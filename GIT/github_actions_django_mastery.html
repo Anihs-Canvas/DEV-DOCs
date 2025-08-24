@@ -8856,6 +8856,593 @@ jobs:
         </div>
       </div>
     </section>
+
+    <section id="complete-workflow-showcase" class="section">
+      <h2>Complete Workflow Showcase</h2>
+      <p class="subtitle">Real-world production workflows for JobPost Django application</p>
+      
+      <div class="example">
+        <h4>Production-Ready Django CI/CD Workflow</h4>
+        <p>This comprehensive workflow demonstrates a complete CI/CD pipeline for the JobPost Django application, including testing, security scanning, building, and deployment across multiple environments.</p>
+        
+        <pre><code class="language-yaml">name: JobPost Complete Production Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'jobpost/**'
+      - 'requirements/**'
+      - 'Dockerfile'
+      - '.github/workflows/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: jobpost
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+  DJANGO_SETTINGS_MODULE: jobpost.settings.ci
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # ======================================
+  # CODE QUALITY & SECURITY CHECKS
+  # ======================================
+  quality-gate:
+    name: Code Quality Gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should-deploy: ${{ steps.deploy-check.outputs.should-deploy }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: pip-${{ env.PYTHON_VERSION }}-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements/dev.txt
+
+      - name: Code formatting check
+        run: |
+          black --check --diff jobpost/
+          isort --check-only --diff jobpost/
+
+      - name: Lint with flake8
+        run: |
+          flake8 jobpost/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 jobpost/ --count --exit-zero --max-complexity=10 --statistics
+
+      - name: Type checking with mypy
+        run: mypy jobpost/
+
+      - name: Security scan with bandit
+        run: bandit -r jobpost/ -f json -o security-report.json
+        continue-on-error: true
+
+      - name: Dependency vulnerability scan
+        run: |
+          pip install safety
+          safety check --json --output safety-report.json
+        continue-on-error: true
+
+      - name: Generate version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="${GITHUB_SHA::8}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check deployment eligibility
+        id: deploy-check
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]] || [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "should-deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: |
+            security-report.json
+            safety-report.json
+          retention-days: 30
+
+  # ======================================
+  # COMPREHENSIVE TESTING MATRIX
+  # ======================================
+  test-matrix:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+        django-version: ['4.1', '4.2', '5.0']
+        database: ['postgresql', 'mysql']
+        include:
+          - python-version: '3.11'
+            django-version: '5.0'
+            database: 'postgresql'
+            coverage: true
+        exclude:
+          - python-version: '3.9'
+            django-version: '5.0'
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres_test_pass
+          POSTGRES_USER: postgres
+          POSTGRES_DB: jobpost_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: mysql_test_pass
+          MYSQL_DATABASE: jobpost_test
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+      redis:
+        image: redis:7-alpine
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      elasticsearch:
+        image: elasticsearch:8.10.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports: [9200:9200]
+        options: >-
+          --health-cmd "curl http://localhost:9200/_cluster/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: ${{ matrix.database == 'postgresql' && 'postgresql://postgres:postgres_test_pass@localhost:5432/jobpost_test' || 'mysql://root:mysql_test_pass@localhost:3306/jobpost_test' }}
+      REDIS_URL: redis://localhost:6379/0
+      ELASTICSEARCH_URL: http://localhost:9200
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ matrix.python-version }}-${{ matrix.django-version }}-${{ hashFiles('**/requirements*.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install Django==${{ matrix.django-version }}
+          pip install -r requirements/test.txt
+          if [ "${{ matrix.database }}" = "mysql" ]; then
+            pip install mysqlclient
+          fi
+
+      - name: Wait for services
+        run: |
+          python -c "
+          import time, socket
+          services = [('localhost', 5432), ('localhost', 6379), ('localhost', 9200)]
+          if '${{ matrix.database }}' == 'mysql':
+              services.append(('localhost', 3306))
+          for host, port in services:
+              while True:
+                  try:
+                      sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                      sock.settimeout(1)
+                      result = sock.connect_ex((host, port))
+                      sock.close()
+                      if result == 0:
+                          print(f'✓ {host}:{port} is ready')
+                          break
+                  except:
+                      pass
+                  time.sleep(1)
+          "
+
+      - name: Run migrations
+        run: |
+          python manage.py makemigrations jobpost
+          python manage.py migrate
+
+      - name: Load test fixtures
+        run: |
+          python manage.py loaddata fixtures/jobpost_test_data.json
+          echo "✓ Loaded JobPost test fixtures"
+
+      - name: Run unit tests
+        run: |
+          python manage.py test jobpost.tests.unit --parallel --keepdb
+          echo "✓ Unit tests passed"
+
+      - name: Run integration tests
+        run: |
+          python manage.py test jobpost.tests.integration --keepdb
+          echo "✓ Integration tests passed"
+
+      - name: Run API tests
+        run: |
+          python manage.py test jobpost.tests.api --keepdb
+          echo "✓ API tests passed"
+
+      - name: Run search tests
+        run: |
+          python manage.py test jobpost.tests.search --keepdb
+          echo "✓ Search tests passed"
+
+      - name: Generate coverage report
+        if: matrix.coverage
+        run: |
+          coverage run --source='jobpost' manage.py test jobpost
+          coverage xml
+          coverage report --show-missing
+
+      - name: Upload coverage to Codecov
+        if: matrix.coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: JobPost-${{ matrix.python-version }}-${{ matrix.django-version }}
+
+  # ======================================
+  # FRONTEND BUILD & TESTING
+  # ======================================
+  frontend-build:
+    name: Frontend Build & Test
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint JavaScript/CSS
+        run: |
+          npm run lint:js
+          npm run lint:css
+
+      - name: Run frontend tests
+        run: npm test -- --coverage
+
+      - name: Build frontend assets
+        run: |
+          npm run build:production
+          echo "✓ Frontend assets built successfully"
+
+      - name: Upload frontend artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-dist
+          path: |
+            jobpost/static/dist/
+            jobpost/static/manifest.json
+          retention-days: 30
+
+  # ======================================
+  # DOCKER BUILD & SECURITY SCANNING
+  # ======================================
+  docker-build:
+    name: Docker Build & Scan
+    runs-on: ubuntu-latest
+    needs: [quality-gate, test-matrix, frontend-build]
+    if: needs.quality-gate.outputs.should-deploy == 'true'
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-dist
+          path: jobpost/static/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.quality-gate.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.quality-gate.outputs.version }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+
+      - name: Set image output
+        id: image
+        run: echo "image=${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ needs.quality-gate.outputs.version }}" >> $GITHUB_OUTPUT
+
+      - name: Run container security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image.outputs.image }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+        continue-on-error: true
+
+      - name: Upload security scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+        continue-on-error: true
+
+  # ======================================
+  # STAGING DEPLOYMENT
+  # ======================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [quality-gate, docker-build]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    environment:
+      name: staging
+      url: https://staging.jobpost.app
+    steps:
+      - name: Deploy to staging environment
+        run: |
+          echo "🚀 Deploying JobPost to staging..."
+          echo "Image: ${{ needs.docker-build.outputs.image }}"
+          echo "Version: ${{ needs.quality-gate.outputs.version }}"
+          
+          # Here you would add your actual deployment commands
+          # For example, using kubectl, AWS ECS, or your deployment tool
+          
+          # kubectl set image deployment/jobpost-staging \
+          #   jobpost=${{ needs.docker-build.outputs.image }} \
+          #   --namespace=jobpost-staging
+          
+          # kubectl rollout status deployment/jobpost-staging \
+          #   --namespace=jobpost-staging --timeout=300s
+          
+          echo "✅ JobPost staging deployment completed"
+
+      - name: Run smoke tests
+        run: |
+          echo "🧪 Running staging smoke tests..."
+          
+          # Wait for deployment to be ready
+          sleep 60
+          
+          # Run critical path tests
+          curl -f https://staging.jobpost.app/health/ || exit 1
+          curl -f https://staging.jobpost.app/api/jobs/ || exit 1
+          
+          echo "✅ Staging smoke tests passed"
+
+  # ======================================
+  # PRODUCTION DEPLOYMENT
+  # ======================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [quality-gate, docker-build, deploy-staging]
+    if: github.ref == 'refs/heads/main' && needs.deploy-staging.result == 'success'
+    environment:
+      name: production
+      url: https://jobpost.app
+    steps:
+      - name: Deploy to production environment
+        run: |
+          echo "🚀 Deploying JobPost to production..."
+          echo "Image: ${{ needs.docker-build.outputs.image }}"
+          echo "Version: ${{ needs.quality-gate.outputs.version }}"
+          
+          # Production deployment with zero-downtime strategy
+          # kubectl set image deployment/jobpost-production \
+          #   jobpost=${{ needs.docker-build.outputs.image }} \
+          #   --namespace=jobpost-production
+          
+          # kubectl rollout status deployment/jobpost-production \
+          #   --namespace=jobpost-production --timeout=600s
+          
+          echo "✅ JobPost production deployment completed"
+
+      - name: Run production health checks
+        run: |
+          echo "🏥 Running production health checks..."
+          
+          # Wait for deployment to stabilize
+          sleep 120
+          
+          # Comprehensive health checks
+          curl -f https://jobpost.app/health/ || exit 1
+          curl -f https://jobpost.app/health/db/ || exit 1
+          curl -f https://jobpost.app/health/cache/ || exit 1
+          
+          echo "✅ Production health checks passed"
+
+      - name: Update deployment status
+        run: |
+          echo "📊 Updating deployment status..."
+          
+          # Update deployment tracking system
+          curl -X POST https://api.jobpost.app/internal/deployments \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "version": "${{ needs.quality-gate.outputs.version }}",
+              "environment": "production",
+              "status": "success",
+              "deployed_at": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+              "git_sha": "${{ github.sha }}",
+              "image": "${{ needs.docker-build.outputs.image }}"
+            }'
+          
+          echo "✅ Deployment status updated"
+
+  # ======================================
+  # RELEASE MANAGEMENT
+  # ======================================
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [quality-gate, deploy-production]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          echo "## JobPost Release ${{ needs.quality-gate.outputs.version }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### What's Changed" >> CHANGELOG.md
+          git log --pretty=format:"- %s (%an)" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### Docker Image" >> CHANGELOG.md
+          echo "\`${{ needs.docker-build.outputs.image }}\`" >> CHANGELOG.md
+          
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          cat CHANGELOG.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: JobPost ${{ needs.quality-gate.outputs.version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: false
+
+  # ======================================
+  # NOTIFICATION & CLEANUP
+  # ======================================
+  notify-completion:
+    name: Notify Pipeline Completion
+    runs-on: ubuntu-latest
+    needs: [quality-gate, test-matrix, deploy-staging, deploy-production]
+    if: always()
+    steps:
+      - name: Notify team
+        run: |
+          STATUS="✅ Success"
+          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ]; then
+            STATUS="❌ Failed"
+          elif [ "${{ contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            STATUS="⚠️ Cancelled"
+          fi
+          
+          echo "📧 Sending notification: JobPost pipeline $STATUS"
+          
+          # Send notification to Slack, Teams, or email
+          # curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+          #   -H 'Content-type: application/json' \
+          #   --data '{
+          #     "text": "JobPost Pipeline '$STATUS'",
+          #     "attachments": [{
+          #       "fields": [
+          #         {"title": "Version", "value": "${{ needs.quality-gate.outputs.version }}", "short": true},
+          #         {"title": "Branch", "value": "${{ github.ref_name }}", "short": true},
+          #         {"title": "Commit", "value": "${{ github.sha }}", "short": true}
+          #       ]
+          #     }]
+          #   }'
+          
+          echo "✅ Team notification sent"</code></pre>
+        <div class="printout">🎯 Complete production-ready CI/CD pipeline for JobPost Django application with comprehensive testing, security scanning, multi-environment deployment, and monitoring</div>
+      </div>
+    </section>
   </main>
 
   <footer>
