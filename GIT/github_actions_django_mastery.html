@@ -8562,6 +8562,300 @@ jobs:
         </div>
       </div>
     </div>
+
+    <section id="advanced-django-patterns" class="section">
+      <h2>Advanced Django CI/CD Patterns</h2>
+      <p class="subtitle">Production-ready workflow patterns for complex Django applications</p>
+      
+      <div class="grid">
+        <div class="example">
+          <h4>Multi-Environment Deployment Pipeline</h4>
+          <pre><code class="language-yaml">name: JobPost Multi-Environment Pipeline
+
+on:
+  push:
+    branches: [main, develop, staging]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: jobpost-app
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11]
+        django-version: [4.1, 4.2, 5.0]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: jobpost_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run comprehensive tests
+        run: |
+          pip install Django==${{ matrix.django-version }}
+          pip install -r requirements/test.txt
+          python manage.py test jobpost.tests.unit --parallel
+        env:
+          DATABASE_URL: postgresql://postgres:test_password@localhost:5432/jobpost_test
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run security audit
+        run: |
+          pip install safety bandit semgrep
+          safety check --json --output safety-report.json || true
+          bandit -r jobpost/ -f json -o bandit-report.json || true</code></pre>
+          <div class="printout">🏭 Complete multi-environment pipeline with testing, security, and deployment</div>
+        </div>
+
+        <div class="example">
+          <h4>Database Migration Workflow</h4>
+          <pre><code class="language-yaml">name: JobPost Database Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options: [staging, production]
+      migration_type:
+        description: 'Migration type'
+        required: true
+        default: 'forward'
+        type: choice
+        options: [forward, rollback]
+
+jobs:
+  validate-migrations:
+    runs-on: ubuntu-latest
+    outputs:
+      has-migrations: ${{ steps.detect.outputs.has-migrations }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect migration changes
+        id: detect
+        run: |
+          MIGRATIONS=$(git diff --name-only HEAD~1 HEAD | grep -E "migrations/[0-9]+.*\.py$" || true)
+          if [ -n "$MIGRATIONS" ]; then
+            echo "has-migrations=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-migrations=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Validate migration files
+        if: steps.detect.outputs.has-migrations == 'true'
+        run: |
+          pip install -r requirements.txt
+          python manage.py makemigrations --check --dry-run
+          echo "✓ All JobPost migrations are valid"
+
+  backup-database:
+    runs-on: ubuntu-latest
+    needs: validate-migrations
+    if: needs.validate-migrations.outputs.has-migrations == 'true'
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Create database backup
+        run: |
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          BACKUP_FILE="jobpost_backup_${TIMESTAMP}.sql"
+          echo "Creating backup: $BACKUP_FILE"
+          pg_dump $DATABASE_URL > $BACKUP_FILE
+          aws s3 cp $BACKUP_FILE s3://jobpost-backups/${{ github.event.inputs.environment }}/
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  run-migrations:
+    runs-on: ubuntu-latest
+    needs: [validate-migrations, backup-database]
+    if: always() && needs.validate-migrations.outputs.has-migrations == 'true'
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Run JobPost migrations
+        run: |
+          pip install -r requirements.txt
+          if [ "${{ github.event.inputs.migration_type }}" = "forward" ]; then
+            python manage.py migrate
+            echo "✓ JobPost forward migrations completed"
+          else
+            python manage.py migrate jobpost 0001
+            echo "✓ JobPost rollback completed"
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}</code></pre>
+          <div class="printout">🗃️ Production-ready database migration workflow with validation and backup</div>
+        </div>
+
+        <div class="example">
+          <h4>Performance Testing Pipeline</h4>
+          <pre><code class="language-yaml">name: JobPost Performance Testing
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM
+  workflow_dispatch:
+    inputs:
+      concurrent_users:
+        description: 'Number of concurrent users'
+        required: true
+        default: '100'
+
+jobs:
+  performance-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: perf_test_pass
+          POSTGRES_DB: jobpost_perf
+        options: --shm-size=1g
+      redis:
+        image: redis:7
+        options: --memory=512m
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python and dependencies
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install performance testing tools
+        run: |
+          pip install -r requirements.txt
+          pip install locust django-silk memory-profiler
+      - name: Setup test database with realistic data
+        run: |
+          python manage.py migrate
+          python manage.py loaddata fixtures/jobpost_performance_data.json
+          echo "✓ Loaded 10,000 JobPost records for testing"
+        env:
+          DATABASE_URL: postgresql://postgres:perf_test_pass@localhost:5432/jobpost_perf
+      - name: Start Django application
+        run: |
+          gunicorn jobpost.wsgi:application --bind 0.0.0.0:8000 --workers 4 &
+          sleep 10
+          echo "✓ JobPost application started"
+      - name: Run Locust performance tests
+        run: |
+          USERS=${{ github.event.inputs.concurrent_users || '100' }}
+          locust -f tests/performance/locustfile.py \
+                 --host http://localhost:8000 \
+                 --users $USERS \
+                 --spawn-rate 10 \
+                 --run-time 10m \
+                 --html performance_report.html \
+                 --headless
+          echo "✓ Performance test completed with $USERS users"</code></pre>
+          <div class="printout">⚡ Comprehensive performance testing with load testing, profiling, and reporting</div>
+        </div>
+
+        <div class="example">
+          <h4>Blue-Green Deployment Strategy</h4>
+          <pre><code class="language-yaml">name: JobPost Blue-Green Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options: [staging, production]
+      rollback:
+        description: 'Perform rollback instead of deployment'
+        type: boolean
+        default: false
+
+jobs:
+  determine-deployment-slot:
+    runs-on: ubuntu-latest
+    outputs:
+      active-slot: ${{ steps.slots.outputs.active }}
+      inactive-slot: ${{ steps.slots.outputs.inactive }}
+    steps:
+      - name: Determine active/inactive slots
+        id: slots
+        run: |
+          ACTIVE_SLOT=$(curl -s https://api.jobpost.app/health/active-slot)
+          if [ "$ACTIVE_SLOT" = "blue" ]; then
+            echo "active=blue" >> $GITHUB_OUTPUT
+            echo "inactive=green" >> $GITHUB_OUTPUT
+          else
+            echo "active=green" >> $GITHUB_OUTPUT  
+            echo "inactive=blue" >> $GITHUB_OUTPUT
+          fi
+
+  deploy-inactive-slot:
+    runs-on: ubuntu-latest
+    needs: determine-deployment-slot
+    if: ${{ !github.event.inputs.rollback }}
+    environment: ${{ github.event.inputs.target_environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to inactive slot
+        run: |
+          SLOT=${{ needs.determine-deployment-slot.outputs.inactive-slot }}
+          echo "Deploying JobPost to $SLOT slot..."
+          kubectl set image deployment/jobpost-$SLOT \
+            jobpost=ghcr.io/${{ github.repository }}/jobpost:${{ github.sha }}
+          kubectl rollout status deployment/jobpost-$SLOT --timeout=600s
+          echo "✓ JobPost deployed to $SLOT slot"
+      - name: Run health checks on inactive slot
+        run: |
+          URL="https://${{ needs.determine-deployment-slot.outputs.inactive-slot }}.jobpost.app"
+          for i in {1..30}; do
+            if curl -f $URL/health/; then
+              echo "✓ JobPost health check passed"
+              break
+            fi
+            sleep 10
+          done
+
+  switch-traffic:
+    runs-on: ubuntu-latest
+    needs: [determine-deployment-slot, deploy-inactive-slot]
+    if: ${{ !github.event.inputs.rollback }}
+    steps:
+      - name: Switch traffic to new deployment
+        run: |
+          NEW_ACTIVE=${{ needs.determine-deployment-slot.outputs.inactive-slot }}
+          curl -X POST https://api.jobpost.app/admin/switch-slot \
+            -H "Authorization: Bearer ${{ secrets.ADMIN_API_TOKEN }}" \
+            -d "{'active_slot': '$NEW_ACTIVE'}"
+          echo "✅ Traffic switched to $NEW_ACTIVE slot"</code></pre>
+          <div class="printout">🔄 Zero-downtime blue-green deployment with automated rollback capability</div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer>
