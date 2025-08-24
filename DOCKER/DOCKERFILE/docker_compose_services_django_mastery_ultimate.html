@@ -216,6 +216,9 @@
       <li><a href="#storage_opt">storage_opt</a></li>
       <li><a href="#use_api_socket">use_api_socket</a></li>
       <li><a href="#uts">uts</a></li>
+      <li><a href="#production-templates">Production-Ready Templates</a></li>
+      <li><a href="#best-practices">Best Practices & Optimization</a></li>
+      <li><a href="#troubleshooting">Troubleshooting Guide</a></li>
       <li><a href="#cheatsheet">Compose Services API Cheat Sheet</a></li>
     </ol>
   </nav>
@@ -383,6 +386,16 @@
         <li><a href="#oom_kill_disable">oom_kill_disable</a></li>
         <li><a href="#mac_address">mac_address</a></li>
         <li><a href="#userns_mode">userns_mode</a></li>
+        <li><a href="#models">models</a></li>
+        <li><a href="#post_start">post_start</a></li>
+        <li><a href="#pre_stop">pre_stop</a></li>
+        <li><a href="#provider">provider</a></li>
+        <li><a href="#storage_opt">storage_opt</a></li>
+        <li><a href="#use_api_socket">use_api_socket</a></li>
+        <li><a href="#uts">uts</a></li>
+        <li><a href="#production-templates">Production-Ready Templates</a></li>
+        <li><a href="#best-practices">Best Practices & Optimization</a></li>
+        <li><a href="#troubleshooting">Troubleshooting Guide</a></li>
         <li><a href="#cheatsheet">Compose Services API Cheat Sheet</a></li>
       </ol>
     </section>
@@ -12197,6 +12210,412 @@ volumes:
     command: python manage.py location_node --node=2</code></pre>
           <div class="printout"># Location service mesh with shared hostname namespace</div>
         </div>
+      </div>
+    </section>
+
+    <section id="production-templates" class="section">
+      <h2>Production-Ready Templates</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/compose/production/" target="_blank" rel="noopener" title="Production Guide">Production Guide</a>
+      </div>
+      <p class="subtitle">Complete production templates for Django JobPost applications.</p>
+      
+      <h3>Complete Production Stack</h3>
+      <div class="example">
+        <h4>Full-Stack JobPost Platform</h4>
+        <pre><code class="language-yaml">version: '3.8'
+
+services:
+  # Nginx Load Balancer & Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - static_volume:/var/www/static:ro
+      - media_volume:/var/www/media:ro
+    depends_on:
+      - web
+    restart: unless-stopped
+    mem_limit: 128m
+    cpu_shares: 512
+
+  # Django Web Application
+  web:
+    build:
+      context: .
+      target: production
+    command: gunicorn myproject.wsgi:application --bind 0.0.0.0:8000 --workers 4 --threads 2
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    environment:
+      - DJANGO_SETTINGS_MODULE=myproject.settings.production
+      - DATABASE_URL=postgresql://jobpost_user:${DB_PASSWORD}@db:5432/jobpost_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - SECRET_KEY=${SECRET_KEY}
+      - ALLOWED_HOSTS=jobpost.company.com,localhost
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    mem_limit: 1g
+    cpu_shares: 1024
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    environment:
+      - POSTGRES_DB=jobpost_db
+      - POSTGRES_USER=jobpost_user
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_INITDB_ARGS=--auth-host=md5
+    restart: unless-stopped
+    mem_limit: 2g
+    cpu_shares: 1024
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobpost_user -d jobpost_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Broker
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    mem_limit: 512m
+    cpu_shares: 512
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Celery Worker
+  worker:
+    build:
+      context: .
+      target: production
+    command: celery -A myproject worker -l info --concurrency=2
+    volumes:
+      - media_volume:/app/media
+    environment:
+      - DJANGO_SETTINGS_MODULE=myproject.settings.production
+      - DATABASE_URL=postgresql://jobpost_user:${DB_PASSWORD}@db:5432/jobpost_db
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - SECRET_KEY=${SECRET_KEY}
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    mem_limit: 1g
+    cpu_shares: 512
+
+  # Celery Beat Scheduler
+  scheduler:
+    build:
+      context: .
+      target: production
+    command: celery -A myproject beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      - DJANGO_SETTINGS_MODULE=myproject.settings.production
+      - DATABASE_URL=postgresql://jobpost_user:${DB_PASSWORD}@db:5432/jobpost_db
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - SECRET_KEY=${SECRET_KEY}
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    mem_limit: 256m
+    cpu_shares: 256
+
+  # Elasticsearch for Search
+  elasticsearch:
+    image: elasticsearch:8.8.0
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=false
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    restart: unless-stopped
+    mem_limit: 2g
+    cpu_shares: 1024
+
+  # Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    restart: unless-stopped
+    mem_limit: 512m
+    cpu_shares: 256
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  static_volume:
+    driver: local
+  media_volume:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  prometheus_data:
+    driver: local
+
+networks:
+  default:
+    driver: bridge</code></pre>
+        <div class="printout"># Complete production Django JobPost platform
+# Includes web server, database, cache, workers, search, monitoring
+# Configured with health checks, resource limits, and restart policies
+# Ready for enterprise deployment</div>
+      </div>
+
+      <h3>Development Stack</h3>
+      <div class="example">
+        <h4>Development JobPost Environment</h4>
+        <pre><code class="language-yaml">version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./media:/app/media
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgresql://jobpost_user:password@db:5432/jobpost_dev
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    develop:
+      watch:
+        - action: sync
+          path: ./
+          target: /app
+          ignore:
+            - node_modules/
+            - .git/
+        - action: restart
+          path: ./requirements.txt
+    command: python manage.py runserver 0.0.0.0:8000
+
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=jobpost_dev
+      - POSTGRES_USER=jobpost_user
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+volumes:
+  postgres_dev_data:</code></pre>
+        <div class="printout"># Development environment with hot-reload
+# Exposed ports for direct access
+# Email testing with MailHog
+# File watching for rapid development</div>
+      </div>
+    </section>
+
+    <section id="best-practices" class="section">
+      <h2>Best Practices & Optimization</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/compose/production/" target="_blank" rel="noopener" title="Production Best Practices">Production Best Practices</a>
+      </div>
+      <p class="subtitle">Performance optimization and security best practices for Django applications.</p>
+
+      <h3>Resource Management</h3>
+      <div class="example">
+        <h4>Optimized Resource Allocation</h4>
+        <pre><code class="language-yaml">services:
+  web:
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpu_shares: 1024
+    pids_limit: 100
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check", "--deploy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s</code></pre>
+        <div class="printout"># Memory limits prevent OOM kills
+# CPU shares ensure fair resource distribution
+# Health checks enable automatic recovery
+# Process limits prevent fork bombs</div>
+      </div>
+
+      <h3>Security Hardening</h3>
+      <div class="example">
+        <h4>Production Security Configuration</h4>
+        <pre><code class="language-yaml">services:
+  web:
+    user: 1000:1000
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID</code></pre>
+        <div class="printout"># Non-root user execution
+# Read-only filesystem with temp mounts
+# Dropped capabilities for minimal privileges
+# Security policies enabled</div>
+      </div>
+
+      <h3>Performance Optimization</h3>
+      <div class="example">
+        <h4>High-Performance Configuration</h4>
+        <pre><code class="language-yaml">services:
+  db:
+    image: postgres:15-alpine
+    shm_size: 256mb
+    command: postgres -c shared_preload_libraries=pg_stat_statements
+    environment:
+      - POSTGRES_SHARED_BUFFERS=256MB
+      - POSTGRES_EFFECTIVE_CACHE_SIZE=1GB
+    
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no --maxmemory 512mb --maxmemory-policy allkeys-lru
+    
+  web:
+    environment:
+      - GUNICORN_WORKERS=4
+      - GUNICORN_THREADS=2
+      - GUNICORN_MAX_REQUESTS=1000
+      - GUNICORN_PRELOAD_APP=true</code></pre>
+        <div class="printout"># Optimized PostgreSQL memory settings
+# Redis configured for cache workload
+# Gunicorn tuned for Django performance
+# Connection pooling and preloading enabled</div>
+      </div>
+    </section>
+
+    <section id="troubleshooting" class="section">
+      <h2>Troubleshooting Guide</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/compose/troubleshooting/" target="_blank" rel="noopener" title="Troubleshooting Guide">Troubleshooting</a>
+      </div>
+      <p class="subtitle">Common issues and solutions for Django Docker Compose deployments.</p>
+
+      <h3>Container Health Monitoring</h3>
+      <div class="example">
+        <h4>Comprehensive Health Checks</h4>
+        <pre><code class="language-yaml">services:
+  web:
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  db:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3</code></pre>
+        <div class="printout"># HTTP endpoint health check for web service
+# Database connection validation
+# Redis ping with increment test
+# Configurable intervals and retry policies</div>
+      </div>
+
+      <h3>Logging Configuration</h3>
+      <div class="example">
+        <h4>Centralized Logging Setup</h4>
+        <pre><code class="language-yaml">services:
+  web:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service,environment"
+    labels:
+      - "service=jobpost-web"
+      - "environment=production"
+
+  worker:
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "tcp://logserver:514"
+        tag: "jobpost-worker"</code></pre>
+        <div class="printout"># JSON file logging with rotation
+# Syslog integration for workers
+# Service labels for log filtering
+# Size-based log rotation</div>
       </div>
     </section>
 

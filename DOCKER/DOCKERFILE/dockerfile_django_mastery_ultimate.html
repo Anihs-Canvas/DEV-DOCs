@@ -2753,8 +2753,443 @@ ONBUILD RUN python manage.py collectstatic --noinput</code></pre>
       </section>
     </section>
 
+    <section id="stopsignal" class="section">
+      <h2>20) STOPSIGNAL</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/dockerfile/#stopsignal" target="_blank" rel="noopener" title="STOPSIGNAL instruction">STOPSIGNAL instruction</a>
+      </div>
+      <p class="subtitle">Sets the system call signal that will be sent to the container to exit.</p>
+      <h3>Full description</h3>
+      <p>The STOPSIGNAL instruction sets the system call signal that will be sent to the container to exit. This signal can be a valid unsigned number that matches a position in the kernel's syscall table, for instance 9, or a signal name in the format SIGNAME, for instance SIGKILL. For Django JobPost applications, proper signal handling ensures graceful shutdowns, connection cleanup, and data integrity during container stops.</p>
+      <h3>Syntax</h3>
+      <pre><code class="language-dockerfile">STOPSIGNAL signal</code></pre>
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>signal</strong>: System call signal number or signal name (e.g., SIGTERM, SIGKILL, 15, 9)</li>
+        <li><strong>Default</strong>: SIGTERM (15) - allows graceful shutdown</li>
+        <li><strong>SIGKILL (9)</strong>: Forces immediate termination without cleanup</li>
+        <li><strong>SIGINT (2)</strong>: Interrupt signal, similar to Ctrl+C</li>
+      </ul>
+      <h3>Return value</h3>
+      <p>Configures the signal Docker will send to stop the container, enabling proper application shutdown handling.</p>
+      <div class="grid">
+        <div class="example">
+          <h4>Example 1: Graceful Django shutdown</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+# Install Django and dependencies
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# Set graceful shutdown signal for Django
+STOPSIGNAL SIGTERM
+
+# Run with proper signal handling
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--graceful-timeout", "30", "jobpost.wsgi:application"]</code></pre>
+          <div class="printout"># SIGTERM allows Django to finish current requests
+# Gunicorn graceful-timeout gives 30s for cleanup
+# Database connections closed properly
+# JobPost data integrity maintained</div>
+        </div>
+        <div class="example">
+          <h4>Example 2: Celery worker with proper signals</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt celery redis
+
+COPY . /app
+WORKDIR /app
+
+# Use SIGTERM for graceful Celery worker shutdown
+STOPSIGNAL SIGTERM
+
+# Celery worker with warm shutdown
+CMD ["celery", "-A", "jobpost", "worker", "-l", "info", "--without-gossip", "--without-heartbeat"]</code></pre>
+          <div class="printout"># SIGTERM allows Celery to finish current tasks
+# Workers complete job processing before shutdown
+# No incomplete skills analysis or user notifications
+# Clean Redis connection cleanup</div>
+        </div>
+        <div class="example">
+          <h4>Example 3: Development server with interrupt</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# Use SIGINT for development server (like Ctrl+C)
+STOPSIGNAL SIGINT
+
+# Django development server
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+          <div class="printout"># SIGINT mimics Ctrl+C behavior for development
+# Development server stops immediately
+# Good for rapid development cycles
+# Author content changes applied quickly</div>
+        </div>
+        <div class="example">
+          <h4>Example 4: Database with custom timeout</h4>
+          <pre><code class="language-dockerfile">FROM postgres:15-alpine
+
+# Set environment for JobPost database
+ENV POSTGRES_DB=jobpost_db
+ENV POSTGRES_USER=jobpost_user
+ENV POSTGRES_PASSWORD=secure_password
+
+# Use default SIGTERM but document the behavior
+STOPSIGNAL SIGTERM
+
+# PostgreSQL handles SIGTERM gracefully by default
+# Allows active transactions to complete
+# Ensures location data consistency</code></pre>
+          <div class="printout"># PostgreSQL default SIGTERM handling
+# Active transactions complete before shutdown
+# Data integrity for user profiles and job posts
+# Clean database state maintained</div>
+        </div>
+        <div class="example">
+          <h4>Example 5: Nginx reverse proxy</h4>
+          <pre><code class="language-dockerfile">FROM nginx:alpine
+
+# Copy JobPost nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY ssl/ /etc/nginx/ssl/
+
+# SIGTERM for graceful connection handling
+STOPSIGNAL SIGTERM
+
+# Nginx handles graceful shutdown with SIGTERM
+EXPOSE 80 443</code></pre>
+          <div class="printout"># Nginx gracefully closes existing connections
+# SSL termination completes properly
+# JobPost users experience clean disconnections
+# Load balancing state maintained</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="healthcheck" class="section">
+      <h2>21) HEALTHCHECK</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/dockerfile/#healthcheck" target="_blank" rel="noopener" title="HEALTHCHECK instruction">HEALTHCHECK instruction</a>
+      </div>
+      <p class="subtitle">Tells Docker how to test a container to check that it is still working.</p>
+      <h3>Full description</h3>
+      <p>The HEALTHCHECK instruction tells Docker how to test a container to check that it is still working. This can detect cases such as a web server that is stuck in an infinite loop and unable to handle new connections, even though the server process is still running. For Django JobPost applications, health checks ensure the application can serve requests, database connections work, and critical services like user authentication and job posting functionality remain available.</p>
+      <h3>Syntax</h3>
+      <pre><code class="language-dockerfile">HEALTHCHECK [OPTIONS] CMD command
+HEALTHCHECK NONE  # Disable health check</code></pre>
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>--interval=DURATION</strong>: Time between health checks (default: 30s)</li>
+        <li><strong>--timeout=DURATION</strong>: Maximum time for single check (default: 30s)</li>
+        <li><strong>--start-period=DURATION</strong>: Grace period before checks start (default: 0s)</li>
+        <li><strong>--retries=N</strong>: Consecutive failures needed to mark unhealthy (default: 3)</li>
+        <li><strong>CMD command</strong>: Command to run for health check</li>
+      </ul>
+      <h3>Return value</h3>
+      <p>Returns exit status: 0 (healthy), 1 (unhealthy), or 2 (reserved). Container marked as unhealthy after consecutive failures.</p>
+      <div class="grid">
+        <div class="example">
+          <h4>Example 1: Django web application health check</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# Health check for Django JobPost web service
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s \
+  CMD python manage.py health_check || exit 1
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "jobpost.wsgi:application"]</code></pre>
+          <div class="printout"># Checks every 30 seconds after 40s startup
+# Custom Django health_check management command
+# Validates database, cache, and core services
+# JobPost functionality verified automatically</div>
+        </div>
+        <div class="example">
+          <h4>Example 2: HTTP endpoint health check</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# HTTP health check for JobPost API
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8000/health/ || exit 1
+
+EXPOSE 8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+          <div class="printout"># HTTP GET to dedicated health endpoint
+# 60s startup period for database migrations
+# 3 retries before marking unhealthy
+# Skills and user services monitored</div>
+        </div>
+        <div class="example">
+          <h4>Example 3: Database connection health check</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt psycopg2-binary
+
+COPY . /app
+WORKDIR /app
+
+# Database-focused health check for JobPost
+HEALTHCHECK --interval=15s --timeout=5s \
+  CMD python -c "
+import django; django.setup()
+from django.db import connection
+cursor = connection.cursor()
+cursor.execute('SELECT 1')
+" || exit 1
+
+CMD ["python", "manage.py", "migrate", "&&", "gunicorn", "jobpost.wsgi:application"]</code></pre>
+          <div class="printout"># Direct database connection test
+# Ensures PostgreSQL connectivity
+# JobPost data access verified
+# Quick 15s intervals for rapid detection</div>
+        </div>
+        <div class="example">
+          <h4>Example 4: Comprehensive service health check</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y curl redis-tools postgresql-client && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+COPY health_check.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/health_check.sh
+
+# Multi-service health check for JobPost platform
+HEALTHCHECK --interval=45s --timeout=20s --start-period=2m --retries=2 \
+  CMD /usr/local/bin/health_check.sh
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "jobpost.wsgi:application"]</code></pre>
+          <div class="printout"># Custom script checks multiple services
+# Database, cache, search, and HTTP endpoints
+# JobPost platform-wide health monitoring
+# 2-minute startup for complex initialization</div>
+        </div>
+        <div class="example">
+          <h4>Example 5: Celery worker health check</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt celery redis
+
+COPY . /app
+WORKDIR /app
+
+# Celery worker health check for background tasks
+HEALTHCHECK --interval=60s --timeout=30s --retries=2 \
+  CMD celery -A jobpost inspect ping -d celery@$HOSTNAME || exit 1
+
+CMD ["celery", "-A", "jobpost", "worker", "-l", "info", "--concurrency=2"]</code></pre>
+          <div class="printout"># Celery worker ping for health verification
+# Ensures worker can process tasks
+# Skills analysis and email jobs monitored
+# 60s interval for background services</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="shell" class="section">
+      <h2>22) SHELL</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/dockerfile/#shell" target="_blank" rel="noopener" title="SHELL instruction">SHELL instruction</a>
+      </div>
+      <p class="subtitle">Overrides the default shell used for the shell form of commands.</p>
+      <h3>Full description</h3>
+      <p>The SHELL instruction allows the default shell used for the shell form of commands to be overridden. The default shell on Linux is ["/bin/sh", "-c"], and on Windows is ["cmd", "/S", "/C"]. The SHELL instruction must be written in JSON form in a Dockerfile. For Django JobPost applications, custom shells can improve script compatibility, enable advanced features, or optimize container startup and build processes.</p>
+      <h3>Syntax</h3>
+      <pre><code class="language-dockerfile">SHELL ["executable", "parameters"]</code></pre>
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>executable</strong>: Shell executable path (e.g., "/bin/bash", "/bin/zsh", "powershell")</li>
+        <li><strong>parameters</strong>: Shell parameters and flags (e.g., "-c", "-e", "-x")</li>
+        <li><strong>JSON format</strong>: Must be written as JSON array, not string</li>
+        <li><strong>Affects</strong>: RUN, CMD, and ENTRYPOINT shell forms</li>
+      </ul>
+      <h3>Return value</h3>
+      <p>Changes the default shell for subsequent shell-form commands, enabling shell-specific features and behaviors.</p>
+      <div class="grid">
+        <div class="example">
+          <h4>Example 1: Bash shell for advanced scripting</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+# Use Bash for better script support
+SHELL ["/bin/bash", "-c"]
+
+# Install system dependencies for JobPost
+RUN apt-get update && \
+    apt-get install -y postgresql-client redis-tools && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# Bash enables advanced features like arrays and conditionals
+RUN if [[ -f "manage.py" ]]; then \
+      echo "Django project detected"; \
+      python manage.py collectstatic --noinput; \
+    fi
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+          <div class="printout"># Bash enables [[ ]] conditionals and advanced syntax
+# Better error handling with -e flag available
+# JobPost build scripts can use Bash features
+# Compatible with complex deployment automation</div>
+        </div>
+        <div class="example">
+          <h4>Example 2: Strict error handling shell</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+# Enable strict error handling for reliable builds
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+COPY requirements.txt .
+# Build will fail fast on any error
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# Strict shell ensures JobPost build reliability
+RUN python manage.py check --deploy && \
+    python manage.py collectstatic --noinput && \
+    python -m py_compile manage.py
+
+CMD ["gunicorn", "jobpost.wsgi:application"]</code></pre>
+          <div class="printout"># -e: Exit on error, -u: Error on undefined vars
+# -o pipefail: Pipeline fails if any command fails
+# Reliable JobPost container builds
+# Prevents silent failures in user data processing</div>
+        </div>
+        <div class="example">
+          <h4>Example 3: Development shell with debugging</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-slim
+
+# Development shell with verbose output
+SHELL ["/bin/bash", "-x", "-c"]
+
+RUN apt-get update && apt-get install -y \
+    postgresql-client \
+    redis-tools \
+    curl \
+    vim
+
+COPY requirements.txt .
+# Verbose output shows each command execution
+RUN pip install -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# Debug output helps troubleshoot JobPost build issues
+RUN echo "Setting up development environment for JobPost" && \
+    python manage.py check && \
+    echo "Django check completed successfully"
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000", "--settings=jobpost.settings.development"]</code></pre>
+          <div class="printout"># -x flag enables command tracing
+# Every executed command is printed
+# Helpful for debugging JobPost build issues
+# Skills processing setup visible in logs</div>
+        </div>
+        <div class="example">
+          <h4>Example 4: Alpine shell compatibility</h4>
+          <pre><code class="language-dockerfile">FROM python:3.11-alpine
+
+# Explicitly use sh for Alpine compatibility
+SHELL ["/bin/sh", "-c"]
+
+# Alpine-specific package installation for JobPost
+RUN apk add --no-cache \
+    postgresql-client \
+    redis \
+    curl \
+    bash
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . /app
+WORKDIR /app
+
+# Alpine sh is POSIX-compliant, avoid Bash-specific features
+RUN test -f "manage.py" && echo "Django detected" || echo "No Django found"
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+          <div class="printout"># Explicit sh for Alpine Linux compatibility
+# POSIX-compliant scripting for portability
+# JobPost runs efficiently on Alpine base
+# Smaller image size for production deployment</div>
+        </div>
+        <div class="example">
+          <h4>Example 5: Multi-stage build with different shells</h4>
+          <pre><code class="language-dockerfile"># Build stage with Bash for complex operations
+FROM node:16-slim as frontend-builder
+SHELL ["/bin/bash", "-c"]
+
+COPY package.json package-lock.json ./
+RUN npm ci --only=production
+
+COPY frontend/ ./frontend/
+# Bash enables complex build scripts
+RUN source ~/.bashrc && \
+    npm run build:production
+
+# Production stage with minimal shell
+FROM python:3.11-alpine as production
+SHELL ["/bin/sh", "-c"]
+
+RUN apk add --no-cache postgresql-client
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . /app
+COPY --from=frontend-builder /app/dist /app/static/
+WORKDIR /app
+
+# Minimal shell for production efficiency
+CMD ["gunicorn", "jobpost.wsgi:application"]</code></pre>
+          <div class="printout"># Different shells for different build stages
+# Bash for complex frontend build operations
+# Alpine sh for minimal production runtime
+# JobPost frontend and backend optimally built</div>
+        </div>
+      </div>
+    </section>
+
     <section id="heredoc" class="section">
-      <h2>22) Here-Documents</h2>
+      <h2>23) Here-Documents</h2>
       <div class="meta">
         Docs:
         <a href="https://docs.docker.com/reference/dockerfile/#here-documents" target="_blank" rel="noopener" title="Here-Documents">Here-Documents</a>
