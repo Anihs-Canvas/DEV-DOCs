@@ -529,21 +529,2216 @@ networks:
       </section>
     </section>
 
-    <!-- I'll continue with the first few attributes to establish the pattern. Due to length constraints, 
-         I'll show a representative sample and then note where the rest would continue -->
-
-    <section id="annotations" class="section">
-      <h2>annotations</h2>
+    <!-- 1. image -->
+    <section id="image" class="section">
+      <h2>1. image</h2>
       <div class="meta">
         Docs:
-        <a href="https://docs.docker.com/reference/compose-file/services/#annotations" target="_blank" rel="noopener" title="Compose annotations">annotations attribute</a>
+        <a href="https://docs.docker.com/reference/compose-file/services/#image" target="_blank" rel="noopener" title="Image Reference">Image Reference</a> •
+        <a href="https://docs.docker.com/engine/reference/commandline/images/" target="_blank" rel="noopener" title="Docker Images">Docker Images</a>
       </div>
-      <p class="subtitle">Adds metadata to containers.</p>
 
       <h3>Full description</h3>
-      <p>Annotations add metadata to containers as key-value pairs. This metadata can be used by orchestration tools, monitoring systems, or custom tooling to make decisions about container management. For Django applications, annotations are useful for tagging services with environment information, team ownership, or deployment metadata that helps with JobPost application management.</p>
+      <p>The <code>image</code> attribute specifies the Docker image to create containers from, serving as the foundation for Django JobPost services. This attribute defines the base operating system, runtime environment, and pre-installed software that containers will use, enabling consistent deployment across environments.</p>
 
       <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    image: ubuntu:22.04
+    # OR with registry
+    image: myregistry.com/django:5.2
+    # OR with tag and digest
+    image: python:3.11-slim@sha256:abc123</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Repository name:</strong> Docker Hub or private registry image name</li>
+        <li><strong>Tag specification:</strong> Version or variant identifier (defaults to 'latest')</li>
+        <li><strong>Registry URL:</strong> Custom registry domain for private images</li>
+        <li><strong>Digest pinning:</strong> SHA256 hash for immutable image references</li>
+        <li><strong>Official images:</strong> Docker Hub verified images with simplified names</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Provides the base container image for service deployment, ensuring consistent runtime environment and dependencies for Django JobPost applications across different deployment stages.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Django Application with Python Base</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    image: python:3.11-slim
+    command: |
+      sh -c "
+      pip install -r requirements.txt &&
+      python manage.py migrate &&
+      python manage.py runserver 0.0.0.0:8000
+      "
+    ports: ["8000:8000"]
+    volumes:
+      - .:/app
+      - jobpost_media:/app/media
+    working_dir: /app
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+
+  jobpost-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: jobpost_db
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  jobpost-cache:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+volumes:
+  jobpost_media:
+  postgres_data:
+  redis_data:</code></pre>
+          <div class="printout"># Complete JobPost stack with official images
+# Python slim: Lightweight Django runtime environment
+# PostgreSQL Alpine: Efficient database with minimal footprint
+# Redis Alpine: High-performance caching layer
+# Volume persistence for data and media files</div>
+        </div>
+
+        <div class="example">
+          <h4>Production JobPost with Custom Registry Images</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    image: myregistry.azurecr.io/jobpost/django-app:v2.1.3
+    ports: ["8000:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      DATABASE_URL: postgresql://user:pass@jobpost-db:5432/jobpost
+    secrets:
+      - db_password
+      - django_secret_key
+
+  jobpost-worker:
+    image: myregistry.azurecr.io/jobpost/django-worker:v2.1.3
+    command: celery -A myproject worker --loglevel=info
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      CELERY_BROKER_URL: redis://jobpost-redis:6379/0
+    secrets:
+      - db_password
+      - celery_broker_auth
+
+  jobpost-scheduler:
+    image: myregistry.azurecr.io/jobpost/django-beat:v2.1.3
+    command: celery -A myproject beat --loglevel=info
+    depends_on:
+      - jobpost-redis
+
+  jobpost-db:
+    image: postgres:15.4-alpine@sha256:c5b2c7036...
+    environment:
+      POSTGRES_DB: jobpost_production
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+
+secrets:
+  db_password:
+    external: true
+  django_secret_key:
+    external: true
+  celery_broker_auth:
+    external: true
+
+volumes:
+  postgres_prod_data:</code></pre>
+          <div class="printout"># Production deployment with versioned custom images
+# Custom registry: Private Azure Container Registry images
+# Version pinning: Specific v2.1.3 tags for consistency
+# Digest pinning: SHA256 hash for PostgreSQL immutability
+# Secrets management: External secrets for production security</div>
+        </div>
+
+        <div class="example">
+          <h4>Multi-Environment JobPost with Image Variants</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web-dev:
+    image: python:3.11-slim
+    profiles: ["dev"]
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+      DEBUG: "True"
+
+  jobpost-web-staging:
+    image: jobpost/django-app:staging-latest
+    profiles: ["staging"]
+    command: gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.staging
+
+  jobpost-web-prod:
+    image: jobpost/django-app:1.8.2
+    profiles: ["prod"]
+    command: gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  jobpost-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-jobpost_dev}
+      POSTGRES_USER: ${DB_USER:-jobpost_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}</code></pre>
+          <div class="printout"># Multi-environment image strategy
+# Development: Base Python image with live code mounting
+# Staging: Latest staging builds for integration testing
+# Production: Pinned version tags for stability
+# Environment-specific configuration via profiles</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Microservices with Specialized Images</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-api:
+    image: node:18-alpine
+    working_dir: /app
+    command: npm start
+    ports: ["3000:3000"]
+    volumes:
+      - ./api:/app
+
+  jobpost-skills-service:
+    image: python:3.11-slim
+    working_dir: /app
+    command: |
+      sh -c "
+      pip install scikit-learn pandas numpy &&
+      python skills_processor.py
+      "
+    volumes:
+      - ./skills:/app
+
+  jobpost-location-service:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: location_db
+      POSTGRES_USER: geo_user
+      POSTGRES_PASSWORD: geo_password
+    volumes:
+      - geo_data:/var/lib/postgresql/data
+
+  jobpost-search:
+    image: elasticsearch:8.9.0
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    volumes:
+      - search_data:/usr/share/elasticsearch/data
+
+  jobpost-monitoring:
+    image: prom/prometheus:v2.45.0
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  geo_data:
+  search_data:</code></pre>
+          <div class="printout"># Microservices with technology-specific images
+# API: Node.js Alpine for lightweight JavaScript runtime
+# Skills: Python for machine learning libraries
+# Location: PostGIS for geographical data processing
+# Search: Elasticsearch for full-text search capabilities
+# Monitoring: Prometheus for metrics collection</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Development with GPU Support</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-ml-training:
+    image: tensorflow/tensorflow:2.13.0-gpu
+    command: python train_skills_model.py
+    volumes:
+      - ./ml:/app
+      - ml_models:/app/models
+    working_dir: /app
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  jobpost-web:
+    image: python:3.11-slim
+    command: |
+      sh -c "
+      pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu &&
+      pip install -r requirements.txt &&
+      python manage.py runserver 0.0.0.0:8000
+      "
+    ports: ["8000:8000"]
+    volumes:
+      - .:/app
+      - ml_models:/app/models:ro
+
+  jobpost-inference:
+    image: python:3.11-slim
+    command: |
+      sh -c "
+      pip install torch==2.0.1+cpu torchvision==0.15.2+cpu -f https://download.pytorch.org/whl/torch_stable.html &&
+      python inference_server.py
+      "
+    ports: ["8001:8001"]
+    volumes:
+      - ./inference:/app
+      - ml_models:/app/models:ro
+
+volumes:
+  ml_models:</code></pre>
+          <div class="printout"># AI-enhanced JobPost with GPU training
+# ML Training: TensorFlow GPU image for model training
+# Web App: CPU-only PyTorch for lightweight inference
+# Inference Server: Optimized CPU builds for production serving
+# Shared model storage for training and inference</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. ports -->
+    <section id="ports" class="section">
+      <h2>2. ports</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#ports" target="_blank" rel="noopener" title="Ports Reference">Ports Reference</a> •
+        <a href="https://docs.docker.com/engine/reference/run/#publish-or-expose-port--p---expose" target="_blank" rel="noopener" title="Port Publishing">Port Publishing</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>ports</code> attribute publishes container ports to the host machine, enabling external access to Django JobPost services. This mapping allows users, load balancers, and external systems to connect to containerized applications running on internal container networks.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    ports:
+      - "8000:8000"        # host:container
+      - "8001:8000"        # different host port
+      - "127.0.0.1:8002:8000"  # bind to specific interface
+      - "8003-8005:8003-8005"  # port ranges</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Port mapping:</strong> HOST_PORT:CONTAINER_PORT format for external access</li>
+        <li><strong>Interface binding:</strong> Specify IP address for network interface binding</li>
+        <li><strong>Port ranges:</strong> Map multiple consecutive ports simultaneously</li>
+        <li><strong>Protocol specification:</strong> TCP (default) or UDP protocol selection</li>
+        <li><strong>Dynamic allocation:</strong> Let Docker assign random host ports</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Exposes container services to host network, enabling external connectivity and load balancer integration for Django JobPost application deployment.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Multi-Service Port Configuration</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports:
+      - "8000:8000"     # Main Django application
+      - "8443:8443"     # HTTPS for production
+    command: |
+      sh -c "
+      python manage.py migrate &&
+      gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+      "
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+
+  jobpost-api:
+    build: ./api
+    ports:
+      - "8001:8000"     # API service on different host port
+    command: gunicorn api.wsgi:application --bind 0.0.0.0:8000
+    environment:
+      DJANGO_SETTINGS_MODULE: api.settings.production
+
+  jobpost-admin:
+    build: .
+    ports:
+      - "127.0.0.1:8002:8000"  # Admin interface, localhost only
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.admin
+
+  jobpost-metrics:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"     # Prometheus metrics
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  jobpost-db:
+    image: postgres:15-alpine
+    ports:
+      - "127.0.0.1:5432:5432"  # Database, localhost access only
+    environment:
+      POSTGRES_DB: jobpost_db
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password</code></pre>
+          <div class="printout"># Multi-service port strategy
+# Web: Standard HTTP and HTTPS ports
+# API: Separate host port for microservice architecture
+# Admin: Localhost-only binding for security
+# Metrics: Standard Prometheus port
+# Database: Localhost-only for development access</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Development with Dynamic Ports</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+      DEBUG: "True"
+
+  jobpost-test-runner:
+    build: .
+    ports:
+      - "8001"          # Random host port assignment
+    command: python manage.py test --keepdb
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.test
+
+  jobpost-docs:
+    image: nginx:alpine
+    ports:
+      - "8080:80"       # Documentation server
+    volumes:
+      - ./docs/_build/html:/usr/share/nginx/html:ro
+
+  jobpost-mailcatcher:
+    image: schickling/mailcatcher
+    ports:
+      - "1080:1080"     # Web interface
+      - "1025:1025"     # SMTP server
+
+  jobpost-db-admin:
+    image: adminer
+    ports:
+      - "8081:8080"     # Database admin interface
+    environment:
+      ADMINER_DEFAULT_SERVER: jobpost-db</code></pre>
+          <div class="printout"># Development environment with support services
+# Web: Main Django development server
+# Test runner: Dynamic port for parallel testing
+# Docs: Nginx serving built documentation
+# Mail catcher: Email testing in development
+# DB admin: Adminer for database management</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Production Load Balancer Setup</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"         # HTTP traffic
+      - "443:443"       # HTTPS traffic
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - jobpost-web-1
+      - jobpost-web-2
+      - jobpost-web-3
+
+  jobpost-web-1:
+    build: .
+    expose:
+      - "8000"          # Internal port, not published to host
+    command: gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+
+  jobpost-web-2:
+    build: .
+    expose:
+      - "8000"
+    command: gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+
+  jobpost-web-3:
+    build: .
+    expose:
+      - "8000"
+    command: gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+
+  jobpost-worker:
+    build: .
+    command: celery -A myproject worker --loglevel=info
+    # No ports needed for background workers
+
+  jobpost-monitoring:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"     # Grafana dashboard
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin_password</code></pre>
+          <div class="printout"># Production setup with load balancing
+# Nginx: Public HTTP/HTTPS entry point
+# Web instances: Internal exposure without host ports
+# Worker: Background processing, no external access
+# Monitoring: Grafana dashboard on standard port</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Microservices with Port Ranges</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-gateway:
+    image: traefik:v2.10
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"     # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+
+  jobpost-users-service:
+    build: ./services/users
+    ports:
+      - "8001:8000"
+    labels:
+      - "traefik.http.routers.users.rule=PathPrefix(`/api/users`)"
+
+  jobpost-jobs-service:
+    build: ./services/jobs
+    ports:
+      - "8002:8000"
+    labels:
+      - "traefik.http.routers.jobs.rule=PathPrefix(`/api/jobs`)"
+
+  jobpost-skills-service:
+    build: ./services/skills
+    ports:
+      - "8003:8000"
+    labels:
+      - "traefik.http.routers.skills.rule=PathPrefix(`/api/skills`)"
+
+  jobpost-notifications:
+    build: ./services/notifications
+    ports:
+      - "8004-8006:8000-8002"  # Port range for scaling
+    deploy:
+      replicas: 3
+
+  jobpost-search:
+    image: elasticsearch:8.9.0
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node</code></pre>
+          <div class="printout"># Microservices architecture with API gateway
+# Gateway: Traefik reverse proxy with dashboard
+# Services: Dedicated ports for each microservice
+# Notifications: Port range for horizontal scaling
+# Search: Standard Elasticsearch ports</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Development with Protocol Specification</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports:
+      - "8000:8000/tcp"    # Explicit TCP protocol
+    command: python manage.py runserver 0.0.0.0:8000
+
+  jobpost-realtime:
+    build: ./realtime
+    ports:
+      - "8001:8001/tcp"    # WebSocket server
+      - "8002:8002/udp"    # UDP for real-time notifications
+    command: |
+      sh -c "
+      python websocket_server.py &
+      python udp_notifier.py
+      "
+
+  jobpost-metrics:
+    image: statsd/statsd
+    ports:
+      - "8125:8125/udp"    # StatsD UDP metrics
+      - "8126:8126/tcp"    # StatsD admin interface
+
+  jobpost-dns:
+    image: coredns/coredns
+    ports:
+      - "53:53/udp"        # DNS queries
+      - "53:53/tcp"        # DNS zone transfers
+    volumes:
+      - ./Corefile:/etc/coredns/Corefile:ro
+
+  jobpost-syslog:
+    image: rsyslog/rsyslog_base
+    ports:
+      - "514:514/udp"      # Syslog UDP
+      - "514:514/tcp"      # Syslog TCP
+    volumes:
+      - ./rsyslog.conf:/etc/rsyslog.conf:ro
+      - syslog_data:/var/log
+
+volumes:
+  syslog_data:</code></pre>
+          <div class="printout"># Multi-protocol JobPost infrastructure
+# Web: Standard HTTP over TCP
+# Real-time: WebSocket TCP + UDP notifications
+# Metrics: StatsD UDP with TCP admin interface
+# DNS: UDP queries with TCP zone transfers
+# Syslog: Both UDP and TCP log collection</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. environment -->
+    <section id="environment" class="section">
+      <h2>3. environment</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#environment" target="_blank" rel="noopener" title="Environment Variables Reference">Environment Variables Reference</a> •
+        <a href="https://docs.docker.com/engine/reference/run/#env" target="_blank" rel="noopener" title="Docker Run Environment">Docker Run Environment</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>environment</code> attribute sets environment variables inside containers, enabling configuration of Django JobPost applications without rebuilding images. Environment variables control database connections, debug settings, API keys, and deployment-specific configurations.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    environment:
+      - DJANGO_SETTINGS_MODULE=myproject.settings.production
+      - DEBUG=False
+    # OR object format
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      DEBUG: "False"</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Variable assignment:</strong> KEY=value pairs for container environment</li>
+        <li><strong>String values:</strong> All values treated as strings, use quotes for clarity</li>
+        <li><strong>Boolean representation:</strong> Use "True"/"False" strings for Python compatibility</li>
+        <li><strong>Variable substitution:</strong> Reference host environment with ${VAR} syntax</li>
+        <li><strong>Runtime configuration:</strong> Override image defaults without rebuilding</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Configures container runtime environment with application-specific settings, enabling flexible Django JobPost deployment across different environments without code changes.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Production Environment Configuration</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      # Django Core Settings
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      SECRET_KEY_FILE: /run/secrets/django_secret_key
+      DEBUG: "False"
+      ALLOWED_HOSTS: "jobpost.com,api.jobpost.com"
+      
+      # Database Configuration
+      DATABASE_URL: postgresql://jobpost_user:${DB_PASSWORD}@jobpost-db:5432/jobpost_prod
+      DATABASE_SSL_REQUIRE: "True"
+      DATABASE_CONN_MAX_AGE: "300"
+      
+      # Cache Configuration
+      REDIS_URL: redis://jobpost-redis:6379/0
+      CACHE_TTL: "3600"
+      SESSION_ENGINE: django.contrib.sessions.backends.cache
+      
+      # Email Configuration
+      EMAIL_BACKEND: django.core.mail.backends.smtp.EmailBackend
+      EMAIL_HOST: smtp.sendgrid.net
+      EMAIL_PORT: "587"
+      EMAIL_USE_TLS: "True"
+      EMAIL_HOST_USER: apikey
+      EMAIL_HOST_PASSWORD_FILE: /run/secrets/sendgrid_api_key
+      
+      # JobPost Application Settings
+      JOBPOST_MAX_UPLOAD_SIZE: "10485760"  # 10MB
+      JOBPOST_ALLOWED_EXTENSIONS: "pdf,doc,docx,txt"
+      JOBPOST_ENABLE_NOTIFICATIONS: "True"
+      JOBPOST_SEARCH_BACKEND: elasticsearch
+      
+      # Security Settings
+      SECURE_SSL_REDIRECT: "True"
+      SECURE_PROXY_SSL_HEADER: "HTTP_X_FORWARDED_PROTO,https"
+      CSRF_COOKIE_SECURE: "True"
+      SESSION_COOKIE_SECURE: "True"
+      
+      # Logging Configuration
+      LOG_LEVEL: "INFO"
+      SENTRY_DSN_FILE: /run/secrets/sentry_dsn
+    secrets:
+      - django_secret_key
+      - sendgrid_api_key
+      - sentry_dsn
+    depends_on:
+      - jobpost-db
+      - jobpost-redis
+
+secrets:
+  django_secret_key:
+    external: true
+  sendgrid_api_key:
+    external: true  
+  sentry_dsn:
+    external: true</code></pre>
+          <div class="printout"># Comprehensive production environment setup
+# Django: Production settings with security hardening
+# Database: PostgreSQL with SSL and connection pooling
+# Cache: Redis for sessions and application caching
+# Email: SendGrid integration with secure API key
+# Security: SSL enforcement and secure cookies
+# Monitoring: Sentry integration for error tracking</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Development Environment with Hot Reloading</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: 
+      context: .
+      dockerfile: Dockerfile.dev
+    ports: ["8000:8000"]
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      # Development Django Settings
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+      DEBUG: "True"
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      
+      # Database Configuration
+      DATABASE_URL: postgresql://dev_user:dev_password@jobpost-db:5432/jobpost_dev
+      DATABASE_ENGINE: django.db.backends.postgresql
+      
+      # Cache Configuration (disabled for development)
+      CACHE_BACKEND: django.core.cache.backends.dummy.DummyCache
+      
+      # Email Configuration (use console backend)
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+      
+      # JobPost Development Settings
+      JOBPOST_ENABLE_DEBUG_TOOLBAR: "True"
+      JOBPOST_MAX_UPLOAD_SIZE: "52428800"  # 50MB for dev
+      JOBPOST_ENABLE_PROFILING: "True"
+      
+      # Development Tools
+      CELERY_EAGER_PROPAGATES_EXCEPTIONS: "True"
+      CELERY_ALWAYS_EAGER: "True"
+      
+      # Asset Configuration
+      STATIC_URL: "/static/"
+      MEDIA_URL: "/media/"
+      
+      # Feature Flags
+      ENABLE_EXPERIMENTAL_FEATURES: "True"
+      JOBPOST_MOCK_EXTERNAL_APIS: "True"
+    command: |
+      sh -c "
+      python manage.py migrate &&
+      python manage.py collectstatic --noinput &&
+      python manage.py runserver 0.0.0.0:8000
+      "
+
+  jobpost-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: jobpost_dev
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_dev_data:</code></pre>
+          <div class="printout"># Development environment optimizations
+# Django: Debug mode with hot reloading
+# Database: Local PostgreSQL with exposed port
+# Caching: Disabled for immediate changes
+# Email: Console output for testing
+# Tools: Debug toolbar and profiling enabled
+# Assets: Direct file serving for development</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Multi-Worker Environment with Queue Configuration</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      WORKER_TYPE: "web"
+      DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/jobpost
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - jobpost-db
+      - jobpost-redis
+
+  jobpost-worker-high:
+    build: .
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      WORKER_TYPE: "celery_high"
+      CELERY_QUEUES: "high_priority,notifications"
+      CELERY_CONCURRENCY: "4"
+      CELERY_LOGLEVEL: "INFO"
+      DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/jobpost
+      REDIS_URL: redis://redis:6379/0
+      
+      # Email processing configuration
+      EMAIL_QUEUE_HIGH_PRIORITY: "True"
+      NOTIFICATION_BATCH_SIZE: "10"
+    command: celery -A myproject worker -Q high_priority,notifications --concurrency=4
+    deploy:
+      replicas: 2
+
+  jobpost-worker-low:
+    build: .
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      WORKER_TYPE: "celery_low"
+      CELERY_QUEUES: "low_priority,reports,analytics"
+      CELERY_CONCURRENCY: "2"
+      CELERY_LOGLEVEL: "WARNING"
+      DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/jobpost
+      REDIS_URL: redis://redis:6379/0
+      
+      # Batch processing configuration
+      REPORT_GENERATION_TIMEOUT: "1800"  # 30 minutes
+      ANALYTICS_BATCH_SIZE: "1000"
+    command: celery -A myproject worker -Q low_priority,reports,analytics --concurrency=2
+    deploy:
+      replicas: 1
+
+  jobpost-scheduler:
+    build: .
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      WORKER_TYPE: "celery_beat"
+      DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/jobpost
+      REDIS_URL: redis://redis:6379/0
+      
+      # Periodic task configuration
+      JOBPOST_CLEANUP_INTERVAL: "86400"  # Daily
+      JOBPOST_REPORT_SCHEDULE: "0 2 * * *"  # 2 AM daily
+      JOBPOST_ANALYTICS_SCHEDULE: "0 */6 * * *"  # Every 6 hours
+    command: celery -A myproject beat --loglevel=info
+
+  jobpost-monitoring:
+    image: flower
+    ports: ["5555:5555"]
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      FLOWER_BASIC_AUTH: "${FLOWER_USER}:${FLOWER_PASSWORD}"
+    depends_on:
+      - jobpost-redis</code></pre>
+          <div class="printout"># Multi-worker Celery configuration
+# High Priority: Notifications and real-time tasks
+# Low Priority: Reports and analytics processing
+# Scheduler: Periodic task management
+# Monitoring: Flower dashboard for worker oversight
+# Queue separation for performance optimization</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Feature Flag and A/B Testing Environment</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web-variant-a:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      
+      # A/B Testing Configuration
+      VARIANT_GROUP: "A"
+      EXPERIMENT_ID: "job_recommendation_v2"
+      
+      # Feature Flags
+      FEATURE_NEW_RECOMMENDATION_ENGINE: "True"
+      FEATURE_ADVANCED_SEARCH_FILTERS: "False"
+      FEATURE_SOCIAL_LOGIN: "True"
+      FEATURE_PREMIUM_JOBPOST: "False"
+      
+      # JobPost A Variant Settings
+      RECOMMENDATION_ALGORITHM: "collaborative_filtering"
+      SEARCH_RESULTS_PER_PAGE: "10"
+      JOB_CARD_LAYOUT: "compact"
+      
+      # Analytics and Tracking
+      ANALYTICS_ENDPOINT: "https://analytics.jobpost.com/v2"
+      EXPERIMENT_TRACKING: "True"
+      USER_BEHAVIOR_LOGGING: "detailed"
+      
+      # Performance Settings for Variant A
+      CACHE_TIMEOUT_RECOMMENDATIONS: "3600"
+      CACHE_TIMEOUT_SEARCH: "1800"
+    labels:
+      - "variant=A"
+      - "experiment=job_recommendation_v2"
+
+  jobpost-web-variant-b:
+    build: .
+    ports: ["8001:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      
+      # A/B Testing Configuration
+      VARIANT_GROUP: "B"
+      EXPERIMENT_ID: "job_recommendation_v2"
+      
+      # Feature Flags (Different from Variant A)
+      FEATURE_NEW_RECOMMENDATION_ENGINE: "False"
+      FEATURE_ADVANCED_SEARCH_FILTERS: "True"
+      FEATURE_SOCIAL_LOGIN: "True"
+      FEATURE_PREMIUM_JOBPOST: "True"
+      
+      # JobPost B Variant Settings
+      RECOMMENDATION_ALGORITHM: "content_based"
+      SEARCH_RESULTS_PER_PAGE: "15"
+      JOB_CARD_LAYOUT: "detailed"
+      
+      # Analytics and Tracking
+      ANALYTICS_ENDPOINT: "https://analytics.jobpost.com/v2"
+      EXPERIMENT_TRACKING: "True"
+      USER_BEHAVIOR_LOGGING: "detailed"
+      
+      # Performance Settings for Variant B
+      CACHE_TIMEOUT_RECOMMENDATIONS: "1800"
+      CACHE_TIMEOUT_SEARCH: "3600"
+    labels:
+      - "variant=B"
+      - "experiment=job_recommendation_v2"
+
+  jobpost-load-balancer:
+    image: nginx:alpine
+    ports: ["80:80"]
+    volumes:
+      - ./nginx-ab-testing.conf:/etc/nginx/nginx.conf:ro
+    environment:
+      VARIANT_A_UPSTREAM: "jobpost-web-variant-a:8000"
+      VARIANT_B_UPSTREAM: "jobpost-web-variant-b:8000"
+      AB_TESTING_RATIO: "50:50"  # 50% traffic to each variant
+    depends_on:
+      - jobpost-web-variant-a
+      - jobpost-web-variant-b</code></pre>
+          <div class="printout"># A/B testing environment setup
+# Variant A: Collaborative filtering recommendation engine
+# Variant B: Content-based recommendations with advanced filters
+# Feature Flags: Granular control over functionality
+# Load Balancer: Traffic distribution between variants
+# Analytics: Comprehensive experiment tracking</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Environment Variable Inheritance and Override</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-base: &base-service
+    build: .
+    environment: &base-environment
+      # Base Django Configuration
+      DJANGO_SETTINGS_MODULE: myproject.settings.base
+      PYTHONUNBUFFERED: "1"
+      
+      # Database Configuration (defaults)
+      DATABASE_ENGINE: django.db.backends.postgresql
+      DATABASE_CONN_MAX_AGE: "0"
+      DATABASE_AUTOCOMMIT: "True"
+      
+      # Cache Configuration (defaults)
+      CACHE_BACKEND: django.core.cache.backends.redis.RedisCache
+      CACHE_KEY_PREFIX: "jobpost"
+      
+      # JobPost Application Defaults
+      JOBPOST_MAX_UPLOAD_SIZE: "5242880"  # 5MB
+      JOBPOST_ALLOWED_EXTENSIONS: "pdf,doc,docx"
+      JOBPOST_SESSION_TIMEOUT: "3600"
+      
+      # Security Defaults
+      SECURE_CONTENT_TYPE_NOSNIFF: "True"
+      SECURE_BROWSER_XSS_FILTER: "True"
+      X_FRAME_OPTIONS: "DENY"
+
+  jobpost-web-dev:
+    <<: *base-service
+    ports: ["8000:8000"]
+    volumes: [".:/app"]
+    environment:
+      <<: *base-environment
+      # Override base settings for development
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+      DEBUG: "True"
+      DATABASE_URL: postgresql://dev:dev@db:5432/jobpost_dev
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+      JOBPOST_MAX_UPLOAD_SIZE: "52428800"  # 50MB for dev
+
+  jobpost-web-staging:
+    <<: *base-service
+    ports: ["8000:8000"]
+    environment:
+      <<: *base-environment
+      # Override for staging
+      DJANGO_SETTINGS_MODULE: myproject.settings.staging
+      DEBUG: "False"
+      DATABASE_URL: postgresql://staging_user:${STAGING_DB_PASSWORD}@staging-db:5432/jobpost_staging
+      ALLOWED_HOSTS: "staging.jobpost.com"
+      EMAIL_BACKEND: django.core.mail.backends.smtp.EmailBackend
+      EMAIL_HOST: smtp.mailtrap.io
+
+  jobpost-web-prod:
+    <<: *base-service
+    environment:
+      <<: *base-environment
+      # Override for production
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      DEBUG: "False"
+      DATABASE_URL: postgresql://prod_user:${PROD_DB_PASSWORD}@prod-db:5432/jobpost_prod
+      ALLOWED_HOSTS: "jobpost.com,www.jobpost.com"
+      EMAIL_BACKEND: django.core.mail.backends.smtp.EmailBackend
+      EMAIL_HOST: smtp.sendgrid.net
+      # Additional production-only settings
+      SECURE_SSL_REDIRECT: "True"
+      SENTRY_DSN: "${SENTRY_DSN}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"</code></pre>
+          <div class="printout"># Environment inheritance pattern
+# Base Service: Common configuration shared across environments
+# Development: Debug enabled, console email, large uploads
+# Staging: Production-like but with test email backend
+# Production: Full security, external services, SSL enforcement
+# YAML anchors enable DRY configuration management</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. volumes -->
+    <section id="volumes" class="section">
+      <h2>4. volumes</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#volumes" target="_blank" rel="noopener" title="Volumes Reference">Volumes Reference</a> •
+        <a href="https://docs.docker.com/storage/volumes/" target="_blank" rel="noopener" title="Docker Volumes">Docker Volumes</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>volumes</code> attribute mounts host directories or named volumes into containers, enabling persistent data storage and file sharing for Django JobPost applications. Volumes preserve data across container restarts and enable development workflows with live code editing.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    volumes:
+      - /host/path:/container/path        # bind mount
+      - named_volume:/container/path      # named volume
+      - /container/path                   # anonymous volume
+      - ./relative/path:/container/path:ro # read-only mount</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Bind mounts:</strong> Direct host directory mapping for development and configuration</li>
+        <li><strong>Named volumes:</strong> Docker-managed storage for persistent data</li>
+        <li><strong>Anonymous volumes:</strong> Temporary container-specific storage</li>
+        <li><strong>Access modes:</strong> Read-only (ro) or read-write (rw) permissions</li>
+        <li><strong>Mount options:</strong> Additional mounting behavior configuration</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Provides persistent storage and file system access for Django JobPost applications, enabling data persistence, configuration sharing, and development workflows.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Production Data Persistence</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports: ["8000:8000"]
+    volumes:
+      # Application data persistence
+      - jobpost_media:/app/media                    # User uploads
+      - jobpost_static:/app/staticfiles             # Collected static files
+      - jobpost_logs:/app/logs                      # Application logs
+      
+      # Configuration files (read-only)
+      - ./config/settings.py:/app/myproject/settings/production.py:ro
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      
+      # SSL certificates
+      - ./ssl:/app/ssl:ro
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      MEDIA_ROOT: /app/media
+      STATIC_ROOT: /app/staticfiles
+
+  jobpost-db:
+    image: postgres:15-alpine
+    volumes:
+      # Database data persistence
+      - postgres_data:/var/lib/postgresql/data
+      
+      # Database initialization scripts
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      
+      # Backup storage
+      - jobpost_db_backups:/backups
+    environment:
+      POSTGRES_DB: jobpost_production
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+
+  jobpost-redis:
+    image: redis:7-alpine
+    volumes:
+      # Redis data persistence
+      - redis_data:/data
+      
+      # Redis configuration
+      - ./config/redis.conf:/etc/redis/redis.conf:ro
+    command: redis-server /etc/redis/redis.conf
+
+  jobpost-backup:
+    image: alpine:latest
+    volumes:
+      # Access to data for backup
+      - postgres_data:/data/db:ro
+      - jobpost_media:/data/media:ro
+      - jobpost_logs:/data/logs:ro
+      
+      # Backup destination
+      - /host/backups:/backups
+    command: |
+      sh -c "
+      tar -czf /backups/jobpost-$(date +%Y%m%d-%H%M%S).tar.gz -C /data .
+      find /backups -name '*.tar.gz' -mtime +30 -delete
+      "
+
+volumes:
+  jobpost_media:
+    driver: local
+  jobpost_static:
+    driver: local  
+  jobpost_logs:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  jobpost_db_backups:
+    driver: local</code></pre>
+          <div class="printout"># Production data architecture
+# Media: User-uploaded files with persistent storage
+# Static: Collected Django static files for serving
+# Database: PostgreSQL data with initialization scripts
+# Redis: Cache and session data persistence
+# Backup: Read-only access to all data for backup creation
+# Configuration: Read-only mounted config files</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Development with Live Code Editing</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: 
+      context: .
+      dockerfile: Dockerfile.dev
+    ports: ["8000:8000"]
+    volumes:
+      # Live code editing
+      - .:/app                                      # Source code hot reload
+      - /app/node_modules                           # Exclude node_modules
+      - /app/__pycache__                            # Exclude Python cache
+      - /app/.git                                   # Exclude git directory
+      
+      # Development data
+      - jobpost_dev_media:/app/media
+      - jobpost_dev_static:/app/staticfiles
+      
+      # Development tools
+      - ./scripts:/app/scripts:ro                  # Development scripts
+      - ./fixtures:/app/fixtures:ro                # Test data fixtures
+      
+      # IDE and tools configuration
+      - ./.vscode:/app/.vscode:ro                   # VSCode settings
+      - ./pytest.ini:/app/pytest.ini:ro            # Testing configuration
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+      DEBUG: "True"
+      PYTHONUNBUFFERED: "1"
+    command: |
+      sh -c "
+      pip install -r requirements-dev.txt &&
+      python manage.py migrate &&
+      python manage.py runserver 0.0.0.0:8000
+      "
+
+  jobpost-db-dev:
+    image: postgres:15-alpine
+    ports: ["5432:5432"]  # Expose for external tools
+    volumes:
+      # Development database
+      - postgres_dev_data:/var/lib/postgresql/data
+      
+      # Sample data and migrations
+      - ./db/fixtures:/fixtures:ro
+      - ./db/dev-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      POSTGRES_DB: jobpost_dev
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+
+  jobpost-redis-dev:
+    image: redis:7-alpine
+    ports: ["6379:6379"]  # Expose for external tools
+    volumes:
+      # Development Redis (no persistence needed)
+      - redis_dev_data:/data
+    command: redis-server --appendonly yes
+
+  jobpost-mailcatcher:
+    image: schickling/mailcatcher
+    ports: ["1080:1080", "1025:1025"]
+    # No volumes needed for development email testing
+
+  jobpost-docs:
+    image: nginx:alpine
+    ports: ["8080:80"]
+    volumes:
+      # Serve documentation
+      - ./docs/_build/html:/usr/share/nginx/html:ro
+    command: nginx -g 'daemon off;'
+
+volumes:
+  jobpost_dev_media:
+  jobpost_dev_static:
+  postgres_dev_data:
+  redis_dev_data:</code></pre>
+          <div class="printout"># Development environment optimization
+# Live Editing: Source code mounted for immediate changes
+# Exclusions: node_modules and cache directories excluded
+# Database: Exposed port for external DB tools
+# Sample Data: Fixtures and initialization scripts
+# Tools: Development scripts and IDE configuration
+# Documentation: Built docs served via Nginx</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Multi-Environment Volume Strategy</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    volumes:
+      # Environment-specific configuration
+      - ./config/${ENVIRONMENT:-development}:/app/config:ro
+      
+      # Shared application data
+      - jobpost_media_${ENVIRONMENT:-dev}:/app/media
+      - jobpost_static_${ENVIRONMENT:-dev}:/app/staticfiles
+      
+      # Logs with environment separation
+      - ./logs/${ENVIRONMENT:-development}:/app/logs
+      
+      # SSL certificates (production only)
+      - ./ssl:/app/ssl:ro
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.${ENVIRONMENT:-development}
+
+  jobpost-nginx:
+    image: nginx:alpine
+    ports: ["80:80", "443:443"]
+    volumes:
+      # Environment-specific nginx configuration
+      - ./nginx/${ENVIRONMENT:-development}.conf:/etc/nginx/nginx.conf:ro
+      
+      # Static files from web service
+      - jobpost_static_${ENVIRONMENT:-dev}:/var/www/static:ro
+      
+      # SSL certificates (production only)
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - jobpost-web
+
+  jobpost-db:
+    image: postgres:15-alpine
+    volumes:
+      # Environment-specific database data
+      - postgres_data_${ENVIRONMENT:-dev}:/var/lib/postgresql/data
+      
+      # Environment-specific initialization
+      - ./db/init/${ENVIRONMENT:-development}:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB: jobpost_${ENVIRONMENT:-dev}
+      POSTGRES_USER: ${DB_USER:-dev_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}
+
+  jobpost-monitoring:
+    image: prom/prometheus
+    volumes:
+      # Environment-specific monitoring config
+      - ./monitoring/${ENVIRONMENT:-development}/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      
+      # Metrics data storage
+      - prometheus_data_${ENVIRONMENT:-dev}:/prometheus
+    ports: ["9090:9090"]
+
+volumes:
+  # Development volumes
+  jobpost_media_dev:
+  jobpost_static_dev:
+  postgres_data_dev:
+  prometheus_data_dev:
+  
+  # Staging volumes
+  jobpost_media_staging:
+  jobpost_static_staging:
+  postgres_data_staging:
+  prometheus_data_staging:
+  
+  # Production volumes
+  jobpost_media_production:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=nfs.example.com,rw
+      device: ":/data/jobpost/media"
+  
+  jobpost_static_production:
+    driver: local
+  
+  postgres_data_production:
+    driver: local
+    driver_opts:
+      type: ext4
+      device: /dev/disk/by-label/postgres-data
+  
+  prometheus_data_production:
+    driver: local</code></pre>
+          <div class="printout"># Multi-environment volume management
+# Environment Variables: Dynamic volume and config selection
+# Development: Local volumes for rapid iteration
+# Staging: Separate volumes mimicking production
+# Production: NFS for media, dedicated disk for database
+# Configuration: Environment-specific configs and initialization</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Advanced Volume Configurations</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    volumes:
+      # Bind mount with specific options
+      - type: bind
+        source: ./app
+        target: /app
+        bind:
+          propagation: rprivate
+      
+      # Named volume with driver options
+      - type: volume
+        source: jobpost_uploads
+        target: /app/uploads
+        volume:
+          nocopy: false
+      
+      # tmpfs for temporary files
+      - type: tmpfs
+        target: /app/tmp
+        tmpfs:
+          size: 100M
+          mode: 1777
+
+  jobpost-db:
+    image: postgres:15-alpine
+    volumes:
+      # Volume with backup configuration
+      - type: volume
+        source: postgres_primary_data
+        target: /var/lib/postgresql/data
+        volume:
+          nocopy: true
+      
+      # Read-only configuration
+      - type: bind
+        source: ./db/postgresql.conf
+        target: /etc/postgresql/postgresql.conf
+        read_only: true
+
+  jobpost-cache:
+    image: redis:7-alpine
+    volumes:
+      # Memory-mapped file volume
+      - type: volume
+        source: redis_data
+        target: /data
+        volume:
+          driver_opts:
+            type: tmpfs
+            device: tmpfs
+            o: size=1G,uid=999
+
+  jobpost-search:
+    image: elasticsearch:8.9.0
+    volumes:
+      # SSD storage for search indices
+      - type: volume
+        source: elasticsearch_data
+        target: /usr/share/elasticsearch/data
+        volume:
+          driver_opts:
+            type: ext4
+            device: /dev/nvme0n1p1
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  jobpost-backup:
+    image: alpine:latest
+    volumes:
+      # Multiple source volumes for backup
+      - postgres_primary_data:/backup/db:ro
+      - jobpost_uploads:/backup/uploads:ro
+      - elasticsearch_data:/backup/search:ro
+      
+      # Network storage for backup destination
+      - type: volume
+        source: backup_storage
+        target: /backups
+        volume:
+          driver: nfs
+          driver_opts:
+            addr: backup.example.com
+            device: ":/jobpost/backups"
+            o: "nfsvers=4,soft,intr"
+
+volumes:
+  jobpost_uploads:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/storage/jobpost/uploads
+
+  postgres_primary_data:
+    driver: local
+    driver_opts:
+      type: ext4
+      device: /dev/disk/by-label/postgres-primary
+
+  redis_data:
+    driver: local
+
+  elasticsearch_data:
+    driver: local
+    driver_opts:
+      type: ext4
+      device: /dev/nvme0n1p1
+
+  backup_storage:
+    driver: nfs
+    driver_opts:
+      addr: backup.example.com
+      device: ":/jobpost/backups"
+      o: "nfsvers=4,soft,intr"</code></pre>
+          <div class="printout"># Advanced volume configurations
+# Bind Mounts: Specific propagation and mount options
+# tmpfs: In-memory temporary storage for performance
+# SSD Storage: NVMe drives for Elasticsearch performance
+# Network Storage: NFS for distributed backup storage
+# Memory Mapping: tmpfs Redis for ultimate performance
+# Mount Options: Fine-grained control over filesystem behavior</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Container Data Sharing Patterns</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports: ["8000:8000"]
+    volumes:
+      # Shared data volumes between services
+      - shared_static:/app/staticfiles
+      - shared_media:/app/media
+      - shared_logs:/app/logs
+      
+      # Configuration shared across services
+      - jobpost_config:/app/config:ro
+    command: |
+      sh -c "
+      python manage.py collectstatic --noinput &&
+      python manage.py migrate &&
+      gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+      "
+
+  jobpost-worker:
+    build: .
+    volumes:
+      # Same shared volumes for consistency
+      - shared_media:/app/media
+      - shared_logs:/app/logs
+      - jobpost_config:/app/config:ro
+      
+      # Worker-specific temporary storage
+      - worker_temp:/app/temp
+    command: celery -A myproject worker --loglevel=info
+
+  jobpost-nginx:
+    image: nginx:alpine
+    ports: ["80:80"]
+    volumes:
+      # Serve static files directly from shared volume
+      - shared_static:/var/www/static:ro
+      - shared_media:/var/www/media:ro
+      
+      # Nginx access to logs for aggregation
+      - shared_logs:/var/log/jobpost:ro
+      
+      # Nginx-specific configuration
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - jobpost-web
+
+  jobpost-log-aggregator:
+    image: fluentd:latest
+    volumes:
+      # Read logs from shared volume
+      - shared_logs:/fluentd/log:ro
+      
+      # Fluentd configuration
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf:ro
+      
+      # Output buffer storage
+      - fluentd_buffer:/fluentd/buffer
+
+  jobpost-backup:
+    image: alpine:latest
+    volumes:
+      # Access all shared data for backup
+      - shared_static:/backup/static:ro
+      - shared_media:/backup/media:ro
+      - shared_logs:/backup/logs:ro
+      - postgres_data:/backup/db:ro
+      
+      # Backup destination
+      - ./backups:/backups
+    command: |
+      sh -c "
+      echo 'Creating backup...'
+      tar -czf /backups/jobpost-full-$(date +%Y%m%d-%H%M%S).tar.gz -C /backup .
+      echo 'Backup complete'
+      "
+
+  jobpost-db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - jobpost_config:/config:ro
+    environment:
+      POSTGRES_DB: jobpost_db
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+
+volumes:
+  # Shared volumes for data consistency
+  shared_static:
+    driver: local
+  shared_media:
+    driver: local
+  shared_logs:
+    driver: local
+  
+  # Service-specific volumes
+  postgres_data:
+    driver: local
+  worker_temp:
+    driver: local
+  fluentd_buffer:
+    driver: local
+  
+  # Configuration volume
+  jobpost_config:
+    driver: local</code></pre>
+          <div class="printout"># Container data sharing architecture
+# Shared Volumes: Static files, media, and logs shared across services
+# Service Coordination: Web, worker, and nginx access same data
+# Log Aggregation: Centralized log collection from shared volume
+# Backup Strategy: Single backup service accessing all data volumes
+# Configuration: Shared config volume for consistent settings
+# Separation: Service-specific volumes for isolated data</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. networks -->
+    <section id="networks" class="section">
+      <h2>5. networks</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#networks" target="_blank" rel="noopener" title="Networks Reference">Networks Reference</a> •
+        <a href="https://docs.docker.com/network/" target="_blank" rel="noopener" title="Docker Networks">Docker Networks</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>networks</code> attribute configures network connectivity for Django JobPost services, enabling secure communication between containers while controlling network access. Networks provide isolation, service discovery, and traffic routing for microservices architectures.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    networks:
+      - frontend
+      - backend
+    # OR with configuration
+    networks:
+      frontend:
+        ipv4_address: 172.20.0.5
+      backend:
+        aliases: ["api-server"]</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Network assignment:</strong> Connect services to named networks for communication</li>
+        <li><strong>Static IP addressing:</strong> Assign fixed IP addresses within network subnets</li>
+        <li><strong>Service aliases:</strong> Alternative hostnames for service discovery</li>
+        <li><strong>Network isolation:</strong> Separate traffic between different service tiers</li>
+        <li><strong>External networks:</strong> Connect to pre-existing Docker networks</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Establishes secure network connectivity and communication channels between Django JobPost services with controlled access and service discovery.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Three-Tier Network Architecture</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-nginx:
+    image: nginx:alpine
+    ports: ["80:80", "443:443"]
+    networks:
+      - frontend
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - jobpost-web
+
+  jobpost-web:
+    build: .
+    networks:
+      - frontend
+      - backend
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      DATABASE_URL: postgresql://user:pass@jobpost-db:5432/jobpost
+      REDIS_URL: redis://jobpost-cache:6379/0
+
+  jobpost-api:
+    build: ./api
+    networks:
+      - frontend
+      - backend
+    environment:
+      API_DATABASE_URL: postgresql://user:pass@jobpost-db:5432/jobpost
+
+  jobpost-worker:
+    build: .
+    networks:
+      - backend  # No frontend access needed
+    command: celery -A myproject worker --loglevel=info
+
+  jobpost-db:
+    image: postgres:15-alpine
+    networks:
+      - backend  # Database isolated from frontend
+    environment:
+      POSTGRES_DB: jobpost_db
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  jobpost-cache:
+    image: redis:7-alpine
+    networks:
+      - backend  # Cache isolated from frontend
+
+networks:
+  frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1
+    internal: true  # No external internet access
+
+volumes:
+  postgres_data:</code></pre>
+          <div class="printout"># Three-tier network security
+# Frontend: Public-facing services (nginx, web, api)
+# Backend: Internal services (worker, database, cache)
+# Network Isolation: Database and cache not accessible from frontend
+# Internal Network: Backend network without internet access
+# Service Discovery: Services communicate via hostnames</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Microservices with Service Mesh</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-gateway:
+    image: traefik:v2.10
+    ports: ["80:80", "443:443", "8080:8080"]
+    networks:
+      - public
+      - mesh
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  jobpost-users-service:
+    build: ./services/users
+    networks:
+      mesh:
+        aliases: ["users-api", "user-service"]
+    labels:
+      - "traefik.http.routers.users.rule=PathPrefix(`/api/users`)"
+    environment:
+      SERVICE_NAME: users
+      DATABASE_URL: postgresql://user:pass@users-db:5432/users
+
+  jobpost-jobs-service:
+    build: ./services/jobs
+    networks:
+      mesh:
+        aliases: ["jobs-api", "job-service"]
+    labels:
+      - "traefik.http.routers.jobs.rule=PathPrefix(`/api/jobs`)"
+    environment:
+      SERVICE_NAME: jobs
+      DATABASE_URL: postgresql://user:pass@jobs-db:5432/jobs
+
+  jobpost-skills-service:
+    build: ./services/skills
+    networks:
+      mesh:
+        aliases: ["skills-api", "skill-service"]
+    labels:
+      - "traefik.http.routers.skills.rule=PathPrefix(`/api/skills`)"
+
+  jobpost-notification-service:
+    build: ./services/notifications
+    networks:
+      - mesh
+      - notification-network
+    environment:
+      USERS_SERVICE_URL: http://users-api:8000
+      JOBS_SERVICE_URL: http://jobs-api:8000
+
+  # Dedicated databases per service
+  users-db:
+    image: postgres:15-alpine
+    networks:
+      - mesh
+    environment:
+      POSTGRES_DB: users
+      POSTGRES_USER: users_user
+
+  jobs-db:
+    image: postgres:15-alpine
+    networks:
+      - mesh
+    environment:
+      POSTGRES_DB: jobs
+      POSTGRES_USER: jobs_user
+
+  # Shared services
+  jobpost-cache:
+    image: redis:7-alpine
+    networks:
+      mesh:
+        aliases: ["shared-cache", "redis-cluster"]
+
+  jobpost-message-queue:
+    image: rabbitmq:3-management
+    networks:
+      - mesh
+      - notification-network
+    ports: ["15672:15672"]  # Management interface
+
+networks:
+  public:
+    driver: bridge
+  
+  mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+  
+  notification-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/16</code></pre>
+          <div class="printout"># Microservices mesh architecture
+# Service Mesh: All services communicate via mesh network
+# Service Aliases: Multiple hostnames for service discovery
+# Dedicated Databases: Per-service database isolation
+# Shared Services: Cache and message queue accessible to all
+# Gateway: Traefik for service routing and load balancing
+# Network Segmentation: Separate notification network for async processing</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Multi-Environment Network Isolation</h4>
+          <pre><code class="language-yaml">services:
+  # Development Environment
+  jobpost-web-dev:
+    build: .
+    profiles: ["dev"]
+    networks:
+      - dev-frontend
+      - dev-backend
+    environment:
+      ENVIRONMENT: development
+
+  jobpost-db-dev:
+    image: postgres:15-alpine
+    profiles: ["dev"]
+    networks:
+      dev-backend:
+        ipv4_address: 172.25.0.10
+    ports: ["5432:5432"]  # Exposed for dev tools
+
+  # Staging Environment
+  jobpost-web-staging:
+    build: .
+    profiles: ["staging"]
+    networks:
+      - staging-frontend
+      - staging-backend
+    environment:
+      ENVIRONMENT: staging
+
+  jobpost-db-staging:
+    image: postgres:15-alpine
+    profiles: ["staging"]
+    networks:
+      staging-backend:
+        ipv4_address: 172.26.0.10
+    # No exposed ports in staging
+
+  # Production Environment
+  jobpost-web-prod:
+    build: .
+    profiles: ["prod"]
+    networks:
+      - prod-frontend
+      - prod-backend
+    environment:
+      ENVIRONMENT: production
+    deploy:
+      replicas: 3
+
+  jobpost-db-prod:
+    image: postgres:15-alpine
+    profiles: ["prod"]
+    networks:
+      prod-backend:
+        ipv4_address: 172.27.0.10
+    # No exposed ports in production
+
+  # Shared monitoring across environments
+  jobpost-monitoring:
+    image: prometheus/prometheus
+    networks:
+      - dev-backend
+      - staging-backend
+      - prod-backend
+    ports: ["9090:9090"]
+
+networks:
+  # Development networks
+  dev-frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/24
+  dev-backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.1.0/24
+
+  # Staging networks
+  staging-frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.26.0.0/24
+  staging-backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.26.1.0/24
+    internal: true
+
+  # Production networks
+  prod-frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.27.0.0/24
+  prod-backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.27.1.0/24
+    internal: true
+    encrypted: true  # Network encryption for production</code></pre>
+          <div class="printout"># Multi-environment network strategy
+# Development: Exposed database ports for development tools
+# Staging: Internal networks with no external access
+# Production: Encrypted networks with multiple web replicas
+# Static IPs: Fixed database addresses for configuration
+# Monitoring: Cross-environment monitoring service
+# Network Isolation: Complete separation between environments</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. labels -->
+    <section id="labels" class="section">
+      <h2>6. labels</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#labels" target="_blank" rel="noopener" title="Labels Reference">Labels Reference</a> •
+        <a href="https://docs.docker.com/engine/reference/commandline/inspect/" target="_blank" rel="noopener" title="Docker Inspect">Docker Inspect</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>labels</code> attribute adds metadata to containers using key-value pairs, enabling orchestration tools, monitoring systems, and automation scripts to identify and manage Django JobPost services. Labels provide context for deployment tracking, service discovery, and operational management.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    labels:
+      - "com.example.team=backend"
+      - "com.example.environment=production"
+    # OR object format
+    labels:
+      com.example.team: backend
+      com.example.environment: production</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Metadata tags:</strong> Key-value pairs for container identification and categorization</li>
+        <li><strong>Orchestration labels:</strong> Integration with Docker Swarm, Kubernetes, and service discovery</li>
+        <li><strong>Monitoring labels:</strong> Support for Prometheus, Grafana, and observability tools</li>
+        <li><strong>Deployment tracking:</strong> Version, environment, and team ownership information</li>
+        <li><strong>Automation hooks:</strong> Labels for CI/CD pipeline and deployment automation</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Provides rich metadata for container management, enabling automated operations, monitoring, and service discovery for Django JobPost infrastructure.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Production Labeling Strategy</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports: ["8000:8000"]
+    labels:
+      # Application metadata
+      com.jobpost.service: "web"
+      com.jobpost.tier: "frontend"
+      com.jobpost.component: "django-app"
+      
+      # Team and ownership
+      com.jobpost.team: "backend-team"
+      com.jobpost.maintainer: "platform@jobpost.com"
+      com.jobpost.on-call: "backend-oncall@jobpost.com"
+      
+      # Environment and deployment
+      com.jobpost.environment: "production"
+      com.jobpost.region: "us-west-2"
+      com.jobpost.deployment.version: "v2.1.3"
+      com.jobpost.deployment.timestamp: "2024-01-15T10:30:00Z"
+      com.jobpost.deployment.pipeline: "github-actions"
+      
+      # Monitoring and observability
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8000"
+      prometheus.io/path: "/metrics"
+      
+      # Traefik routing
+      traefik.enable: "true"
+      traefik.http.routers.jobpost-web.rule: "Host(`jobpost.com`)"
+      traefik.http.routers.jobpost-web.tls: "true"
+      traefik.http.services.jobpost-web.loadbalancer.server.port: "8000"
+
+  jobpost-worker:
+    build: .
+    labels:
+      # Application metadata
+      com.jobpost.service: "worker"
+      com.jobpost.tier: "backend"
+      com.jobpost.component: "celery-worker"
+      
+      # Team and ownership
+      com.jobpost.team: "backend-team"
+      com.jobpost.maintainer: "platform@jobpost.com"
+      
+      # Environment and deployment
+      com.jobpost.environment: "production"
+      com.jobpost.deployment.version: "v2.1.3"
+      
+      # Worker-specific labels
+      com.jobpost.worker.queues: "high_priority,notifications"
+      com.jobpost.worker.concurrency: "4"
+      
+      # Monitoring (no HTTP scraping for workers)
+      prometheus.io/scrape: "false"
+    command: celery -A myproject worker -Q high_priority,notifications --concurrency=4
+
+  jobpost-db:
+    image: postgres:15-alpine
+    labels:
+      # Application metadata
+      com.jobpost.service: "database"
+      com.jobpost.tier: "data"
+      com.jobpost.component: "postgresql"
+      
+      # Database-specific labels
+      com.jobpost.database.type: "primary"
+      com.jobpost.database.backup.schedule: "daily"
+      com.jobpost.database.backup.retention: "30d"
+      
+      # Persistence and storage
+      com.jobpost.storage.type: "persistent"
+      com.jobpost.storage.size: "100GB"
+      
+      # Team and ownership
+      com.jobpost.team: "platform-team"
+      com.jobpost.dba: "dba@jobpost.com"</code></pre>
+          <div class="printout"># Comprehensive production labeling
+# Service Identity: Clear service, tier, and component identification
+# Team Ownership: Contact information and responsibility assignment
+# Deployment Tracking: Version, timestamp, and pipeline information
+# Monitoring Integration: Prometheus scraping configuration
+# Routing Configuration: Traefik reverse proxy labels
+# Operational Metadata: Backup schedules and storage requirements</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Multi-Environment Label Management</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    labels:
+      # Dynamic environment labeling
+      com.jobpost.environment: "${ENVIRONMENT:-development}"
+      com.jobpost.branch: "${GIT_BRANCH:-main}"
+      com.jobpost.commit: "${GIT_COMMIT:-unknown}"
+      
+      # Feature flags via labels
+      com.jobpost.features.new-ui: "${ENABLE_NEW_UI:-false}"
+      com.jobpost.features.advanced-search: "${ENABLE_ADVANCED_SEARCH:-false}"
+      com.jobpost.features.premium: "${ENABLE_PREMIUM_FEATURES:-false}"
+      
+      # Scaling and resource labels
+      com.jobpost.scaling.min-replicas: "${MIN_REPLICAS:-1}"
+      com.jobpost.scaling.max-replicas: "${MAX_REPLICAS:-3}"
+      com.jobpost.resources.cpu-limit: "${CPU_LIMIT:-500m}"
+      com.jobpost.resources.memory-limit: "${MEMORY_LIMIT:-512Mi}"
+      
+      # Environment-specific monitoring
+      prometheus.io/scrape: "${ENABLE_METRICS:-true}"
+      prometheus.io/environment: "${ENVIRONMENT:-development}"
+
+  jobpost-db:
+    image: postgres:15-alpine
+    labels:
+      # Database environment configuration
+      com.jobpost.database.environment: "${ENVIRONMENT:-development}"
+      com.jobpost.database.backup.enabled: "${ENABLE_BACKUPS:-false}"
+      com.jobpost.database.monitoring.enabled: "${ENABLE_DB_MONITORING:-true}"
+      
+      # Environment-specific storage
+      com.jobpost.storage.class: "${STORAGE_CLASS:-standard}"
+      com.jobpost.storage.backup-location: "${BACKUP_LOCATION:-local}"
+
+  jobpost-monitoring:
+    image: prometheus/prometheus
+    labels:
+      # Monitoring service labels
+      com.jobpost.service: "monitoring"
+      com.jobpost.monitoring.targets: "web,worker,database"
+      com.jobpost.monitoring.retention: "${METRICS_RETENTION:-15d}"
+      
+      # Environment-specific monitoring config
+      com.jobpost.monitoring.environment: "${ENVIRONMENT:-development}"
+      com.jobpost.monitoring.alerting: "${ENABLE_ALERTING:-false}"</code></pre>
+          <div class="printout"># Dynamic environment labeling
+# Environment Variables: Labels populated from CI/CD environment
+# Feature Flags: Runtime feature control via environment variables
+# Git Integration: Branch and commit tracking for deployments
+# Resource Management: Dynamic scaling and resource limit configuration
+# Conditional Features: Environment-specific functionality enablement</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Monitoring and Observability Labels</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    ports: ["8000:8000"]
+    labels:
+      # Prometheus metrics collection
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8000"
+      prometheus.io/path: "/metrics"
+      prometheus.io/interval: "15s"
+      
+      # Custom metrics labels
+      prometheus.io/job: "jobpost-web"
+      prometheus.io/instance: "${HOSTNAME:-jobpost-web}"
+      prometheus.io/environment: "production"
+      
+      # Grafana dashboard integration
+      grafana.dashboard.uid: "jobpost-web-dashboard"
+      grafana.folder: "JobPost Services"
+      
+      # Alerting configuration
+      alertmanager.io/team: "backend-team"
+      alertmanager.io/escalation: "platform-oncall"
+      alertmanager.io/slack-channel: "#jobpost-alerts"
+      
+      # Health check configuration
+      healthcheck.io/enabled: "true"
+      healthcheck.io/endpoint: "/health/"
+      healthcheck.io/timeout: "30s"
+      healthcheck.io/interval: "60s"
+
+  jobpost-worker:
+    build: .
+    labels:
+      # Worker metrics (custom exporter)
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+      prometheus.io/path: "/worker/metrics"
+      
+      # Celery-specific monitoring
+      celery.monitoring/enabled: "true"
+      celery.monitoring/worker-name: "jobpost-worker"
+      celery.monitoring/queues: "high_priority,notifications"
+      
+      # Log aggregation
+      fluentd.io/collect: "true"
+      fluentd.io/parser: "json"
+      fluentd.io/tag: "jobpost.worker"
+      
+      # Error tracking
+      sentry.io/enabled: "true"
+      sentry.io/environment: "production"
+      sentry.io/release: "${APP_VERSION:-latest}"
+
+  jobpost-db:
+    image: postgres:15-alpine
+    labels:
+      # Database monitoring
+      postgres-exporter.io/enabled: "true"
+      postgres-exporter.io/database: "jobpost_production"
+      postgres-exporter.io/metrics-port: "9187"
+      
+      # Backup monitoring
+      backup.monitoring/enabled: "true"
+      backup.monitoring/schedule: "0 2 * * *"
+      backup.monitoring/retention-check: "true"
+      
+      # Performance monitoring
+      pganalyze.io/enabled: "true"
+      pganalyze.io/database-url: "postgresql://monitor:password@localhost:5432/jobpost"
+
+  jobpost-cache:
+    image: redis:7-alpine
+    labels:
+      # Redis monitoring
+      redis-exporter.io/enabled: "true"
+      redis-exporter.io/addr: "redis://localhost:6379"
+      redis-exporter.io/metrics-port: "9121"
+      
+      # Cache performance tracking
+      cache.monitoring/hit-ratio-alert: "0.8"
+      cache.monitoring/memory-usage-alert: "90%"</code></pre>
+          <div class="printout"># Comprehensive observability labeling
+# Prometheus: Service discovery and metrics collection configuration
+# Grafana: Dashboard and folder organization
+# Alerting: Team assignment and escalation paths
+# Health Checks: Service health monitoring configuration
+# Celery Monitoring: Worker-specific metrics and queue tracking
+# Database Monitoring: PostgreSQL and Redis performance tracking</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Continue with sections -->
       <pre><code class="language-yaml">services:
   service_name:
     annotations:
@@ -11003,6 +13198,791 @@ volumes:
       </div>
     </section>
 
+    <!-- 79. hostname -->
+    <section id="hostname" class="section">
+      <h2>79. hostname</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#hostname" target="_blank" rel="noopener" title="Hostname Reference">Hostname Reference</a> •
+        <a href="https://docs.docker.com/engine/reference/run/#hostname" target="_blank" rel="noopener" title="Docker Run Hostname">Docker Run Hostname</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>hostname</code> attribute sets the hostname inside Django JobPost containers, overriding the default container ID hostname. This enables predictable hostnames for application configuration, logging, and inter-service communication.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    hostname: jobpost-web-server
+    # Custom hostname for container</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Custom hostname:</strong> Override default container ID with meaningful name</li>
+        <li><strong>Service identification:</strong> Consistent hostnames for logging and monitoring</li>
+        <li><strong>Application configuration:</strong> Hostname-based configuration and routing</li>
+        <li><strong>Network identification:</strong> Predictable network identity for services</li>
+        <li><strong>Multi-instance deployment:</strong> Unique hostnames for service instances</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Sets container hostname for internal identification, enabling consistent naming for Django JobPost service management and configuration.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Service Hostname Strategy</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    hostname: jobpost-web-server
+    ports: ["8000:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      HOSTNAME: jobpost-web-server
+    command: |
+      sh -c "
+      echo 'Starting JobPost web server on hostname: $(hostname)' &&
+      gunicorn myproject.wsgi:application --bind 0.0.0.0:8000
+      "
+
+  jobpost-worker:
+    build: .
+    hostname: jobpost-worker-node
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      WORKER_HOSTNAME: jobpost-worker-node
+      CELERY_WORKER_NAME: "worker@jobpost-worker-node"
+    command: |
+      sh -c "
+      echo 'Starting Celery worker on hostname: $(hostname)' &&
+      celery -A myproject worker --hostname=worker@$(hostname) --loglevel=info
+      "
+
+  jobpost-db:
+    image: postgres:15-alpine
+    hostname: jobpost-database
+    environment:
+      POSTGRES_DB: jobpost_production
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: |
+      postgres -c 'cluster_name=jobpost-cluster' 
+               -c 'log_line_prefix=%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+
+  jobpost-cache:
+    image: redis:7-alpine
+    hostname: jobpost-redis-cache
+    command: |
+      redis-server --save 60 1000 
+                   --appendonly yes 
+                   --appendfsync everysec
+                   --syslog-enabled yes
+                   --syslog-ident "jobpost-redis-cache"
+
+volumes:
+  postgres_data:</code></pre>
+          <div class="printout"># Consistent hostname strategy
+# Web Server: Clear identification for load balancer logs
+# Worker: Hostname-based Celery worker identification
+# Database: Named database instance for cluster management
+# Cache: Redis instance with syslog hostname identification
+# Logging: Hostname appears in all application logs</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Multi-Instance Deployment</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web-primary:
+    build: .
+    hostname: jobpost-web-01
+    environment:
+      INSTANCE_ROLE: primary
+      INSTANCE_ID: "01"
+      HOSTNAME: jobpost-web-01
+    labels:
+      - "com.jobpost.instance=primary"
+      - "com.jobpost.hostname=jobpost-web-01"
+
+  jobpost-web-secondary:
+    build: .
+    hostname: jobpost-web-02
+    environment:
+      INSTANCE_ROLE: secondary
+      INSTANCE_ID: "02"
+      HOSTNAME: jobpost-web-02
+    labels:
+      - "com.jobpost.instance=secondary"
+      - "com.jobpost.hostname=jobpost-web-02"
+
+  jobpost-worker-high-priority:
+    build: .
+    hostname: jobpost-worker-hp-01
+    environment:
+      WORKER_TYPE: high_priority
+      INSTANCE_ID: "hp-01"
+      CELERY_WORKER_NAME: "high-priority@jobpost-worker-hp-01"
+    command: celery -A myproject worker -Q high_priority --hostname=high-priority@$(hostname)
+
+  jobpost-worker-low-priority:
+    build: .
+    hostname: jobpost-worker-lp-01
+    environment:
+      WORKER_TYPE: low_priority
+      INSTANCE_ID: "lp-01"
+      CELERY_WORKER_NAME: "low-priority@jobpost-worker-lp-01"
+    command: celery -A myproject worker -Q low_priority --hostname=low-priority@$(hostname)
+
+  jobpost-monitoring:
+    image: prometheus/prometheus
+    hostname: jobpost-monitoring
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command: |
+      --config.file=/etc/prometheus/prometheus.yml
+      --storage.tsdb.path=/prometheus
+      --web.console.libraries=/etc/prometheus/console_libraries
+      --web.console.templates=/etc/prometheus/consoles
+      --external.hostname=jobpost-monitoring</code></pre>
+          <div class="printout"># Multi-instance hostname management
+# Primary/Secondary: Clear role identification via hostname
+# Worker Types: Queue-specific worker hostname identification
+# Monitoring: Named monitoring instance for metric collection
+# Instance IDs: Numeric identifiers combined with hostnames
+# Celery Workers: Hostname-based worker naming for monitoring</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Environment-Specific Hostnames</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    hostname: "jobpost-web-${ENVIRONMENT:-dev}"
+    environment:
+      DJANGO_SETTINGS_MODULE: "myproject.settings.${ENVIRONMENT:-local}"
+      ENVIRONMENT: "${ENVIRONMENT:-development}"
+      HOSTNAME: "jobpost-web-${ENVIRONMENT:-dev}"
+    labels:
+      - "com.jobpost.environment=${ENVIRONMENT:-dev}"
+      - "com.jobpost.hostname=jobpost-web-${ENVIRONMENT:-dev}"
+
+  jobpost-db:
+    image: postgres:15-alpine
+    hostname: "jobpost-db-${ENVIRONMENT:-dev}"
+    environment:
+      POSTGRES_DB: "jobpost_${ENVIRONMENT:-dev}"
+      POSTGRES_USER: "${DB_USER:-dev_user}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-dev_password}"
+    volumes:
+      - "postgres_data_${ENVIRONMENT:-dev}:/var/lib/postgresql/data"
+
+  jobpost-cache:
+    image: redis:7-alpine
+    hostname: "jobpost-cache-${ENVIRONMENT:-dev}"
+    command: |
+      redis-server --save 60 1000 
+                   --appendonly yes
+                   --syslog-enabled yes
+                   --syslog-ident "jobpost-cache-${ENVIRONMENT:-dev}"
+
+  jobpost-monitoring:
+    image: prometheus/prometheus
+    hostname: "jobpost-prometheus-${ENVIRONMENT:-dev}"
+    environment:
+      ENVIRONMENT: "${ENVIRONMENT:-development}"
+    volumes:
+      - "./prometheus/${ENVIRONMENT:-dev}.yml:/etc/prometheus/prometheus.yml:ro"
+
+volumes:
+  postgres_data_dev:
+  postgres_data_staging:
+  postgres_data_production:</code></pre>
+          <div class="printout"># Environment-specific hostname strategy
+# Web Server: Environment-aware hostname for identification
+# Database: Environment-specific database hostname
+# Cache: Redis with environment-specific syslog identity
+# Monitoring: Environment-specific Prometheus configuration
+# Volume Management: Environment-specific data persistence</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 80. init -->
+    <section id="init" class="section">
+      <h2>80. init</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#init" target="_blank" rel="noopener" title="Init Reference">Init Reference</a> •
+        <a href="https://docs.docker.com/engine/reference/run/#init" target="_blank" rel="noopener" title="Docker Run Init">Docker Run Init</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>init</code> attribute runs containers with an init process, enabling proper signal handling and zombie process reaping for Django JobPost applications. This is essential for production deployments and containers running multiple processes.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    init: true  # Enable init process
+    # OR
+    init: false # Disable init process (default)</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Signal handling:</strong> Proper SIGTERM and SIGINT signal forwarding to application</li>
+        <li><strong>Zombie reaping:</strong> Clean up zombie processes in multi-process containers</li>
+        <li><strong>Graceful shutdown:</strong> Enable proper application shutdown sequences</li>
+        <li><strong>Process management:</strong> Improved process lifecycle management</li>
+        <li><strong>Production readiness:</strong> Essential for production Django deployments</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Enables proper process management and signal handling for Django JobPost containers, ensuring clean shutdown and process lifecycle management.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Production Init Configuration</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: .
+    init: true  # Enable init for production web server
+    ports: ["8000:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+    command: |
+      sh -c "
+      # Start multiple processes that need proper signal handling
+      gunicorn myproject.wsgi:application --bind 0.0.0.0:8000 &
+      python manage.py metrics_collector &
+      python manage.py health_monitor &
+      wait
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  jobpost-worker:
+    build: .
+    init: true  # Essential for Celery workers
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+    command: |
+      sh -c "
+      # Multiple Celery processes
+      celery -A myproject worker -Q high_priority --concurrency=2 &
+      celery -A myproject worker -Q low_priority --concurrency=1 &
+      celery -A myproject beat --loglevel=info &
+      wait
+      "
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  jobpost-monitoring:
+    image: prom/prometheus
+    init: true  # Required for Prometheus with multiple components
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command: |
+      --config.file=/etc/prometheus/prometheus.yml
+      --storage.tsdb.path=/prometheus
+      --web.console.libraries=/etc/prometheus/console_libraries
+      --web.enable-lifecycle
+
+  jobpost-db:
+    image: postgres:15-alpine
+    init: false  # PostgreSQL handles signals properly by default
+    environment:
+      POSTGRES_DB: jobpost_production
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  prometheus_data:
+  postgres_data:</code></pre>
+          <div class="printout"># Production init process strategy
+# Web Server: Multi-process gunicorn with monitoring processes
+# Worker: Multiple Celery processes requiring signal coordination
+# Monitoring: Prometheus with lifecycle management enabled
+# Database: PostgreSQL doesn't need init (handles signals natively)
+# Signal Handling: Proper SIGTERM forwarding for graceful shutdown</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Development vs Production Init</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web-dev:
+    build: .
+    profiles: ["dev"]
+    init: false  # Development doesn't need init
+    ports: ["8000:8000"]
+    volumes:
+      - .:/app  # Live code reloading
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+      DEBUG: "True"
+    command: python manage.py runserver 0.0.0.0:8000
+
+  jobpost-web-prod:
+    build: .
+    profiles: ["prod"]
+    init: true  # Production requires init
+    ports: ["8000:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+      DEBUG: "False"
+    command: |
+      sh -c "
+      gunicorn myproject.wsgi:application --bind 0.0.0.0:8000 --workers 4 &
+      python manage.py health_check_server &
+      wait
+      "
+
+  jobpost-worker-dev:
+    build: .
+    profiles: ["dev"]
+    init: false  # Simple development worker
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+    command: celery -A myproject worker --loglevel=debug
+
+  jobpost-worker-prod:
+    build: .
+    profiles: ["prod"]
+    init: true  # Production worker with multiple processes
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+    command: |
+      sh -c "
+      celery -A myproject worker -Q high_priority --concurrency=2 &
+      celery -A myproject worker -Q low_priority --concurrency=1 &
+      python manage.py worker_health_monitor &
+      wait
+      "
+
+  jobpost-scheduler-prod:
+    build: .
+    profiles: ["prod"]
+    init: true  # Celery beat with monitoring
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+    command: |
+      sh -c "
+      celery -A myproject beat --loglevel=info &
+      python manage.py beat_health_monitor &
+      wait
+      "</code></pre>
+          <div class="printout"># Environment-specific init strategy
+# Development: Single processes don't need init
+# Production Web: Multi-process gunicorn requires init
+# Production Worker: Multiple Celery processes need coordination
+# Production Scheduler: Beat with health monitoring
+# Signal Management: Production ensures proper shutdown sequences</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Microservices Init Management</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-api-gateway:
+    image: nginx:alpine
+    init: true  # Nginx with custom monitoring scripts
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    command: |
+      sh -c "
+      nginx -g 'daemon off;' &
+      /scripts/ssl_cert_monitor.sh &
+      /scripts/access_log_processor.sh &
+      wait
+      "
+
+  jobpost-users-service:
+    build: ./services/users
+    init: true  # Django service with health monitoring
+    expose: ["8000"]
+    environment:
+      SERVICE_NAME: users
+    command: |
+      sh -c "
+      gunicorn users.wsgi:application --bind 0.0.0.0:8000 &
+      python manage.py health_reporter --service=users &
+      wait
+      "
+
+  jobpost-jobs-service:
+    build: ./services/jobs
+    init: true  # Service with background job processing
+    expose: ["8000"]
+    environment:
+      SERVICE_NAME: jobs
+    command: |
+      sh -c "
+      gunicorn jobs.wsgi:application --bind 0.0.0.0:8000 &
+      python manage.py job_indexer --daemon &
+      python manage.py recommendation_updater --daemon &
+      wait
+      "
+
+  jobpost-notification-service:
+    build: ./services/notifications
+    init: true  # Real-time notification service
+    expose: ["8000", "8001"]
+    environment:
+      SERVICE_NAME: notifications
+    command: |
+      sh -c "
+      gunicorn notifications.wsgi:application --bind 0.0.0.0:8000 &
+      python websocket_server.py --port 8001 &
+      python notification_processor.py &
+      wait
+      "
+
+  jobpost-database-proxy:
+    image: pgbouncer/pgbouncer
+    init: true  # Connection pooler with monitoring
+    expose: ["5432"]
+    environment:
+      DATABASES_HOST: jobpost-db
+      DATABASES_PORT: 5432
+      POOL_MODE: transaction
+    command: |
+      sh -c "
+      pgbouncer /etc/pgbouncer/pgbouncer.ini &
+      /scripts/connection_monitor.sh &
+      wait
+      "
+
+  jobpost-cache-cluster:
+    image: redis:7-alpine
+    init: false  # Redis Cluster mode handles signals properly
+    expose: ["6379", "16379"]
+    command: |
+      redis-server /etc/redis/redis.conf 
+      --cluster-enabled yes 
+      --cluster-config-file nodes.conf 
+      --cluster-node-timeout 5000</code></pre>
+          <div class="printout"># Microservices init strategy
+# API Gateway: Nginx with SSL and log monitoring scripts
+# Services: Django apps with health reporting processes
+# Jobs Service: Background indexing and recommendation processes
+# Notifications: WebSocket server with message processing
+# Database Proxy: PgBouncer with connection monitoring
+# Cache Cluster: Redis cluster doesn't need init (native handling)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 81. platform -->
+    <section id="platform" class="section">
+      <h2>81. platform</h2>
+      <div class="meta">
+        Docs:
+        <a href="https://docs.docker.com/reference/compose-file/services/#platform" target="_blank" rel="noopener" title="Platform Reference">Platform Reference</a> •
+        <a href="https://docs.docker.com/engine/reference/builder/#platform" target="_blank" rel="noopener" title="Dockerfile Platform">Dockerfile Platform</a>
+      </div>
+
+      <h3>Full description</h3>
+      <p>The <code>platform</code> attribute specifies the target platform architecture for Django JobPost containers, enabling cross-platform deployment and ensuring compatibility across different CPU architectures like AMD64, ARM64, and others.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml">services:
+  servicename:
+    platform: linux/amd64    # x86_64 architecture
+    # OR
+    platform: linux/arm64    # ARM64 architecture
+    # OR
+    platform: linux/arm/v7   # ARM v7 architecture</code></pre>
+
+      <h3>Parameters description</h3>
+      <ul>
+        <li><strong>Architecture specification:</strong> Target CPU architecture for container deployment</li>
+        <li><strong>Cross-platform compatibility:</strong> Deploy across different hardware architectures</li>
+        <li><strong>Multi-architecture builds:</strong> Support for Apple Silicon, ARM servers, and x86</li>
+        <li><strong>Performance optimization:</strong> Native architecture for optimal performance</li>
+        <li><strong>CI/CD flexibility:</strong> Consistent deployments across different build environments</li>
+      </ul>
+
+      <h3>Return value</h3>
+      <p>Ensures Django JobPost containers run on specified architecture, enabling cross-platform deployment and architecture-specific optimizations.</p>
+
+      <h3>Examples</h3>
+      <div class="grid">
+        <div class="example">
+          <h4>JobPost Multi-Architecture Strategy</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web-amd64:
+    build: .
+    platform: linux/amd64
+    profiles: ["x86", "intel"]
+    environment:
+      ARCHITECTURE: "amd64"
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+    labels:
+      - "com.jobpost.architecture=amd64"
+      - "com.jobpost.platform=linux/amd64"
+
+  jobpost-web-arm64:
+    build: .
+    platform: linux/arm64
+    profiles: ["arm", "apple-silicon"]
+    environment:
+      ARCHITECTURE: "arm64"
+      DJANGO_SETTINGS_MODULE: myproject.settings.production
+    labels:
+      - "com.jobpost.architecture=arm64"
+      - "com.jobpost.platform=linux/arm64"
+
+  jobpost-db-amd64:
+    image: postgres:15-alpine
+    platform: linux/amd64
+    profiles: ["x86", "intel"]
+    environment:
+      POSTGRES_DB: jobpost_production
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+    volumes:
+      - postgres_data_amd64:/var/lib/postgresql/data
+
+  jobpost-db-arm64:
+    image: postgres:15-alpine
+    platform: linux/arm64
+    profiles: ["arm", "apple-silicon"]
+    environment:
+      POSTGRES_DB: jobpost_production
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+    volumes:
+      - postgres_data_arm64:/var/lib/postgresql/data
+
+  jobpost-cache:
+    image: redis:7-alpine
+    platform: ${PLATFORM:-linux/amd64}  # Dynamic platform selection
+    environment:
+      REDIS_ARCHITECTURE: "${PLATFORM:-linux/amd64}"
+    command: |
+      redis-server --save 60 1000 
+                   --appendonly yes 
+                   --syslog-enabled yes 
+                   --syslog-ident "redis-${PLATFORM:-amd64}"
+
+volumes:
+  postgres_data_amd64:
+  postgres_data_arm64:</code></pre>
+          <div class="printout"># Multi-architecture deployment strategy
+# Platform-specific services with profiles
+# AMD64: Traditional x86_64 Intel/AMD processors
+# ARM64: Apple Silicon, AWS Graviton, ARM servers
+# Dynamic platform: Environment variable-based selection
+# Data isolation: Separate volumes per architecture
+# Profile-based deployment: Conditional service activation</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Development Environment Platform Support</h4>
+          <pre><code class="language-yaml">services:
+  jobpost-web:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64
+    platform: ${DOCKER_DEFAULT_PLATFORM:-linux/amd64}
+    ports: ["8000:8000"]
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: myproject.settings.local
+      DEBUG: "True"
+      PLATFORM_ARCHITECTURE: "${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
+
+  jobpost-db:
+    image: postgres:15-alpine
+    platform: ${DOCKER_DEFAULT_PLATFORM:-linux/amd64}
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_DB: jobpost_dev
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_PLATFORM: "${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
+
+  # Platform-specific development tools
+  jobpost-tools-amd64:
+    image: python:3.11-slim
+    platform: linux/amd64
+    profiles: ["tools", "x86-tools"]
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: |
+      sh -c "
+      echo 'Running development tools on AMD64'
+      pip install -r requirements-dev.txt
+      python manage.py shell
+      "
+
+  jobpost-tools-arm64:
+    image: python:3.11-slim
+    platform: linux/arm64
+    profiles: ["tools", "arm-tools"]
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: |
+      sh -c "
+      echo 'Running development tools on ARM64'
+      pip install -r requirements-dev.txt
+      python manage.py shell
+      "
+
+  # Cross-platform testing
+  jobpost-test-matrix:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    platform: ${TEST_PLATFORM:-linux/amd64}
+    profiles: ["test"]
+    environment:
+      TEST_PLATFORM: "${TEST_PLATFORM:-linux/amd64}"
+      DJANGO_SETTINGS_MODULE: myproject.settings.test
+    command: |
+      sh -c "
+      echo 'Running tests on platform: ${TEST_PLATFORM:-linux/amd64}'
+      python -m pytest tests/ --tb=short -v
+      python manage.py test --parallel
+      "</code></pre>
+          <div class="printout"># Development platform flexibility
+# Multi-platform builds: Support for developer machine diversity
+# Dynamic platform: Automatic detection via DOCKER_DEFAULT_PLATFORM
+# Platform-specific tools: Different tool versions per architecture
+# Cross-platform testing: Test matrix across architectures
+# Developer experience: Seamless development regardless of hardware</div>
+        </div>
+
+        <div class="example">
+          <h4>JobPost Production Multi-Cloud Platform Strategy</h4>
+          <pre><code class="language-yaml">services:
+  # AWS x86 deployment
+  jobpost-web-aws:
+    build: .
+    platform: linux/amd64
+    profiles: ["aws", "x86-cloud"]
+    environment:
+      CLOUD_PROVIDER: aws
+      INSTANCE_TYPE: x86
+      DJANGO_SETTINGS_MODULE: myproject.settings.aws
+    labels:
+      - "com.jobpost.cloud=aws"
+      - "com.jobpost.architecture=amd64"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+
+  # AWS ARM (Graviton) deployment
+  jobpost-web-aws-graviton:
+    build: .
+    platform: linux/arm64
+    profiles: ["aws-graviton", "arm-cloud"]
+    environment:
+      CLOUD_PROVIDER: aws-graviton
+      INSTANCE_TYPE: arm64
+      DJANGO_SETTINGS_MODULE: myproject.settings.aws
+    labels:
+      - "com.jobpost.cloud=aws-graviton"
+      - "com.jobpost.architecture=arm64"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+
+  # Google Cloud deployment
+  jobpost-web-gcp:
+    build: .
+    platform: linux/amd64
+    profiles: ["gcp", "google-cloud"]
+    environment:
+      CLOUD_PROVIDER: gcp
+      INSTANCE_TYPE: x86
+      DJANGO_SETTINGS_MODULE: myproject.settings.gcp
+    labels:
+      - "com.jobpost.cloud=gcp"
+      - "com.jobpost.architecture=amd64"
+
+  # Azure deployment
+  jobpost-web-azure:
+    build: .
+    platform: linux/amd64
+    profiles: ["azure", "microsoft-cloud"]
+    environment:
+      CLOUD_PROVIDER: azure
+      INSTANCE_TYPE: x86
+      DJANGO_SETTINGS_MODULE: myproject.settings.azure
+    labels:
+      - "com.jobpost.cloud=azure"
+      - "com.jobpost.architecture=amd64"
+
+  # Hybrid cloud load balancer
+  jobpost-load-balancer:
+    image: haproxy:2.8-alpine
+    platform: ${LB_PLATFORM:-linux/amd64}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./haproxy/multi-cloud.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    environment:
+      CLOUD_STRATEGY: multi-cloud
+      PRIMARY_CLOUD: "${PRIMARY_CLOUD:-aws}"
+      BACKUP_CLOUD: "${BACKUP_CLOUD:-gcp}"
+
+  # Database with platform-specific optimizations
+  jobpost-db-optimized:
+    image: postgres:15-alpine
+    platform: ${DB_PLATFORM:-linux/amd64}
+    environment:
+      POSTGRES_DB: jobpost_production
+      POSTGRES_USER: jobpost_user
+      POSTGRES_PASSWORD: secure_password
+      POSTGRES_PLATFORM: "${DB_PLATFORM:-linux/amd64}"
+    volumes:
+      - ./postgresql/${DB_PLATFORM:-linux-amd64}.conf:/etc/postgresql/postgresql.conf:ro
+      - postgres_optimized_data:/var/lib/postgresql/data
+    command: |
+      postgres -c config_file=/etc/postgresql/postgresql.conf
+               -c 'shared_preload_libraries=pg_stat_statements'
+               -c 'log_line_prefix=%t [%p]: [%l-1] platform=${DB_PLATFORM:-linux/amd64} '
+
+volumes:
+  postgres_optimized_data:</code></pre>
+          <div class="printout"># Multi-cloud platform strategy
+# AWS x86: Traditional Intel/AMD cloud instances
+# AWS Graviton: ARM-based cost-effective cloud computing
+# Multi-cloud: GCP and Azure deployment options
+# Load Balancing: Platform-aware traffic distribution
+# Database Optimization: Platform-specific PostgreSQL tuning
+# Hybrid Deployment: Cross-cloud redundancy and optimization</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Continue with Cheat Sheet -->
     <section id="cheatsheet" class="section">
       <h2>Compose Services API Cheat Sheet</h2>
       <div class="meta">
