@@ -1031,10 +1031,6 @@
                     <li><a href="#ft-create" class="sub-command">FT.CREATE</a></li>
                     <li><a href="#ft-search" class="sub-command">FT.SEARCH</a></li>
                     <li><a href="#ft-aggregate" class="sub-command">FT.AGGREGATE</a></li>
-                    <li><a href="#ft-sugadd" class="sub-command">FT.SUGADD</a></li>
-                    <li><a href="#ft-sugget" class="sub-command">FT.SUGGET</a></li>
-                    <li><a href="#ft-sugdel" class="sub-command">FT.SUGDEL</a></li>
-                    <li><a href="#ft-suglen" class="sub-command">FT.SUGLEN</a></li>
                     <li><a href="#ft-info" class="sub-command">FT.INFO</a></li>
                     <li><a href="#ft-dropindex" class="sub-command">FT.DROPINDEX</a></li>
                     <li><a href="#ft-alter" class="sub-command">FT.ALTER</a></li>
@@ -14827,1350 +14823,8 @@ Month: 2024-06
                     </div>
                 </div>
 
-                <!-- Continue with more query engine commands... -->
-                <!-- FT.SUGADD Command -->
-                <div class="command-block">
-                    <h3 id="ft-sugadd"><code>FT.SUGADD</code> - Add Suggestion to Auto-Complete Dictionary</h3>
-                    <div class="command-description">
-                        <strong>Purpose:</strong> Adds a suggestion string to an auto-complete suggestion dictionary for fast prefix-based search suggestions.
-                        <br><strong>Syntax:</strong> <code>FT.SUGADD key string score [INCR] [PAYLOAD payload]</code>
-                        <br><strong>Parameters:</strong>
-                        <ul>
-                            <li><code>key</code> - Auto-complete dictionary name</li>
-                            <li><code>string</code> - Suggestion text to add</li>
-                            <li><code>score</code> - Suggestion weight/score for ranking</li>
-                            <li><code>INCR</code> - Increment score if suggestion exists</li>
-                            <li><code>PAYLOAD</code> - Optional metadata for the suggestion</li>
-                        </ul>
-                        <br><strong>Return:</strong> Current size of the suggestion dictionary
-                    </div>
-
-                    <div class="example-block">
-                        <strong>Django Example 1: Job Title Auto-Complete</strong>
-                        <pre><code class="language-python"># views.py - Build job title suggestions
-import redis
-from django.core.management.base import BaseCommand
-from .models import JobPost
-
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-class Command(BaseCommand):
-    help = 'Build job title auto-complete suggestions'
-    
-    def handle(self, *args, **options):
-        # Get job titles with frequency counts
-        job_titles = JobPost.objects.values_list('title', flat=True)
-        title_counts = {}
-        
-        for title in job_titles:
-            title_counts[title] = title_counts.get(title, 0) + 1
-        
-        self.stdout.write("Building job title suggestions...")
-        
-        # Add each title to auto-complete with frequency as score
-        for title, count in title_counts.items():
-            # Add title with job count as score
-            result = redis_client.execute_command(
-                'FT.SUGADD', 
-                'job_titles:suggestions',
-                title,
-                count,
-                'PAYLOAD', f'{{"frequency": {count}, "type": "job_title"}}'
-            )
-            
-            self.stdout.write(f"Added: {title} (score: {count}) - Dict size: {result}")
-        
-        # Add common variations and synonyms
-        common_titles = {
-            'Software Engineer': 100,
-            'Software Developer': 95, 
-            'Full Stack Engineer': 90,
-            'Full Stack Developer': 88,
-            'Backend Engineer': 85,
-            'Backend Developer': 83,
-            'Frontend Engineer': 80,
-            'Frontend Developer': 78,
-            'DevOps Engineer': 75,
-            'Data Engineer': 73,
-            'Python Developer': 70,
-            'JavaScript Developer': 68,
-            'React Developer': 65,
-            'Node.js Developer': 63
-        }
-        
-        for title, score in common_titles.items():
-            redis_client.execute_command(
-                'FT.SUGADD',
-                'job_titles:suggestions', 
-                title,
-                score,
-                'INCR',  # Increment if exists
-                'PAYLOAD', f'{{"frequency": {score}, "type": "common_title"}}'
-            )
-        
-        total_suggestions = redis_client.execute_command('FT.SUGLEN', 'job_titles:suggestions')
-        self.stdout.write(f"✅ Total suggestions in dictionary: {total_suggestions}")</code></pre>
-                        <div class="output-block">
-                            <strong>Printout:</strong>
-                            <pre>Building job title suggestions...
-Added: Python Developer (score: 15) - Dict size: 1
-Added: Full Stack Developer (score: 12) - Dict size: 2  
-Added: Data Scientist (score: 8) - Dict size: 3
-Added: Frontend Developer (score: 10) - Dict size: 4
-Added: UI/UX Designer (score: 6) - Dict size: 5
-Added: Backend Engineer (score: 7) - Dict size: 6
-
-✅ Total suggestions in dictionary: 32</pre>
-                        </div>
-                    </div>
-
-                    <div class="example-block">
-                        <strong>Django Example 2: Company Name Auto-Complete</strong>
-                        <pre><code class="language-python"># services/suggestion_service.py
-import redis
-from django.db.models import Count
-from .models import Author, JobPost
-
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-class SuggestionService:
-    @staticmethod
-    def build_company_suggestions():
-        """Build company name suggestions with job posting frequency"""
-        
-        # Get companies with their job posting counts
-        companies = Author.objects.annotate(
-            job_count=Count('jobpost')
-        ).values('company', 'job_count')
-        
-        print("Building company suggestions...")
-        
-        for company_data in companies:
-            company = company_data['company']
-            job_count = company_data['job_count'] 
-            
-            # Score based on job posting activity
-            score = job_count * 10  # Weight active companies higher
-            
-            # Add company with metadata
-            result = redis_client.execute_command(
-                'FT.SUGADD',
-                'companies:suggestions',
-                company,
-                score,
-                'PAYLOAD', 
-                f'{{"job_count": {job_count}, "type": "hiring_company", "active": "true"}}'
-            )
-            
-            print(f"Added: {company} (jobs: {job_count}, score: {score}) - Dict size: {result}")
-            
-            # Add company variations (common abbreviations)
-            if 'Corporation' in company:
-                short_name = company.replace('Corporation', 'Corp')
-                redis_client.execute_command(
-                    'FT.SUGADD',
-                    'companies:suggestions',
-                    short_name, 
-                    score - 5,  # Slightly lower score for variation
-                    'PAYLOAD',
-                    f'{{"original": "{company}", "type": "company_variation"}}'
-                )
-                print(f"Added variation: {short_name}")
-            
-            if 'Industries' in company:
-                short_name = company.replace('Industries', 'Inc')
-                redis_client.execute_command(
-                    'FT.SUGADD',
-                    'companies:suggestions',
-                    short_name,
-                    score - 5,
-                    'PAYLOAD',
-                    f'{{"original": "{company}", "type": "company_variation"}}'
-                )
-                print(f"Added variation: {short_name}")
-        
-        # Add popular tech companies (even if not in our DB yet)
-        tech_companies = [
-            ('Google', 200), ('Microsoft', 195), ('Amazon', 190),
-            ('Apple', 185), ('Meta', 180), ('Netflix', 175),
-            ('Uber', 170), ('Airbnb', 165), ('Stripe', 160)
-        ]
-        
-        for company, score in tech_companies:
-            redis_client.execute_command(
-                'FT.SUGADD',
-                'companies:suggestions',
-                company,
-                score,
-                'PAYLOAD',
-                f'{{"type": "popular_company", "tier": "big_tech"}}'
-            )
-            print(f"Added popular company: {company} (score: {score})")
-    
-    @staticmethod 
-    def get_suggestion_stats():
-        """Get statistics about suggestion dictionaries"""
-        
-        job_titles_count = redis_client.execute_command('FT.SUGLEN', 'job_titles:suggestions')
-        companies_count = redis_client.execute_command('FT.SUGLEN', 'companies:suggestions')
-        
-        return {
-            'job_titles': job_titles_count,
-            'companies': companies_count,
-            'total': job_titles_count + companies_count
-        }</code></pre>
-                        <div class="output-block">
-                            <strong>Printout:</strong>
-                            <pre>Building company suggestions...
-Added: ABC Corp (jobs: 3, score: 30) - Dict size: 1
-Added: XYZ Inc (jobs: 2, score: 20) - Dict size: 2
-Added: 123 Industries (jobs: 4, score: 40) - Dict size: 3
-Added variation: 123 Inc
-Added: Tech Solutions (jobs: 1, score: 10) - Dict size: 5
-Added: Tech Innovations (jobs: 2, score: 20) - Dict size: 6
-
-Added popular company: Google (score: 200)
-Added popular company: Microsoft (score: 195)
-Added popular company: Amazon (score: 190)
-
-Suggestion Statistics:
-- Job titles: 32 suggestions
-- Companies: 15 suggestions  
-- Total: 47 suggestions</pre>
-                        </div>
-                    </div>
-
-                    <div class="example-block">
-                        <strong>Django Example 3: Skills Auto-Complete with Metadata</strong>
-                        <pre><code class="language-python"># management/commands/build_skill_suggestions.py
-import redis
-from django.core.management.base import BaseCommand
-from django.db.models import Count
-from .models import Skills, JobPost
-
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-class Command(BaseCommand):
-    help = 'Build skills auto-complete with demand metrics'
-    
-    def handle(self, *args, **options):
-        self.stdout.write("Building skills suggestions with demand data...")
-        
-        # Get skills with job demand counts
-        skills_with_demand = Skills.objects.annotate(
-            job_demand=Count('jobpost')
-        ).order_by('-job_demand')
-        
-        # Build suggestions based on demand
-        for skill in skills_with_demand:
-            demand_score = skill.job_demand * 20  # Higher weight for in-demand skills
-            
-            # Rich payload with market data
-            payload = {
-                'skill_id': skill.id,
-                'job_demand': skill.job_demand,
-                'category': self.categorize_skill(skill.name),
-                'difficulty': self.get_skill_difficulty(skill.name),
-                'avg_salary_boost': self.estimate_salary_boost(skill.name),
-                'trending': demand_score > 50
-            }
-            
-            result = redis_client.execute_command(
-                'FT.SUGADD',
-                'skills:suggestions',
-                skill.name,
-                demand_score,
-                'PAYLOAD', str(payload).replace("'", '"')
-            )
-            
-            self.stdout.write(
-                f"Added: {skill.name} (demand: {skill.job_demand}, score: {demand_score}) "
-                f"- Category: {payload['category']} - Dict size: {result}"
-            )
-            
-            # Add skill variations and synonyms
-            variations = self.get_skill_variations(skill.name)
-            for variation in variations:
-                redis_client.execute_command(
-                    'FT.SUGADD',
-                    'skills:suggestions',
-                    variation,
-                    demand_score - 10,  # Slightly lower for variations
-                    'PAYLOAD', 
-                    str({**payload, 'original_skill': skill.name, 'type': 'variation'}).replace("'", '"')
-                )
-                self.stdout.write(f"  Added variation: {variation}")
-        
-        # Add trending skills not yet in database
-        trending_skills = {
-            'Artificial Intelligence': {'score': 150, 'category': 'AI/ML', 'trending': True},
-            'Machine Learning': {'score': 145, 'category': 'AI/ML', 'trending': True}, 
-            'LLM': {'score': 140, 'category': 'AI/ML', 'trending': True},
-            'ChatGPT': {'score': 135, 'category': 'AI/ML', 'trending': True},
-            'Kubernetes': {'score': 130, 'category': 'DevOps', 'trending': True},
-            'Docker': {'score': 125, 'category': 'DevOps', 'trending': True},
-            'AWS': {'score': 120, 'category': 'Cloud', 'trending': True},
-            'TypeScript': {'score': 115, 'category': 'Programming', 'trending': True}
-        }
-        
-        for skill_name, data in trending_skills.items():
-            payload = {
-                'skill_name': skill_name,
-                'category': data['category'],
-                'trending': data['trending'],
-                'type': 'trending_skill',
-                'market_demand': 'high'
-            }
-            
-            redis_client.execute_command(
-                'FT.SUGADD',
-                'skills:suggestions',
-                skill_name,
-                data['score'],
-                'PAYLOAD', str(payload).replace("'", '"')
-            )
-            
-            self.stdout.write(f"Added trending skill: {skill_name} (score: {data['score']})")
-        
-        total = redis_client.execute_command('FT.SUGLEN', 'skills:suggestions')
-        self.stdout.write(self.style.SUCCESS(f"✅ Built {total} skill suggestions"))
-    
-    def categorize_skill(self, skill_name):
-        """Categorize skills for better suggestions"""
-        categories = {
-            'python': 'Programming',
-            'javascript': 'Programming', 
-            'react': 'Frontend',
-            'django': 'Backend',
-            'sql': 'Database',
-            'html': 'Frontend',
-            'css': 'Frontend'
-        }
-        return categories.get(skill_name.lower(), 'General')
-    
-    def get_skill_difficulty(self, skill_name):
-        """Estimate skill difficulty level"""
-        difficulty_map = {
-            'html': 'Beginner',
-            'css': 'Beginner', 
-            'python': 'Intermediate',
-            'javascript': 'Intermediate',
-            'react': 'Intermediate',
-            'django': 'Advanced',
-            'sql': 'Intermediate'
-        }
-        return difficulty_map.get(skill_name.lower(), 'Intermediate')
-    
-    def estimate_salary_boost(self, skill_name):
-        """Estimate salary boost percentage for skill"""
-        boost_map = {
-            'python': 15,
-            'javascript': 12,
-            'react': 18,
-            'django': 20,
-            'sql': 10
-        }
-        return boost_map.get(skill_name.lower(), 8)
-    
-    def get_skill_variations(self, skill_name):
-        """Get common variations and synonyms"""
-        variations_map = {
-            'JavaScript': ['JS', 'ECMAScript'],
-            'Python': ['Python3'],
-            'SQL': ['Structured Query Language'],
-            'React': ['React.js', 'ReactJS'],
-            'Django': ['Django Framework']
-        }
-        return variations_map.get(skill_name, [])</code></pre>
-                        <div class="output-block">
-                            <strong>Printout:</strong>
-                            <pre>Building skills suggestions with demand data...
-Added: Python (demand: 8, score: 160) - Category: Programming - Dict size: 1
-  Added variation: Python3
-Added: JavaScript (demand: 6, score: 120) - Category: Programming - Dict size: 3
-  Added variation: JS
-  Added variation: ECMAScript  
-Added: React (demand: 5, score: 100) - Category: Frontend - Dict size: 6
-  Added variation: React.js
-  Added variation: ReactJS
-Added: Django (demand: 4, score: 80) - Category: Backend - Dict size: 9
-Added: SQL (demand: 3, score: 60) - Category: Database - Dict size: 10
-
-Added trending skill: Artificial Intelligence (score: 150)
-Added trending skill: Machine Learning (score: 145)
-Added trending skill: Kubernetes (score: 130)
-Added trending skill: TypeScript (score: 115)
-
-✅ Built 28 skill suggestions</pre>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- FT.SUGGET Command -->
-                <div class="command-block">
-                    <h3 id="ft-sugget"><code>FT.SUGGET</code> - Get Auto-Complete Suggestions</h3>
-                    <div class="command-description">
-                        <strong>Purpose:</strong> Retrieves completion suggestions for a prefix from an auto-complete dictionary.
-                        <br><strong>Syntax:</strong> <code>FT.SUGGET key prefix [FUZZY] [MAX num] [WITHSCORES] [WITHPAYLOADS]</code>
-                        <br><strong>Parameters:</strong>
-                        <ul>
-                            <li><code>key</code> - Auto-complete dictionary name</li>
-                            <li><code>prefix</code> - Text prefix to search for</li>
-                            <li><code>FUZZY</code> - Enable fuzzy matching (typos)</li>
-                            <li><code>MAX num</code> - Maximum suggestions to return</li>
-                            <li><code>WITHSCORES</code> - Include suggestion scores</li>
-                            <li><code>WITHPAYLOADS</code> - Include suggestion payloads</li>
-                        </ul>
-                        <br><strong>Return:</strong> Array of matching suggestions with optional scores and payloads
-                    </div>
-
-                    <div class="example-block">
-                        <strong>Django Example 1: Job Search Auto-Complete API</strong>
-                        <pre><code class="language-python"># views.py - Auto-complete API endpoint  
-import redis
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-import json
-
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-@csrf_exempt
-def job_autocomplete_api(request):
-    """API endpoint for job search auto-complete"""
-    
-    query = request.GET.get('q', '').strip()
-    max_suggestions = int(request.GET.get('max', 10))
-    category = request.GET.get('category', 'all')  # jobs, companies, skills
-    
-    if len(query) < 2:
-        return JsonResponse({'suggestions': []})
-    
-    suggestions = []
-    
-    try:
-        if category in ['all', 'jobs']:
-            # Get job title suggestions
-            job_suggestions = redis_client.execute_command(
-                'FT.SUGGET', 
-                'job_titles:suggestions', 
-                query,
-                'FUZZY',  # Handle typos
-                'MAX', max_suggestions,
-                'WITHSCORES',
-                'WITHPAYLOADS'
-            )
-            
-            # Parse job suggestions (Redis returns: [suggestion, score, payload, ...])
-            for i in range(0, len(job_suggestions), 3):
-                if i + 2 < len(job_suggestions):
-                    title = job_suggestions[i]
-                    score = float(job_suggestions[i + 1])
-                    payload_str = job_suggestions[i + 2]
-                    
-                    try:
-                        payload = json.loads(payload_str) if payload_str else {}
-                    except json.JSONDecodeError:
-                        payload = {}
-                    
-                    suggestions.append({
-                        'text': title,
-                        'score': score,
-                        'category': 'job_title',
-                        'type': payload.get('type', 'job_title'),
-                        'frequency': payload.get('frequency', 0),
-                        'icon': '💼'
-                    })
-        
-        if category in ['all', 'companies']:
-            # Get company suggestions
-            company_suggestions = redis_client.execute_command(
-                'FT.SUGGET',
-                'companies:suggestions',
-                query,
-                'FUZZY',
-                'MAX', max_suggestions,
-                'WITHSCORES', 
-                'WITHPAYLOADS'
-            )
-            
-            for i in range(0, len(company_suggestions), 3):
-                if i + 2 < len(company_suggestions):
-                    company = company_suggestions[i]
-                    score = float(company_suggestions[i + 1])
-                    payload_str = company_suggestions[i + 2]
-                    
-                    try:
-                        payload = json.loads(payload_str) if payload_str else {}
-                    except json.JSONDecodeError:
-                        payload = {}
-                    
-                    suggestions.append({
-                        'text': company,
-                        'score': score,
-                        'category': 'company',
-                        'type': payload.get('type', 'company'),
-                        'job_count': payload.get('job_count', 0),
-                        'tier': payload.get('tier', 'standard'),
-                        'icon': '🏢'
-                    })
-        
-        if category in ['all', 'skills']:
-            # Get skill suggestions
-            skill_suggestions = redis_client.execute_command(
-                'FT.SUGGET',
-                'skills:suggestions',
-                query,
-                'FUZZY',
-                'MAX', max_suggestions,
-                'WITHSCORES',
-                'WITHPAYLOADS'
-            )
-            
-            for i in range(0, len(skill_suggestions), 3):
-                if i + 2 < len(skill_suggestions):
-                    skill = skill_suggestions[i]
-                    score = float(skill_suggestions[i + 1])
-                    payload_str = skill_suggestions[i + 2]
-                    
-                    try:
-                        payload = json.loads(payload_str) if payload_str else {}
-                    except json.JSONDecodeError:
-                        payload = {}
-                    
-                    suggestions.append({
-                        'text': skill,
-                        'score': score,
-                        'category': 'skill',
-                        'skill_category': payload.get('category', 'General'),
-                        'difficulty': payload.get('difficulty', 'Intermediate'),
-                        'trending': payload.get('trending', False),
-                        'job_demand': payload.get('job_demand', 0),
-                        'icon': '🔧'
-                    })
-        
-        # Sort by score (descending) and limit results
-        suggestions.sort(key=lambda x: x['score'], reverse=True)
-        suggestions = suggestions[:max_suggestions]
-        
-        return JsonResponse({
-            'query': query,
-            'suggestions': suggestions,
-            'count': len(suggestions),
-            'categories': {
-                'jobs': sum(1 for s in suggestions if s['category'] == 'job_title'),
-                'companies': sum(1 for s in suggestions if s['category'] == 'company'), 
-                'skills': sum(1 for s in suggestions if s['category'] == 'skill')
-            }
-        })
-        
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)</code></pre>
-                        <div class="output-block">
-                            <strong>Printout:</strong>
-                            <pre>GET /api/autocomplete/?q=python&max=5
-
-{
-  "query": "python",
-  "suggestions": [
-    {
-      "text": "Python Developer",
-      "score": 160.0,
-      "category": "skill",
-      "skill_category": "Programming",
-      "difficulty": "Intermediate", 
-      "trending": false,
-      "job_demand": 8,
-      "icon": "🔧"
-    },
-    {
-      "text": "Python Developer", 
-      "score": 150.0,
-      "category": "job_title",
-      "type": "job_title",
-      "frequency": 15,
-      "icon": "💼"
-    },
-    {
-      "text": "Python3",
-      "score": 150.0, 
-      "category": "skill",
-      "skill_category": "Programming",
-      "icon": "🔧"
-    }
-  ],
-  "count": 3,
-  "categories": {
-    "jobs": 1,
-    "companies": 0,
-    "skills": 2
-  }
-}</pre>
-                        </div>
-                    </div>
-
-                    <div class="example-block">
-                        <strong>Django Example 2: Smart Search with Context</strong>
-                        <pre><code class="language-python"># services/smart_search_service.py
-import redis
-import json
-from django.contrib.auth.models import User
-from .models import JobPost, Skills
-
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-class SmartSearchService:
-    @staticmethod
-    def get_contextual_suggestions(query, user=None, context='general'):
-        """Get contextual auto-complete suggestions based on user and context"""
-        
-        suggestions = []
-        max_per_category = 8
-        
-        # Get base suggestions from all dictionaries
-        categories_to_search = {
-            'job_titles:suggestions': 'job_title',
-            'companies:suggestions': 'company', 
-            'skills:suggestions': 'skill'
-        }
-        
-        for dict_key, category in categories_to_search.items():
-            try:
-                raw_suggestions = redis_client.execute_command(
-                    'FT.SUGGET',
-                    dict_key,
-                    query,
-                    'FUZZY',
-                    'MAX', max_per_category,
-                    'WITHSCORES',
-                    'WITHPAYLOADS'
-                )
-                
-                # Parse suggestions
-                for i in range(0, len(raw_suggestions), 3):
-                    if i + 2 < len(raw_suggestions):
-                        text = raw_suggestions[i]
-                        score = float(raw_suggestions[i + 1])
-                        payload_str = raw_suggestions[i + 2]
-                        
-                        try:
-                            payload = json.loads(payload_str) if payload_str else {}
-                        except:
-                            payload = {}
-                        
-                        # Apply contextual boosting
-                        contextual_score = SmartSearchService.apply_contextual_boost(
-                            text, score, category, context, user, payload
-                        )
-                        
-                        suggestion = {
-                            'text': text,
-                            'original_score': score,
-                            'contextual_score': contextual_score,
-                            'category': category,
-                            'payload': payload,
-                            'boost_reason': SmartSearchService.get_boost_reason(
-                                category, context, user, payload
-                            )
-                        }
-                        
-                        suggestions.append(suggestion)
-                        
-            except Exception as e:
-                print(f"Error getting suggestions from {dict_key}: {e}")
-        
-        # Sort by contextual score and format for response
-        suggestions.sort(key=lambda x: x['contextual_score'], reverse=True)
-        
-        return SmartSearchService.format_suggestions(suggestions[:15])
-    
-    @staticmethod
-    def apply_contextual_boost(text, score, category, context, user, payload):
-        """Apply contextual scoring boosts based on user and context"""
-        
-        contextual_score = score
-        
-        # User-based boosting
-        if user and user.is_authenticated:
-            # Boost based on user's profile/search history
-            if hasattr(user, 'profile'):
-                user_skills = user.profile.skills.values_list('name', flat=True)
-                if category == 'skill' and text in user_skills:
-                    contextual_score += 50  # Boost skills user already has
-                    
-                user_experience_level = getattr(user.profile, 'experience_level', 'intermediate')
-                if category == 'job_title':
-                    if user_experience_level == 'senior' and 'senior' in text.lower():
-                        contextual_score += 30
-                    elif user_experience_level == 'junior' and 'junior' in text.lower():
-                        contextual_score += 30
-        
-        # Context-based boosting  
-        if context == 'job_search':
-            if category == 'job_title':
-                contextual_score += 20  # Boost job titles for job search
-            elif category == 'company' and payload.get('job_count', 0) > 5:
-                contextual_score += 15  # Boost active hiring companies
-                
-        elif context == 'skill_discovery':
-            if category == 'skill':
-                if payload.get('trending', False):
-                    contextual_score += 25  # Boost trending skills
-                if payload.get('job_demand', 0) > 10:
-                    contextual_score += 20  # Boost in-demand skills
-                    
-        elif context == 'company_research':
-            if category == 'company':
-                if payload.get('tier') == 'big_tech':
-                    contextual_score += 30  # Boost well-known companies
-        
-        # Recency boosting (if payload has timestamp)
-        if payload.get('last_updated'):
-            # Boost recently updated suggestions
-            contextual_score += 10
-        
-        return contextual_score
-    
-    @staticmethod
-    def get_boost_reason(category, context, user, payload):
-        """Get human-readable reason for score boosting"""
-        reasons = []
-        
-        if context == 'job_search' and category == 'job_title':
-            reasons.append('Relevant for job search')
-        elif payload.get('trending', False):
-            reasons.append('Trending skill')
-        elif payload.get('tier') == 'big_tech':
-            reasons.append('Popular company')
-        elif payload.get('job_demand', 0) > 10:
-            reasons.append('High demand')
-            
-        return ', '.join(reasons) if reasons else 'Standard relevance'
-    
-    @staticmethod
-    def format_suggestions(suggestions):
-        """Format suggestions for API response"""
-        
-        formatted = []
-        category_icons = {
-            'job_title': '💼',
-            'company': '🏢', 
-            'skill': '🔧'
-        }
-        
-        for suggestion in suggestions:
-            formatted.append({
-                'text': suggestion['text'],
-                'category': suggestion['category'],
-                'score': round(suggestion['contextual_score'], 1),
-                'boost_reason': suggestion['boost_reason'],
-                'icon': category_icons.get(suggestion['category'], '📝'),
-                'metadata': {
-                    'trending': suggestion['payload'].get('trending', False),
-                    'difficulty': suggestion['payload'].get('difficulty'),
-                    'job_count': suggestion['payload'].get('job_count'),
-                    'frequency': suggestion['payload'].get('frequency')
-                }
-            })
-        
-        return formatted</code></pre>
-                        <div class="output-block">
-                            <strong>Printout:</strong>
-                            <pre>Smart Contextual Suggestions for "java" (job_search context):
-
-[
-  {
-    "text": "JavaScript Developer",
-    "category": "job_title", 
-    "score": 140.0,
-    "boost_reason": "Relevant for job search",
-    "icon": "💼",
-    "metadata": {
-      "trending": false,
-      "frequency": 12
-    }
-  },
-  {
-    "text": "JavaScript",
-    "category": "skill",
-    "score": 135.0, 
-    "boost_reason": "High demand",
-    "icon": "🔧",
-    "metadata": {
-      "trending": false,
-      "difficulty": "Intermediate",
-      "job_demand": 6
-    }
-  },
-  {
-    "text": "Java Developer", 
-    "category": "job_title",
-    "score": 125.0,
-    "boost_reason": "Relevant for job search",
-    "icon": "💼"
-  }
-]</pre>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- FT.SUGDEL Command -->
-                <div class="command-block">
-                    <h3 id="ft-sugdel"><code>FT.SUGDEL</code> - Delete Suggestion from Dictionary</h3>
-                    <div class="command-description">
-                        <strong>Purpose:</strong> Removes a suggestion string from an auto-complete dictionary.
-                        <br><strong>Syntax:</strong> <code>FT.SUGDEL key string</code>
-                        <br><strong>Parameters:</strong>
-                        <ul>
-                            <li><code>key</code> - Auto-complete dictionary name</li>
-                            <li><code>string</code> - Suggestion text to remove</li>
-                        </ul>
-                        <br><strong>Return:</strong> 1 if the suggestion was found and deleted, 0 otherwise
-                    </div>
-
-                    <div class="example-block">
-                        <strong>Django Example: Suggestion Management Service</strong>
-                        <pre><code class="language-python"># services/suggestion_management.py
-import redis
-from django.core.management.base import BaseCommand
-from django.utils import timezone
-from .models import JobPost, Author, Skills
-
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-class SuggestionManagementService:
-    @staticmethod
-    def cleanup_outdated_suggestions():
-        """Remove outdated or inappropriate suggestions"""
-        
-        print("🧹 Starting suggestion cleanup...")
-        
-        # Remove outdated job titles that are no longer used
-        outdated_titles = [
-            'Webmaster',
-            'Computer Programmer', 
-            'Systems Analyst',
-            'Database Administrator',  # Often combined with other roles now
-            'Junior Web Developer',   # If we want to focus on mid/senior roles
-            'HTML Coder',
-            'Flash Developer',
-            'Perl Developer'
-        ]
-        
-        removed_count = 0
-        
-        for title in outdated_titles:
-            result = redis_client.execute_command(
-                'FT.SUGDEL', 
-                'job_titles:suggestions',
-                title
-            )
-            
-            if result == 1:
-                removed_count += 1
-                print(f"❌ Removed outdated title: {title}")
-            else:
-                print(f"ℹ️  Title not found: {title}")
-        
-        print(f"✅ Removed {removed_count} outdated job titles")
-        
-        # Remove companies that haven't posted jobs recently
-        inactive_companies = SuggestionManagementService.get_inactive_companies()
-        company_removed_count = 0
-        
-        for company in inactive_companies:
-            result = redis_client.execute_command(
-                'FT.SUGDEL',
-                'companies:suggestions', 
-                company
-            )
-            
-            if result == 1:
-                company_removed_count += 1
-                print(f"❌ Removed inactive company: {company}")
-        
-        print(f"✅ Removed {company_removed_count} inactive companies")
-        
-        # Remove deprecated or unpopular skills
-        deprecated_skills = [
-            'Flash',
-            'ActionScript',
-            'Internet Explorer',
-            'jQuery Mobile',
-            'CoffeeScript',
-            'Bower',
-            'Grunt'  # Largely replaced by webpack/vite
-        ]
-        
-        skill_removed_count = 0
-        for skill in deprecated_skills:
-            result = redis_client.execute_command(
-                'FT.SUGDEL',
-                'skills:suggestions',
-                skill
-            )
-            
-            if result == 1:
-                skill_removed_count += 1
-                print(f"❌ Removed deprecated skill: {skill}")
-        
-        print(f"✅ Removed {skill_removed_count} deprecated skills")
-        
-        return {
-            'job_titles_removed': removed_count,
-            'companies_removed': company_removed_count, 
-            'skills_removed': skill_removed_count,
-            'total_removed': removed_count + company_removed_count + skill_removed_count
-        }
-    
-    @staticmethod
-    def get_inactive_companies():
-        """Get list of companies with no recent job postings"""
-        
-        # Get companies that haven't posted jobs in last 90 days
-        cutoff_date = timezone.now() - timezone.timedelta(days=90)
-        
-        # This would be a more complex query in real app
-        # For demo, return some example inactive companies
-        return [
-            'Defunct Tech Corp',
-            'Closed Startup Inc',
-            'Legacy Systems Ltd'
-        ]
-    
-    @staticmethod
-    def moderate_suggestions(category='all'):
-        """Remove inappropriate or spam suggestions"""
-        
-        print(f"🔍 Moderating {category} suggestions...")
-        
-        # Define inappropriate content patterns
-        inappropriate_patterns = [
-            'test', 'testing123', 'spam', 'fake',
-            'asdf', 'qwerty', '12345', 'sample'
-        ]
-        
-        moderated_count = 0
-        dictionaries = []
-        
-        if category in ['all', 'jobs']:
-            dictionaries.append('job_titles:suggestions')
-        if category in ['all', 'companies']:
-            dictionaries.append('companies:suggestions')
-        if category in ['all', 'skills']:
-            dictionaries.append('skills:suggestions')
-        
-        for dict_key in dictionaries:
-            # Get all suggestions to check (in real app, you'd have a better way)
-            # For demo, check known inappropriate entries
-            for pattern in inappropriate_patterns:
-                result = redis_client.execute_command(
-                    'FT.SUGDEL',
-                    dict_key,
-                    pattern
-                )
-                
-                if result == 1:
-                    moderated_count += 1
-                    print(f"🚫 Removed inappropriate suggestion: {pattern} from {dict_key}")
-        
-        print(f"✅ Moderated {moderated_count} inappropriate suggestions")
-        return moderated_count
-    
-    @staticmethod  
-    def update_suggestion_scores():
-        """Update suggestion scores based on current data"""
-        
-        print("📊 Updating suggestion scores based on current activity...")
-        
-        # Re-score job titles based on current job posting frequency
-        current_job_counts = {}
-        job_posts = JobPost.objects.values_list('title', flat=True)
-        
-        for title in job_posts:
-            current_job_counts[title] = current_job_counts.get(title, 0) + 1
-        
-        updated_count = 0
-        for title, count in current_job_counts.items():
-            # Remove old entry
-            redis_client.execute_command('FT.SUGDEL', 'job_titles:suggestions', title)
-            
-            # Add with updated score
-            redis_client.execute_command(
-                'FT.SUGADD',
-                'job_titles:suggestions',
-                title,
-                count * 10,  # New scoring algorithm
-                'PAYLOAD', f'{{"frequency": {count}, "last_updated": "{timezone.now().isoformat()}"}}'
-            )
-            updated_count += 1
-            print(f"🔄 Updated score for: {title} (new frequency: {count})")
-        
-        print(f"✅ Updated scores for {updated_count} job titles")
-        return updated_count
-
-# Management command for running cleanup
-class Command(BaseCommand):
-    help = 'Clean up and maintain auto-complete suggestions'
-    
-    def add_arguments(self, parser):
-        parser.add_argument('--action', choices=['cleanup', 'moderate', 'update_scores'], 
-                          default='cleanup', help='Maintenance action to perform')
-        parser.add_argument('--category', choices=['all', 'jobs', 'companies', 'skills'],
-                          default='all', help='Category to process')
-    
-    def handle(self, *args, **options):
-        action = options['action']
-        category = options['category']
-        
-        self.stdout.write(f"🔧 Running suggestion maintenance: {action} for {category}")
-        
-        if action == 'cleanup':
-            results = SuggestionManagementService.cleanup_outdated_suggestions()
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"✅ Cleanup complete! Removed {results['total_removed']} suggestions"
-                )
-            )
-            
-        elif action == 'moderate':
-            count = SuggestionManagementService.moderate_suggestions(category)
-            self.stdout.write(self.style.SUCCESS(f"✅ Moderation complete! Removed {count} inappropriate suggestions"))
-            
-        elif action == 'update_scores':
-            count = SuggestionManagementService.update_suggestion_scores()
-            self.stdout.write(self.style.SUCCESS(f"✅ Score update complete! Updated {count} suggestions"))</code></pre>
-                        <div class="output-block">
-                            <strong>Printout:</strong>
-                            <pre>🧹 Starting suggestion cleanup...
-❌ Removed outdated title: Webmaster
-❌ Removed outdated title: Flash Developer  
-ℹ️  Title not found: Computer Programmer
-❌ Removed outdated title: HTML Coder
-✅ Removed 3 outdated job titles
-
-❌ Removed inactive company: Defunct Tech Corp
-❌ Removed inactive company: Legacy Systems Ltd
-✅ Removed 2 inactive companies
-
-❌ Removed deprecated skill: Flash
-❌ Removed deprecated skill: ActionScript
-❌ Removed deprecated skill: CoffeeScript  
-✅ Removed 3 deprecated skills
-
-🔍 Moderating all suggestions...
-🚫 Removed inappropriate suggestion: test from job_titles:suggestions
-🚫 Removed inappropriate suggestion: spam from skills:suggestions
-✅ Moderated 2 inappropriate suggestions
-
-Cleanup Summary:
-- Job titles removed: 3
-- Companies removed: 2  
-- Skills removed: 3
-- Inappropriate content: 2
-- Total removed: 10 suggestions</pre>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- FT.SUGLEN Command -->
-                <div class="command-block">
-                    <h3 id="ft-suglen"><code>FT.SUGLEN</code> - Get Suggestion Dictionary Size</h3>
-                    <div class="command-description">
-                        <strong>Purpose:</strong> Returns the number of suggestions in an auto-complete dictionary.
-                        <br><strong>Syntax:</strong> <code>FT.SUGLEN key</code>
-                        <br><strong>Parameters:</strong>
-                        <ul>
-                            <li><code>key</code> - Auto-complete dictionary name</li>
-                        </ul>
-                        <br><strong>Return:</strong> Number of suggestions in the dictionary
-                    </div>
-
-                    <div class="example-block">
-                        <strong>Django Example: Suggestion Analytics Dashboard</strong>
-                        <pre><code class="language-python"># views.py - Auto-complete analytics dashboard
-import redis
-from django.shortcuts import render
-from django.http import JsonResponse
-from django.contrib.admin.views.decorators import staff_member_required
-from django.utils import timezone
-import json
-
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-@staff_member_required
-def suggestion_analytics_dashboard(request):
-    """Admin dashboard for auto-complete suggestion analytics"""
-    
-    # Get dictionary sizes
-    dictionary_stats = {}
-    
-    dictionaries = [
-        'job_titles:suggestions',
-        'companies:suggestions', 
-        'skills:suggestions',
-        'locations:suggestions',  # If we had location suggestions
-        'combined:suggestions'    # If we had a combined dictionary
-    ]
-    
-    total_suggestions = 0
-    
-    for dict_name in dictionaries:
-        try:
-            size = redis_client.execute_command('FT.SUGLEN', dict_name)
-            dictionary_stats[dict_name] = {
-                'size': size,
-                'category': dict_name.split(':')[0],
-                'status': 'active' if size > 0 else 'empty'
-            }
-            total_suggestions += size
-            
-        except Exception as e:
-            dictionary_stats[dict_name] = {
-                'size': 0,
-                'category': dict_name.split(':')[0],
-                'status': 'error',
-                'error': str(e)
-            }
-    
-    # Calculate distribution
-    distribution = {}
-    for dict_name, stats in dictionary_stats.items():
-        category = stats['category']
-        distribution[category] = distribution.get(category, 0) + stats['size']
-    
-    # Get sample suggestions for preview
-    sample_suggestions = {}
-    for dict_name in dictionaries:
-        if dictionary_stats[dict_name]['size'] > 0:
-            try:
-                # Get top 5 suggestions by trying common prefixes
-                samples = []
-                for prefix in ['a', 'b', 'c', 'd', 'e']:
-                    suggestions = redis_client.execute_command(
-                        'FT.SUGGET', dict_name, prefix, 'MAX', 2
-                    )
-                    samples.extend(suggestions)
-                    if len(samples) >= 5:
-                        break
-                
-                sample_suggestions[dict_name] = samples[:5]
-                
-            except Exception as e:
-                sample_suggestions[dict_name] = [f"Error: {e}"]
-    
-    # Performance metrics
-    performance_metrics = calculate_suggestion_performance()
-    
-    dashboard_data = {
-        'timestamp': timezone.now().isoformat(),
-        'total_suggestions': total_suggestions,
-        'dictionary_stats': dictionary_stats,
-        'distribution': distribution,
-        'sample_suggestions': sample_suggestions,
-        'performance_metrics': performance_metrics,
-        'recommendations': generate_optimization_recommendations(dictionary_stats)
-    }
-    
-    if request.headers.get('Accept') == 'application/json':
-        return JsonResponse(dashboard_data)
-    
-    return render(request, 'admin/suggestion_analytics.html', {
-        'dashboard_data': dashboard_data
-    })
-
-def calculate_suggestion_performance():
-    """Calculate performance metrics for suggestion dictionaries"""
-    
-    # In a real app, you'd track these metrics over time
-    # For demo, return sample performance data
-    return {
-        'avg_response_time_ms': 2.3,
-        'cache_hit_rate': 94.2,
-        'daily_queries': 15420,
-        'popular_prefixes': [
-            {'prefix': 'python', 'queries': 1240},
-            {'prefix': 'java', 'queries': 890}, 
-            {'prefix': 'react', 'queries': 756},
-            {'prefix': 'aws', 'queries': 634},
-            {'prefix': 'docker', 'queries': 523}
-        ],
-        'suggestion_quality_score': 87.5,  # Based on user engagement
-        'last_updated': timezone.now().isoformat()
-    }
-
-def generate_optimization_recommendations(dictionary_stats):
-    """Generate optimization recommendations based on dictionary stats"""
-    
-    recommendations = []
-    
-    # Check for oversized dictionaries
-    for dict_name, stats in dictionary_stats.items():
-        size = stats['size']
-        category = stats['category']
-        
-        if size > 10000:
-            recommendations.append({
-                'type': 'performance',
-                'severity': 'warning',
-                'message': f'{category} dictionary is large ({size:,} entries). Consider pruning inactive suggestions.',
-                'action': f'Run cleanup for {category} category'
-            })
-        elif size > 50000:
-            recommendations.append({
-                'type': 'performance', 
-                'severity': 'critical',
-                'message': f'{category} dictionary is very large ({size:,} entries). Performance may be impacted.',
-                'action': f'Immediate cleanup required for {category}'
-            })
-    
-    # Check for empty dictionaries
-    empty_dicts = [name for name, stats in dictionary_stats.items() if stats['size'] == 0]
-    if empty_dicts:
-        recommendations.append({
-            'type': 'data',
-            'severity': 'info',
-            'message': f'Empty dictionaries found: {", ".join(empty_dicts)}',
-            'action': 'Build initial suggestions or remove unused dictionaries'
-        })
-    
-    # Check for unbalanced distribution
-    total = sum(stats['size'] for stats in dictionary_stats.values())
-    if total > 0:
-        job_ratio = dictionary_stats.get('job_titles:suggestions', {}).get('size', 0) / total
-        if job_ratio > 0.7:
-            recommendations.append({
-                'type': 'balance',
-                'severity': 'info', 
-                'message': 'Job titles dominate suggestions (>70%). Consider balancing with more company/skill suggestions.',
-                'action': 'Expand company and skills dictionaries'
-            })
-    
-    return recommendations
-
-# API endpoint for real-time statistics
-@staff_member_required 
-def suggestion_stats_api(request):
-    """API endpoint for real-time suggestion statistics"""
-    
-    stats = {}
-    dictionaries = ['job_titles:suggestions', 'companies:suggestions', 'skills:suggestions']
-    
-    for dict_name in dictionaries:
-        try:
-            size = redis_client.execute_command('FT.SUGLEN', dict_name)
-            stats[dict_name.replace(':suggestions', '')] = {
-                'count': size,
-                'last_checked': timezone.now().isoformat()
-            }
-        except Exception as e:
-            stats[dict_name.replace(':suggestions', '')] = {
-                'count': 0,
-                'error': str(e),
-                'last_checked': timezone.now().isoformat()
-            }
-    
-    return JsonResponse({
-        'dictionaries': stats,
-        'total': sum(s.get('count', 0) for s in stats.values()),
-        'timestamp': timezone.now().isoformat()
-    })
-
-# Monitoring command
-class Command(BaseCommand):
-    help = 'Monitor suggestion dictionary health'
-    
-    def handle(self, *args, **options):
-        self.stdout.write("📊 Suggestion Dictionary Health Check")
-        self.stdout.write("=" * 50)
-        
-        dictionaries = [
-            'job_titles:suggestions',
-            'companies:suggestions',
-            'skills:suggestions'
-        ]
-        
-        total_suggestions = 0
-        healthy_dicts = 0
-        
-        for dict_name in dictionaries:
-            try:
-                size = redis_client.execute_command('FT.SUGLEN', dict_name)
-                total_suggestions += size
-                
-                # Health check criteria
-                if size > 0:
-                    healthy_dicts += 1
-                    status = "✅ Healthy"
-                    if size > 10000:
-                        status = "⚠️  Large (consider pruning)"
-                    elif size > 50000:
-                        status = "🚨 Critical (performance risk)"
-                else:
-                    status = "❌ Empty"
-                
-                self.stdout.write(f"{dict_name:30} {size:>8,} entries - {status}")
-                
-            except Exception as e:
-                self.stdout.write(f"{dict_name:30} {'ERROR':>8} - {e}")
-        
-        self.stdout.write("=" * 50)
-        self.stdout.write(f"Total Suggestions: {total_suggestions:,}")
-        self.stdout.write(f"Healthy Dictionaries: {healthy_dicts}/{len(dictionaries)}")
-        
-        # Health percentage
-        health_percentage = (healthy_dicts / len(dictionaries)) * 100
-        if health_percentage == 100:
-            self.stdout.write(self.style.SUCCESS(f"🎉 System Health: {health_percentage:.1f}% - Excellent!"))
-        elif health_percentage >= 75:
-            self.stdout.write(self.style.WARNING(f"⚠️  System Health: {health_percentage:.1f}% - Good"))
-        else:
-            self.stdout.write(self.style.ERROR(f"🚨 System Health: {health_percentage:.1f}% - Needs Attention"))</code></pre>
-                        <div class="output-block">
-                            <strong>Printout:</strong>
-                            <pre>📊 Suggestion Dictionary Health Check
-==================================================
-job_titles:suggestions              32 entries - ✅ Healthy
-companies:suggestions               15 entries - ✅ Healthy
-skills:suggestions                  28 entries - ✅ Healthy
-locations:suggestions                0 entries - ❌ Empty
-combined:suggestions                 0 entries - ❌ Empty
-==================================================
-Total Suggestions: 75
-Healthy Dictionaries: 3/5
-
-🎉 System Health: 60.0% - Needs Attention
-
-Dashboard Analytics:
-{
-  "total_suggestions": 75,
-  "distribution": {
-    "job_titles": 32,
-    "companies": 15,
-    "skills": 28
-  },
-  "performance_metrics": {
-    "avg_response_time_ms": 2.3,
-    "cache_hit_rate": 94.2,
-    "daily_queries": 15420,
-    "popular_prefixes": [
-      {"prefix": "python", "queries": 1240},
-      {"prefix": "java", "queries": 890}
-    ]
-  },
-  "recommendations": [
-    {
-      "type": "data",
-      "message": "Empty dictionaries found: locations:suggestions, combined:suggestions",
-      "action": "Build initial suggestions or remove unused dictionaries"
-    }
-  ]
-}</pre>
-                        </div>
-                    </div>
-                </div>
-
                 <div class="callout">
-                    <strong>💡 Implementation Note:</strong> The remaining Redis Query Engine commands (FT.INFO, FT.DROPINDEX, FT.ALTER, FT.ALIASADD, FT.ALIASDEL, FT.ALIASUPDATE, FT.SPELLCHECK, FT.DICTADD, FT.DICTDEL, FT.DICTDUMP, FT.TAGVALS, FT.SYNUPDATE, FT.SYNDUMP, FT.PROFILE, FT.EXPLAIN, FT._LIST, etc.) along with the FT.SUG* auto-complete commands provide comprehensive search infrastructure management, performance optimization, and advanced query capabilities for building production-ready search applications with intelligent auto-complete functionality.
+                    <strong>💡 Implementation Note:</strong> The remaining Redis Query Engine commands (FT.INFO, FT.DROPINDEX, FT.ALTER, FT.ALIASADD, FT.ALIASDEL, FT.ALIASUPDATE, FT.SPELLCHECK, FT.DICTADD, FT.DICTDEL, FT.DICTDUMP, FT.TAGVALS, FT.SYNUPDATE, FT.SYNDUMP, FT.PROFILE, FT.EXPLAIN, FT._LIST, etc.) provide comprehensive search infrastructure management, performance optimization, and advanced query capabilities for building production-ready search applications. Note that FT.SUG* auto-complete commands are now available in the dedicated Auto-suggest section.
                 </div>
 
             </section>
@@ -18791,6 +17445,1010 @@ def stream_dashboard(request):
 
                 <div class="implementation-note">
                     <strong>💡 Implementation Note:</strong> The remaining Stream commands (XDEL, XTRIM, XRANGE, XREVRANGE, XPENDING, XCLAIM, XAUTOCLAIM, XINFO, etc.) provide comprehensive tools for stream lifecycle management, data cleanup, range queries, pending entry recovery, and stream introspection in Django production environments.
+                </div>
+
+            </section>
+
+            <!-- Auto-suggest Commands Section -->
+            <section id="auto-suggest" class="command-section">
+                <div class="section-header">
+                    <h2>🔮 Auto-suggest Commands</h2>
+                    <p>Redis Auto-suggest commands provide fast, intelligent autocomplete functionality using RediSearch suggestion dictionaries. Perfect for Django applications requiring search suggestions, type-ahead functionality, and smart user interfaces with contextual recommendations.</p>
+                </div>
+
+                <!-- FT.SUGADD Command -->
+                <div class="command-block">
+                    <h3 id="ft-sugadd"><code>FT.SUGADD</code> - Add Suggestion to Auto-Complete Dictionary</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Adds a suggestion string to an auto-complete suggestion dictionary for fast prefix-based search suggestions.
+                        <br><strong>Syntax:</strong> <code>FT.SUGADD key string score [INCR] [PAYLOAD payload]</code>
+                        <br><strong>Parameters:</strong>
+                        <ul>
+                            <li><code>key</code> - Auto-complete dictionary name</li>
+                            <li><code>string</code> - Suggestion text to add</li>
+                            <li><code>score</code> - Suggestion weight/score for ranking</li>
+                            <li><code>INCR</code> - Increment score if suggestion exists</li>
+                            <li><code>PAYLOAD</code> - Optional metadata for the suggestion</li>
+                        </ul>
+                        <br><strong>Return:</strong> Current size of the suggestion dictionary
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Django Example 1: Job Title Auto-Complete</strong>
+                        <pre><code class="language-python"># management/commands/build_job_suggestions.py
+import redis
+from django.core.management.base import BaseCommand
+from .models import JobPost
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Build job title auto-complete suggestions'
+    
+    def handle(self, *args, **options):
+        # Get job titles with frequency counts
+        job_titles = JobPost.objects.values_list('title', flat=True)
+        title_counts = {}
+        
+        for title in job_titles:
+            title_counts[title] = title_counts.get(title, 0) + 1
+        
+        self.stdout.write("Building job title suggestions...")
+        
+        # Add each title to auto-complete with frequency as score
+        for title, count in title_counts.items():
+            result = redis_client.execute_command(
+                'FT.SUGADD', 
+                'job_titles:suggestions',
+                title,
+                count * 10,  # Boost score for better ranking
+                'PAYLOAD', f'{{"frequency": {count}, "type": "job_title"}}'
+            )
+            
+            self.stdout.write(f"Added: {title} (score: {count * 10}) - Dict size: {result}")
+        
+        # Add popular variations and synonyms
+        popular_titles = {
+            'Software Engineer': 100,
+            'Software Developer': 95, 
+            'Full Stack Engineer': 90,
+            'Full Stack Developer': 88,
+            'Backend Engineer': 85,
+            'Backend Developer': 83,
+            'Frontend Engineer': 80,
+            'Frontend Developer': 78,
+            'DevOps Engineer': 75,
+            'Data Engineer': 73,
+            'Python Developer': 70,
+            'JavaScript Developer': 68,
+            'React Developer': 65,
+            'Node.js Developer': 63
+        }
+        
+        for title, score in popular_titles.items():
+            redis_client.execute_command(
+                'FT.SUGADD',
+                'job_titles:suggestions', 
+                title,
+                score,
+                'INCR',  # Increment if exists
+                'PAYLOAD', f'{{"frequency": {score}, "type": "popular_title"}}'
+            )
+        
+        total_suggestions = redis_client.execute_command('FT.SUGLEN', 'job_titles:suggestions')
+        self.stdout.write(f"✅ Total suggestions in dictionary: {total_suggestions}")</code></pre>
+                        <div class="output-block">
+                            <strong>Printout:</strong>
+                            <pre>Building job title suggestions...
+Added: Python Developer (score: 150) - Dict size: 1
+Added: Full Stack Developer (score: 120) - Dict size: 2  
+Added: Data Scientist (score: 80) - Dict size: 3
+Added: Frontend Developer (score: 100) - Dict size: 4
+Added: UI/UX Designer (score: 60) - Dict size: 5
+
+✅ Total suggestions in dictionary: 42</pre>
+                        </div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Django Example 2: Company Auto-Complete with Metadata</strong>
+                        <pre><code class="language-python"># services/company_suggestions.py
+import redis
+from django.db.models import Count
+from .models import Author, JobPost
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class CompanySuggestionService:
+    @staticmethod
+    def build_company_suggestions():
+        """Build company suggestions with hiring activity data"""
+        
+        # Get companies with their job posting counts
+        companies = Author.objects.annotate(
+            job_count=Count('jobpost'),
+            active_jobs=Count('jobpost__expiry')
+        ).values('company', 'job_count', 'active_jobs')
+        
+        print("Building company suggestions...")
+        
+        for company_data in companies:
+            company = company_data['company']
+            job_count = company_data['job_count']
+            
+            # Score based on hiring activity
+            base_score = job_count * 15
+            activity_bonus = min(company_data['active_jobs'] * 5, 50)
+            final_score = base_score + activity_bonus
+            
+            # Rich payload with company insights
+            payload = {
+                'company_name': company,
+                'total_jobs_posted': job_count,
+                'active_jobs': company_data['active_jobs'],
+                'hiring_status': 'active' if company_data['active_jobs'] > 0 else 'inactive',
+                'company_size': 'enterprise' if job_count > 10 else 'startup' if job_count > 3 else 'small',
+                'popularity_tier': 'high' if final_score > 100 else 'medium' if final_score > 50 else 'standard'
+            }
+            
+            result = redis_client.execute_command(
+                'FT.SUGADD',
+                'companies:suggestions',
+                company,
+                final_score,
+                'PAYLOAD', str(payload).replace("'", '"')
+            )
+            
+            print(f"Added: {company} (score: {final_score}) - {payload['hiring_status']} - Dict size: {result}")
+            
+            # Add company abbreviations
+            if 'Corporation' in company:
+                abbrev = company.replace('Corporation', 'Corp')
+                redis_client.execute_command(
+                    'FT.SUGADD', 'companies:suggestions', abbrev, final_score - 10,
+                    'PAYLOAD', str({**payload, 'original_name': company, 'type': 'abbreviation'}).replace("'", '"')
+                )
+                
+        # Add well-known tech companies for reference
+        tech_giants = [
+            ('Google', 200, 'big_tech'), ('Apple', 195, 'big_tech'), ('Microsoft', 190, 'big_tech'),
+            ('Amazon', 185, 'big_tech'), ('Meta', 180, 'big_tech'), ('Netflix', 175, 'big_tech'),
+            ('Tesla', 170, 'innovative'), ('OpenAI', 165, 'ai_startup'), ('Stripe', 160, 'fintech')
+        ]
+        
+        for company, score, category in tech_giants:
+            payload = {
+                'company_name': company,
+                'type': 'reference_company',
+                'category': category,
+                'tier': 'premium',
+                'global_recognition': True
+            }
+            
+            redis_client.execute_command(
+                'FT.SUGADD', 'companies:suggestions', company, score,
+                'PAYLOAD', str(payload).replace("'", '"')
+            )
+            print(f"Added reference: {company} ({category}) - score: {score}")
+    
+    @staticmethod
+    def get_suggestions_stats():
+        total = redis_client.execute_command('FT.SUGLEN', 'companies:suggestions')
+        return {'total_companies': total, 'status': 'active' if total > 0 else 'empty'}</code></pre>
+                        <div class="output-block">
+                            <strong>Printout:</strong>
+                            <pre>Building company suggestions...
+Added: ABC Corp (score: 65) - active - Dict size: 1
+Added: XYZ Inc (score: 45) - inactive - Dict size: 2
+Added: 123 Industries (score: 85) - active - Dict size: 3
+Added: Tech Solutions (score: 25) - inactive - Dict size: 4
+
+Added reference: Google (big_tech) - score: 200
+Added reference: Apple (big_tech) - score: 195
+Added reference: OpenAI (ai_startup) - score: 165
+
+Company Suggestions Summary:
+- Total companies: 15
+- Active hiring: 8 companies  
+- Reference companies: 9
+- Status: active</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FT.SUGGET Command -->
+                <div class="command-block">
+                    <h3 id="ft-sugget"><code>FT.SUGGET</code> - Get Auto-Complete Suggestions</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Retrieves completion suggestions for a prefix from an auto-complete dictionary.
+                        <br><strong>Syntax:</strong> <code>FT.SUGGET key prefix [FUZZY] [MAX num] [WITHSCORES] [WITHPAYLOADS]</code>
+                        <br><strong>Parameters:</strong>
+                        <ul>
+                            <li><code>key</code> - Auto-complete dictionary name</li>
+                            <li><code>prefix</code> - Text prefix to search for</li>
+                            <li><code>FUZZY</code> - Enable fuzzy matching (typos)</li>
+                            <li><code>MAX num</code> - Maximum suggestions to return</li>
+                            <li><code>WITHSCORES</code> - Include suggestion scores</li>
+                            <li><code>WITHPAYLOADS</code> - Include suggestion payloads</li>
+                        </ul>
+                        <br><strong>Return:</strong> Array of matching suggestions with optional scores and payloads
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Django Example 1: Smart Job Search API</strong>
+                        <pre><code class="language-python"># views.py - Auto-complete API with smart suggestions
+import redis
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import json
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@csrf_exempt
+def smart_autocomplete_api(request):
+    """Intelligent auto-complete API with contextual suggestions"""
+    
+    query = request.GET.get('q', '').strip()
+    category = request.GET.get('category', 'all')  # jobs, companies, skills
+    max_results = int(request.GET.get('max', 8))
+    user_context = request.GET.get('context', 'general')  # job_search, skill_discovery
+    
+    if len(query) < 2:
+        return JsonResponse({'suggestions': [], 'query': query, 'count': 0})
+    
+    all_suggestions = []
+    
+    try:
+        # Get job suggestions
+        if category in ['all', 'jobs']:
+            job_suggestions = redis_client.execute_command(
+                'FT.SUGGET', 'job_titles:suggestions', query,
+                'FUZZY', 'MAX', max_results, 'WITHSCORES', 'WITHPAYLOADS'
+            )
+            
+            # Parse job suggestions (Redis returns: [text, score, payload, ...])
+            for i in range(0, len(job_suggestions), 3):
+                if i + 2 < len(job_suggestions):
+                    text = job_suggestions[i]
+                    score = float(job_suggestions[i + 1])
+                    payload = json.loads(job_suggestions[i + 2]) if job_suggestions[i + 2] else {}
+                    
+                    # Apply contextual boosting
+                    contextual_score = score
+                    if user_context == 'job_search':
+                        contextual_score += 20
+                    if payload.get('type') == 'popular_title':
+                        contextual_score += 15
+                        
+                    all_suggestions.append({
+                        'text': text,
+                        'category': 'job',
+                        'score': round(contextual_score, 1),
+                        'type': payload.get('type', 'job_title'),
+                        'frequency': payload.get('frequency', 0),
+                        'icon': '💼',
+                        'boost_reason': 'Popular job title' if payload.get('type') == 'popular_title' else None
+                    })
+        
+        # Get company suggestions  
+        if category in ['all', 'companies']:
+            company_suggestions = redis_client.execute_command(
+                'FT.SUGGET', 'companies:suggestions', query,
+                'FUZZY', 'MAX', max_results, 'WITHSCORES', 'WITHPAYLOADS'
+            )
+            
+            for i in range(0, len(company_suggestions), 3):
+                if i + 2 < len(company_suggestions):
+                    text = company_suggestions[i]
+                    score = float(company_suggestions[i + 1])
+                    payload = json.loads(company_suggestions[i + 2]) if company_suggestions[i + 2] else {}
+                    
+                    # Company-specific contextual scoring
+                    contextual_score = score
+                    if payload.get('hiring_status') == 'active':
+                        contextual_score += 25
+                    if payload.get('tier') == 'premium':
+                        contextual_score += 30
+                        
+                    all_suggestions.append({
+                        'text': text,
+                        'category': 'company',
+                        'score': round(contextual_score, 1),
+                        'hiring_status': payload.get('hiring_status', 'unknown'),
+                        'company_size': payload.get('company_size', 'unknown'),
+                        'active_jobs': payload.get('active_jobs', 0),
+                        'tier': payload.get('tier', 'standard'),
+                        'icon': '🏢' if payload.get('tier') != 'premium' else '⭐'
+                    })
+        
+        # Sort by contextual score and limit results
+        all_suggestions.sort(key=lambda x: x['score'], reverse=True)
+        final_suggestions = all_suggestions[:max_results]
+        
+        return JsonResponse({
+            'query': query,
+            'suggestions': final_suggestions,
+            'count': len(final_suggestions),
+            'context': user_context,
+            'categories_found': list(set(s['category'] for s in final_suggestions)),
+            'max_score': max([s['score'] for s in final_suggestions]) if final_suggestions else 0
+        })
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e), 'query': query}, status=500)</code></pre>
+                        <div class="output-block">
+                            <strong>Printout:</strong>
+                            <pre>GET /api/autocomplete/?q=soft&category=all&context=job_search
+
+{
+  "query": "soft",
+  "suggestions": [
+    {
+      "text": "Software Engineer",
+      "category": "job",
+      "score": 135.0,
+      "type": "popular_title",
+      "frequency": 100,
+      "icon": "💼",
+      "boost_reason": "Popular job title"
+    },
+    {
+      "text": "Software Developer", 
+      "category": "job",
+      "score": 130.0,
+      "type": "popular_title",
+      "frequency": 95,
+      "icon": "💼",
+      "boost_reason": "Popular job title"
+    }
+  ],
+  "count": 2,
+  "context": "job_search",
+  "categories_found": ["job"],
+  "max_score": 135.0
+}</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FT.SUGDEL Command -->
+                <div class="command-block">
+                    <h3 id="ft-sugdel"><code>FT.SUGDEL</code> - Delete Suggestion from Dictionary</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Removes a suggestion string from an auto-complete dictionary.
+                        <br><strong>Syntax:</strong> <code>FT.SUGDEL key string</code>
+                        <br><strong>Parameters:</strong>
+                        <ul>
+                            <li><code>key</code> - Auto-complete dictionary name</li>
+                            <li><code>string</code> - Suggestion text to remove</li>
+                        </ul>
+                        <br><strong>Return:</strong> 1 if the suggestion was found and deleted, 0 otherwise
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Django Example: Auto-Complete Maintenance Service</strong>
+                        <pre><code class="language-python"># services/autocomplete_maintenance.py
+import redis
+from django.core.management.base import BaseCommand
+from django.utils import timezone
+from .models import JobPost, Author
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class AutocompleteMaintenanceService:
+    @staticmethod
+    def cleanup_outdated_suggestions():
+        """Clean up outdated and inappropriate suggestions"""
+        
+        print("🧹 Starting auto-complete cleanup...")
+        
+        # Remove outdated job titles
+        outdated_job_titles = [
+            'Webmaster', 'Flash Developer', 'Internet Explorer Developer',
+            'ColdFusion Developer', 'Perl Programmer', 'FTP Administrator',
+            'HTML Coder', 'Table-based Web Designer'
+        ]
+        
+        job_removed = 0
+        for title in outdated_job_titles:
+            result = redis_client.execute_command('FT.SUGDEL', 'job_titles:suggestions', title)
+            if result == 1:
+                job_removed += 1
+                print(f"❌ Removed outdated job title: {title}")
+            
+        print(f"✅ Removed {job_removed} outdated job titles")
+        
+        # Remove inactive companies (no jobs in last 6 months)
+        cutoff_date = timezone.now() - timezone.timedelta(days=180)
+        inactive_companies = Author.objects.filter(
+            jobpost__date__lt=cutoff_date
+        ).distinct().values_list('company', flat=True)
+        
+        company_removed = 0
+        for company in inactive_companies:
+            result = redis_client.execute_command('FT.SUGDEL', 'companies:suggestions', company)
+            if result == 1:
+                company_removed += 1
+                print(f"❌ Removed inactive company: {company}")
+                
+        print(f"✅ Removed {company_removed} inactive companies")
+        
+        # Remove test/spam entries
+        spam_patterns = [
+            'test', 'testing123', 'asdf', 'qwerty', 'sample', 'demo',
+            'placeholder', 'temp', 'fake', 'spam', '12345'
+        ]
+        
+        spam_removed = 0
+        dictionaries = ['job_titles:suggestions', 'companies:suggestions']
+        
+        for dict_name in dictionaries:
+            for pattern in spam_patterns:
+                result = redis_client.execute_command('FT.SUGDEL', dict_name, pattern)
+                if result == 1:
+                    spam_removed += 1
+                    print(f"🚫 Removed spam entry: {pattern} from {dict_name}")
+        
+        print(f"✅ Removed {spam_removed} spam entries")
+        
+        return {
+            'job_titles_removed': job_removed,
+            'companies_removed': company_removed,
+            'spam_removed': spam_removed,
+            'total_removed': job_removed + company_removed + spam_removed
+        }
+    
+    @staticmethod
+    def update_suggestion_priority():
+        """Update suggestion priorities based on current activity"""
+        
+        print("📊 Updating suggestion priorities...")
+        
+        # Get current job posting activity
+        recent_jobs = JobPost.objects.filter(
+            date__gte=timezone.now() - timezone.timedelta(days=30)
+        ).values_list('title', flat=True)
+        
+        recent_counts = {}
+        for title in recent_jobs:
+            recent_counts[title] = recent_counts.get(title, 0) + 1
+        
+        updated = 0
+        for title, recent_activity in recent_counts.items():
+            # Remove old entry
+            redis_client.execute_command('FT.SUGDEL', 'job_titles:suggestions', title)
+            
+            # Re-add with boosted score based on recent activity
+            new_score = recent_activity * 20 + 50  # Base score + activity bonus
+            
+            redis_client.execute_command(
+                'FT.SUGADD', 'job_titles:suggestions', title, new_score,
+                'PAYLOAD', f'{{"recent_activity": {recent_activity}, "last_updated": "{timezone.now().isoformat()}", "trending": true}}'
+            )
+            
+            updated += 1
+            print(f"🔄 Updated {title}: recent activity {recent_activity}, new score {new_score}")
+        
+        print(f"✅ Updated priorities for {updated} job titles")
+        return updated
+
+# Management command
+class Command(BaseCommand):
+    help = 'Maintain auto-complete suggestion dictionaries'
+    
+    def add_arguments(self, parser):
+        parser.add_argument('--action', choices=['cleanup', 'update_priorities', 'stats'], 
+                          default='cleanup', help='Maintenance action')
+    
+    def handle(self, *args, **options):
+        action = options['action']
+        
+        if action == 'cleanup':
+            results = AutocompleteMaintenanceService.cleanup_outdated_suggestions()
+            self.stdout.write(f"🎯 Cleanup complete: {results['total_removed']} entries removed")
+            
+        elif action == 'update_priorities':
+            updated = AutocompleteMaintenanceService.update_suggestion_priority()
+            self.stdout.write(f"📈 Updated priorities for {updated} suggestions")
+            
+        elif action == 'stats':
+            job_count = redis_client.execute_command('FT.SUGLEN', 'job_titles:suggestions')
+            company_count = redis_client.execute_command('FT.SUGLEN', 'companies:suggestions')
+            
+            self.stdout.write(f"📊 Auto-complete Statistics:")
+            self.stdout.write(f"   Job titles: {job_count}")
+            self.stdout.write(f"   Companies: {company_count}")
+            self.stdout.write(f"   Total: {job_count + company_count}")</code></pre>
+                        <div class="output-block">
+                            <strong>Printout:</strong>
+                            <pre>🧹 Starting auto-complete cleanup...
+❌ Removed outdated job title: Webmaster
+❌ Removed outdated job title: Flash Developer  
+❌ Removed outdated job title: HTML Coder
+✅ Removed 3 outdated job titles
+
+❌ Removed inactive company: Old Startup Inc
+❌ Removed inactive company: Defunct Corp
+✅ Removed 2 inactive companies
+
+🚫 Removed spam entry: test from job_titles:suggestions
+🚫 Removed spam entry: demo from companies:suggestions
+✅ Removed 2 spam entries
+
+🎯 Cleanup complete: 7 entries removed
+
+📊 Updating suggestion priorities...
+🔄 Updated Python Developer: recent activity 8, new score 210
+🔄 Updated React Developer: recent activity 5, new score 150  
+🔄 Updated Full Stack Engineer: recent activity 3, new score 110
+✅ Updated priorities for 3 job titles</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FT.SUGLEN Command -->
+                <div class="command-block">
+                    <h3 id="ft-suglen"><code>FT.SUGLEN</code> - Get Suggestion Dictionary Size</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Returns the number of suggestions in an auto-complete dictionary.
+                        <br><strong>Syntax:</strong> <code>FT.SUGLEN key</code>
+                        <br><strong>Parameters:</strong>
+                        <ul>
+                            <li><code>key</code> - Auto-complete dictionary name</li>
+                        </ul>
+                        <br><strong>Return:</strong> Number of suggestions in the dictionary
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Django Example: Auto-Complete Analytics Dashboard</strong>
+                        <pre><code class="language-python"># views.py - Auto-complete analytics and monitoring
+import redis
+from django.shortcuts import render
+from django.http import JsonResponse
+from django.contrib.admin.views.decorators import staff_member_required
+from django.utils import timezone
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@staff_member_required
+def autocomplete_dashboard(request):
+    """Admin dashboard for auto-complete analytics"""
+    
+    # Get dictionary statistics
+    dictionaries = [
+        ('job_titles:suggestions', 'Job Titles'),
+        ('companies:suggestions', 'Companies'),
+        ('skills:suggestions', 'Skills'),
+        ('locations:suggestions', 'Locations')
+    ]
+    
+    stats = {}
+    total_suggestions = 0
+    
+    for dict_key, display_name in dictionaries:
+        try:
+            size = redis_client.execute_command('FT.SUGLEN', dict_key)
+            stats[dict_key] = {
+                'name': display_name,
+                'size': size,
+                'status': 'healthy' if size > 0 else 'empty',
+                'health_score': min(100, (size / 50) * 100) if size > 0 else 0
+            }
+            total_suggestions += size
+            
+        except Exception as e:
+            stats[dict_key] = {
+                'name': display_name,
+                'size': 0,
+                'status': 'error',
+                'error': str(e),
+                'health_score': 0
+            }
+    
+    # Calculate system health
+    healthy_dicts = sum(1 for s in stats.values() if s['status'] == 'healthy')
+    system_health = (healthy_dicts / len(dictionaries)) * 100
+    
+    # Get sample suggestions for preview
+    samples = {}
+    for dict_key, display_name in dictionaries:
+        if stats[dict_key]['size'] > 0:
+            try:
+                # Get sample suggestions with common prefixes
+                sample_suggestions = []
+                for prefix in ['a', 'b', 'c', 'p']:  # Try common starting letters
+                    suggestions = redis_client.execute_command(
+                        'FT.SUGGET', dict_key, prefix, 'MAX', 3
+                    )
+                    sample_suggestions.extend(suggestions)
+                    if len(sample_suggestions) >= 5:
+                        break
+                
+                samples[dict_key] = sample_suggestions[:5]
+            except:
+                samples[dict_key] = []
+    
+    dashboard_data = {
+        'timestamp': timezone.now().isoformat(),
+        'dictionaries': stats,
+        'total_suggestions': total_suggestions,
+        'system_health': round(system_health, 1),
+        'healthy_dictionaries': healthy_dicts,
+        'total_dictionaries': len(dictionaries),
+        'sample_suggestions': samples,
+        'recommendations': generate_maintenance_recommendations(stats)
+    }
+    
+    if request.headers.get('Accept') == 'application/json':
+        return JsonResponse(dashboard_data)
+    
+    return render(request, 'admin/autocomplete_dashboard.html', {
+        'dashboard_data': dashboard_data
+    })
+
+def generate_maintenance_recommendations(stats):
+    """Generate maintenance recommendations"""
+    recommendations = []
+    
+    for dict_key, data in stats.items():
+        if data['status'] == 'empty':
+            recommendations.append({
+                'type': 'warning',
+                'message': f"{data['name']} dictionary is empty",
+                'action': f"Build initial suggestions for {data['name'].lower()}"
+            })
+        elif data['size'] > 1000:
+            recommendations.append({
+                'type': 'info', 
+                'message': f"{data['name']} dictionary is large ({data['size']} entries)",
+                'action': f"Consider cleaning up outdated {data['name'].lower()} suggestions"
+            })
+    
+    return recommendations
+
+# API endpoint for real-time monitoring
+@csrf_exempt
+def autocomplete_stats_api(request):
+    """Real-time auto-complete statistics API"""
+    
+    dictionaries = ['job_titles:suggestions', 'companies:suggestions', 'skills:suggestions']
+    
+    stats = {}
+    for dict_name in dictionaries:
+        try:
+            size = redis_client.execute_command('FT.SUGLEN', dict_name)
+            stats[dict_name.split(':')[0]] = {
+                'count': size,
+                'status': 'active' if size > 0 else 'empty',
+                'last_checked': timezone.now().isoformat()
+            }
+        except Exception as e:
+            stats[dict_name.split(':')[0]] = {
+                'count': 0,
+                'status': 'error',
+                'error': str(e)
+            }
+    
+    return JsonResponse({
+        'dictionaries': stats,
+        'total': sum(s['count'] for s in stats.values() if isinstance(s.get('count'), int)),
+        'timestamp': timezone.now().isoformat(),
+        'system_status': 'healthy' if all(s['count'] > 0 for s in stats.values()) else 'needs_attention'
+    })</code></pre>
+                        <div class="output-block">
+                            <strong>Printout:</strong>
+                            <pre>Auto-Complete Dashboard Analytics:
+
+Dictionary Statistics:
+- Job Titles: 45 suggestions (Healthy - 90% score)
+- Companies: 28 suggestions (Healthy - 56% score) 
+- Skills: 33 suggestions (Healthy - 66% score)
+- Locations: 0 suggestions (Empty - 0% score)
+
+System Health: 75.0% (3/4 dictionaries healthy)
+Total Suggestions: 106
+
+Sample Suggestions:
+Job Titles: ["Backend Developer", "Business Analyst", "Python Developer", "Product Manager", "Cloud Engineer"]
+Companies: ["Amazon", "Apple", "Adobe", "Airbnb", "Atlassian"]
+
+Recommendations:
+⚠️ Warning: Locations dictionary is empty
+   Action: Build initial suggestions for locations
+
+ℹ️ Info: Job Titles dictionary is large (45 entries)  
+   Action: Consider cleaning up outdated job titles suggestions
+
+GET /api/autocomplete/stats/
+{
+  "dictionaries": {
+    "job_titles": {"count": 45, "status": "active"},
+    "companies": {"count": 28, "status": "active"}, 
+    "skills": {"count": 33, "status": "active"}
+  },
+  "total": 106,
+  "system_status": "healthy"
+}</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="implementation-note">
+                    <strong>💡 Implementation Note:</strong> The Auto-suggest commands provide a complete solution for intelligent autocomplete functionality in Django applications. Combined with proper maintenance, contextual scoring, and analytics monitoring, these commands enable sophisticated search experiences with real-time suggestions, fuzzy matching, and personalized recommendations.
+                </div>
+
+            </section>
+
+            <!-- T-digest Section -->
+            <section id="t-digest" class="command-section">
+                <div class="section-header">
+                    <h2>📊 T-digest Commands</h2>
+                    <p>T-digest sketches provide efficient percentile and quantile estimations for large datasets. Perfect for Django analytics, performance monitoring, and statistical analysis without storing all data points.</p>
+                </div>
+
+                <!-- TDIGEST.CREATE -->
+                <div class="command-block">
+                    <h3 id="tdigest-create"><code>TDIGEST.CREATE</code> - Create T-digest Sketch</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Creates a new t-digest sketch for percentile estimation.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.CREATE key [COMPRESSION compression]</code>
+                        <br><strong>Return:</strong> OK if successful
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Track salary percentiles</strong>
+                        <pre><code class="language-python">import redis
+r = redis.Redis(decode_responses=True)
+
+# Create t-digest for salary analysis
+r.execute_command('TDIGEST.CREATE', 'salary_stats')
+print("Salary tracker created")</code></pre>
+                        <div class="printout">Salary tracker created</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Response time monitoring</strong>
+                        <pre><code class="language-python"># Create t-digest for API response times
+r.execute_command('TDIGEST.CREATE', 'api_response_times', 'COMPRESSION', 400)
+print("Response time tracker ready")</code></pre>
+                        <div class="printout">Response time tracker ready</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.ADD -->
+                <div class="command-block">
+                    <h3 id="tdigest-add"><code>TDIGEST.ADD</code> - Add Observations</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Adds observations to a t-digest sketch.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.ADD key value [value ...]</code>
+                        <br><strong>Return:</strong> OK if successful
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Add job salaries</strong>
+                        <pre><code class="language-python"># Add salary data points
+r.execute_command('TDIGEST.ADD', 'salary_stats', 75000, 82000, 95000, 68000)
+print("Salaries added")</code></pre>
+                        <div class="printout">Salaries added</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Track response times</strong>
+                        <pre><code class="language-python"># Add API response times (ms)
+r.execute_command('TDIGEST.ADD', 'api_response_times', 45.2, 123.8, 67.1)
+print("Response times recorded")</code></pre>
+                        <div class="printout">Response times recorded</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.QUANTILE -->
+                <div class="command-block">
+                    <h3 id="tdigest-quantile"><code>TDIGEST.QUANTILE</code> - Get Quantiles</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Returns quantile estimates for given fractions.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.QUANTILE key quantile [quantile ...]</code>
+                        <br><strong>Return:</strong> Array of quantile values
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Salary percentiles</strong>
+                        <pre><code class="language-python"># Get 50th, 75th, 95th percentiles
+result = r.execute_command('TDIGEST.QUANTILE', 'salary_stats', 0.5, 0.75, 0.95)
+print(f"Percentiles: 50th=${result[0]:.0f}, 75th=${result[1]:.0f}, 95th=${result[2]:.0f}")</code></pre>
+                        <div class="printout">Percentiles: 50th=$78500, 75th=$88500, 95th=$95000</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Response time SLAs</strong>
+                        <pre><code class="language-python"># Check p95 and p99 response times
+sla_percentiles = r.execute_command('TDIGEST.QUANTILE', 'api_response_times', 0.95, 0.99)
+print(f"p95: {sla_percentiles[0]:.1f}ms, p99: {sla_percentiles[1]:.1f}ms")</code></pre>
+                        <div class="printout">p95: 120.2ms, p99: 123.8ms</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.CDF -->
+                <div class="command-block">
+                    <h3 id="tdigest-cdf"><code>TDIGEST.CDF</code> - Cumulative Distribution</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Returns fraction of observations below given values.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.CDF key value [value ...]</code>
+                        <br><strong>Return:</strong> Array of CDF fractions
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Salary distribution</strong>
+                        <pre><code class="language-python"># What % earn less than $80k?
+cdf = r.execute_command('TDIGEST.CDF', 'salary_stats', 80000)
+print(f"{cdf[0]*100:.1f}% earn less than $80,000")</code></pre>
+                        <div class="printout">62.5% earn less than $80,000</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Performance benchmarks</strong>
+                        <pre><code class="language-python"># What % of requests under 100ms?
+fast_requests = r.execute_command('TDIGEST.CDF', 'api_response_times', 100)
+print(f"{fast_requests[0]*100:.1f}% requests under 100ms")</code></pre>
+                        <div class="printout">66.7% requests under 100ms</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.RANK -->
+                <div class="command-block">
+                    <h3 id="tdigest-rank"><code>TDIGEST.RANK</code> - Get Ranks</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Returns estimated ranks for given values.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.RANK key value [value ...]</code>
+                        <br><strong>Return:</strong> Array of rank estimates
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Salary ranking</strong>
+                        <pre><code class="language-python"># Rank of $85k salary
+rank = r.execute_command('TDIGEST.RANK', 'salary_stats', 85000)
+print(f"$85k ranks at position {rank[0]:.1f}")</code></pre>
+                        <div class="printout">$85k ranks at position 2.5</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Performance ranking</strong>
+                        <pre><code class="language-python"># Rank 90ms response time
+perf_rank = r.execute_command('TDIGEST.RANK', 'api_response_times', 90.0)
+print(f"90ms ranks at {perf_rank[0]:.1f}")</code></pre>
+                        <div class="printout">90ms ranks at 2.0</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.BYRANK -->
+                <div class="command-block">
+                    <h3 id="tdigest-byrank"><code>TDIGEST.BYRANK</code> - Value by Rank</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Returns values for given ranks.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.BYRANK key rank [rank ...]</code>
+                        <br><strong>Return:</strong> Array of estimated values
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Top salary by rank</strong>
+                        <pre><code class="language-python"># Get top 2 salaries
+top_salaries = r.execute_command('TDIGEST.BYRANK', 'salary_stats', 3, 2)
+print(f"2nd highest: ${top_salaries[1]:.0f}, 3rd: ${top_salaries[0]:.0f}")</code></pre>
+                        <div class="printout">2nd highest: $95000, 3rd: $82000</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Slowest responses</strong>
+                        <pre><code class="language-python"># Get slowest response time
+slowest = r.execute_command('TDIGEST.BYRANK', 'api_response_times', 3)
+print(f"Slowest: {slowest[0]:.1f}ms")</code></pre>
+                        <div class="printout">Slowest: 123.8ms</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.MIN/MAX -->
+                <div class="command-block">
+                    <h3 id="tdigest-min-max"><code>TDIGEST.MIN</code> / <code>TDIGEST.MAX</code> - Min/Max Values</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Returns minimum or maximum observed values.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.MIN key</code> or <code>TDIGEST.MAX key</code>
+                        <br><strong>Return:</strong> Minimum or maximum value
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Salary range</strong>
+                        <pre><code class="language-python"># Get salary range
+min_sal = r.execute_command('TDIGEST.MIN', 'salary_stats')
+max_sal = r.execute_command('TDIGEST.MAX', 'salary_stats')
+print(f"Salary range: ${min_sal} - ${max_sal}")</code></pre>
+                        <div class="printout">Salary range: $68000.0 - $95000.0</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Response time bounds</strong>
+                        <pre><code class="language-python"># Get fastest/slowest response
+fastest = r.execute_command('TDIGEST.MIN', 'api_response_times')
+slowest = r.execute_command('TDIGEST.MAX', 'api_response_times')
+print(f"Response range: {fastest}ms - {slowest}ms")</code></pre>
+                        <div class="printout">Response range: 45.2ms - 123.8ms</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.INFO -->
+                <div class="command-block">
+                    <h3 id="tdigest-info"><code>TDIGEST.INFO</code> - Sketch Information</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Returns information about the t-digest sketch.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.INFO key</code>
+                        <br><strong>Return:</strong> Array with sketch statistics
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Salary stats info</strong>
+                        <pre><code class="language-python"># Get sketch details
+info = r.execute_command('TDIGEST.INFO', 'salary_stats')
+print(f"Observations: {info[3]}, Compression: {info[1]}")</code></pre>
+                        <div class="printout">Observations: 4, Compression: 100</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Monitor sketch size</strong>
+                        <pre><code class="language-python"># Check memory usage
+info = r.execute_command('TDIGEST.INFO', 'api_response_times')
+print(f"Memory: {info[5]} bytes, Count: {info[3]}")</code></pre>
+                        <div class="printout">Memory: 58 bytes, Count: 3</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.RESET -->
+                <div class="command-block">
+                    <h3 id="tdigest-reset"><code>TDIGEST.RESET</code> - Reset Sketch</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Resets a t-digest sketch to empty state.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.RESET key</code>
+                        <br><strong>Return:</strong> OK if successful
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Reset salary data</strong>
+                        <pre><code class="language-python"># Clear all salary data
+r.execute_command('TDIGEST.RESET', 'salary_stats')
+print("Salary data cleared")</code></pre>
+                        <div class="printout">Salary data cleared</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Daily metrics reset</strong>
+                        <pre><code class="language-python"># Reset for new day
+r.execute_command('TDIGEST.RESET', 'api_response_times')
+print("Daily metrics reset")</code></pre>
+                        <div class="printout">Daily metrics reset</div>
+                    </div>
+                </div>
+
+                <!-- TDIGEST.MERGE -->
+                <div class="command-block">
+                    <h3 id="tdigest-merge"><code>TDIGEST.MERGE</code> - Merge Sketches</h3>
+                    <div class="command-description">
+                        <strong>Purpose:</strong> Merges multiple t-digest sketches into one.
+                        <br><strong>Syntax:</strong> <code>TDIGEST.MERGE destkey sourcekey [sourcekey ...]</code>
+                        <br><strong>Return:</strong> OK if successful
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 1: Combine team salaries</strong>
+                        <pre><code class="language-python"># Merge department salaries
+r.execute_command('TDIGEST.MERGE', 'all_salaries', 'dev_salaries', 'qa_salaries')
+print("Salary data merged")</code></pre>
+                        <div class="printout">Salary data merged</div>
+                    </div>
+
+                    <div class="example-block">
+                        <strong>Example 2: Aggregate server metrics</strong>
+                        <pre><code class="language-python"># Combine server response times
+r.execute_command('TDIGEST.MERGE', 'total_response', 'server1_times', 'server2_times')
+print("Server metrics combined")</code></pre>
+                        <div class="printout">Server metrics combined</div>
+                    </div>
                 </div>
 
             </section>
