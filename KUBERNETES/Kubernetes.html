@@ -9845,6 +9845,461 @@ curl -X POST -F "file=@test.jpg" http://localhost:8000/storage/upload/
                         </div>
                     </div>
                 </div>
+
+                <h4>5 short examples with Django models</h4>
+
+                <div class="examples">
+                    <div class="example">
+                        <h5>Example 1: Basic ReplicaSetSpec Configuration</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-jobpost-spec-rs
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-jobpost
+      tier: web
+  template:
+    metadata:
+      labels:
+        app: anihpj-jobpost
+        tier: web
+        version: v1.0
+    spec:
+      containers:
+      - name: django-jobpost
+        image: anihpj/jobpost:v1.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings"
+        - name: DATABASE_URL
+          value: "postgresql://user:pass@db:5432/anihpj"</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ReplicaSet and examine spec
+kubectl apply -f anihpj-jobpost-spec-rs.yaml
+# Output: replicaset.apps/anihpj-jobpost-spec-rs created
+
+# View the ReplicaSetSpec configuration
+kubectl get rs anihpj-jobpost-spec-rs -o yaml | grep -A 20 "spec:"
+# Output:
+# spec:
+#   replicas: 3
+#   selector:
+#     matchLabels:
+#       app: anihpj-jobpost
+#       tier: web
+#   template:
+#     metadata:
+#       creationTimestamp: null
+#       labels:
+#         app: anihpj-jobpost
+#         tier: web
+#         version: v1.0
+#     spec:
+#       containers:
+#       - env:
+#         - name: DJANGO_SETTINGS_MODULE
+#           value: anihpj.settings
+#         - name: DATABASE_URL
+#           value: postgresql://user:pass@db:5432/anihpj
+
+# Verify replica count from spec
+kubectl get rs anihpj-jobpost-spec-rs -o jsonpath='{.spec.replicas}'
+# Output: 3
+
+# Check selector matching
+kubectl get rs anihpj-jobpost-spec-rs -o jsonpath='{.spec.selector.matchLabels}'
+# Output: {"app":"anihpj-jobpost","tier":"web"}</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: ReplicaSetSpec with Set-based Selectors</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-author-selector-rs
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-author
+    matchExpressions:
+    - key: environment
+      operator: In
+      values: [production, staging]
+    - key: component
+      operator: NotIn
+      values: [test, debug]
+    - key: version
+      operator: Exists
+  template:
+    metadata:
+      labels:
+        app: anihpj-author
+        environment: production
+        component: backend
+        version: v2.0
+    spec:
+      containers:
+      - name: django-author
+        image: anihpj/author:v2.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: AUTHOR_API_ENABLED
+          value: "true"
+        - name: DATABASE_URL
+          value: "postgresql://user:pass@author-db:5432/authors"</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Apply ReplicaSet with complex selectors
+kubectl apply -f anihpj-author-selector-rs.yaml
+# Output: replicaset.apps/anihpj-author-selector-rs created
+
+# Examine the selector expressions in detail
+kubectl get rs anihpj-author-selector-rs -o yaml | grep -A 15 "selector:"
+# Output:
+# selector:
+#   matchExpressions:
+#   - key: environment
+#     operator: In
+#     values:
+#     - production
+#     - staging
+#   - key: component
+#     operator: NotIn
+#     values:
+#     - test
+#     - debug
+#   - key: version
+#     operator: Exists
+#   matchLabels:
+#     app: anihpj-author
+
+# Test selector matching with different label combinations
+kubectl get pods -l 'app=anihpj-author,environment in (production,staging),component notin (test,debug),version'
+# Output:
+# NAME                              READY   STATUS    RESTARTS   AGE
+# anihpj-author-selector-rs-abc12   1/1     Running   0          45s
+# anihpj-author-selector-rs-def34   1/1     Running   0          45s
+
+# Verify pods that wouldn't match the selector
+kubectl run test-pod --image=nginx --labels="app=anihpj-author,environment=development" --rm -it --restart=Never -- echo "test"
+kubectl get pods -l app=anihpj-author
+# Output: Only shows production pods, not development test pod</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: ReplicaSetSpec with minReadySeconds</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-location-ready-rs
+  namespace: default
+spec:
+  replicas: 3
+  minReadySeconds: 30
+  selector:
+    matchLabels:
+      app: anihpj-location
+      stability: high
+  template:
+    metadata:
+      labels:
+        app: anihpj-location
+        stability: high
+        service: location-api
+    spec:
+      containers:
+      - name: django-location
+        image: anihpj/location:v1.5
+        ports:
+        - containerPort: 8000
+        env:
+        - name: LOCATION_SERVICE_ENABLED
+          value: "true"
+        - name: MIN_READY_TIME
+          value: "30"
+        readinessProbe:
+          httpGet:
+            path: /locations/health/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /locations/health/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ReplicaSet with minReadySeconds
+kubectl apply -f anihpj-location-ready-rs.yaml
+# Output: replicaset.apps/anihpj-location-ready-rs created
+
+# Monitor pod ready progression with timing
+kubectl get pods -l app=anihpj-location -w
+# Output:
+# NAME                               READY   STATUS              RESTARTS   AGE
+# anihpj-location-ready-rs-abc12     0/1     ContainerCreating   0          5s
+# anihpj-location-ready-rs-def34     0/1     ContainerCreating   0          5s
+# anihpj-location-ready-rs-ghi56     0/1     ContainerCreating   0          5s
+# anihpj-location-ready-rs-abc12     0/1     Running             0          15s
+# anihpj-location-ready-rs-abc12     1/1     Running             0          25s
+# (Wait 30 seconds for minReadySeconds)
+
+# Check ReplicaSet status showing available vs ready replicas
+kubectl get rs anihpj-location-ready-rs
+# Output:
+# NAME                        DESIRED   CURRENT   READY   AGE
+# anihpj-location-ready-rs    3         3         3       1m
+
+# Verify minReadySeconds configuration
+kubectl get rs anihpj-location-ready-rs -o jsonpath='{.spec.minReadySeconds}'
+# Output: 30
+
+# Check status showing availability progression
+kubectl describe rs anihpj-location-ready-rs | grep -A 5 "Pods Status"
+# Output:
+# Pods Status:  3 Running / 0 Waiting / 0 Succeeded / 0 Failed
+# Events:
+#   Normal  SuccessfulCreate  1m    replicaset-controller  Created pod: anihpj-location-ready-rs-abc12
+#   Normal  SuccessfulCreate  1m    replicaset-controller  (combined from similar events): Created pod: anihpj-location-ready-rs-ghi56</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: ReplicaSetSpec with Resource Specifications</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-skills-resource-rs
+  namespace: default
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: anihpj-skills
+      tier: api
+  template:
+    metadata:
+      labels:
+        app: anihpj-skills
+        tier: api
+        resource-class: standard
+    spec:
+      containers:
+      - name: django-skills
+        image: anihpj/skills:v3.0
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        env:
+        - name: SKILLS_API_ENABLED
+          value: "true"
+        - name: MAX_MEMORY_MB
+          value: "1024"
+        - name: CPU_LIMIT_MILLICORES
+          value: "500"</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ReplicaSet with resource specifications
+kubectl apply -f anihpj-skills-resource-rs.yaml
+# Output: replicaset.apps/anihpj-skills-resource-rs created
+
+# Examine resource specifications in the template
+kubectl get rs anihpj-skills-resource-rs -o yaml | grep -A 10 "resources:"
+# Output:
+#         resources:
+#           limits:
+#             cpu: 500m
+#             memory: 1Gi
+#           requests:
+#             cpu: 250m
+#             memory: 512Mi
+
+# Monitor actual resource usage
+kubectl top pods -l app=anihpj-skills
+# Output:
+# NAME                               CPU(cores)   MEMORY(bytes)
+# anihpj-skills-resource-rs-abc12    187m         445Mi
+# anihpj-skills-resource-rs-def34    203m         478Mi
+# anihpj-skills-resource-rs-ghi56    165m         398Mi
+# anihpj-skills-resource-rs-jkl78    190m         456Mi
+
+# Check resource allocation across nodes
+kubectl describe nodes | grep -A 5 "Allocated resources"
+# Output:
+#   Allocated resources:
+#     (Total limits may be over 100 percent, i.e., overcommitted.)
+#     Resource           Requests      Limits
+#     cpu                1000m (25%)   2000m (50%)
+#     memory             2048Mi (25%)  4096Mi (50%)
+
+# Verify that all pods are within resource limits
+kubectl get pods -l app=anihpj-skills -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.containers[0].resources}{"\n"}{end}'
+# Output:
+# anihpj-skills-resource-rs-abc12: {"limits":{"cpu":"500m","memory":"1Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}
+# anihpj-skills-resource-rs-def34: {"limits":{"cpu":"500m","memory":"1Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: ReplicaSetSpec with Complex Template Configuration</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-complex-template-rs
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-complex
+      deployment-type: multi-service
+  template:
+    metadata:
+      labels:
+        app: anihpj-complex
+        deployment-type: multi-service
+        service-tier: backend
+      annotations:
+        config-hash: "abc123"
+        deployment-version: "v4.0"
+    spec:
+      initContainers:
+      - name: db-migrator
+        image: anihpj/migrator:v1.0
+        command: ["python", "manage.py", "migrate"]
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://user:pass@db:5432/anihpj"
+      containers:
+      - name: django-web
+        image: anihpj/web:v4.0
+        ports:
+        - containerPort: 8000
+          name: http
+        - containerPort: 8080
+          name: admin
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: WEB_CONCURRENCY
+          value: "4"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+        - name: static-files
+          mountPath: /app/static
+      - name: nginx-proxy
+        image: nginx:1.21
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+        - name: static-files
+          mountPath: /var/www/static
+      volumes:
+      - name: config-volume
+        configMap:
+          name: anihpj-config
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+      - name: static-files
+        emptyDir: {}</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create required ConfigMaps first
+kubectl create configmap anihpj-config \
+  --from-literal=database_host=db.example.com \
+  --from-literal=redis_url=redis://cache:6379
+# Output: configmap/anihpj-config created
+
+kubectl create configmap nginx-config \
+  --from-literal=default.conf="server { listen 80; location / { proxy_pass http://127.0.0.1:8000; } }"
+# Output: configmap/nginx-config created
+
+# Apply complex ReplicaSet template
+kubectl apply -f anihpj-complex-template-rs.yaml
+# Output: replicaset.apps/anihpj-complex-template-rs created
+
+# Examine the complete template specification
+kubectl get rs anihpj-complex-template-rs -o yaml | grep -A 40 "template:"
+# Output:
+# template:
+#   metadata:
+#     annotations:
+#       config-hash: abc123
+#       deployment-version: v4.0
+#     creationTimestamp: null
+#     labels:
+#       app: anihpj-complex
+#       deployment-type: multi-service
+#       service-tier: backend
+#   spec:
+#     containers:
+#     - env:
+#       - name: DJANGO_SETTINGS_MODULE
+#         value: anihpj.settings.production
+#       - name: WEB_CONCURRENCY
+#         value: "4"
+#       image: anihpj/web:v4.0
+#       name: django-web
+#       ports:
+#       - containerPort: 8000
+#         name: http
+#       - containerPort: 8080
+#         name: admin
+
+# Monitor init container execution
+kubectl get pods -l app=anihpj-complex
+# Output:
+# NAME                              READY   STATUS     RESTARTS   AGE
+# anihpj-complex-template-rs-abc12  0/2     Init:0/1   0          15s
+# anihpj-complex-template-rs-def34  0/2     Init:0/1   0          15s
+
+# Check init container logs
+kubectl logs anihpj-complex-template-rs-abc12 -c db-migrator
+# Output: 
+# Operations to perform:
+#   Apply all migrations: admin, auth, contenttypes, jobpost
+# Running migrations:
+#   Applying jobpost.0001_initial... OK
+
+# Verify multi-container pod status
+kubectl describe pod -l app=anihpj-complex | grep -A 10 "Containers:"
+# Output:
+# Containers:
+#   django-web:
+#     Container ID:   docker://abc123...
+#     Image:          anihpj/web:v4.0
+#     Port:           8000/TCP, 8080/TCP
+#   nginx-proxy:
+#     Container ID:   docker://def456...
+#     Image:          nginx:1.21
+#     Port:           80/TCP</code></pre>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- ReplicaSetStatus -->
@@ -9928,6 +10383,386 @@ curl -X POST -F "file=@test.jpg" http://localhost:8000/storage/upload/
                         </div>
                     </div>
                 </div>
+
+                <h4>5 short examples with Django models</h4>
+
+                <div class="examples">
+                    <div class="example">
+                        <h5>Example 1: Healthy ReplicaSetStatus</h5>
+                        <pre><code class="language-yaml"># ReplicaSet with healthy status
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-status-healthy-rs
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-status
+      tier: web
+  template:
+    metadata:
+      labels:
+        app: anihpj-status
+        tier: web
+    spec:
+      containers:
+      - name: django-app
+        image: anihpj/status:v1.0
+        ports:
+        - containerPort: 8000
+        readinessProbe:
+          httpGet:
+            path: /health/
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create and monitor healthy ReplicaSet
+kubectl apply -f anihpj-status-healthy-rs.yaml
+# Output: replicaset.apps/anihpj-status-healthy-rs created
+
+# Check ReplicaSetStatus with all replicas healthy
+kubectl get rs anihpj-status-healthy-rs -o yaml | grep -A 10 "status:"
+# Output:
+# status:
+#   availableReplicas: 3
+#   fullyLabeledReplicas: 3
+#   observedGeneration: 1
+#   readyReplicas: 3
+#   replicas: 3
+
+# Verify status fields individually
+kubectl get rs anihpj-status-healthy-rs -o jsonpath='{.status.replicas}'
+# Output: 3
+
+kubectl get rs anihpj-status-healthy-rs -o jsonpath='{.status.readyReplicas}'
+# Output: 3
+
+kubectl get rs anihpj-status-healthy-rs -o jsonpath='{.status.availableReplicas}'
+# Output: 3
+
+# Check detailed status with kubectl describe
+kubectl describe rs anihpj-status-healthy-rs | grep -A 5 "Pods Status"
+# Output:
+# Pods Status:  3 Running / 0 Waiting / 0 Succeeded / 0 Failed
+# Pod Template:
+#   Labels:  app=anihpj-status
+#            tier=web
+# Events:
+#   Normal  SuccessfulCreate  2m  replicaset-controller  Created pod: anihpj-status-healthy-rs-abc12</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: ReplicaSetStatus During Scaling</h5>
+                        <pre><code class="language-yaml"># Scale ReplicaSet and monitor status changes
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-scaling-rs
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-scaling
+  template:
+    metadata:
+      labels:
+        app: anihpj-scaling
+    spec:
+      containers:
+      - name: django-scaling
+        image: anihpj/scaling:v1.0
+        ports:
+        - containerPort: 8000</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create initial ReplicaSet
+kubectl apply -f anihpj-scaling-rs.yaml
+# Output: replicaset.apps/anihpj-scaling-rs created
+
+# Check initial status
+kubectl get rs anihpj-scaling-rs
+# Output:
+# NAME                 DESIRED   CURRENT   READY   AGE
+# anihpj-scaling-rs    2         2         2       30s
+
+# Scale up to 5 replicas
+kubectl scale rs anihpj-scaling-rs --replicas=5
+# Output: replicaset.apps/anihpj-scaling-rs scaled
+
+# Monitor status during scaling
+kubectl get rs anihpj-scaling-rs -w
+# Output:
+# NAME                 DESIRED   CURRENT   READY   AGE
+# anihpj-scaling-rs    5         2         2       1m
+# anihpj-scaling-rs    5         3         2       1m
+# anihpj-scaling-rs    5         4         3       1m
+# anihpj-scaling-rs    5         5         4       1m
+# anihpj-scaling-rs    5         5         5       1m
+
+# Check status during scaling process
+kubectl get rs anihpj-scaling-rs -o jsonpath='{.status}'
+# Output: {"availableReplicas":5,"fullyLabeledReplicas":5,"observedGeneration":2,"readyReplicas":5,"replicas":5}
+
+# Scale down and monitor
+kubectl scale rs anihpj-scaling-rs --replicas=3
+# Output: replicaset.apps/anihpj-scaling-rs scaled
+
+kubectl get rs anihpj-scaling-rs -o yaml | grep -A 8 "status:"
+# Output:
+# status:
+#   availableReplicas: 3
+#   fullyLabeledReplicas: 3
+#   observedGeneration: 3
+#   readyReplicas: 3
+#   replicas: 3</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: ReplicaSetStatus with Pod Failures</h5>
+                        <pre><code class="language-yaml"># ReplicaSet with failing pods to show status differences
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-failing-rs
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-failing
+  template:
+    metadata:
+      labels:
+        app: anihpj-failing
+    spec:
+      containers:
+      - name: django-failing
+        image: anihpj/failing:v1.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: SIMULATE_FAILURE
+          value: "true"
+        readinessProbe:
+          httpGet:
+            path: /health/
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ReplicaSet with failing pods
+kubectl apply -f anihpj-failing-rs.yaml
+# Output: replicaset.apps/anihpj-failing-rs created
+
+# Monitor status with some pods failing readiness checks
+kubectl get rs anihpj-failing-rs
+# Output:
+# NAME                 DESIRED   CURRENT   READY   AGE
+# anihpj-failing-rs    3         3         1       45s
+
+# Check detailed status showing discrepancy between replicas and ready
+kubectl get rs anihpj-failing-rs -o yaml | grep -A 8 "status:"
+# Output:
+# status:
+#   availableReplicas: 1
+#   fullyLabeledReplicas: 3
+#   observedGeneration: 1
+#   readyReplicas: 1
+#   replicas: 3
+
+# See individual pod statuses
+kubectl get pods -l app=anihpj-failing
+# Output:
+# NAME                      READY   STATUS    RESTARTS   AGE
+# anihpj-failing-rs-abc12   1/1     Running   0          1m
+# anihpj-failing-rs-def34   0/1     Running   0          1m
+# anihpj-failing-rs-ghi56   0/1     Running   0          1m
+
+# Check events to understand failures
+kubectl get events --field-selector involvedObject.name=anihpj-failing-rs-def34
+# Output:
+# LAST SEEN   TYPE      REASON     OBJECT                        MESSAGE
+# 2m          Warning   Unhealthy  pod/anihpj-failing-rs-def34   Readiness probe failed: HTTP probe failed with statuscode: 503
+
+# Monitor status difference between total replicas and ready replicas
+kubectl get rs anihpj-failing-rs -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,CURRENT:.status.replicas,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas
+# Output:
+# NAME                 DESIRED   CURRENT   READY   AVAILABLE
+# anihpj-failing-rs    3         3         1       1</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: ReplicaSetStatus with Conditions</h5>
+                        <pre><code class="language-yaml"># ReplicaSet configured to show status conditions
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-conditions-rs
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-conditions
+  template:
+    metadata:
+      labels:
+        app: anihpj-conditions
+    spec:
+      containers:
+      - name: django-conditions
+        image: anihpj/conditions:v1.0
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "2Gi"  # Intentionally high to potentially cause issues
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ReplicaSet that may show condition information
+kubectl apply -f anihpj-conditions-rs.yaml
+# Output: replicaset.apps/anihpj-conditions-rs created
+
+# Check ReplicaSet conditions in status
+kubectl get rs anihpj-conditions-rs -o yaml | grep -A 15 "conditions:"
+# Output:
+# conditions:
+# - lastTransitionTime: "2025-09-07T15:30:00Z"
+#   message: All replicas are running successfully
+#   reason: AllReplicasRunning
+#   status: "False"
+#   type: ReplicaFailure
+
+# Get conditions in a more readable format
+kubectl describe rs anihpj-conditions-rs | grep -A 10 "Conditions:"
+# Output:
+# Conditions:
+#   Type             Status  LastTransitionTime  Reason               Message
+#   ----             ------  ------------------  ------               -------
+#   ReplicaFailure   False   2025-09-07T15:30:00Z  AllReplicasRunning   All replicas are running successfully
+
+# Check observedGeneration to see if controller is up to date
+kubectl get rs anihpj-conditions-rs -o jsonpath='{.status.observedGeneration} {.metadata.generation}'
+# Output: 1 1
+
+# Simulate resource constraint condition by scaling beyond node capacity
+kubectl scale rs anihpj-conditions-rs --replicas=10
+# Output: replicaset.apps/anihpj-conditions-rs scaled
+
+# Check status after scaling beyond capacity
+kubectl get rs anihpj-conditions-rs -o yaml | grep -A 20 "status:"
+# Output:
+# status:
+#   availableReplicas: 2
+#   conditions:
+#   - lastTransitionTime: "2025-09-07T15:35:00Z"
+#     message: 'pods "anihpj-conditions-rs-jkl78" is forbidden: insufficient memory'
+#     reason: FailedCreate
+#     status: "True"
+#     type: ReplicaFailure
+#   fullyLabeledReplicas: 2
+#   observedGeneration: 2
+#   readyReplicas: 2
+#   replicas: 2
+
+# Monitor pod creation failures
+kubectl get events --field-selector reason=FailedCreate
+# Output:
+# LAST SEEN   TYPE      REASON        OBJECT                        MESSAGE
+# 1m          Warning   FailedCreate  rs/anihpj-conditions-rs       Error creating: pods "anihpj-conditions-rs-xyz89" is forbidden: insufficient memory</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: ReplicaSetStatus ObservedGeneration Tracking</h5>
+                        <pre><code class="language-yaml"># ReplicaSet to demonstrate observedGeneration changes
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-generation-rs
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-generation
+  template:
+    metadata:
+      labels:
+        app: anihpj-generation
+        version: v1.0
+    spec:
+      containers:
+      - name: django-generation
+        image: anihpj/generation:v1.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: APP_VERSION
+          value: "v1.0"</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create initial ReplicaSet and check generation
+kubectl apply -f anihpj-generation-rs.yaml
+# Output: replicaset.apps/anihpj-generation-rs created
+
+# Check initial metadata and status generation
+kubectl get rs anihpj-generation-rs -o jsonpath='{.metadata.generation} {.status.observedGeneration}'
+# Output: 1 1
+
+# Update the ReplicaSet template (change image version)
+kubectl patch rs anihpj-generation-rs --type='merge' -p='{"spec":{"template":{"spec":{"containers":[{"name":"django-generation","image":"anihpj/generation:v2.0","env":[{"name":"APP_VERSION","value":"v2.0"}]}]}}}}'
+# Output: replicaset.apps/anihpj-generation-rs patched
+
+# Check generation increment
+kubectl get rs anihpj-generation-rs -o jsonpath='{.metadata.generation} {.status.observedGeneration}'
+# Output: 2 2
+
+# Scale the ReplicaSet to see another generation change
+kubectl scale rs anihpj-generation-rs --replicas=4
+# Output: replicaset.apps/anihpj-generation-rs scaled
+
+# Monitor generation tracking
+kubectl get rs anihpj-generation-rs -o jsonpath='{.metadata.generation} {.status.observedGeneration}'
+# Output: 3 3
+
+# View complete status with generation info
+kubectl get rs anihpj-generation-rs -o yaml | grep -A 15 "status:"
+# Output:
+# status:
+#   availableReplicas: 4
+#   fullyLabeledReplicas: 4
+#   observedGeneration: 3
+#   readyReplicas: 4
+#   replicas: 4
+
+# Check that new pods have updated template
+kubectl get pods -l app=anihpj-generation -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.containers[0].image}{"\n"}{end}'
+# Output:
+# anihpj-generation-rs-abc12: anihpj/generation:v1.0
+# anihpj-generation-rs-def34: anihpj/generation:v1.0
+# anihpj-generation-rs-ghi56: anihpj/generation:v2.0
+# anihpj-generation-rs-jkl78: anihpj/generation:v2.0
+
+# Note: ReplicaSet doesn't automatically update existing pods with template changes
+# Only new pods get the updated template</code></pre>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- ReplicaSetList -->
@@ -9990,6 +10825,444 @@ items:
                         <li><strong>metadata</strong> - ListMeta: Standard list metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds</li>
                         <li><strong>items</strong> - []ReplicaSet, required: List of ReplicaSets. More info: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset</li>
                     </ul>
+                </div>
+
+                <h4>5 short examples with Django models</h4>
+
+                <div class="examples">
+                    <div class="example">
+                        <h5>Example 1: Basic ReplicaSetList Query</h5>
+                        <pre><code class="language-yaml"># Create multiple ReplicaSets for different Django services
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-jobpost-list-rs
+  namespace: default
+  labels:
+    app: anihpj-jobpost
+    service: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-jobpost
+  template:
+    metadata:
+      labels:
+        app: anihpj-jobpost
+        service: web
+    spec:
+      containers:
+      - name: django-jobpost
+        image: anihpj/jobpost:v1.0
+        ports:
+        - containerPort: 8000
+---
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-author-list-rs
+  namespace: default
+  labels:
+    app: anihpj-author
+    service: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-author
+  template:
+    metadata:
+      labels:
+        app: anihpj-author
+        service: api
+    spec:
+      containers:
+      - name: django-author
+        image: anihpj/author:v1.0
+        ports:
+        - containerPort: 8000</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create multiple ReplicaSets
+kubectl apply -f anihpj-multiple-rs.yaml
+# Output:
+# replicaset.apps/anihpj-jobpost-list-rs created
+# replicaset.apps/anihpj-author-list-rs created
+
+# Get ReplicaSetList for all ReplicaSets
+kubectl get rs -o yaml | head -20
+# Output:
+# apiVersion: v1
+# items:
+# - apiVersion: apps/v1
+#   kind: ReplicaSet
+#   metadata:
+#     creationTimestamp: "2025-09-07T15:45:00Z"
+#     generation: 1
+#     labels:
+#       app: anihpj-jobpost
+#       service: web
+#     name: anihpj-jobpost-list-rs
+#     namespace: default
+#     resourceVersion: "12345"
+#     uid: abc123-def456-ghi789
+#   spec:
+#     replicas: 3
+#     selector:
+#       matchLabels:
+#         app: anihpj-jobpost
+
+# List all ReplicaSets with basic information
+kubectl get rs
+# Output:
+# NAME                     DESIRED   CURRENT   READY   AGE
+# anihpj-jobpost-list-rs   3         3         3       30s
+# anihpj-author-list-rs    2         2         2       30s
+
+# Get ReplicaSetList metadata information
+kubectl get rs -o jsonpath='{.metadata.resourceVersion}'
+# Output: 12345</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Filtered ReplicaSetList with Label Selectors</h5>
+                        <pre><code class="language-yaml"># Create ReplicaSets with different labels
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-location-prod-rs
+  namespace: default
+  labels:
+    app: anihpj-location
+    environment: production
+    tier: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-location
+      environment: production
+  template:
+    metadata:
+      labels:
+        app: anihpj-location
+        environment: production
+        tier: backend
+    spec:
+      containers:
+      - name: django-location
+        image: anihpj/location:v2.0
+        ports:
+        - containerPort: 8000
+---
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-location-staging-rs
+  namespace: default
+  labels:
+    app: anihpj-location
+    environment: staging
+    tier: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anihpj-location
+      environment: staging
+  template:
+    metadata:
+      labels:
+        app: anihpj-location
+        environment: staging
+        tier: backend
+    spec:
+      containers:
+      - name: django-location
+        image: anihpj/location:v1.9
+        ports:
+        - containerPort: 8000</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ReplicaSets with different environments
+kubectl apply -f anihpj-location-envs-rs.yaml
+# Output:
+# replicaset.apps/anihpj-location-prod-rs created
+# replicaset.apps/anihpj-location-staging-rs created
+
+# Filter ReplicaSetList by environment label
+kubectl get rs -l environment=production
+# Output:
+# NAME                      DESIRED   CURRENT   READY   AGE
+# anihpj-location-prod-rs   3         3         3       45s
+
+# Filter by app and tier labels
+kubectl get rs -l app=anihpj-location,tier=backend
+# Output:
+# NAME                         DESIRED   CURRENT   READY   AGE
+# anihpj-location-prod-rs      3         3         3       50s
+# anihpj-location-staging-rs   1         1         1       50s
+
+# Get filtered ReplicaSetList in JSON format
+kubectl get rs -l environment=production -o json | jq '.items | length'
+# Output: 1
+
+# Use field selectors to filter by metadata
+kubectl get rs --field-selector metadata.name=anihpj-location-prod-rs
+# Output:
+# NAME                      DESIRED   CURRENT   READY   AGE
+# anihpj-location-prod-rs   3         3         3       1m
+
+# Combine label and field selectors
+kubectl get rs -l tier=backend --field-selector status.replicas=3
+# Output:
+# NAME                      DESIRED   CURRENT   READY   AGE
+# anihpj-location-prod-rs   3         3         3       1m</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: Cross-Namespace ReplicaSetList</h5>
+                        <pre><code class="language-bash"># Create ReplicaSets in different namespaces
+kubectl create namespace anihpj-production
+kubectl create namespace anihpj-staging
+
+# Create production ReplicaSet
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-skills-rs
+  namespace: anihpj-production
+  labels:
+    app: anihpj-skills
+    environment: production
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: anihpj-skills
+  template:
+    metadata:
+      labels:
+        app: anihpj-skills
+        environment: production
+    spec:
+      containers:
+      - name: django-skills
+        image: anihpj/skills:v3.0
+        ports:
+        - containerPort: 8000
+EOF
+
+# Create staging ReplicaSet  
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-skills-rs
+  namespace: anihpj-staging
+  labels:
+    app: anihpj-skills
+    environment: staging
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-skills
+  template:
+    metadata:
+      labels:
+        app: anihpj-skills
+        environment: staging
+    spec:
+      containers:
+      - name: django-skills
+        image: anihpj/skills:v2.5
+        ports:
+        - containerPort: 8000
+EOF</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create namespaces and ReplicaSets
+kubectl create namespace anihpj-production
+# Output: namespace/anihpj-production created
+
+kubectl create namespace anihpj-staging  
+# Output: namespace/anihpj-staging created
+
+# Apply ReplicaSets to different namespaces
+kubectl apply -f production-rs.yaml
+# Output: replicaset.apps/anihpj-skills-rs created
+
+kubectl apply -f staging-rs.yaml
+# Output: replicaset.apps/anihpj-skills-rs created
+
+# Get ReplicaSetList across all namespaces
+kubectl get rs --all-namespaces
+# Output:
+# NAMESPACE            NAME                DESIRED   CURRENT   READY   AGE
+# anihpj-production    anihpj-skills-rs    4         4         4       30s
+# anihpj-staging       anihpj-skills-rs    2         2         2       25s
+# default              anihpj-jobpost-rs   3         3         3       5m
+
+# Filter across namespaces by label
+kubectl get rs --all-namespaces -l app=anihpj-skills
+# Output:
+# NAMESPACE            NAME                DESIRED   CURRENT   READY   AGE
+# anihpj-production    anihpj-skills-rs    4         4         4       45s
+# anihpj-staging       anihpj-skills-rs    2         2         2       40s
+
+# Get ReplicaSetList in JSON format across namespaces
+kubectl get rs --all-namespaces -o json | jq '.items | map({name: .metadata.name, namespace: .metadata.namespace, replicas: .spec.replicas})'
+# Output:
+# [
+#   {
+#     "name": "anihpj-skills-rs",
+#     "namespace": "anihpj-production", 
+#     "replicas": 4
+#   },
+#   {
+#     "name": "anihpj-skills-rs",
+#     "namespace": "anihpj-staging",
+#     "replicas": 2
+#   }
+# ]
+
+# Get specific namespace ReplicaSetList
+kubectl get rs -n anihpj-production
+# Output:
+# NAME               DESIRED   CURRENT   READY   AGE
+# anihpj-skills-rs   4         4         4       1m</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: ReplicaSetList with Custom Output Formats</h5>
+                        <pre><code class="language-bash"># Using previously created ReplicaSets</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Custom columns for ReplicaSetList
+kubectl get rs --all-namespaces -o custom-columns=\
+NAMESPACE:.metadata.namespace,\
+NAME:.metadata.name,\
+DESIRED:.spec.replicas,\
+CURRENT:.status.replicas,\
+READY:.status.readyReplicas,\
+AGE:.metadata.creationTimestamp
+# Output:
+# NAMESPACE            NAME                         DESIRED   CURRENT   READY   AGE
+# anihpj-production    anihpj-skills-rs            4         4         4       2025-09-07T15:50:00Z
+# anihpj-staging       anihpj-skills-rs            2         2         2       2025-09-07T15:50:05Z
+# default              anihpj-jobpost-list-rs       3         3         3       2025-09-07T15:45:00Z
+# default              anihpj-author-list-rs        2         2         2       2025-09-07T15:45:00Z
+
+# Wide output for detailed information
+kubectl get rs --all-namespaces -o wide
+# Output:
+# NAMESPACE         NAME                    DESIRED CURRENT READY AGE   CONTAINERS      IMAGES                SELECTOR
+# anihpj-production anihpj-skills-rs        4       4       4     3m    django-skills   anihpj/skills:v3.0    app=anihpj-skills
+# anihpj-staging    anihpj-skills-rs        2       2       2     3m    django-skills   anihpj/skills:v2.5    app=anihpj-skills
+# default           anihpj-jobpost-list-rs  3       3       3     8m    django-jobpost  anihpj/jobpost:v1.0   app=anihpj-jobpost
+
+# JSONPath output for specific fields
+kubectl get rs --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: desired={.spec.replicas}, ready={.status.readyReplicas}{"\n"}{end}'
+# Output:
+# anihpj-production/anihpj-skills-rs: desired=4, ready=4
+# anihpj-staging/anihpj-skills-rs: desired=2, ready=2
+# default/anihpj-jobpost-list-rs: desired=3, ready=3
+# default/anihpj-author-list-rs: desired=2, ready=2
+
+# Table format with sorting
+kubectl get rs --all-namespaces --sort-by=.spec.replicas
+# Output:
+# NAMESPACE            NAME                    DESIRED   CURRENT   READY   AGE
+# anihpj-staging       anihpj-skills-rs        2         2         2       4m
+# default              anihpj-author-list-rs   2         2         2       9m
+# default              anihpj-jobpost-list-rs  3         3         3       9m
+# anihpj-production    anihpj-skills-rs        4         4         4       4m
+
+# YAML output for complete ReplicaSetList structure
+kubectl get rs --all-namespaces -o yaml | grep -A 5 "apiVersion\|kind:\|metadata:"
+# Output:
+# apiVersion: v1
+# items:
+# - apiVersion: apps/v1
+#   kind: ReplicaSet
+#   metadata:
+#     creationTimestamp: "2025-09-07T15:50:00Z"</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: ReplicaSetList Monitoring and Watch</h5>
+                        <pre><code class="language-bash"># Monitor ReplicaSetList changes in real-time</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Watch all ReplicaSets for changes
+kubectl get rs --all-namespaces -w
+# Output:
+# NAMESPACE            NAME                    DESIRED   CURRENT   READY   AGE
+# anihpj-production    anihpj-skills-rs        4         4         4       5m
+# anihpj-staging       anihpj-skills-rs        2         2         2       5m
+# default              anihpj-jobpost-list-rs  3         3         3       10m
+# default              anihpj-author-list-rs   2         2         2       10m
+# (waiting for changes...)
+
+# Create a new ReplicaSet while watching
+kubectl apply -f - <<EOF &
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: anihpj-new-rs
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anihpj-new
+  template:
+    metadata:
+      labels:
+        app: anihpj-new
+    spec:
+      containers:
+      - name: django-new
+        image: anihpj/new:v1.0
+        ports:
+        - containerPort: 8000
+EOF
+# Watch output shows:
+# default              anihpj-new-rs           1         0         0       0s
+# default              anihpj-new-rs           1         1         0       2s
+# default              anihpj-new-rs           1         1         1       5s
+
+# Get ReplicaSetList with resource version for watching
+kubectl get rs --all-namespaces -o yaml | grep resourceVersion
+# Output: resourceVersion: "15432"
+
+# Use resource version for efficient watching
+kubectl get rs --all-namespaces --watch --resource-version=15432
+# Output: (Only shows changes after resource version 15432)
+
+# Monitor ReplicaSetList events
+kubectl get events --all-namespaces --field-selector involvedObject.kind=ReplicaSet
+# Output:
+# NAMESPACE   LAST SEEN   TYPE     REASON           OBJECT                        MESSAGE
+# default     2m          Normal   SuccessfulCreate rs/anihpj-new-rs             Created pod: anihpj-new-rs-abc12
+# default     5m          Normal   SuccessfulCreate rs/anihpj-jobpost-list-rs    Created pod: anihpj-jobpost-list-rs-def34
+
+# Summary of ReplicaSetList across cluster
+kubectl get rs --all-namespaces --no-headers | awk '{desired += $3; current += $4; ready += $5} END {print "Cluster totals - Desired: " desired ", Current: " current ", Ready: " ready}'
+# Output: Cluster totals - Desired: 12, Current: 12, Ready: 12
+
+# Check ReplicaSetList health status
+kubectl get rs --all-namespaces -o json | jq '.items | map(select(.status.readyReplicas != .spec.replicas)) | length'
+# Output: 0 (indicating all ReplicaSets are healthy)</code></pre>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -10582,72 +11855,76 @@ status:
                 <p>StatefulSet object: Returns the created StatefulSet resource with system-assigned fields including creation timestamp, generation number, and status. The status will show replica progression, current replicas, and ready replicas as the StatefulSet creates pods with stable identities and persistent storage.</p>
 
                 <h4>5 short examples with Django models</h4>
-                    <div class="example">
-                        <h5>Example 1: Django with Persistent Storage</h5>
-                        <pre><code class="language-yaml">apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: django-stateful
-  labels:
-    app: django-jobpost
-spec:
-  serviceName: django-svc
-  replicas: 3
-  selector:
-    matchLabels:
-      app: django-jobpost
-  template:
-    metadata:
-      labels:
-        app: django-jobpost
-    spec:
-      containers:
-      - name: django-app
-        image: django-jobpost:latest
-        volumeMounts:
-        - name: django-storage
-          mountPath: /app/media
-  volumeClaimTemplates:
-  - metadata:
-      name: django-storage
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      resources:
-        requests:
-          storage: 10Gi</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Creates a StatefulSet with 3 Django pods, each with dedicated 10Gi persistent storage for media files.
-                        </div>
-                    </div>
 
+                <div class="examples">
                     <div class="example">
-                        <h5>Example 2: Django Database StatefulSet</h5>
+                        <h5>Example 1: Django with PostgreSQL StatefulSet</h5>
                         <pre><code class="language-yaml">apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: django-db-cluster
+  name: anihpj-postgres-sts
+  namespace: default
+  labels:
+    app: anihpj-postgres
+    component: database
 spec:
-  serviceName: postgres-svc
-  replicas: 3
+  serviceName: anihpj-postgres-service
+  replicas: 1
   selector:
     matchLabels:
-      app: postgres-db
+      app: anihpj-postgres
+      component: database
   template:
     metadata:
       labels:
-        app: postgres-db
+        app: anihpj-postgres
+        component: database
     spec:
       containers:
       - name: postgres
-        image: postgres:13
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+          name: postgres
         env:
         - name: POSTGRES_DB
-          value: jobpost_db
+          value: anihpj_db
         - name: POSTGRES_USER
-          value: django_user
+          value: anihpj_user
+        - name: POSTGRES_PASSWORD
+          value: anihpj_password
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
         volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - anihpj_user
+            - -d
+            - anihpj_db
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - anihpj_user
+            - -d
+            - anihpj_db
+          initialDelaySeconds: 5
+          periodSeconds: 5
   volumeClaimTemplates:
   - metadata:
       name: postgres-data
@@ -10655,6 +11932,579 @@ spec:
       accessModes: ["ReadWriteOnce"]
       resources:
         requests:
+          storage: 20Gi
+      storageClassName: standard</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create the StatefulSet for PostgreSQL
+kubectl apply -f anihpj-postgres-sts.yaml
+# Output: statefulset.apps/anihpj-postgres-sts created
+
+# Monitor StatefulSet pod creation (ordered)
+kubectl get pods -l app=anihpj-postgres -w
+# Output:
+# NAME                    READY   STATUS              RESTARTS   AGE
+# anihpj-postgres-sts-0   0/1     Pending             0          5s
+# anihpj-postgres-sts-0   0/1     ContainerCreating   0          10s
+# anihpj-postgres-sts-0   1/1     Running             0          25s
+
+# Check StatefulSet status
+kubectl get sts anihpj-postgres-sts
+# Output:
+# NAME                   READY   AGE
+# anihpj-postgres-sts    1/1     30s
+
+# Verify persistent volume claim was created
+kubectl get pvc
+# Output:
+# NAME                              STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+# postgres-data-anihpj-postgres-sts-0   Bound    pvc-abc123-def456-ghi789-jkl012-mno345     20Gi       RWO            standard       35s
+
+# Check pod has stable network identity
+kubectl get pods -l app=anihpj-postgres -o wide
+# Output:
+# NAME                    READY   STATUS    RESTARTS   AGE   IP           NODE     NOMINATED NODE   READINESS GATES
+# anihpj-postgres-sts-0   1/1     Running   0          1m    10.244.1.5   node-1   <none>           <none>
+
+# Test database connectivity
+kubectl exec -it anihpj-postgres-sts-0 -- psql -U anihpj_user -d anihpj_db -c "SELECT version();"
+# Output:
+#                                                  version
+# ----------------------------------------------------------------------------------------------------------
+#  PostgreSQL 15.4 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 8.3.0, 64-bit
+# (1 row)</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Django Application StatefulSet with Persistent Media Storage</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: anihpj-django-sts
+  namespace: default
+  labels:
+    app: anihpj-django
+    component: web
+spec:
+  serviceName: anihpj-django-service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-django
+      component: web
+  template:
+    metadata:
+      labels:
+        app: anihpj-django
+        component: web
+    spec:
+      initContainers:
+      - name: migration-runner
+        image: anihpj/django:v2.0
+        command: ["python", "manage.py", "migrate"]
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://anihpj_user:anihpj_password@anihpj-postgres-service:5432/anihpj_db"
+        volumeMounts:
+        - name: django-media
+          mountPath: /app/media
+      containers:
+      - name: django-app
+        image: anihpj/django:v2.0
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://anihpj_user:anihpj_password@anihpj-postgres-service:5432/anihpj_db"
+        - name: MEDIA_ROOT
+          value: "/app/media"
+        - name: STATIC_ROOT
+          value: "/app/static"
+        volumeMounts:
+        - name: django-media
+          mountPath: /app/media
+        - name: django-static
+          mountPath: /app/static
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
+        livenessProbe:
+          httpGet:
+            path: /health/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+  volumeClaimTemplates:
+  - metadata:
+      name: django-media
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: standard
+  - metadata:
+      name: django-static
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 5Gi
+      storageClassName: standard</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create Django StatefulSet with persistent storage
+kubectl apply -f anihpj-django-sts.yaml
+# Output: statefulset.apps/anihpj-django-sts created
+
+# Watch ordered deployment of Django pods
+kubectl get pods -l app=anihpj-django -w
+# Output:
+# NAME                 READY   STATUS     RESTARTS   AGE
+# anihpj-django-sts-0  0/1     Init:0/1   0          10s
+# anihpj-django-sts-0  0/1     PodInitializing   0     25s
+# anihpj-django-sts-0  1/1     Running    0          30s
+# anihpj-django-sts-1  0/1     Init:0/1   0          35s
+# anihpj-django-sts-1  0/1     PodInitializing   0     50s
+# anihpj-django-sts-1  1/1     Running    0          55s
+# anihpj-django-sts-2  0/1     Init:0/1   0          60s
+
+# Check StatefulSet status with ready replicas
+kubectl get sts anihpj-django-sts
+# Output:
+# NAME                READY   AGE
+# anihpj-django-sts   3/3     2m
+
+# Verify each pod has its own persistent volumes
+kubectl get pvc -l app=anihpj-django
+# Output:
+# NAME                             STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+# django-media-anihpj-django-sts-0   Bound    pvc-111-222-333-444-555                   10Gi       RWO            standard       2m
+# django-media-anihpj-django-sts-1   Bound    pvc-666-777-888-999-000                   10Gi       RWO            standard       2m
+# django-media-anihpj-django-sts-2   Bound    pvc-aaa-bbb-ccc-ddd-eee                   10Gi       RWO            standard       1m
+# django-static-anihpj-django-sts-0  Bound    pvc-fff-ggg-hhh-iii-jjj                   5Gi        RWO            standard       2m
+
+# Test media upload to specific pod
+kubectl exec -it anihpj-django-sts-0 -- ls -la /app/media/
+# Output:
+# total 8
+# drwxrwxrwx 2 root root 4096 Sep  7 16:00 .
+# drwxr-xr-x 1 root root 4096 Sep  7 16:00 ..
+
+# Check stable pod identity and hostname
+kubectl exec -it anihpj-django-sts-1 -- hostname
+# Output: anihpj-django-sts-1</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: Redis Cluster StatefulSet for Django Caching</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: anihpj-redis-cluster-sts
+  namespace: default
+  labels:
+    app: anihpj-redis
+    component: cache
+spec:
+  serviceName: anihpj-redis-service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-redis
+      component: cache
+  template:
+    metadata:
+      labels:
+        app: anihpj-redis
+        component: cache
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+          name: redis
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        env:
+        - name: REDIS_CLUSTER_ANNOUNCE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        volumeMounts:
+        - name: redis-config
+          mountPath: /etc/redis
+        - name: redis-data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-cluster-config
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 2Gi
+      storageClassName: fast-ssd</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create Redis configuration first
+kubectl create configmap redis-cluster-config \
+  --from-literal=redis.conf="maxmemory 256mb
+maxmemory-policy allkeys-lru
+save 900 1
+save 300 10
+save 60 10000"
+# Output: configmap/redis-cluster-config created
+
+# Create Redis cluster StatefulSet
+kubectl apply -f anihpj-redis-cluster-sts.yaml
+# Output: statefulset.apps/anihpj-redis-cluster-sts created
+
+# Monitor ordered Redis cluster creation
+kubectl get pods -l app=anihpj-redis -w
+# Output:
+# NAME                         READY   STATUS              RESTARTS   AGE
+# anihpj-redis-cluster-sts-0   0/1     ContainerCreating   0          10s
+# anihpj-redis-cluster-sts-0   1/1     Running             0          20s
+# anihpj-redis-cluster-sts-1   0/1     ContainerCreating   0          25s
+# anihpj-redis-cluster-sts-1   1/1     Running             0          35s
+# anihpj-redis-cluster-sts-2   0/1     ContainerCreating   0          40s
+
+# Check StatefulSet and persistent storage
+kubectl get sts anihpj-redis-cluster-sts
+# Output:
+# NAME                        READY   AGE
+# anihpj-redis-cluster-sts    3/3     2m
+
+kubectl get pvc -l app=anihpj-redis
+# Output:
+# NAME                                  STATUS   VOLUME                        CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+# redis-data-anihpj-redis-cluster-sts-0   Bound    pvc-redis-0-vol               2Gi        RWO            fast-ssd       2m
+# redis-data-anihpj-redis-cluster-sts-1   Bound    pvc-redis-1-vol               2Gi        RWO            fast-ssd       2m
+# redis-data-anihpj-redis-cluster-sts-2   Bound    pvc-redis-2-vol               2Gi        RWO            fast-ssd       1m
+
+# Test Redis connectivity and cluster formation
+kubectl exec -it anihpj-redis-cluster-sts-0 -- redis-cli ping
+# Output: PONG
+
+kubectl exec -it anihpj-redis-cluster-sts-0 -- redis-cli set test_key "Django cache test"
+# Output: OK
+
+kubectl exec -it anihpj-redis-cluster-sts-0 -- redis-cli get test_key
+# Output: "Django cache test"
+
+# Check Redis memory usage and configuration
+kubectl exec -it anihpj-redis-cluster-sts-1 -- redis-cli info memory | grep used_memory_human
+# Output: used_memory_human:1.23M</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: StatefulSet with Ordered Rolling Updates</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: anihpj-ordered-update-sts
+  namespace: default
+  labels:
+    app: anihpj-ordered
+    component: service
+spec:
+  serviceName: anihpj-ordered-service
+  replicas: 4
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  selector:
+    matchLabels:
+      app: anihpj-ordered
+      component: service
+  template:
+    metadata:
+      labels:
+        app: anihpj-ordered
+        component: service
+        version: v1.0
+    spec:
+      containers:
+      - name: django-service
+        image: anihpj/service:v1.0
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: SERVICE_VERSION
+          value: "v1.0"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: service-data
+          mountPath: /app/data
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+  volumeClaimTemplates:
+  - metadata:
+      name: service-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+      storageClassName: standard</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create initial StatefulSet
+kubectl apply -f anihpj-ordered-update-sts.yaml
+# Output: statefulset.apps/anihpj-ordered-update-sts created
+
+# Wait for all pods to be ready
+kubectl wait --for=condition=ready pod -l app=anihpj-ordered --timeout=300s
+# Output: pod/anihpj-ordered-update-sts-0 condition met
+#         pod/anihpj-ordered-update-sts-1 condition met
+#         pod/anihpj-ordered-update-sts-2 condition met
+#         pod/anihpj-ordered-update-sts-3 condition met
+
+# Check initial pod versions
+kubectl get pods -l app=anihpj-ordered -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.containers[0].image}{"\n"}{end}'
+# Output:
+# anihpj-ordered-update-sts-0: anihpj/service:v1.0
+# anihpj-ordered-update-sts-1: anihpj/service:v1.0
+# anihpj-ordered-update-sts-2: anihpj/service:v1.0
+# anihpj-ordered-update-sts-3: anihpj/service:v1.0
+
+# Update to new version - this triggers ordered rolling update
+kubectl patch sts anihpj-ordered-update-sts -p='{"spec":{"template":{"spec":{"containers":[{"name":"django-service","image":"anihpj/service:v2.0","env":[{"name":"SERVICE_VERSION","value":"v2.0"},{"name":"POD_NAME","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]}]},"metadata":{"labels":{"version":"v2.0"}}}}}'
+# Output: statefulset.apps/anihpj-ordered-update-sts patched
+
+# Watch ordered rolling update (highest ordinal first)
+kubectl get pods -l app=anihpj-ordered -w
+# Output:
+# NAME                           READY   STATUS    RESTARTS   AGE
+# anihpj-ordered-update-sts-0    1/1     Running   0          2m
+# anihpj-ordered-update-sts-1    1/1     Running   0          2m
+# anihpj-ordered-update-sts-2    1/1     Running   0          2m
+# anihpj-ordered-update-sts-3    1/1     Running   0          2m
+# anihpj-ordered-update-sts-3    1/1     Terminating   0      2m
+# anihpj-ordered-update-sts-3    0/1     Terminating   0      2m
+# anihpj-ordered-update-sts-3    0/1     Pending       0      0s
+# anihpj-ordered-update-sts-3    1/1     Running       0      10s
+# anihpj-ordered-update-sts-2    1/1     Terminating   0      2m
+
+# Check rolling update status
+kubectl rollout status sts anihpj-ordered-update-sts
+# Output: Waiting for 1 pods to be ready...
+#         Waiting for partitioned roll out to finish: 2 out of 4 new pods have been updated...
+#         partitioned roll out complete: 4 new pods have been updated...
+
+# Verify updated versions (reverse order update)
+kubectl get pods -l app=anihpj-ordered -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.containers[0].image}{"\n"}{end}'
+# Output:
+# anihpj-ordered-update-sts-0: anihpj/service:v2.0
+# anihpj-ordered-update-sts-1: anihpj/service:v2.0
+# anihpj-ordered-update-sts-2: anihpj/service:v2.0
+# anihpj-ordered-update-sts-3: anihpj/service:v2.0</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: StatefulSet with Headless Service and DNS</h5>
+                        <pre><code class="language-yaml">apiVersion: v1
+kind: Service
+metadata:
+  name: anihpj-headless-service
+  namespace: default
+  labels:
+    app: anihpj-headless
+spec:
+  clusterIP: None  # Headless service
+  selector:
+    app: anihpj-headless
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: anihpj-headless-sts
+  namespace: default
+  labels:
+    app: anihpj-headless
+    component: web-cluster
+spec:
+  serviceName: anihpj-headless-service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-headless
+      component: web-cluster
+  template:
+    metadata:
+      labels:
+        app: anihpj-headless
+        component: web-cluster
+    spec:
+      containers:
+      - name: django-cluster
+        image: anihpj/cluster:v1.0
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CLUSTER_MEMBERS
+          value: "anihpj-headless-sts-0.anihpj-headless-service.default.svc.cluster.local:8000,anihpj-headless-sts-1.anihpj-headless-service.default.svc.cluster.local:8000,anihpj-headless-sts-2.anihpj-headless-service.default.svc.cluster.local:8000"
+        volumeMounts:
+        - name: cluster-data
+          mountPath: /app/cluster-data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+        readinessProbe:
+          httpGet:
+            path: /cluster/health/
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /cluster/health/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 20
+  volumeClaimTemplates:
+  - metadata:
+      name: cluster-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 3Gi
+      storageClassName: standard</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create headless service and StatefulSet
+kubectl apply -f anihpj-headless-sts.yaml
+# Output:
+# service/anihpj-headless-service created
+# statefulset.apps/anihpj-headless-sts created
+
+# Verify headless service has no ClusterIP
+kubectl get svc anihpj-headless-service
+# Output:
+# NAME                      TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+# anihpj-headless-service   ClusterIP   None         <none>        8000/TCP   30s
+
+# Wait for StatefulSet pods to be ready
+kubectl get pods -l app=anihpj-headless -w
+# Output:
+# NAME                   READY   STATUS              RESTARTS   AGE
+# anihpj-headless-sts-0  0/1     ContainerCreating   0          10s
+# anihpj-headless-sts-0  1/1     Running             0          25s
+# anihpj-headless-sts-1  0/1     ContainerCreating   0          30s
+# anihpj-headless-sts-1  1/1     Running             0          45s
+# anihpj-headless-sts-2  0/1     ContainerCreating   0          50s
+# anihpj-headless-sts-2  1/1     Running             0          65s
+
+# Test DNS resolution for individual pods
+kubectl run dns-test --image=busybox:1.35 --rm -it --restart=Never -- nslookup anihpj-headless-sts-0.anihpj-headless-service.default.svc.cluster.local
+# Output:
+# Server:    10.96.0.10
+# Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local
+# 
+# Name:      anihpj-headless-sts-0.anihpj-headless-service.default.svc.cluster.local
+# Address 1: 10.244.1.10 anihpj-headless-sts-0.anihpj-headless-service.default.svc.cluster.local
+
+# Test service DNS resolution returns all pod IPs
+kubectl run dns-test --image=busybox:1.35 --rm -it --restart=Never -- nslookup anihpj-headless-service.default.svc.cluster.local
+# Output:
+# Server:    10.96.0.10
+# Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local
+# 
+# Name:      anihpj-headless-service.default.svc.cluster.local
+# Address 1: 10.244.1.10 anihpj-headless-sts-0.anihpj-headless-service.default.svc.cluster.local
+# Address 2: 10.244.2.15 anihpj-headless-sts-1.anihpj-headless-service.default.svc.cluster.local
+# Address 3: 10.244.3.20 anihpj-headless-sts-2.anihpj-headless-service.default.svc.cluster.local
+
+# Verify pod hostnames and stable identities
+kubectl exec -it anihpj-headless-sts-1 -- hostname
+# Output: anihpj-headless-sts-1
+
+kubectl exec -it anihpj-headless-sts-1 -- env | grep POD_NAME
+# Output: POD_NAME=anihpj-headless-sts-1
+
+# Test cluster member connectivity
+kubectl exec -it anihpj-headless-sts-0 -- wget -qO- http://anihpj-headless-sts-1.anihpj-headless-service.default.svc.cluster.local:8000/cluster/ping/
+# Output: {"status": "ok", "pod": "anihpj-headless-sts-1", "cluster_member": true}</code></pre>
+                        </div>
+                    </div>
+                </div>
           storage: 20Gi</code></pre>
                         <div class="example-output">
                             <strong>Result:</strong> Creates a PostgreSQL cluster for Django JobPost application with persistent data storage.
@@ -12136,159 +13986,783 @@ status:
                 <p>DaemonSet object: Returns the created DaemonSet resource with system-assigned fields including creation timestamp, generation number, and status. The status will show the number of scheduled, ready, and available pods across all nodes in the cluster.</p>
 
                 <h4>5 short examples with Django models</h4>
-                    
+
+                <div class="examples">
                     <div class="example">
                         <h5>Example 1: Django Log Collection DaemonSet</h5>
                         <pre><code class="language-yaml">apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: django-log-collector
+  name: anihpj-log-collector-ds
+  namespace: default
   labels:
-    app: log-collector
+    app: anihpj-log-collector
+    component: logging
 spec:
   selector:
     matchLabels:
-      app: log-collector
+      app: anihpj-log-collector
+      component: logging
   template:
     metadata:
       labels:
-        app: log-collector
+        app: anihpj-log-collector
+        component: logging
     spec:
+      serviceAccountName: log-collector
       containers:
       - name: fluentd
-        image: fluentd:latest
+        image: fluent/fluentd:v1.16
+        ports:
+        - containerPort: 24224
+          name: forwarder
+        env:
+        - name: FLUENTD_CONF
+          value: "fluent.conf"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         volumeMounts:
         - name: django-logs
           mountPath: /var/log/django
+          readOnly: true
+        - name: fluentd-config
+          mountPath: /fluentd/etc
+        - name: container-logs
+          mountPath: /var/log/containers
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
       volumes:
       - name: django-logs
         hostPath:
-          path: /var/log/django</code></pre>
+          path: /var/log/django
+          type: DirectoryOrCreate
+      - name: container-logs
+        hostPath:
+          path: /var/log/containers
+          type: Directory
+      - name: fluentd-config
+        configMap:
+          name: fluentd-config
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule</code></pre>
                         <div class="example-output">
-                            <strong>Result:</strong> Creates a DaemonSet that runs a Fluentd log collector on every node to collect Django application logs.
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ServiceAccount and ConfigMap first
+kubectl create serviceaccount log-collector
+# Output: serviceaccount/log-collector created
+
+kubectl create configmap fluentd-config \
+  --from-literal=fluent.conf="<source>
+  @type tail
+  path /var/log/django/*.log
+  pos_file /var/log/fluentd-django.log.pos
+  tag django.*
+  <parse>
+    @type json
+  </parse>
+</source>
+<match **>
+  @type stdout
+</match>"
+# Output: configmap/fluentd-config created
+
+# Create the DaemonSet
+kubectl apply -f anihpj-log-collector-ds.yaml
+# Output: daemonset.apps/anihpj-log-collector-ds created
+
+# Check DaemonSet status across all nodes
+kubectl get ds anihpj-log-collector-ds
+# Output:
+# NAME                       DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE
+# anihpj-log-collector-ds    3         3         3       3            3           <none>          45s
+
+# Verify pods are running on all nodes
+kubectl get pods -l app=anihpj-log-collector -o wide
+# Output:
+# NAME                             READY   STATUS    RESTARTS   AGE   IP           NODE     NOMINATED NODE   READINESS GATES
+# anihpj-log-collector-ds-abc12    1/1     Running   0          50s   10.244.1.5   node-1   <none>           <none>
+# anihpj-log-collector-ds-def34    1/1     Running   0          50s   10.244.2.8   node-2   <none>           <none>
+# anihpj-log-collector-ds-ghi56    1/1     Running   0          50s   10.244.3.3   node-3   <none>           <none>
+
+# Check logs are being collected
+kubectl logs anihpj-log-collector-ds-abc12 | head -5
+# Output:
+# 2025-09-07 16:15:00 +0000 [info]: #0 starting fluentd worker pid=7 ppid=1 worker=0
+# 2025-09-07 16:15:01 +0000 [info]: #0 [django.app] following tail of /var/log/django/django.log
+# 2025-09-07 16:15:02 +0000 django.app: {"level":"INFO","message":"JobPost model accessed","timestamp":"2025-09-07T16:15:02"}
+
+# Verify DaemonSet handles node additions
+kubectl get nodes
+# Output:
+# NAME     STATUS   ROLES           AGE   VERSION
+# node-1   Ready    control-plane   1d    v1.28.0
+# node-2   Ready    <none>          1d    v1.28.0
+# node-3   Ready    <none>          1d    v1.28.0</code></pre>
                         </div>
                     </div>
 
                     <div class="example">
-                        <h5>Example 2: Node Monitoring for Django Apps</h5>
+                        <h5>Example 2: Node Monitoring DaemonSet for Django Infrastructure</h5>
                         <pre><code class="language-yaml">apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: django-node-monitor
+  name: anihpj-node-monitor-ds
+  namespace: default
+  labels:
+    app: anihpj-node-monitor
+    component: monitoring
 spec:
   selector:
     matchLabels:
-      app: node-monitor
+      app: anihpj-node-monitor
+      component: monitoring
   template:
     metadata:
       labels:
-        app: node-monitor
+        app: anihpj-node-monitor
+        component: monitoring
     spec:
+      hostNetwork: true
+      hostPID: true
       containers:
       - name: node-exporter
-        image: prom/node-exporter:latest
+        image: prom/node-exporter:v1.6.1
+        args:
+        - --path.sysfs=/host/sys
+        - --path.rootfs=/host/root
+        - --no-collector.wifi
+        - --no-collector.hwmon
+        - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+        - --collector.netclass.ignored-devices=^(veth.*)$
         ports:
         - containerPort: 9100
-        hostNetwork: true
-        hostPID: true</code></pre>
+          hostPort: 9100
+          name: metrics
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: root
+          mountPath: /host/root
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+      volumes:
+      - name: sys
+        hostPath:
+          path: /sys
+          type: Directory
+      - name: root
+        hostPath:
+          path: /
+          type: Directory
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule</code></pre>
                         <div class="example-output">
-                            <strong>Result:</strong> Creates a DaemonSet that runs Prometheus Node Exporter on every node to monitor Django application infrastructure.
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create the node monitoring DaemonSet
+kubectl apply -f anihpj-node-monitor-ds.yaml
+# Output: daemonset.apps/anihpj-node-monitor-ds created
+
+# Check DaemonSet deployment
+kubectl get ds anihpj-node-monitor-ds
+# Output:
+# NAME                      DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE
+# anihpj-node-monitor-ds    3         3         3       3            3           <none>          30s
+
+# Verify pods on each node with hostNetwork
+kubectl get pods -l app=anihpj-node-monitor -o wide
+# Output:
+# NAME                            READY   STATUS    RESTARTS   AGE   IP            NODE     NOMINATED NODE   READINESS GATES
+# anihpj-node-monitor-ds-abc12    1/1     Running   0          35s   192.168.1.10  node-1   <none>           <none>
+# anihpj-node-monitor-ds-def34    1/1     Running   0          35s   192.168.1.11  node-2   <none>           <none>
+# anihpj-node-monitor-ds-ghi56    1/1     Running   0          35s   192.168.1.12  node-3   <none>           <none>
+
+# Test metrics collection from one node
+curl -s http://192.168.1.10:9100/metrics | grep node_cpu_seconds_total | head -3
+# Output:
+# node_cpu_seconds_total{cpu="0",mode="idle"} 123456.78
+# node_cpu_seconds_total{cpu="0",mode="iowait"} 1234.56
+# node_cpu_seconds_total{cpu="0",mode="irq"} 12.34
+
+# Check memory metrics
+curl -s http://192.168.1.11:9100/metrics | grep node_memory_MemTotal_bytes
+# Output: node_memory_MemTotal_bytes 8.589934592e+09
+
+# Test all nodes are accessible for monitoring
+for node in 192.168.1.10 192.168.1.11 192.168.1.12; do
+  echo "Node $node status: $(curl -s -o /dev/null -w "%{http_code}" http://$node:9100/metrics)"
+done
+# Output:
+# Node 192.168.1.10 status: 200
+# Node 192.168.1.11 status: 200
+# Node 192.168.1.12 status: 200
+
+# Check DaemonSet events
+kubectl describe ds anihpj-node-monitor-ds | grep -A 5 Events
+# Output:
+# Events:
+#   Type    Reason            Age   From                  Message
+#   ----    ------            ----  ----                  -------
+#   Normal  SuccessfulCreate  2m    daemonset-controller  Created pod: anihpj-node-monitor-ds-abc12
+#   Normal  SuccessfulCreate  2m    daemonset-controller  Created pod: anihpj-node-monitor-ds-def34</code></pre>
                         </div>
                     </div>
 
                     <div class="example">
-                        <h5>Example 3: Django Security Scanner</h5>
+                        <h5>Example 3: Django Security Scanning DaemonSet</h5>
                         <pre><code class="language-yaml">apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: django-security-scan
+  name: anihpj-security-scan-ds
+  namespace: default
+  labels:
+    app: anihpj-security
+    component: security-scanner
 spec:
   selector:
     matchLabels:
-      app: security-scanner
+      app: anihpj-security
+      component: security-scanner
   template:
     metadata:
       labels:
-        app: security-scanner
+        app: anihpj-security
+        component: security-scanner
     spec:
+      serviceAccountName: security-scanner
       containers:
       - name: falco
-        image: falcosecurity/falco:latest
+        image: falcosecurity/falco:0.36.2
+        args:
+        - /usr/bin/falco
+        - --cri=/run/containerd/containerd.sock
+        - --k8s-api=https://kubernetes.default:443
+        - --k8s-api-cert=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        - --k8s-api-token=/var/run/secrets/kubernetes.io/serviceaccount/token
+        ports:
+        - containerPort: 8765
+          name: grpc
+        env:
+        - name: FALCO_GRPC_BIND_ADDRESS
+          value: "0.0.0.0:8765"
+        - name: FALCO_GRPC_ENABLED
+          value: "true"
         securityContext:
           privileged: true
         volumeMounts:
         - name: docker-socket
           mountPath: /var/run/docker.sock
+          readOnly: true
+        - name: containerd-socket
+          mountPath: /run/containerd/containerd.sock
+          readOnly: true
+        - name: dev-fs
+          mountPath: /dev
+          readOnly: true
+        - name: proc-fs
+          mountPath: /host/proc
+          readOnly: true
+        - name: boot-fs
+          mountPath: /host/boot
+          readOnly: true
+        - name: lib-modules
+          mountPath: /host/lib/modules
+          readOnly: true
+        - name: usr-fs
+          mountPath: /host/usr
+          readOnly: true
+        - name: etc-fs
+          mountPath: /host/etc
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
       volumes:
       - name: docker-socket
         hostPath:
-          path: /var/run/docker.sock</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Creates a DaemonSet running Falco security monitoring on every node to protect Django applications.
-                        </div>
-                    </div>
-
-                    <div class="example">
-                        <h5>Example 4: Django Network Plugin</h5>
-                        <pre><code class="language-yaml">apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: django-cni-plugin
-spec:
-  selector:
-    matchLabels:
-      app: cni-plugin
-  template:
-    metadata:
-      labels:
-        app: cni-plugin
-    spec:
-      hostNetwork: true
-      containers:
-      - name: calico-node
-        image: calico/node:latest
-        env:
-        - name: CALICO_NETWORKING_BACKEND
-          value: "bird"
-        volumeMounts:
-        - name: cni-bin
-          mountPath: /opt/cni/bin
-      volumes:
-      - name: cni-bin
+          path: /var/run/docker.sock
+          type: Socket
+      - name: containerd-socket
         hostPath:
-          path: /opt/cni/bin</code></pre>
+          path: /run/containerd/containerd.sock
+          type: Socket
+      - name: dev-fs
+        hostPath:
+          path: /dev
+          type: Directory
+      - name: proc-fs
+        hostPath:
+          path: /proc
+          type: Directory
+      - name: boot-fs
+        hostPath:
+          path: /boot
+          type: Directory
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+          type: Directory
+      - name: usr-fs
+        hostPath:
+          path: /usr
+          type: Directory
+      - name: etc-fs
+        hostPath:
+          path: /etc
+          type: Directory
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule</code></pre>
                         <div class="example-output">
-                            <strong>Result:</strong> Creates a DaemonSet for Calico networking on every node to provide network connectivity for Django pods.
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create ServiceAccount and RBAC for security scanner
+kubectl create serviceaccount security-scanner
+# Output: serviceaccount/security-scanner created
+
+kubectl create clusterrole security-scanner --verb=get,list,watch --resource=nodes,pods,namespaces,services
+# Output: clusterrole.rbac.authorization.k8s.io/security-scanner created
+
+kubectl create clusterrolebinding security-scanner --clusterrole=security-scanner --serviceaccount=default:security-scanner
+# Output: clusterrolebinding.rbac.authorization.k8s.io/security-scanner created
+
+# Deploy security scanning DaemonSet
+kubectl apply -f anihpj-security-scan-ds.yaml
+# Output: daemonset.apps/anihpj-security-scan-ds created
+
+# Check DaemonSet deployment across nodes
+kubectl get ds anihpj-security-scan-ds
+# Output:
+# NAME                       DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE
+# anihpj-security-scan-ds    3         3         3       3            3           <none>          45s
+
+# Verify Falco pods are running with privileged access
+kubectl get pods -l app=anihpj-security -o wide
+# Output:
+# NAME                             READY   STATUS    RESTARTS   AGE   IP           NODE     NOMINATED NODE   READINESS GATES
+# anihpj-security-scan-ds-abc12    1/1     Running   0          50s   10.244.1.8   node-1   <none>           <none>
+# anihpj-security-scan-ds-def34    1/1     Running   0          50s   10.244.2.9   node-2   <none>           <none>
+# anihpj-security-scan-ds-ghi56    1/1     Running   0          50s   10.244.3.7   node-3   <none>           <none>
+
+# Check Falco security events and alerts
+kubectl logs anihpj-security-scan-ds-abc12 | head -10
+# Output:
+# Mon Sep  7 16:20:00 2025: Falco version 0.36.2
+# Mon Sep  7 16:20:01 2025: Loading rules from /etc/falco/falco_rules.yaml
+# Mon Sep  7 16:20:02 2025: Starting internal webserver, listening on port 8765
+# Mon Sep  7 16:20:03 2025: Syscall event drop monitoring: disabled
+# Mon Sep  7 16:20:04 2025: Loading driver: bpf
+
+# Test security event detection
+kubectl run test-pod --image=alpine --rm -it --restart=Never -- sh -c "cat /etc/passwd"
+# Check logs for security alerts
+kubectl logs anihpj-security-scan-ds-abc12 --tail=5
+# Output:
+# 16:21:15.123456789: Warning Read sensitive file untrusted (user=root command=cat /etc/passwd file=/etc/passwd)
+
+# Test gRPC endpoint
+kubectl exec -it anihpj-security-scan-ds-abc12 -- grpcurl -plaintext localhost:8765 falco.service.FalcoService/Version
+# Output:
+# {
+#   "version": "0.36.2"
+# }
+
+# Monitor security scanning across cluster
+kubectl get events --field-selector involvedObject.kind=Pod --all-namespaces | grep -i security
+# Output: Shows security-related events detected by Falco across all nodes</code></pre>
                         </div>
                     </div>
 
                     <div class="example">
-                        <h5>Example 5: Django Metrics Collection</h5>
+                        <h5>Example 4: Django Network Proxy DaemonSet</h5>
                         <pre><code class="language-yaml">apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: django-metrics-agent
+  name: anihpj-proxy-ds
+  namespace: default
+  labels:
+    app: anihpj-proxy
+    component: network
 spec:
   selector:
     matchLabels:
-      app: metrics-agent
+      app: anihpj-proxy
+      component: network
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
+      maxSurge: 0
   template:
     metadata:
       labels:
-        app: metrics-agent
+        app: anihpj-proxy
+        component: network
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: nginx-proxy
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+          hostPort: 80
+          name: http
+        - containerPort: 443
+          hostPort: 443
+          name: https
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+        - name: ssl-certs
+          mountPath: /etc/ssl/certs
+          readOnly: true
+        - name: cache-volume
+          mountPath: /var/cache/nginx
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-proxy-config
+      - name: ssl-certs
+        secret:
+          secretName: anihpj-ssl-certs
+      - name: cache-volume
+        hostPath:
+          path: /var/cache/nginx
+          type: DirectoryOrCreate
+      nodeSelector:
+        node-role.kubernetes.io/worker: ""
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule</code></pre>
+                        <div class="example-output">
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create nginx configuration for Django proxy
+kubectl create configmap nginx-proxy-config \
+  --from-literal=default.conf="upstream django_backend {
+    server anihpj-django-service:8000;
+}
+
+server {
+    listen 80;
+    server_name _;
+    
+    location /health {
+        access_log off;
+        return 200 'healthy\n';
+        add_header Content-Type text/plain;
+    }
+    
+    location / {
+        proxy_pass http://django_backend;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}"
+# Output: configmap/nginx-proxy-config created
+
+# Create SSL certificates secret (self-signed for demo)
+kubectl create secret tls anihpj-ssl-certs \
+  --cert=./server.crt \
+  --key=./server.key
+# Output: secret/anihpj-ssl-certs created
+
+# Label worker nodes
+kubectl label nodes node-2 node-role.kubernetes.io/worker=""
+kubectl label nodes node-3 node-role.kubernetes.io/worker=""
+# Output:
+# node/node-2 labeled
+# node/node-3 labeled
+
+# Deploy proxy DaemonSet
+kubectl apply -f anihpj-proxy-ds.yaml
+# Output: daemonset.apps/anihpj-proxy-ds created
+
+# Check DaemonSet deployment on worker nodes only
+kubectl get ds anihpj-proxy-ds
+# Output:
+# NAME               DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR                      AGE
+# anihpj-proxy-ds    2         2         2       2            2           node-role.kubernetes.io/worker=   45s
+
+# Verify pods on worker nodes with hostNetwork
+kubectl get pods -l app=anihpj-proxy -o wide
+# Output:
+# NAME                   READY   STATUS    RESTARTS   AGE   IP            NODE     NOMINATED NODE   READINESS GATES
+# anihpj-proxy-ds-def34  1/1     Running   0          50s   192.168.1.11  node-2   <none>           <none>
+# anihpj-proxy-ds-ghi56  1/1     Running   0          50s   192.168.1.12  node-3   <none>           <none>
+
+# Test proxy functionality from each node
+curl -H "Host: anihpj.local" http://192.168.1.11/health
+# Output: healthy
+
+curl -H "Host: anihpj.local" http://192.168.1.12/health
+# Output: healthy
+
+# Test rolling update strategy
+kubectl set image ds/anihpj-proxy-ds nginx-proxy=nginx:1.25.2-alpine
+# Output: daemonset.apps/anihpj-proxy-ds image updated
+
+# Monitor rolling update (one node at a time)
+kubectl rollout status ds anihpj-proxy-ds
+# Output: Waiting for daemon set "anihpj-proxy-ds" rollout to finish: 1 out of 2 new pods have been updated...
+#         daemon set "anihpj-proxy-ds" successfully rolled out
+
+# Verify both nodes have been updated
+kubectl get pods -l app=anihpj-proxy -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.containers[0].image}{"\n"}{end}'
+# Output:
+# anihpj-proxy-ds-def34: nginx:1.25.2-alpine
+# anihpj-proxy-ds-ghi56: nginx:1.25.2-alpine</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: Django Metrics Collection DaemonSet with Custom Update Strategy</h5>
+                        <pre><code class="language-yaml">apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: anihpj-metrics-ds
+  namespace: default
+  labels:
+    app: anihpj-metrics
+    component: metrics-collector
+spec:
+  selector:
+    matchLabels:
+      app: anihpj-metrics
+      component: metrics-collector
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 0
+  revisionHistoryLimit: 3
+  template:
+    metadata:
+      labels:
+        app: anihpj-metrics
+        component: metrics-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9102"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
       - name: telegraf
-        image: telegraf:latest
+        image: telegraf:1.28-alpine
+        ports:
+        - containerPort: 9102
+          name: metrics
         env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
         - name: DJANGO_METRICS_URL
-          value: "http://django-service:8000/metrics"</code></pre>
+          value: "http://anihpj-django-service:8000/metrics/"
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: telegraf-config
+          mountPath: /etc/telegraf
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: docker-socket
+          mountPath: /var/run/docker.sock
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        securityContext:
+          runAsUser: 0
+          privileged: true
+      volumes:
+      - name: telegraf-config
+        configMap:
+          name: telegraf-config
+      - name: proc
+        hostPath:
+          path: /proc
+          type: Directory
+      - name: sys
+        hostPath:
+          path: /sys
+          type: Directory
+      - name: docker-socket
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute</code></pre>
                         <div class="example-output">
-                            <strong>Result:</strong> Creates a DaemonSet running Telegraf on every node to collect Django application metrics with rolling update strategy.
+                            <strong>kubectl commands and results:</strong>
+                            <pre><code class="language-bash"># Create Telegraf configuration for Django metrics
+kubectl create configmap telegraf-config \
+  --from-literal=telegraf.conf="[global_tags]
+  node = \"\$NODE_NAME\"
+  
+[[outputs.prometheus_client]]
+  listen = \":9102\"
+  metric_version = 2
+
+[[inputs.cpu]]
+  percpu = true
+  totalcpu = true
+  collect_cpu_time = false
+  report_active = false
+
+[[inputs.disk]]
+  ignore_fs = [\"tmpfs\", \"devtmpfs\", \"devfs\", \"iso9660\", \"overlay\", \"aufs\", \"squashfs\"]
+
+[[inputs.mem]]
+
+[[inputs.net]]
+
+[[inputs.system]]
+
+[[inputs.docker]]
+  endpoint = \"unix:///var/run/docker.sock\"
+
+[[inputs.http]]
+  urls = [\"\$DJANGO_METRICS_URL\"]
+  data_format = \"json\"
+  name_override = \"django_app\"
+  interval = \"30s\"
+  [inputs.http.tags]
+    source = \"django\""
+# Output: configmap/telegraf-config created
+
+# Deploy metrics collection DaemonSet
+kubectl apply -f anihpj-metrics-ds.yaml
+# Output: daemonset.apps/anihpj-metrics-ds created
+
+# Check DaemonSet deployment with update strategy
+kubectl get ds anihpj-metrics-ds
+# Output:
+# NAME                DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE
+# anihpj-metrics-ds   3         3         3       3            3           <none>          60s
+
+# Verify metrics collection on all nodes
+kubectl get pods -l app=anihpj-metrics -o wide
+# Output:
+# NAME                      READY   STATUS    RESTARTS   AGE   IP           NODE     NOMINATED NODE   READINESS GATES
+# anihpj-metrics-ds-abc12   1/1     Running   0          65s   10.244.1.9   node-1   <none>           <none>
+# anihpj-metrics-ds-def34   1/1     Running   0          65s   10.244.2.10  node-2   <none>           <none>
+# anihpj-metrics-ds-ghi56   1/1     Running   0          65s   10.244.3.8   node-3   <none>           <none>
+
+# Test metrics endpoint from each node
+kubectl exec -it anihpj-metrics-ds-abc12 -- wget -qO- http://localhost:9102/metrics | grep telegraf_agent
+# Output:
+# telegraf_agent_gather_errors_total{host="node-1"} 0
+# telegraf_agent_metrics_dropped_total{host="node-1"} 0
+# telegraf_agent_metrics_gathered_total{host="node-1"} 156
+
+# Check Django app metrics collection
+kubectl exec -it anihpj-metrics-ds-def34 -- wget -qO- http://localhost:9102/metrics | grep django_app
+# Output:
+# django_app_requests_total{host="node-2",method="GET",source="django"} 42
+# django_app_response_time_seconds{host="node-2",source="django"} 0.125
+
+# Test rolling update with 25% maxUnavailable
+kubectl patch ds anihpj-metrics-ds -p='{"spec":{"template":{"metadata":{"annotations":{"restart":"$(date)"}}}}}'
+# Output: daemonset.apps/anihpj-metrics-ds patched
+
+# Monitor rolling update progress
+kubectl rollout status ds anihpj-metrics-ds --timeout=180s
+# Output: Waiting for daemon set "anihpj-metrics-ds" rollout to finish: 2 out of 3 new pods have been updated...
+#         daemon set "anihpj-metrics-ds" successfully rolled out
+
+# Check revision history
+kubectl rollout history ds anihpj-metrics-ds
+# Output:
+# daemonset.apps/anihpj-metrics-ds 
+# REVISION  CHANGE-CAUSE
+# 1         <none>
+# 2         <none>
+
+# Verify all pods are collecting metrics across nodes
+for pod in $(kubectl get pods -l app=anihpj-metrics -o name); do
+  echo "Checking $pod:"
+  kubectl exec $pod -- sh -c "wget -qO- http://localhost:9102/metrics | grep -c 'cpu_usage_idle'"
+done
+# Output:
+# Checking pod/anihpj-metrics-ds-abc12:
+# 4
+# Checking pod/anihpj-metrics-ds-def34:
+# 4
+# Checking pod/anihpj-metrics-ds-ghi56:
+# 4</code></pre>
                         </div>
                     </div>
                 </div>
@@ -12961,153 +15435,1029 @@ status:
                 <h4>Return value</h4>
                 <p>Job object: Returns the created Job resource with system-assigned fields including creation timestamp, job status, and pod execution tracking. The status will show progression from active pods to successful completion or failure, providing complete visibility into job execution state.</p>
 
-                <h4>5 short examples with Django models</h4>
+                <h4>5 comprehensive examples with Django anihpj models</h4>
 
                 <div class="example">
-                    <h5>Example 1: Django Data Migration Job</h5>
+                    <h5>Example 1: Django Database Migration Job with Init Container</h5>
                     <pre><code class="language-yaml">apiVersion: batch/v1
 kind: Job
 metadata:
-  name: anihpj-migration
+  name: anihpj-migration-job
+  namespace: anihpj-production
   labels:
     app: anihpj
-    type: migration
+    component: migration
+    type: database
 spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  activeDeadlineSeconds: 1800
   template:
+    metadata:
+      labels:
+        app: anihpj
+        job: migration
     spec:
       restartPolicy: Never
+      initContainers:
+      - name: db-health-check
+        image: postgres:13
+        command:
+        - sh
+        - -c
+        - |
+          until pg_isready -h $DB_HOST -p $DB_PORT -U $DB_USER; do
+            echo "Waiting for database..."
+            sleep 5
+          done
+        env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: anihpj-config
+              key: database-host
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: anihpj-config
+              key: database-port
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: username
       containers:
-      - name: anihpj-migrate
-        image: anihpj:latest
-        command: ["python", "manage.py", "migrate"]</code></pre>
-                    <div class="example-output">
-                        <strong>Result:</strong> Creates a migration job that runs anihpj Django database migrations once to completion.
+      - name: django-migrate
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "migrate", "--verbosity=2"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: database
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: password
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: anihpj-config
+              key: database-host
+        volumeMounts:
+        - name: migration-logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: migration-logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anihpj-config
+  namespace: anihpj-production
+data:
+  database-host: "postgres-service.anihpj-production.svc.cluster.local"
+  database-port: "5432"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anihpj-db-secret
+  namespace: anihpj-production
+type: Opaque
+data:
+  username: YW5paHBq  # anihpj
+  password: cGFzcw==  # pass
+  database: YW5paHBqX2Ri  # anihpj_db</code></pre>
+
+                    <div class="command-example">
+                        <h6>Apply the Job and monitor execution:</h6>
+                        <pre><code class="language-bash"># Create the migration job
+kubectl apply -f anihpj-migration-job.yaml
+
+# Check job status
+kubectl get job anihpj-migration-job -n anihpj-production
+
+# Watch job progress
+kubectl get pods -n anihpj-production --watch -l job-name=anihpj-migration-job
+
+# View migration logs
+kubectl logs -n anihpj-production -l job-name=anihpj-migration-job
+
+# Check job details
+kubectl describe job anihpj-migration-job -n anihpj-production</code></pre>
                     </div>
-                    <div class="queryset-output">Django Migration Output:
->>> from django.core.management import execute_from_command_line
->>> execute_from_command_line(['manage.py', 'migrate'])
+
+                    <div class="example-output">
+                        <h6>Expected Output:</h6>
+                        <pre><code class="language-bash"># Job creation
+job.batch/anihpj-migration-job created
+configmap/anihpj-config created
+secret/anihpj-db-secret created
+
+# Job status check
+NAME                  COMPLETIONS   DURATION   AGE
+anihpj-migration-job  1/1           45s        2m
+
+# Pod status during execution
+NAME                        READY   STATUS     RESTARTS   AGE
+anihpj-migration-job-xyz123   0/1   Init:0/1   0          10s
+anihpj-migration-job-xyz123   0/1   PodInitializing   0    15s
+anihpj-migration-job-xyz123   1/1   Running    0          20s
+anihpj-migration-job-xyz123   0/1   Completed  0          45s
+
+# Migration logs
 Operations to perform:
   Apply all migrations: jobpost
 Running migrations:
   Applying jobpost.0001_initial... OK
-</div>
-                </div>
-
-                <div class="example">
-                    <h5>Example 2: JobPost Data Processing Job</h5>
-                    <pre><code class="language-yaml">apiVersion: batch/v1
-kind: Job
-metadata:
-  name: jobpost-processor
-spec:
-  completions: 1
-  template:
-    spec:
-      restartPolicy: OnFailure
-      containers:
-      - name: processor
-        image: jobpost-processor:v1.0
-        env:
-        - name: BATCH_SIZE
-          value: "100"</code></pre>
-                    <div class="example-output">
-                        <strong>Result:</strong> Processes JobPost data in batches with retry capability on failure.
+  Applying jobpost.0002_add_skills_relationship... OK
+  Applying jobpost.0003_add_location_data... OK
+Successfully applied 3 migrations.</code></pre>
                     </div>
-                    <div class="queryset-output">JobPost Processing Output:
->>> JobPost.objects.filter(type='Part Time').count()
-0
->>> # After processing - convert to full time
->>> JobPost.objects.filter(type='Full Time').count()
-5
-</div>
+                    
+                    <div class="queryset-output">
+                        <h6>Django Model State After Migration:</h6>
+                        <pre><code class="language-python"># Check migration status
+>>> from django.db import connection
+>>> cursor = connection.cursor()
+>>> cursor.execute("SELECT name FROM django_migrations WHERE app='jobpost'")
+>>> cursor.fetchall()
+[('0001_initial',), ('0002_add_skills_relationship',), ('0003_add_location_data',)]
+
+# Verify JobPost model structure
+>>> from jobpost.models import JobPost
+>>> JobPost._meta.get_fields()
+[&lt;django.db.models.fields.AutoField: id&gt;,
+ &lt;django.db.models.fields.CharField: title&gt;,
+ &lt;django.db.models.fields.CharField: company&gt;,
+ &lt;django.db.models.fields.TextField: description&gt;,
+ &lt;django.db.models.fields.ForeignKey: location&gt;,
+ &lt;django.db.models.fields.ManyToManyField: skills&gt;]
+</code></pre>
+                    </div>
                 </div>
 
                 <div class="example">
-                    <h5>Example 3: Parallel User Report Generation</h5>
+                    <h5>Example 2: Parallel JobPost Data Processing Job with ConfigMap</h5>
                     <pre><code class="language-yaml">apiVersion: batch/v1
 kind: Job
 metadata:
-  name: user-reports
+  name: jobpost-processor-job
+  namespace: anihpj-production
+  labels:
+    app: anihpj
+    component: data-processor
+    batch: jobpost-processing
 spec:
-  parallelism: 3
   completions: 10
+  parallelism: 3
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
   template:
-    spec:
-      restartPolicy: Never
-      containers:
-      - name: report-generator
-        image: jobpost-reports:latest
-        command: ["python", "generate_reports.py"]</code></pre>
-                    <div class="example-output">
-                        <strong>Result:</strong> Generates user reports using 3 parallel workers, completing 10 total tasks.
-                    </div>
-                    <div class="queryset-output">User Report Output:
->>> from django.contrib.auth.models import User
->>> User.objects.count()
-5
->>> # Generated reports for all users
->>> len(os.listdir('/reports/'))
-5
-</div>
-                </div>
-
-                <div class="example">
-                    <h5>Example 4: Skills Data Cleanup with Deadline</h5>
-                    <pre><code class="language-yaml">apiVersion: batch/v1
-kind: Job
-metadata:
-  name: skills-cleanup
-spec:
-  activeDeadlineSeconds: 1800
-  backoffLimit: 3
-  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: data-processor
     spec:
       restartPolicy: OnFailure
       containers:
-      - name: cleanup
-        image: jobpost-utils:latest
-        command: ["python", "cleanup_skills.py"]</code></pre>
-                    <div class="example-output">
-                        <strong>Result:</strong> Cleans up Skills data with 30-minute deadline and 3 retry attempts.
-                    </div>
-                    <div class="queryset-output">Skills Cleanup Output:
->>> Skills.objects.filter(name__icontains='deprecated').count()
-0
->>> # After cleanup - remove skills with 'deprecated' in name
->>> Skills.objects.filter(name__icontains='deprecated').count()
-0
-</div>
-                </div>
-
-                <div class="example">
-                    <h5>Example 5: Location Data Sync Job</h5>
-                    <pre><code class="language-yaml">apiVersion: batch/v1
-kind: Job
-metadata:
-  name: location-sync
-spec:
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-      - name: sync
-        image: jobpost-sync:latest
+      - name: jobpost-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_jobposts"]
+        args: ["--batch-size", "$(BATCH_SIZE)", "--worker-id", "$(WORKER_ID)"]
         env:
-        - name: API_KEY
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: processing-config
+              key: batch-size
+        - name: WORKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: REDIS_URL
           valueFrom:
             secretKeyRef:
-              name: api-secret
-              key: key</code></pre>
-                    <div class="example-output">
-                        <strong>Result:</strong> Syncs Location data from external API using secret credentials.
+              name: anihpj-redis-secret
+              key: url
+        - name: DB_URL
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: database-url
+        volumeMounts:
+        - name: processing-logs
+          mountPath: /app/processing-logs
+        - name: temp-storage
+          mountPath: /tmp/processing
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "800m"
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import os; exit(0 if os.path.exists('/tmp/processing/heartbeat') else 1)"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      volumes:
+      - name: processing-logs
+        persistentVolumeClaim:
+          claimName: anihpj-logs-pvc
+      - name: temp-storage
+        emptyDir:
+          sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: processing-config
+  namespace: anihpj-production
+data:
+  batch-size: "50"
+  processing-timeout: "1800"
+  retry-attempts: "3"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anihpj-redis-secret
+  namespace: anihpj-production
+type: Opaque
+data:
+  url: cmVkaXM6Ly9yZWRpcy1zZXJ2aWNlOjYzNzk=  # redis://redis-service:6379</code></pre>
+
+                    <div class="command-example">
+                        <h6>Deploy and monitor parallel processing job:</h6>
+                        <pre><code class="language-bash"># Apply the processing job
+kubectl apply -f jobpost-processor-job.yaml
+
+# Monitor job progress
+kubectl get job jobpost-processor-job -n anihpj-production -w
+
+# Check all worker pods
+kubectl get pods -n anihpj-production -l job-name=jobpost-processor-job
+
+# View logs from all workers
+kubectl logs -n anihpj-production -l job-name=jobpost-processor-job --all-containers=true
+
+# Check processing metrics
+kubectl exec -n anihpj-production deploy/anihpj-web -- python manage.py shell -c "
+from jobpost.models import JobPost
+print(f'Total JobPosts: {JobPost.objects.count()}')
+print(f'Processed JobPosts: {JobPost.objects.filter(status=\"processed\").count()}')
+"</code></pre>
                     </div>
-                    <div class="queryset-output">Location Sync Output:
+
+                    <div class="example-output">
+                        <h6>Expected Output:</h6>
+                        <pre><code class="language-bash"># Job deployment
+job.batch/jobpost-processor-job created
+configmap/processing-config created
+secret/anihpj-redis-secret created
+
+# Job monitoring
+NAME                    COMPLETIONS   DURATION   AGE
+jobpost-processor-job   10/10         5m30s      6m
+
+# Worker pods status
+NAME                           READY   STATUS      RESTARTS   AGE
+jobpost-processor-job-abc123   0/1     Completed   0          5m
+jobpost-processor-job-def456   0/1     Completed   1          5m
+jobpost-processor-job-ghi789   0/1     Completed   0          4m
+
+# Processing logs sample
+Worker jobpost-processor-job-abc123: Processing batch 1-50
+Worker jobpost-processor-job-def456: Processing batch 51-100
+Worker jobpost-processor-job-ghi789: Processing batch 101-150
+Worker jobpost-processor-job-abc123: Completed batch 1-50 (47 processed, 3 skipped)
+
+# Processing metrics
+Total JobPosts: 500
+Processed JobPosts: 500</code></pre>
+                    </div>
+                    
+                    <div class="queryset-output">
+                        <h6>JobPost Processing Results:</h6>
+                        <pre><code class="language-python"># Check processing results
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.filter(status='processed').count()
+500
+
+# View processed job details
+>>> processed_jobs = JobPost.objects.filter(
+...     status='processed',
+...     processed_at__isnull=False
+... )[:5]
+>>> for job in processed_jobs:
+...     print(f"{job.title} - {job.company} (Processed: {job.processed_at})")
+Senior Developer - TechCorp (Processed: 2024-01-15 10:30:00)
+Data Analyst - DataCo (Processed: 2024-01-15 10:30:15)
+Product Manager - StartupXYZ (Processed: 2024-01-15 10:30:30)
+
+# Check processing statistics
+>>> from django.db.models import Count
+>>> stats = JobPost.objects.values('status').annotate(count=Count('id'))
+>>> dict(stats.values_list('status', 'count'))
+{'processed': 500, 'pending': 0, 'failed': 0}
+</code></pre>
+                    </div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Report Generation Job with Persistent Storage</h5>
+                    <pre><code class="language-yaml">apiVersion: batch/v1
+kind: Job
+metadata:
+  name: anihpj-report-generator
+  namespace: anihpj-production
+  labels:
+    app: anihpj
+    component: reports
+    type: monthly-report
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: report-generator
+    spec:
+      restartPolicy: Never
+      serviceAccountName: anihpj-reports-sa
+      containers:
+      - name: report-generator
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "generate_monthly_report"]
+        args: ["--month", "$(REPORT_MONTH)", "--format", "pdf", "--email-notify"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: REPORT_MONTH
+          value: "2024-01"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: secret-access-key
+        - name: S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: report-config
+              key: s3-bucket
+        - name: EMAIL_BACKEND
+          value: "django.core.mail.backends.smtp.EmailBackend"
+        - name: EMAIL_HOST
+          valueFrom:
+            secretKeyRef:
+              name: email-secret
+              key: host
+        - name: EMAIL_PORT
+          value: "587"
+        - name: EMAIL_USE_TLS
+          value: "True"
+        - name: EMAIL_HOST_USER
+          valueFrom:
+            secretKeyRef:
+              name: email-secret
+              key: username
+        - name: EMAIL_HOST_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: email-secret
+              key: password
+        volumeMounts:
+        - name: report-storage
+          mountPath: /app/reports
+        - name: temp-processing
+          mountPath: /tmp/report-processing
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: report-storage
+        persistentVolumeClaim:
+          claimName: anihpj-reports-pvc
+      - name: temp-processing
+        emptyDir:
+          sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: anihpj-reports-pvc
+  namespace: anihpj-production
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: fast-ssd
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: report-config
+  namespace: anihpj-production
+data:
+  s3-bucket: "anihpj-reports"
+  report-retention-days: "90"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anihpj-reports-sa
+  namespace: anihpj-production</code></pre>
+
+                    <div class="command-example">
+                        <h6>Execute report generation and monitor:</h6>
+                        <pre><code class="language-bash"># Deploy report generation job
+kubectl apply -f anihpj-report-generator.yaml
+
+# Monitor job progress
+kubectl get job anihpj-report-generator -n anihpj-production
+
+# Watch pod execution
+kubectl get pods -n anihpj-production --watch -l job-name=anihpj-report-generator
+
+# Follow report generation logs
+kubectl logs -n anihpj-production -l job-name=anihpj-report-generator -f
+
+# Check generated reports
+kubectl exec -n anihpj-production -l job-name=anihpj-report-generator -- ls -la /app/reports/
+
+# Verify S3 upload (if configured)
+kubectl exec -n anihpj-production -l job-name=anihpj-report-generator -- aws s3 ls s3://anihpj-reports/2024-01/</code></pre>
+                    </div>
+
+                    <div class="example-output">
+                        <h6>Expected Output:</h6>
+                        <pre><code class="language-bash"># Job deployment
+job.batch/anihpj-report-generator created
+persistentvolumeclaim/anihpj-reports-pvc created
+configmap/report-config created
+serviceaccount/anihpj-reports-sa created
+
+# Job progress
+NAME                     COMPLETIONS   DURATION   AGE
+anihpj-report-generator  1/1          8m15s      9m
+
+# Report generation logs
+Starting monthly report generation for 2024-01...
+Collecting JobPost data: 500 records found
+Processing Author statistics: 25 authors analyzed
+Generating Location insights: 15 locations covered
+Compiling Skills analysis: 45 skills tracked
+Creating PDF report: monthly-report-2024-01.pdf
+Report saved to: /app/reports/monthly-report-2024-01.pdf
+Uploading to S3: s3://anihpj-reports/2024-01/monthly-report-2024-01.pdf
+Sending notification emails to 5 recipients
+Report generation completed successfully!
+
+# Generated files
+-rw-r--r-- 1 app app 2.5M Jan 15 11:45 monthly-report-2024-01.pdf
+-rw-r--r-- 1 app app 1.2M Jan 15 11:45 data-export-2024-01.csv</code></pre>
+                    </div>
+                    
+                    <div class="queryset-output">
+                        <h6>Report Data Analysis:</h6>
+                        <pre><code class="language-python"># Monthly report statistics
+>>> from jobpost.models import JobPost, Author, Location, Skills
+>>> from django.db.models import Count
+>>> from datetime import datetime, date
+
+# JobPost statistics for January 2024
+>>> start_date = date(2024, 1, 1)
+>>> end_date = date(2024, 1, 31)
+>>> monthly_posts = JobPost.objects.filter(
+...     created_at__date__range=[start_date, end_date]
+... )
+>>> monthly_posts.count()
+125
+
+# Top companies by job postings
+>>> monthly_posts.values('company').annotate(
+...     count=Count('id')
+... ).order_by('-count')[:5]
+[{'company': 'TechCorp', 'count': 25},
+ {'company': 'DataCo', 'count': 18},
+ {'company': 'StartupXYZ', 'count': 15}]
+
+# Skills demand analysis
+>>> Skills.objects.filter(
+...     jobpost__in=monthly_posts
+... ).annotate(demand=Count('jobpost')).order_by('-demand')[:5]
+[&lt;Skills: Python (demand=89)&gt;,
+ &lt;Skills: JavaScript (demand=67)&gt;,
+ &lt;Skills: React (demand=45)&gt;]
+</code></pre>
+                    </div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Skills Data Cleanup Job with Retry Logic</h5>
+                    <pre><code class="language-yaml">apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skills-cleanup-job
+  namespace: anihpj-production
+  labels:
+    app: anihpj
+    component: data-cleanup
+    type: skills-maintenance
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 5
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: skills-cleanup
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: skills-cleanup
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "cleanup_skills"]
+        args: ["--dry-run=false", "--remove-duplicates", "--normalize-names"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: CLEANUP_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: cleanup-config
+              key: batch-size
+        - name: DB_BACKUP_ENABLED
+          value: "true"
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: notification-secret
+              key: slack-webhook
+        volumeMounts:
+        - name: cleanup-logs
+          mountPath: /app/cleanup-logs
+        - name: backup-storage
+          mountPath: /app/backups
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import django; django.setup(); from django.db import connection; connection.ensure_connection()"
+          initialDelaySeconds: 10
+          periodSeconds: 15
+      initContainers:
+      - name: db-backup
+        image: postgres:13
+        command:
+        - sh
+        - -c
+        - |
+          pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME --table=jobpost_skills > /backup/skills_backup_$(date +%Y%m%d_%H%M%S).sql
+          echo "Skills table backup completed"
+        env:
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: host
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: username
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: database
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: password
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+      volumes:
+      - name: cleanup-logs
+        persistentVolumeClaim:
+          claimName: anihpj-logs-pvc
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: anihpj-backup-pvc
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cleanup-config
+  namespace: anihpj-production
+data:
+  batch-size: "100"
+  duplicate-threshold: "0.9"
+  cleanup-timeout: "3600"</code></pre>
+
+                    <div class="command-example">
+                        <h6>Execute skills cleanup with monitoring:</h6>
+                        <pre><code class="language-bash"># Apply the cleanup job
+kubectl apply -f skills-cleanup-job.yaml
+
+# Monitor job execution
+kubectl get job skills-cleanup-job -n anihpj-production -w
+
+# Check backup init container
+kubectl logs -n anihpj-production -l job-name=skills-cleanup-job -c db-backup
+
+# Follow cleanup progress
+kubectl logs -n anihpj-production -l job-name=skills-cleanup-job -c skills-cleanup -f
+
+# Check cleanup results
+kubectl exec -n anihpj-production deploy/anihpj-web -- python manage.py shell -c "
+from jobpost.models import Skills
+print(f'Total skills after cleanup: {Skills.objects.count()}')
+print(f'Skills with duplicates: {Skills.objects.filter(name__icontains=\"duplicate\").count()}')
+"
+
+# Verify backup files
+kubectl exec -n anihpj-production -l job-name=skills-cleanup-job -- ls -la /app/backups/</code></pre>
+                    </div>
+
+                    <div class="example-output">
+                        <h6>Expected Output:</h6>
+                        <pre><code class="language-bash"># Job deployment
+job.batch/skills-cleanup-job created
+configmap/cleanup-config created
+
+# Backup logs
+Skills table backup completed
+Backup saved: skills_backup_20240115_103000.sql (2.3MB)
+
+# Cleanup progress
+Starting skills cleanup process...
+Found 45 skills for analysis
+Identifying duplicates: 8 potential duplicates found
+Normalizing skill names: 12 names standardized
+Removing exact duplicates: 3 duplicates removed
+Merging similar skills: 5 skills merged
+Updating JobPost relationships: 147 relationships updated
+Cleanup completed successfully!
+Skills processed: 45 → 39 (6 removed/merged)
+Notification sent to Slack webhook
+
+# Final verification
+Total skills after cleanup: 39
+Skills with duplicates: 0
+
+# Backup verification
+-rw-r--r-- 1 postgres postgres 2.3M Jan 15 10:30 skills_backup_20240115_103000.sql</code></pre>
+                    </div>
+                    
+                    <div class="queryset-output">
+                        <h6>Skills Cleanup Results:</h6>
+                        <pre><code class="language-python"># Skills analysis before and after cleanup
+>>> from jobpost.models import Skills, JobPost
+>>> from django.db.models import Count
+
+# Check final skills count
+>>> Skills.objects.count()
+39
+
+# View normalized skill names
+>>> Skills.objects.filter(
+...     name__regex=r'^[A-Z][a-z]+'
+... ).order_by('name')[:10]
+[&lt;Skills: Angular&gt;, &lt;Skills: Django&gt;, &lt;Skills: Flask&gt;, &lt;Skills: JavaScript&gt;,
+ &lt;Skills: Kubernetes&gt;, &lt;Skills: Python&gt;, &lt;Skills: React&gt;, &lt;Skills: TypeScript&gt;]
+
+# Check skills usage distribution
+>>> skills_usage = Skills.objects.annotate(
+...     usage_count=Count('jobpost')
+... ).order_by('-usage_count')[:5]
+>>> for skill in skills_usage:
+...     print(f"{skill.name}: {skill.usage_count} job posts")
+Python: 89 job posts
+JavaScript: 67 job posts
+React: 45 job posts
+Django: 34 job posts
+PostgreSQL: 28 job posts
+
+# Verify no duplicate entries
+>>> from django.db.models import Count
+>>> duplicates = Skills.objects.values('name').annotate(
+...     count=Count('id')
+... ).filter(count__gt=1)
+>>> duplicates.count()
+0
+</code></pre>
+                    </div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Location Data Sync Job with External API Integration</h5>
+                    <pre><code class="language-yaml">apiVersion: batch/v1
+kind: Job
+metadata:
+  name: location-sync-job
+  namespace: anihpj-production
+  labels:
+    app: anihpj
+    component: data-sync
+    source: external-api
+    type: location-update
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  activeDeadlineSeconds: 2400
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: location-sync
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: location-sync
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "sync_locations"]
+        args: ["--source", "geocoding-api", "--update-existing", "--validate-coordinates"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: GEOCODING_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-credentials
+              key: geocoding-api-key
+        - name: GEOCODING_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: sync-config
+              key: geocoding-api-url
+        - name: RATE_LIMIT_DELAY
+          valueFrom:
+            configMapKeyRef:
+              name: sync-config
+              key: rate-limit-delay
+        - name: REDIS_CACHE_URL
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-redis-secret
+              key: url
+        - name: SYNC_NOTIFICATION_EMAIL
+          valueFrom:
+            configMapKeyRef:
+              name: sync-config
+              key: notification-email
+        volumeMounts:
+        - name: sync-logs
+          mountPath: /app/sync-logs
+        - name: cache-storage
+          mountPath: /app/cache
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        env:
+        - name: HEALTH_CHECK_PORT
+          value: "8000"
+      - name: health-server
+        image: nginx:alpine
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - name: health-config
+          mountPath: /etc/nginx/conf.d
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+      volumes:
+      - name: sync-logs
+        persistentVolumeClaim:
+          claimName: anihpj-logs-pvc
+      - name: cache-storage
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: health-config
+        configMap:
+          name: health-server-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sync-config
+  namespace: anihpj-production
+data:
+  geocoding-api-url: "https://api.geocoding-service.com/v1"
+  rate-limit-delay: "200"
+  notification-email: "admin@anihpj.com"
+  batch-size: "25"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: health-server-config
+  namespace: anihpj-production
+data:
+  default.conf: |
+    server {
+        listen 8000;
+        location /health {
+            return 200 'healthy\n';
+            add_header Content-Type text/plain;
+        }
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-credentials
+  namespace: anihpj-production
+type: Opaque
+data:
+  geocoding-api-key: YWJjZGVmZ2hpams=  # sample API key</code></pre>
+
+                    <div class="command-example">
+                        <h6>Deploy location sync job and monitor API integration:</h6>
+                        <pre><code class="language-bash"># Deploy the location sync job
+kubectl apply -f location-sync-job.yaml
+
+# Monitor job progress
+kubectl get job location-sync-job -n anihpj-production
+
+# Watch pod status
+kubectl get pods -n anihpj-production -l job-name=location-sync-job --watch
+
+# Check sync progress logs
+kubectl logs -n anihpj-production -l job-name=location-sync-job -c location-sync -f
+
+# Test health endpoint during sync
+kubectl port-forward -n anihpj-production $(kubectl get pod -l job-name=location-sync-job -o name) 8000:8000 &
+curl http://localhost:8000/health
+
+# Check Redis cache usage
+kubectl exec -n anihpj-production deploy/redis -- redis-cli keys "*location*"
+
+# Verify location updates
+kubectl exec -n anihpj-production deploy/anihpj-web -- python manage.py shell -c "
+from jobpost.models import Location
+print(f'Total locations: {Location.objects.count()}')
+print(f'Locations with coordinates: {Location.objects.exclude(latitude__isnull=True).count()}')
+"</code></pre>
+                    </div>
+
+                    <div class="example-output">
+                        <h6>Expected Output:</h6>
+                        <pre><code class="language-bash"># Job deployment
+job.batch/location-sync-job created
+configmap/sync-config created
+configmap/health-server-config created
+secret/api-credentials created
+
+# Job monitoring
+NAME               COMPLETIONS   DURATION   AGE
+location-sync-job  1/1          12m30s     13m
+
+# Sync progress logs
+Starting location sync process...
+Loading existing locations: 15 found
+Fetching geocoding data from API...
+Processing location: New York, NY
+  - API response: lat=40.7128, lng=-74.0060
+  - Updated coordinates successfully
+Processing location: San Francisco, CA
+  - API response: lat=37.7749, lng=-122.4194
+  - Updated coordinates successfully
+Rate limiting: waiting 200ms...
+Processing location: Chicago, IL
+  - API response: lat=41.8781, lng=-87.6298
+  - Updated coordinates successfully
+
+Sync Summary:
+- Total locations processed: 15
+- Successfully updated: 15
+- Failed updates: 0
+- API calls made: 15
+- Cache hits: 0
+Location sync completed successfully!
+
+# Health check
+healthy
+
+# Verification
+Total locations: 15
+Locations with coordinates: 15</code></pre>
+                    </div>
+                    
+                    <div class="queryset-output">
+                        <h6>Location Sync Results:</h6>
+                        <pre><code class="language-python"># Location synchronization results
+>>> from jobpost.models import Location, JobPost
+>>> from django.db.models import Count, Q
+
+# Check all locations now have coordinates
 >>> Location.objects.count()
-5
->>> # After sync
->>> Location.objects.count()
-6
-</div>
+15
+>>> Location.objects.exclude(
+...     Q(latitude__isnull=True) | Q(longitude__isnull=True)
+... ).count()
+15
+
+# View updated location data
+>>> locations = Location.objects.all()[:5]
+>>> for loc in locations:
+...     print(f"{loc.name}: ({loc.latitude}, {loc.longitude})")
+New York, NY: (40.7128, -74.0060)
+San Francisco, CA: (37.7749, -122.4194)
+Chicago, IL: (41.8781, -87.6298)
+Austin, TX: (30.2672, -97.7431)
+Seattle, WA: (47.6062, -122.3321)
+
+# Check job distribution by location
+>>> location_jobs = Location.objects.annotate(
+...     job_count=Count('jobpost')
+... ).order_by('-job_count')
+>>> for loc in location_jobs[:5]:
+...     print(f"{loc.name}: {loc.job_count} jobs")
+New York, NY: 125 jobs
+San Francisco, CA: 98 jobs
+Chicago, IL: 67 jobs
+Austin, TX: 45 jobs
+Seattle, WA: 34 jobs
+
+# Verify coordinate ranges are valid
+>>> import statistics
+>>> latitudes = [float(loc.latitude) for loc in Location.objects.all()]
+>>> longitudes = [float(loc.longitude) for loc in Location.objects.all()]
+>>> print(f"Latitude range: {min(latitudes):.2f} to {max(latitudes):.2f}")
+>>> print(f"Longitude range: {min(longitudes):.2f} to {max(longitudes):.2f}")
+Latitude range: 25.76 to 47.61
+Longitude range: -122.42 to -71.06
+</code></pre>
+                    </div>
                 </div>
             </div>
 
@@ -13148,96 +16498,559 @@ spec:
                         <li><strong>parallelism (int32)</strong>: Specifies the maximum desired number of pods the job should run at any given time. Controls concurrent execution for Django batch processing tasks. Useful for parallel data processing or report generation.</li>
                     </ul>
 
-                    <h5>5 short examples with Django models</h5>
+                    <h5>5 comprehensive examples with Django anihpj models</h5>
 
                     <div class="example">
-                        <h6>Example 1: Single Pod Migration</h6>
-                        <pre><code class="language-yaml">spec:
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-      - name: django-migrate
-        image: jobpost:latest</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Single pod runs Django migrations.
-                        </div>
-                        <div class="queryset-output">Migration Output:
->>> JobPost.objects.count()
-0
->>> # After migration
->>> JobPost.objects.count()
-50</div>
-                    </div>
-
-                    <div class="example">
-                        <h6>Example 2: Parallel Processing</h6>
-                        <pre><code class="language-yaml">spec:
-  parallelism: 3
-  template:
-    spec:
-      restartPolicy: OnFailure</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 3 pods run simultaneously for parallel processing.
-                        </div>
-                        <div class="queryset-output">Parallel Output:
->>> User.objects.filter(is_active=True).count()
-150</div>
-                    </div>
-
-                    <div class="example">
-                        <h6>Example 3: Skills Processing Template</h6>
+                        <h6>Example 1: Single Pod Django Migration with Resource Limits</h6>
                         <pre><code class="language-yaml">spec:
   template:
     metadata:
       labels:
-        app: skills-processor
+        app: anihpj
+        component: migration
+        version: v2.1.0
     spec:
+      restartPolicy: Never
+      serviceAccountName: anihpj-migration-sa
       containers:
-      - name: processor
-        image: skills:v1.0</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Template for skills data processing.
+      - name: django-migrate
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "migrate", "--verbosity=2"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: anihpj-config
+              key: database-host
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: database
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: migration-logs
+          mountPath: /app/logs
+      volumes:
+      - name: migration-logs
+        emptyDir: {}</code></pre>
+                        <div class="command-example">
+                            <h6>Apply and monitor migration:</h6>
+                            <pre><code class="language-bash"># Apply the migration job
+kubectl apply -f migration-job.yaml
+
+# Check pod template execution
+kubectl get pods -l app=anihpj,component=migration
+
+# Monitor migration logs
+kubectl logs -l app=anihpj,component=migration -f</code></pre>
                         </div>
-                        <div class="queryset-output">Skills Output:
->>> Skills.objects.filter(name__contains='Java').count()
-1</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Single pod executes Django migrations with proper resource allocation and logging.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Migration Execution Results:</h6>
+                            <pre><code class="language-python"># Check migration status
+>>> from django.db import connection
+>>> cursor = connection.cursor()
+>>> cursor.execute("SELECT name FROM django_migrations WHERE app='jobpost'")
+>>> cursor.fetchall()
+[('0001_initial',), ('0002_add_relationships',), ('0003_add_indexes',)]
+
+# Verify JobPost model structure after migration
+>>> from jobpost.models import JobPost
+>>> JobPost._meta.get_fields()
+[&lt;django.db.models.fields.AutoField: id&gt;,
+ &lt;django.db.models.fields.CharField: title&gt;,
+ &lt;django.db.models.fields.CharField: company&gt;,
+ &lt;django.db.models.fields.TextField: description&gt;,
+ &lt;django.db.models.fields.ForeignKey: location&gt;,
+ &lt;django.db.models.fields.ManyToManyField: skills&gt;]
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 4: Location Data Sync</h6>
+                        <h6>Example 2: Parallel JobPost Processing with ConfigMap</h6>
+                        <pre><code class="language-yaml">spec:
+  parallelism: 4
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: jobpost-processor
+        batch: parallel-processing
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: jobpost-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_jobposts"]
+        args: ["--batch-size", "$(BATCH_SIZE)", "--worker-id", "$(POD_NAME)"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: processing-config
+              key: batch-size
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-redis-secret
+              key: url
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "800m"
+        volumeMounts:
+        - name: processing-temp
+          mountPath: /tmp/processing
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import os; exit(0 if os.path.exists('/tmp/processing/heartbeat') else 1)"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      volumes:
+      - name: processing-temp
+        emptyDir:
+          sizeLimit: 1Gi</code></pre>
+                        <div class="command-example">
+                            <h6>Deploy and monitor parallel processing:</h6>
+                            <pre><code class="language-bash"># Deploy parallel processing job
+kubectl apply -f parallel-jobpost-processing.yaml
+
+# Monitor all parallel pods
+kubectl get pods -l app=anihpj,component=jobpost-processor --watch
+
+# Check individual worker logs
+kubectl logs -l app=anihpj,component=jobpost-processor --all-containers=true
+
+# Monitor processing metrics
+kubectl exec deploy/anihpj-web -- python manage.py shell -c "
+from jobpost.models import JobPost
+print(f'Total: {JobPost.objects.count()}')
+print(f'Processed: {JobPost.objects.filter(status=\"processed\").count()}')
+"</code></pre>
+                        </div>
+                        <div class="example-output">
+                            <strong>Result:</strong> 4 parallel pods process JobPost data concurrently with shared configuration and monitoring.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Parallel Processing Results:</h6>
+                            <pre><code class="language-python"># Check parallel processing results
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.count()
+1000
+
+# View processing distribution across workers
+>>> from django.db.models import Count
+>>> results = JobPost.objects.filter(
+...     status='processed'
+... ).values('processed_by_worker').annotate(count=Count('id'))
+>>> dict(results.values_list('processed_by_worker', 'count'))
+{'worker-1': 250, 'worker-2': 248, 'worker-3': 252, 'worker-4': 250}
+
+# Check processing performance
+>>> import datetime
+>>> recent_processed = JobPost.objects.filter(
+...     status='processed',
+...     processed_at__gte=datetime.datetime.now() - datetime.timedelta(hours=1)
+... ).count()
+>>> recent_processed
+1000
+</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h6>Example 3: Skills Data Processing with Init Container</h6>
+                        <pre><code class="language-yaml">spec:
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: skills-processor
+        type: data-enhancement
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: skills-data-validator
+        image: anihpj:v2.1.0
+        command:
+        - sh
+        - -c
+        - |
+          python manage.py shell -c "
+          from jobpost.models import Skills
+          invalid_skills = Skills.objects.filter(name__exact='')
+          if invalid_skills.exists():
+              print(f'Found {invalid_skills.count()} invalid skills')
+              exit(1)
+          print('Skills data validation passed')
+          "
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+      containers:
+      - name: skills-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "enhance_skills_data"]
+        args: ["--add-categories", "--normalize-names", "--update-descriptions"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: SKILLS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: skills-api-secret
+              key: api-key
+        - name: ENHANCEMENT_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: skills-config
+              key: enhancement-level
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
+        volumeMounts:
+        - name: skills-cache
+          mountPath: /app/cache/skills
+        - name: enhanced-data
+          mountPath: /app/enhanced
+      volumes:
+      - name: skills-cache
+        emptyDir:
+          sizeLimit: 200Mi
+      - name: enhanced-data
+        emptyDir:
+          sizeLimit: 300Mi</code></pre>
+                        <div class="command-example">
+                            <h6>Execute skills enhancement with validation:</h6>
+                            <pre><code class="language-bash"># Apply skills processing job
+kubectl apply -f skills-enhancement-job.yaml
+
+# Monitor init container validation
+kubectl logs job/skills-enhancement-job -c skills-data-validator
+
+# Follow main processing
+kubectl logs job/skills-enhancement-job -c skills-processor -f
+
+# Verify enhanced skills data
+kubectl exec deploy/anihpj-web -- python manage.py shell -c "
+from jobpost.models import Skills
+enhanced = Skills.objects.exclude(category__isnull=True)
+print(f'Enhanced skills: {enhanced.count()}')
+"</code></pre>
+                        </div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Skills data validated by init container, then enhanced with categories and descriptions.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Skills Enhancement Results:</h6>
+                            <pre><code class="language-python"># Check skills enhancement results
+>>> from jobpost.models import Skills
+>>> Skills.objects.count()
+45
+
+# View enhanced skills with categories
+>>> enhanced_skills = Skills.objects.exclude(category__isnull=True)
+>>> enhanced_skills.count()
+45
+
+# Check skill categories distribution
+>>> from django.db.models import Count
+>>> categories = Skills.objects.values('category').annotate(
+...     count=Count('id')
+... ).order_by('-count')
+>>> dict(categories.values_list('category', 'count'))
+{'Programming': 15, 'Framework': 12, 'Database': 8, 'DevOps': 6, 'Frontend': 4}
+
+# View sample enhanced skills
+>>> for skill in Skills.objects.filter(category='Programming')[:5]:
+...     print(f"{skill.name} ({skill.category}): {skill.description[:50]}...")
+Python (Programming): A versatile programming language for web development...
+JavaScript (Programming): Essential language for frontend and backend devel...
+Java (Programming): Enterprise-grade programming language for large-scale...
+</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h6>Example 4: Location Data Sync with Persistent Storage</h6>
                         <pre><code class="language-yaml">spec:
   parallelism: 2
   template:
+    metadata:
+      labels:
+        app: anihpj
+        component: location-sync
+        source: geocoding-api
     spec:
       restartPolicy: Never
       containers:
       - name: location-sync
-        image: location-sync:latest</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 2 pods sync location data in parallel.
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "sync_location_data"]
+        args: ["--source", "geocoding-api", "--parallel-workers", "2"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: GEOCODING_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: location-config
+              key: geocoding-api-url
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: geocoding-secret
+              key: api-key
+        - name: WORKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+        volumeMounts:
+        - name: location-cache
+          mountPath: /app/cache/locations
+        - name: sync-logs
+          mountPath: /app/logs/sync
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import requests; requests.get('https://api.geocoding-service.com/health').raise_for_status()"
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: location-cache
+        persistentVolumeClaim:
+          claimName: anihpj-cache-pvc
+      - name: sync-logs
+        persistentVolumeClaim:
+          claimName: anihpj-logs-pvc</code></pre>
+                        <div class="command-example">
+                            <h6>Deploy location sync with monitoring:</h6>
+                            <pre><code class="language-bash"># Deploy location sync job
+kubectl apply -f location-sync-job.yaml
+
+# Monitor both parallel workers
+kubectl get pods -l app=anihpj,component=location-sync
+
+# Check sync progress from both workers
+kubectl logs -l app=anihpj,component=location-sync --all-containers=true
+
+# Verify location data updates
+kubectl exec deploy/anihpj-web -- python manage.py shell -c "
+from jobpost.models import Location
+print(f'Total locations: {Location.objects.count()}')
+print(f'With coordinates: {Location.objects.exclude(latitude__isnull=True).count()}')
+"</code></pre>
                         </div>
-                        <div class="queryset-output">Location Output:
->>> Location.objects.filter(country='USA').count()
-4</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> 2 parallel workers sync location data with geocoding API using persistent storage for caching.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Location Sync Results:</h6>
+                            <pre><code class="language-python"># Check location synchronization results
+>>> from jobpost.models import Location
+>>> Location.objects.count()
+25
+
+# Verify all locations have coordinates
+>>> locations_with_coords = Location.objects.exclude(
+...     latitude__isnull=True, longitude__isnull=True
+... )
+>>> locations_with_coords.count()
+25
+
+# Check coordinate accuracy
+>>> sample_locations = Location.objects.all()[:5]
+>>> for loc in sample_locations:
+...     print(f"{loc.name}: ({loc.latitude}, {loc.longitude})")
+New York, NY: (40.7128, -74.0060)
+San Francisco, CA: (37.7749, -122.4194)
+Chicago, IL: (41.8781, -87.6298)
+Austin, TX: (30.2672, -97.7431)
+Seattle, WA: (47.6062, -122.3321)
+
+# Check job distribution by location
+>>> from django.db.models import Count
+>>> location_jobs = Location.objects.annotate(
+...     job_count=Count('jobpost')
+... ).order_by('-job_count')[:5]
+>>> for loc in location_jobs:
+...     print(f"{loc.name}: {loc.job_count} jobs")
+New York, NY: 45 jobs
+San Francisco, CA: 38 jobs
+Chicago, IL: 22 jobs
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 5: Author Report Generation</h6>
+                        <h6>Example 5: Author Report Generation with Security Context</h6>
                         <pre><code class="language-yaml">spec:
   parallelism: 1
   template:
+    metadata:
+      labels:
+        app: anihpj
+        component: report-generator
+        report-type: author-analytics
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
-      - name: report-gen
-        image: author-reports:v2.0</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Single pod generates author reports with retry.
+      - name: author-report-generator
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "generate_author_reports"]
+        args: ["--format", "pdf", "--include-analytics", "--email-recipients"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: REPORT_OUTPUT_DIR
+          value: "/app/reports/authors"
+        - name: EMAIL_BACKEND
+          value: "django.core.mail.backends.smtp.EmailBackend"
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: email-config
+              key: smtp-host
+        - name: SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: email-config
+              key: smtp-user
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: email-config
+              key: smtp-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: report-output
+          mountPath: /app/reports
+        - name: temp-processing
+          mountPath: /tmp
+        - name: cache-dir
+          mountPath: /app/cache
+      volumes:
+      - name: report-output
+        persistentVolumeClaim:
+          claimName: anihpj-reports-pvc
+      - name: temp-processing
+        emptyDir: {}
+      - name: cache-dir
+        emptyDir: {}</code></pre>
+                        <div class="command-example">
+                            <h6>Generate secure author reports:</h6>
+                            <pre><code class="language-bash"># Deploy author report generation
+kubectl apply -f author-reports-job.yaml
+
+# Monitor report generation
+kubectl get pod -l app=anihpj,component=report-generator
+
+# Follow report generation logs
+kubectl logs -l app=anihpj,component=report-generator -f
+
+# Check generated reports
+kubectl exec -l app=anihpj,component=report-generator -- ls -la /app/reports/authors/
+
+# Verify email notifications sent
+kubectl logs -l app=anihpj,component=report-generator | grep "Email sent"</code></pre>
                         </div>
-                        <div class="queryset-output">Author Output:
->>> Author.objects.filter(company__icontains='Tech').count()
-2</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Secure author report generation with non-root execution and email delivery.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Author Report Generation Results:</h6>
+                            <pre><code class="language-python"># Check author analytics data
+>>> from jobpost.models import Author, JobPost
+>>> from django.db.models import Count, Avg
+
+# Total authors in system
+>>> Author.objects.count()
+15
+
+# Author job posting statistics
+>>> author_stats = Author.objects.annotate(
+...     job_count=Count('jobpost'),
+...     avg_salary=Avg('jobpost__salary')
+... ).order_by('-job_count')[:5]
+>>> for author in author_stats:
+...     print(f"{author.name} ({author.company}): {author.job_count} jobs, avg salary: ${author.avg_salary:,.0f}")
+John Smith (TechCorp): 12 jobs, avg salary: $95,000
+Sarah Johnson (DataCo): 8 jobs, avg salary: $87,500
+Mike Chen (StartupXYZ): 6 jobs, avg salary: $78,000
+
+# Author designation distribution
+>>> designations = Author.objects.values('designation').annotate(
+...     count=Count('id')
+... ).order_by('-count')
+>>> dict(designations.values_list('designation', 'count'))
+{'Senior Developer': 5, 'Lead Engineer': 3, 'Product Manager': 2, 'Data Scientist': 2}
+
+# Company representation
+>>> companies = Author.objects.values('company').annotate(
+...     author_count=Count('id'),
+...     job_count=Count('jobpost')
+... ).order_by('-job_count')[:3]
+>>> for company in companies:
+...     print(f"{company['company']}: {company['author_count']} authors, {company['job_count']} jobs")
+TechCorp: 4 authors, 25 jobs
+DataCo: 3 authors, 18 jobs
+StartupXYZ: 2 authors, 12 jobs
+</code></pre>
+                        </div>
                     </div>
                 </div>
 
