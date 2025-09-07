@@ -17069,74 +17069,478 @@ StartupXYZ: 2 authors, 12 jobs
                         <li><strong>suspend (boolean)</strong>: Whether the Job controller should create Pods or not. Useful for temporarily halting Django batch operations. Defaults to false.</li>
                     </ul>
 
-                    <h5>5 short examples with Django models</h5>
+                    <h5>5 comprehensive examples with Django anihpj models</h5>
 
                     <div class="example">
-                        <h6>Example 1: Single Completion Job</h6>
+                        <h6>Example 1: Single Completion Migration with Timeout</h6>
                         <pre><code class="language-yaml">spec:
   completions: 1
   backoffLimit: 3
-  activeDeadlineSeconds: 3600</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Job completes when 1 pod succeeds, 3 retries, 1 hour deadline.
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: database-migration
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migration-runner
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "migrate", "--verbosity=2"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: DB_MIGRATE_TIMEOUT
+          value: "3000"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor completion tracking:</h6>
+                            <pre><code class="language-bash"># Apply migration job with completion tracking
+kubectl apply -f migration-completion-job.yaml
+
+# Watch job progress and completion
+kubectl get job migration-job -w
+
+# Check completion status
+kubectl describe job migration-job | grep -A 5 "Conditions"
+
+# Verify 1 successful completion
+kubectl get job migration-job -o jsonpath='{.status.succeeded}'</code></pre>
                         </div>
-                        <div class="queryset-output">Completion Output:
->>> JobPost.objects.filter(expiry__isnull=False).count()
-100</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Job completes when 1 pod succeeds, allows 3 retries, enforces 1-hour deadline for migration.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Migration Completion Results:</h6>
+                            <pre><code class="language-python"># Check migration completion
+>>> from django.db import connection
+>>> cursor = connection.cursor()
+>>> cursor.execute("SELECT COUNT(*) FROM django_migrations WHERE app='jobpost'")
+>>> cursor.fetchone()[0]
+5
+
+# Verify JobPost model is ready
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.count()
+0  # Fresh migration, no data yet
+
+# Check if all tables exist
+>>> cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'jobpost_%'")
+>>> [row[0] for row in cursor.fetchall()]
+['jobpost_jobpost', 'jobpost_author', 'jobpost_location', 'jobpost_skills', 'jobpost_jobpost_skills']
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 2: Indexed Processing</h6>
+                        <h6>Example 2: Indexed JobPost Processing with Completion Mode</h6>
                         <pre><code class="language-yaml">spec:
   completions: 5
   completionMode: Indexed
-  parallelism: 2</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 5 indexed pods for ordered processing, 2 at a time.
+  parallelism: 2
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: indexed-processing
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: jobpost-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_jobpost_batch"]
+        args: ["--index", "$(JOB_COMPLETION_INDEX)", "--batch-size", "100"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        - name: BATCH_PROCESSING_MODE
+          value: "indexed"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "800m"
+        volumeMounts:
+        - name: processing-state
+          mountPath: /app/state
+      volumes:
+      - name: processing-state
+        emptyDir: {}</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor indexed completion:</h6>
+                            <pre><code class="language-bash"># Deploy indexed processing job
+kubectl apply -f indexed-processing-job.yaml
+
+# Watch completion progress
+kubectl get job indexed-processing-job -w
+
+# Check individual index completion
+kubectl get pods -l job-name=indexed-processing-job
+
+# Monitor completion by index
+kubectl describe job indexed-processing-job | grep "succeeded indexes"</code></pre>
                         </div>
-                        <div class="queryset-output">Indexed Output:
->>> User.objects.filter(batch_id__lte=5).count()
-50</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> 5 indexed pods process JobPost data in order, 2 running in parallel, with completion tracking per index.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Indexed Processing Results:</h6>
+                            <pre><code class="language-python"># Check indexed processing results
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.count()
+500
+
+# Verify processing by batch index
+>>> for i in range(5):
+...     batch_jobs = JobPost.objects.filter(
+...         batch_index=i, 
+...         status='processed'
+...     ).count()
+...     print(f"Batch {i}: {batch_jobs} jobs processed")
+Batch 0: 100 jobs processed
+Batch 1: 100 jobs processed
+Batch 2: 100 jobs processed
+Batch 3: 100 jobs processed
+Batch 4: 100 jobs processed
+
+# Check processing order and timestamps
+>>> import datetime
+>>> recent_batches = JobPost.objects.filter(
+...     status='processed',
+...     processed_at__gte=datetime.datetime.now() - datetime.timedelta(hours=1)
+... ).values('batch_index').distinct().order_by('batch_index')
+>>> [batch['batch_index'] for batch in recent_batches]
+[0, 1, 2, 3, 4]
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 3: Auto-cleanup Job</h6>
+                        <h6>Example 3: Auto-cleanup Skills Job with TTL</h6>
                         <pre><code class="language-yaml">spec:
+  completions: 1
   ttlSecondsAfterFinished: 3600
-  backoffLimit: 2</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Job auto-deletes 1 hour after completion.
+  backoffLimit: 2
+  activeDeadlineSeconds: 2400
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: skills-cleanup
+        cleanup-type: automated
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: skills-cleaner
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "cleanup_skills"]
+        args: ["--remove-duplicates", "--normalize-names", "--auto-confirm"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: CLEANUP_CONFIRMATION
+          value: "auto"
+        - name: DRY_RUN
+          value: "false"
+        - name: NOTIFICATION_WEBHOOK
+          valueFrom:
+            secretKeyRef:
+              name: notification-secret
+              key: webhook-url
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+        volumeMounts:
+        - name: cleanup-logs
+          mountPath: /app/cleanup-logs
+      volumes:
+      - name: cleanup-logs
+        emptyDir: {}</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor cleanup with auto-deletion:</h6>
+                            <pre><code class="language-bash"># Deploy auto-cleanup job
+kubectl apply -f skills-cleanup-ttl-job.yaml
+
+# Monitor cleanup progress
+kubectl get job skills-cleanup-job -w
+
+# Check cleanup logs
+kubectl logs job/skills-cleanup-job
+
+# Verify job auto-deletion after 1 hour
+sleep 3700  # Wait just over 1 hour
+kubectl get job skills-cleanup-job  # Should not exist</code></pre>
                         </div>
-                        <div class="queryset-output">Cleanup Output:
->>> Skills.objects.filter(name__icontains='old').count()
-0</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Skills cleanup job auto-deletes 1 hour after completion, with 2 retry attempts and 40-minute deadline.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Skills Cleanup Results:</h6>
+                            <pre><code class="language-python"># Check skills cleanup results
+>>> from jobpost.models import Skills
+>>> Skills.objects.count()
+38  # Reduced from original count
+
+# Verify no duplicate skills remain
+>>> from django.db.models import Count
+>>> duplicates = Skills.objects.values('name').annotate(
+...     count=Count('id')
+... ).filter(count__gt=1)
+>>> duplicates.count()
+0
+
+# Check normalized skill names
+>>> Skills.objects.filter(name__regex=r'^[A-Z][a-z]+$').count()
+38  # All skills now follow proper naming
+
+# View sample cleaned skills
+>>> for skill in Skills.objects.all()[:10]:
+...     print(f"{skill.name} - {skill.category}")
+Python - Programming
+JavaScript - Programming
+React - Framework
+Django - Framework
+PostgreSQL - Database
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 4: Suspended Job</h6>
+                        <h6>Example 4: Suspended Location Sync Job</h6>
                         <pre><code class="language-yaml">spec:
   suspend: true
-  completions: 10</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Job suspended, no pods created until resumed.
+  completions: 10
+  parallelism: 3
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: location-sync
+        state: suspended
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: location-syncer
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "sync_locations"]
+        args: ["--batch-size", "10", "--validate-coordinates"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: GEOCODING_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: geocoding-secret
+              key: api-key
+        - name: RATE_LIMIT_DELAY
+          value: "1000"  # 1 second delay between API calls
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"</code></pre>
+                        <div class="command-example">
+                            <h6>Manage suspended job:</h6>
+                            <pre><code class="language-bash"># Deploy suspended job (no pods created)
+kubectl apply -f suspended-location-sync.yaml
+
+# Verify job is suspended
+kubectl get job location-sync-job -o jsonpath='{.spec.suspend}'
+
+# Resume the job
+kubectl patch job location-sync-job -p '{"spec":{"suspend":false}}'
+
+# Monitor resumed job
+kubectl get pods -l job-name=location-sync-job --watch</code></pre>
                         </div>
-                        <div class="queryset-output">Suspended Output:
->>> Location.objects.filter(country='USA').count()
-4</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Location sync job suspended initially, no pods created until manually resumed, then processes 10 completions.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Location Sync Results (After Resume):</h6>
+                            <pre><code class="language-python"># Check location sync results after resume
+>>> from jobpost.models import Location
+>>> Location.objects.count()
+25
+
+# Verify all locations have valid coordinates
+>>> locations_with_coords = Location.objects.exclude(
+...     latitude__isnull=True,
+...     longitude__isnull=True
+... )
+>>> locations_with_coords.count()
+25
+
+# Check coordinate validation
+>>> import re
+>>> valid_coords = Location.objects.filter(
+...     latitude__range=(-90, 90),
+...     longitude__range=(-180, 180)
+... )
+>>> valid_coords.count()
+25
+
+# View synchronized location data
+>>> for loc in Location.objects.all()[:5]:
+...     print(f"{loc.name}: ({loc.latitude}, {loc.longitude})")
+New York, NY: (40.7128, -74.0060)
+San Francisco, CA: (37.7749, -122.4194)
+Chicago, IL: (41.8781, -87.6298)
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 5: Batch Processing</h6>
+                        <h6>Example 5: Author Report Batch Processing with Deadline</h6>
                         <pre><code class="language-yaml">spec:
   completions: 3
+  parallelism: 1
   activeDeadlineSeconds: 1800
-  backoffLimit: 6</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 3 completions required, 30-minute deadline, 6 retries.
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 7200
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        job: author-reports
+        report-period: monthly
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: report-generator
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "generate_author_reports"]
+        args: ["--period", "monthly", "--format", "pdf", "--batch", "$(JOB_COMPLETION_INDEX)"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: REPORT_OUTPUT_PATH
+          value: "/app/reports/authors"
+        - name: EMAIL_NOTIFICATIONS
+          value: "true"
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        - name: AWS_S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: report-config
+              key: s3-bucket
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: secret-access-key
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: report-storage
+          mountPath: /app/reports
+        - name: temp-processing
+          mountPath: /tmp
+      volumes:
+      - name: report-storage
+        persistentVolumeClaim:
+          claimName: anihpj-reports-pvc
+      - name: temp-processing
+        emptyDir:
+          sizeLimit: 1Gi</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor batch report generation:</h6>
+                            <pre><code class="language-bash"># Deploy report generation job
+kubectl apply -f author-reports-batch-job.yaml
+
+# Monitor batch completion
+kubectl get job author-reports-job -w
+
+# Check individual batch completion
+kubectl get pods -l job-name=author-reports-job
+
+# Verify reports generated
+kubectl exec deploy/anihpj-web -- ls -la /app/reports/authors/
+
+# Check S3 upload status
+kubectl logs job/author-reports-job | grep "S3 upload"</code></pre>
                         </div>
-                        <div class="queryset-output">Batch Output:
->>> Author.objects.filter(company__contains='Corp').count()
-1</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> 3 author report batches generated sequentially, 30-minute deadline, 6 retries, auto-cleanup after 2 hours.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Author Report Generation Results:</h6>
+                            <pre><code class="language-python"># Check author report generation results
+>>> from jobpost.models import Author, JobPost
+>>> from django.db.models import Count, Avg
+
+# Total authors processed in reports
+>>> Author.objects.count()
+15
+
+# Author report statistics by batch
+>>> batches = [
+...     Author.objects.filter(id__range=(1, 5)),    # Batch 0
+...     Author.objects.filter(id__range=(6, 10)),   # Batch 1  
+...     Author.objects.filter(id__range=(11, 15))   # Batch 2
+... ]
+>>> for i, batch in enumerate(batches):
+...     print(f"Batch {i}: {batch.count()} authors")
+Batch 0: 5 authors
+Batch 1: 5 authors
+Batch 2: 5 authors
+
+# Report metrics per author
+>>> author_metrics = Author.objects.annotate(
+...     job_count=Count('jobpost'),
+...     avg_salary=Avg('jobpost__salary')
+... ).order_by('-job_count')[:5]
+>>> for author in author_metrics:
+...     print(f"{author.name}: {author.job_count} jobs, avg ${author.avg_salary:,.0f}")
+John Smith: 12 jobs, avg $92,500
+Sarah Johnson: 8 jobs, avg $85,000
+Mike Chen: 6 jobs, avg $78,000
+
+# Check report file generation timestamps
+>>> import os, datetime
+>>> report_files = [
+...     '/app/reports/authors/batch_0_report.pdf',
+...     '/app/reports/authors/batch_1_report.pdf', 
+...     '/app/reports/authors/batch_2_report.pdf'
+... ]
+>>> # All reports generated within deadline
+>>> "All batches completed within 30-minute deadline"
+</code></pre>
+                        </div>
                     </div>
                 </div>
 
@@ -17151,84 +17555,474 @@ StartupXYZ: 2 authors, 12 jobs
                         <li><strong>manualSelector (boolean)</strong>: Controls generation of pod labels and pod selectors. Leave unset unless you need custom pod selection logic for Django applications. When true, you're responsible for picking unique labels.</li>
                     </ul>
 
-                    <h5>5 short examples with Django models</h5>
+                    <h5>5 comprehensive examples with Django anihpj models</h5>
 
                     <div class="example">
-                        <h6>Example 1: Automatic Selector</h6>
+                        <h6>Example 1: Automatic Selector for JobPost Processing</h6>
                         <pre><code class="language-yaml">spec:
-  # selector automatically generated
+  # selector automatically generated by Kubernetes
   template:
     metadata:
       labels:
-        app: jobpost-processor</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> System generates unique selector for JobPost processing.
+        app: anihpj
+        component: jobpost-processor
+        version: v2.1.0
+        batch-type: automated
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: jobpost-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_jobpost_data"]
+        args: ["--auto-categorize", "--update-salary-ranges"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: PROCESSING_MODE
+          value: "batch"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor automatic selector assignment:</h6>
+                            <pre><code class="language-bash"># Deploy job with automatic selector
+kubectl apply -f jobpost-auto-selector.yaml
+
+# Check automatically generated selector
+kubectl get job jobpost-processor-job -o jsonpath='{.spec.selector}'
+
+# Verify pod labels match selector
+kubectl get pods -l app=anihpj,component=jobpost-processor --show-labels
+
+# Check job-name label added by Kubernetes
+kubectl get pods -l job-name=jobpost-processor-job</code></pre>
                         </div>
-                        <div class="queryset-output">Auto Selector Output:
->>> JobPost.objects.all().count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Kubernetes automatically generates unique selector matching pod template labels for JobPost processing.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>JobPost Processing with Auto Selector:</h6>
+                            <pre><code class="language-python"># Check JobPost processing results
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.count()
+250
+
+# Verify auto-categorized jobs
+>>> categorized_jobs = JobPost.objects.exclude(category__isnull=True)
+>>> categorized_jobs.count()
+250
+
+# Check salary range updates
+>>> jobs_with_salary = JobPost.objects.exclude(salary__isnull=True)
+>>> jobs_with_salary.count()
+250
+
+# View sample processed JobPosts
+>>> for job in JobPost.objects.all()[:5]:
+...     print(f"{job.title} - {job.category} - ${job.salary:,}")
+Senior Python Developer - Engineering - $95,000
+Data Analyst - Data Science - $75,000
+Product Manager - Product - $110,000
+React Developer - Frontend - $80,000
+DevOps Engineer - Operations - $90,000
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 2: Manual Selector</h6>
+                        <h6>Example 2: Manual Selector for User Migration</h6>
                         <pre><code class="language-yaml">spec:
   manualSelector: true
   selector:
     matchLabels:
-      batch: user-migration</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Manual control over pod selection for user migration.
+      batch: user-migration-v2
+      migration-type: incremental
+      data-source: legacy-system
+  template:
+    metadata:
+      labels:
+        batch: user-migration-v2
+        migration-type: incremental
+        data-source: legacy-system
+        app: anihpj
+        component: user-migrator
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: user-migrator
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "migrate_users"]
+        args: ["--source", "legacy", "--validate", "--batch-size", "50"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: LEGACY_DB_URL
+          valueFrom:
+            secretKeyRef:
+              name: legacy-db-secret
+              key: database-url
+        - name: MIGRATION_BATCH_SIZE
+          value: "50"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"</code></pre>
+                        <div class="command-example">
+                            <h6>Manage manual selector migration:</h6>
+                            <pre><code class="language-bash"># Deploy job with manual selector
+kubectl apply -f user-migration-manual-selector.yaml
+
+# Verify manual selector configuration
+kubectl get job user-migration-job -o jsonpath='{.spec.manualSelector}'
+
+# Check pods match manual selector
+kubectl get pods -l batch=user-migration-v2,migration-type=incremental
+
+# Monitor migration progress
+kubectl logs -l batch=user-migration-v2 -f</code></pre>
                         </div>
-                        <div class="queryset-output">Manual Selector Output:
->>> User.objects.all().count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Manual selector controls pod selection for user migration with custom labels for tracking migration batches.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>User Migration with Manual Selector:</h6>
+                            <pre><code class="language-python"># Check user migration results
+>>> from django.contrib.auth.models import User
+>>> User.objects.count()
+150  # Migrated from legacy system
+
+# Verify migration metadata
+>>> migrated_users = User.objects.filter(
+...     username__startswith='legacy_'
+... )
+>>> migrated_users.count()
+100
+
+# Check migration batch tracking
+>>> from jobpost.models import Author
+>>> migrated_authors = Author.objects.filter(
+...     migration_batch='user-migration-v2'
+... )
+>>> migrated_authors.count()
+25
+
+# View sample migrated users
+>>> for user in User.objects.filter(username__startswith='legacy_')[:5]:
+...     print(f"{user.username} - {user.email} - {user.date_joined}")
+legacy_john_smith - john.smith@legacy.com - 2024-01-15 10:30:00
+legacy_sarah_jones - sarah.jones@legacy.com - 2024-01-15 10:31:00
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 3: Skills Processing Selector</h6>
+                        <h6>Example 3: Skills Processing with Component Selector</h6>
                         <pre><code class="language-yaml">spec:
   selector:
     matchLabels:
-      component: skills-sync
-      version: v1</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Selects pods with specific skills processing labels.
+      component: skills-sync-engine
+      version: v1.2.0
+      data-source: external-api
+  template:
+    metadata:
+      labels:
+        component: skills-sync-engine
+        version: v1.2.0
+        data-source: external-api
+        app: anihpj
+        job-type: data-synchronization
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: skills-syncer
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "sync_skills_data"]
+        args: ["--source", "skills-api", "--enhance-descriptions", "--add-categories"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: SKILLS_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: skills-config
+              key: api-url
+        - name: SKILLS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: skills-api-secret
+              key: api-key
+        - name: SYNC_MODE
+          value: "incremental"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor skills sync with component selector:</h6>
+                            <pre><code class="language-bash"># Deploy skills sync job
+kubectl apply -f skills-sync-component-selector.yaml
+
+# Check pods using component selector
+kubectl get pods -l component=skills-sync-engine,version=v1.2.0
+
+# Monitor sync progress
+kubectl logs -l component=skills-sync-engine -f
+
+# Verify skills enhancement
+kubectl exec deploy/anihpj-web -- python manage.py shell -c "
+from jobpost.models import Skills
+print(f'Enhanced skills: {Skills.objects.exclude(description__isnull=True).count()}')
+"</code></pre>
                         </div>
-                        <div class="queryset-output">Skills Selector Output:
->>> Skills.objects.all().count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Component-based selector tracks skills sync pods with version and data source labels.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Skills Sync with Component Selector:</h6>
+                            <pre><code class="language-python"># Check skills synchronization results
+>>> from jobpost.models import Skills
+>>> Skills.objects.count()
+45
+
+# Verify enhanced descriptions from API
+>>> enhanced_skills = Skills.objects.exclude(description__isnull=True)
+>>> enhanced_skills.count()
+45
+
+# Check category assignments
+>>> categorized_skills = Skills.objects.exclude(category__isnull=True)
+>>> categorized_skills.count()
+45
+
+# View enhanced skills data
+>>> for skill in Skills.objects.all()[:5]:
+...     print(f"{skill.name} ({skill.category}): {skill.description[:50]}...")
+Python (Programming): A versatile programming language for web dev...
+JavaScript (Programming): Essential language for frontend and bac...
+React (Framework): Popular JavaScript library for building user...
+Django (Framework): High-level Python web framework for rapid...
+PostgreSQL (Database): Advanced open-source relational database...
+
+# Check sync metadata
+>>> from django.db.models import Count
+>>> sync_stats = Skills.objects.values('sync_source').annotate(count=Count('id'))
+>>> dict(sync_stats.values_list('sync_source', 'count'))
+{'skills-api': 45}
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 4: Location Job Selector</h6>
+                        <h6>Example 4: Location Job with Automatic Selector</h6>
                         <pre><code class="language-yaml">spec:
   manualSelector: false
   template:
     metadata:
       labels:
-        job-type: location-update</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Automatic selector for location update jobs.
+        job-type: location-update
+        frequency: weekly
+        app: anihpj
+        component: location-service
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: location-updater
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "update_location_data"]
+        args: ["--geocode", "--validate-addresses", "--update-timezones"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: GEOCODING_SERVICE
+          value: "google-maps"
+        - name: GOOGLE_MAPS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: geocoding-secret
+              key: google-maps-key
+        - name: BATCH_SIZE
+          value: "10"
+        - name: RATE_LIMIT_MS
+          value: "200"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor location update with auto selector:</h6>
+                            <pre><code class="language-bash"># Deploy location update job
+kubectl apply -f location-update-auto-selector.yaml
+
+# Check automatic selector generation
+kubectl describe job location-update-job | grep -A 3 "Selector"
+
+# Monitor location update pods
+kubectl get pods -l job-type=location-update,frequency=weekly
+
+# Check geocoding progress
+kubectl logs -l job-type=location-update -f</code></pre>
                         </div>
-                        <div class="queryset-output">Location Selector Output:
->>> Location.objects.filter(state='CA').count()
-1</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Automatic selector for location update job with custom labels for job type and frequency tracking.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Location Update with Auto Selector:</h6>
+                            <pre><code class="language-python"># Check location update results
+>>> from jobpost.models import Location
+>>> Location.objects.count()
+25
+
+# Verify geocoded locations
+>>> geocoded_locations = Location.objects.exclude(
+...     latitude__isnull=True,
+...     longitude__isnull=True
+... )
+>>> geocoded_locations.count()
+25
+
+# Check timezone updates
+>>> locations_with_tz = Location.objects.exclude(timezone__isnull=True)
+>>> locations_with_tz.count()
+25
+
+# View updated location data
+>>> for loc in Location.objects.all()[:5]:
+...     print(f"{loc.name}: ({loc.latitude}, {loc.longitude}) - {loc.timezone}")
+New York, NY: (40.7128, -74.0060) - America/New_York
+San Francisco, CA: (37.7749, -122.4194) - America/Los_Angeles
+Chicago, IL: (41.8781, -87.6298) - America/Chicago
+Austin, TX: (30.2672, -97.7431) - America/Chicago
+Seattle, WA: (47.6062, -122.3321) - America/Los_Angeles
+
+# Check address validation results  
+>>> valid_addresses = Location.objects.filter(address_validated=True)
+>>> valid_addresses.count()
+25
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 5: Author Report Selector</h6>
+                        <h6>Example 5: Author Report with Expression-based Selector</h6>
                         <pre><code class="language-yaml">spec:
   selector:
     matchExpressions:
     - key: report-type
       operator: In
-      values: [author, weekly]</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Selects pods for author or weekly reports.
+      values: [author, weekly, analytics]
+    - key: priority
+      operator: NotIn
+      values: [low]
+    - key: app
+      operator: Exists
+  template:
+    metadata:
+      labels:
+        report-type: author
+        priority: high
+        frequency: weekly
+        app: anihpj
+        component: report-generator
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: author-reporter
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "generate_author_analytics"]
+        args: ["--period", "weekly", "--include-metrics", "--export-pdf"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: REPORT_FORMAT
+          value: "pdf"
+        - name: ANALYTICS_DEPTH
+          value: "detailed"
+        - name: EMAIL_RECIPIENTS
+          valueFrom:
+            configMapKeyRef:
+              name: report-config
+              key: recipients
+        - name: S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: report-config
+              key: s3-bucket
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor report generation with expression selector:</h6>
+                            <pre><code class="language-bash"># Deploy author analytics job
+kubectl apply -f author-analytics-expression-selector.yaml
+
+# Check expression-based selector matching
+kubectl get pods -l 'report-type in (author,weekly,analytics),priority notin (low),app'
+
+# Monitor report generation
+kubectl logs -l report-type=author,priority=high -f
+
+# Verify report output
+kubectl exec deploy/anihpj-web -- ls -la /app/reports/authors/</code></pre>
                         </div>
-                        <div class="queryset-output">Author Selector Output:
->>> Author.objects.filter(designation__contains='Developer').count()
-2</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Expression-based selector matches pods for author or weekly reports with non-low priority and existing app label.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Author Analytics with Expression Selector:</h6>
+                            <pre><code class="language-python"># Check author analytics results
+>>> from jobpost.models import Author, JobPost
+>>> from django.db.models import Count, Avg, Sum
+
+# Total authors analyzed
+>>> Author.objects.count()
+15
+
+# Author performance metrics
+>>> author_metrics = Author.objects.annotate(
+...     job_count=Count('jobpost'),
+...     avg_salary=Avg('jobpost__salary'),
+...     total_views=Sum('jobpost__view_count')
+... ).order_by('-job_count')
+
+>>> for author in author_metrics[:5]:
+...     print(f"{author.name}: {author.job_count} jobs, avg ${author.avg_salary:,.0f}, {author.total_views} views")
+John Smith: 12 jobs, avg $92,500, 1,250 views
+Sarah Johnson: 8 jobs, avg $85,000, 890 views
+Mike Chen: 6 jobs, avg $78,000, 645 views
+
+# Weekly analytics summary
+>>> import datetime
+>>> week_ago = datetime.datetime.now() - datetime.timedelta(days=7)
+>>> weekly_jobs = JobPost.objects.filter(created_at__gte=week_ago)
+>>> weekly_jobs.count()
+25
+
+# Company-wise author distribution
+>>> from django.db.models import Count
+>>> company_authors = Author.objects.values('company').annotate(
+...     author_count=Count('id')
+... ).order_by('-author_count')
+>>> dict(company_authors.values_list('company', 'author_count'))
+{'TechCorp': 4, 'DataCo': 3, 'StartupXYZ': 2, 'InnovateLabs': 2}
+</code></pre>
+                        </div>
                     </div>
                 </div>
 
@@ -17243,91 +18037,505 @@ StartupXYZ: 2 authors, 12 jobs
                         <li><strong>successPolicy (SuccessPolicy)</strong>: Specifies when the Job can be declared successful before all completions finish. Works only for Indexed Jobs and is immutable once set.</li>
                     </ul>
 
-                    <h5>5 short examples with Django models</h5>
+                    <h5>5 comprehensive examples with Django anihpj models</h5>
 
                     <div class="example">
-                        <h6>Example 1: Ignore Exit Code 1</h6>
+                        <h6>Example 1: Ignore Exit Code 1 for Non-Critical Failures</h6>
                         <pre><code class="language-yaml">spec:
   podFailurePolicy:
     rules:
     - action: Ignore
       onExitCodes:
         operator: In
-        values: [1]</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Ignores pods that exit with code 1, creates replacements.
+        values: [1]
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: data-validator
+        failure-tolerance: high
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: data-validator
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "validate_jobpost_data"]
+        args: ["--strict=false", "--ignore-warnings"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: VALIDATION_MODE
+          value: "lenient"
+        - name: CONTINUE_ON_WARNING
+          value: "true"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor failure policy with exit code 1 ignored:</h6>
+                            <pre><code class="language-bash"># Deploy job with failure policy
+kubectl apply -f data-validator-ignore-policy.yaml
+
+# Monitor job status with ignored failures
+kubectl get job data-validator-job -w
+
+# Check pod replacement for exit code 1
+kubectl get pods -l app=anihpj,component=data-validator
+
+# View validation logs
+kubectl logs -l app=anihpj,component=data-validator -f</code></pre>
                         </div>
-                        <div class="queryset-output">Ignore Failure Output:
->>> JobPost.objects.filter(description__isnull=False).count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Job ignores pods that exit with code 1 (warnings), creates replacement pods to continue validation.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Data Validation with Ignored Exit Code 1:</h6>
+                            <pre><code class="language-python"># Check data validation results
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.count()
+500
+
+# Check validation status (warnings ignored)
+>>> validated_jobs = JobPost.objects.filter(validation_status='valid')
+>>> validated_jobs.count()
+485  # 15 had warnings but were processed
+
+# Check jobs with warnings (exit code 1 scenarios)
+>>> jobs_with_warnings = JobPost.objects.filter(validation_warnings__isnull=False)
+>>> jobs_with_warnings.count()
+15
+
+# View sample validation warnings
+>>> for job in jobs_with_warnings[:3]:
+...     print(f"{job.title}: {job.validation_warnings}")
+Senior Developer: Missing preferred skills list
+Data Analyst: Salary range unusually high for location
+Product Manager: Job description exceeds recommended length
+
+# Verify job continued despite warnings
+>>> failed_validation = JobPost.objects.filter(validation_status='failed')
+>>> failed_validation.count()
+0  # No jobs failed due to ignored exit code 1
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 2: Fail Job on Exit Code 2</h6>
+                        <h6>Example 2: Fail Job on Critical Exit Code 2</h6>
                         <pre><code class="language-yaml">spec:
   podFailurePolicy:
     rules:
     - action: FailJob
       onExitCodes:
         operator: In
-        values: [2]</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Fails entire job if any pod exits with code 2.
+        values: [2]
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: security-scanner
+        criticality: high
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: security-scanner
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "security_scan"]
+        args: ["--scan-depth", "deep", "--fail-on-critical"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: SECURITY_LEVEL
+          value: "strict"
+        - name: FAIL_ON_CRITICAL
+          value: "true"
+        - name: SCAN_COMPONENTS
+          value: "database,authentication,authorization"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor critical failure handling:</h6>
+                            <pre><code class="language-bash"># Deploy security scanner with FailJob policy
+kubectl apply -f security-scanner-fail-policy.yaml
+
+# Monitor job for critical failures
+kubectl get job security-scanner-job -w
+
+# Check if job failed due to exit code 2
+kubectl describe job security-scanner-job | grep -A 5 "Conditions"
+
+# View security scan logs
+kubectl logs -l app=anihpj,component=security-scanner</code></pre>
                         </div>
-                        <div class="queryset-output">Fail Job Output:
->>> User.objects.filter(email__contains='example').count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Job fails immediately if any pod exits with code 2 (critical security issues), stopping all processing.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Security Scan with Critical Failure Policy:</h6>
+                            <pre><code class="language-python"># Check security scan results (if successful)
+>>> from django.conf import settings
+>>> hasattr(settings, 'SECURITY_SCAN_RESULTS')
+True
+
+# View security scan status
+>>> scan_results = getattr(settings, 'SECURITY_SCAN_RESULTS', {})
+>>> scan_results.get('overall_status')
+'PASSED'  # Or 'FAILED' if critical issues found
+
+# Check scan categories
+>>> for component, status in scan_results.get('components', {}).items():
+...     print(f"{component}: {status}")
+database: PASSED
+authentication: PASSED  
+authorization: PASSED
+
+# If critical issues were found (exit code 2):
+>>> if scan_results.get('overall_status') == 'FAILED':
+...     critical_issues = scan_results.get('critical_issues', [])
+...     print(f"Critical security issues found: {len(critical_issues)}")
+...     for issue in critical_issues[:3]:
+...         print(f"- {issue['description']}")
+# No critical issues in this case - job succeeded
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 3: Success Policy for Skills</h6>
+                        <h6>Example 3: Success Policy for Skills Processing</h6>
                         <pre><code class="language-yaml">spec:
   completionMode: Indexed
+  completions: 10
+  parallelism: 3
   successPolicy:
     rules:
-    - succeededCount: 3
-      succeededIndexes: "0-4"</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Job succeeds when 3 of indexes 0-4 complete.
+    - succeededCount: 7
+      succeededIndexes: "0-9"
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: skills-processor
+        processing-mode: indexed
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: skills-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_skills_batch"]
+        args: ["--index", "$(JOB_COMPLETION_INDEX)", "--batch-size", "50"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        - name: PROCESSING_MODE
+          value: "indexed"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor success policy with indexed jobs:</h6>
+                            <pre><code class="language-bash"># Deploy indexed skills processing
+kubectl apply -f skills-indexed-success-policy.yaml
+
+# Monitor success policy execution
+kubectl get job skills-processor-job -w
+
+# Check succeeded indexes
+kubectl describe job skills-processor-job | grep "succeeded indexes"
+
+# Verify early completion when 7 of 10 succeed
+kubectl get pods -l app=anihpj,component=skills-processor</code></pre>
                         </div>
-                        <div class="queryset-output">Success Policy Output:
->>> Skills.objects.all().count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Job succeeds when 7 out of 10 indexed tasks complete successfully, allowing early termination.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Skills Processing with Success Policy:</h6>
+                            <pre><code class="language-python"># Check skills processing results
+>>> from jobpost.models import Skills
+>>> Skills.objects.count()
+45
+
+# Check processing by index (batches 0-6 succeeded)
+>>> processed_batches = []
+>>> for i in range(10):
+...     batch_skills = Skills.objects.filter(processing_batch=i)
+...     if batch_skills.exists():
+...         processed_batches.append(i)
+...         print(f"Batch {i}: {batch_skills.count()} skills processed")
+Batch 0: 5 skills processed
+Batch 1: 5 skills processed  
+Batch 2: 5 skills processed
+Batch 3: 5 skills processed
+Batch 4: 5 skills processed
+Batch 5: 5 skills processed
+Batch 6: 5 skills processed
+# Batches 7-9 may not have completed due to early success
+
+>>> len(processed_batches)
+7  # Job completed early with 7 successful indexes
+
+# Verify skills enhancement from successful batches
+>>> enhanced_skills = Skills.objects.filter(
+...     processing_batch__in=processed_batches,
+...     enhanced=True
+... )
+>>> enhanced_skills.count()
+35  # 7 batches × 5 skills each
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 4: Container-specific Failure</h6>
+                        <h6>Example 4: Container-specific Failure for Location Processing</h6>
                         <pre><code class="language-yaml">spec:
+  completionMode: Indexed
+  completions: 5
+  parallelism: 2
   podFailurePolicy:
     rules:
     - action: FailIndex
       onExitCodes:
-        containerName: location-processor
+        containerName: location-geocoder
         operator: NotIn
-        values: [0]</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Fails specific index if location-processor exits non-zero.
+        values: [0]
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: location-processor
+        geocoding-enabled: "true"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: location-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_locations"]
+        args: ["--index", "$(JOB_COMPLETION_INDEX)"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      - name: location-geocoder
+        image: geocoding-service:v1.2.0
+        command: ["geocoder"]
+        args: ["--batch", "$(JOB_COMPLETION_INDEX)", "--api-limit", "100"]
+        env:
+        - name: GEOCODING_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: geocoding-secret
+              key: api-key
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "100m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor container-specific failure policy:</h6>
+                            <pre><code class="language-bash"># Deploy location processing with container-specific policy
+kubectl apply -f location-container-failure-policy.yaml
+
+# Monitor index-specific failures
+kubectl get job location-processor-job -w
+
+# Check which indexes failed due to geocoder issues
+kubectl get pods -l app=anihpj,component=location-processor
+
+# View geocoder-specific logs
+kubectl logs -l app=anihpj,component=location-processor -c location-geocoder</code></pre>
                         </div>
-                        <div class="queryset-output">Container Failure Output:
->>> Location.objects.filter(zip__isnull=False).count()
-4</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Fails specific index if location-geocoder container exits non-zero, while allowing location-processor to continue.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Location Processing with Container-specific Failure:</h6>
+                            <pre><code class="language-python"># Check location processing results
+>>> from jobpost.models import Location
+>>> Location.objects.count()
+25
+
+# Check geocoding success by index
+>>> geocoded_locations = Location.objects.exclude(
+...     latitude__isnull=True,
+...     longitude__isnull=True
+... )
+>>> geocoded_locations.count()
+20  # Some indexes may have failed geocoding
+
+# Check processing status by index
+>>> processing_results = []
+>>> for i in range(5):
+...     index_locations = Location.objects.filter(processing_index=i)
+...     geocoded_count = index_locations.exclude(
+...         latitude__isnull=True,
+...         longitude__isnull=True
+...     ).count()
+...     processing_results.append((i, index_locations.count(), geocoded_count))
+...     print(f"Index {i}: {index_locations.count()} processed, {geocoded_count} geocoded")
+Index 0: 5 processed, 5 geocoded
+Index 1: 5 processed, 5 geocoded  
+Index 2: 5 processed, 0 geocoded  # geocoder failed
+Index 3: 5 processed, 5 geocoded
+Index 4: 5 processed, 5 geocoded
+
+# Verify failed index details
+>>> failed_geocoding = Location.objects.filter(
+...     processing_index=2,
+...     latitude__isnull=True
+... )
+>>> failed_geocoding.count()
+5  # All locations in index 2 missing coordinates due to geocoder failure
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 5: Pod Condition Policy</h6>
+                        <h6>Example 5: Pod Condition Policy for Disruption Handling</h6>
                         <pre><code class="language-yaml">spec:
+  completions: 3
+  parallelism: 2
   podFailurePolicy:
     rules:
     - action: Count
       onPodConditions:
       - type: DisruptionTarget
-        status: "True"</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Counts failures for disruption target conditions.
+        status: "True"
+    - action: Ignore
+      onPodConditions:
+      - type: Ready
+        status: "False"
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: author-analytics
+        disruption-tolerant: "true"
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: author-analyzer
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "analyze_author_performance"]
+        args: ["--deep-analysis", "--export-metrics"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: ANALYSIS_DEPTH
+          value: "comprehensive"
+        - name: EXPORT_FORMAT
+          value: "json,csv"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import psutil; exit(0 if psutil.virtual_memory().percent < 80 else 1)"
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import os; exit(0 if os.path.exists('/tmp/analysis_active') else 1)"
+          initialDelaySeconds: 60
+          periodSeconds: 30</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor disruption handling with pod conditions:</h6>
+                            <pre><code class="language-bash"># Deploy author analytics with disruption policy
+kubectl apply -f author-analytics-disruption-policy.yaml
+
+# Simulate cluster disruption
+kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data
+
+# Monitor disruption target handling
+kubectl get pods -l app=anihpj,component=author-analytics -w
+
+# Check pod conditions
+kubectl describe pods -l app=anihpj,component=author-analytics | grep -A 5 "Conditions"</code></pre>
                         </div>
-                        <div class="queryset-output">Pod Condition Output:
->>> Author.objects.filter(designation__isnull=False).count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Job counts disruption target failures towards backoff limit but ignores readiness failures for resilient processing.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Author Analytics with Disruption Policy:</h6>
+                            <pre><code class="language-python"># Check author analytics results
+>>> from jobpost.models import Author, JobPost
+>>> from django.db.models import Count, Avg, Min, Max
+
+# Total authors analyzed
+>>> Author.objects.count()
+15
+
+# Comprehensive author performance metrics
+>>> author_performance = Author.objects.annotate(
+...     job_count=Count('jobpost'),
+...     avg_salary=Avg('jobpost__salary'),
+...     min_salary=Min('jobpost__salary'),
+...     max_salary=Max('jobpost__salary'),
+...     total_applications=Count('jobpost__applications')
+... ).order_by('-job_count')
+
+>>> for author in author_performance[:5]:
+...     print(f"{author.name}: {author.job_count} jobs, avg ${author.avg_salary:,.0f} ({author.min_salary:,.0f}-{author.max_salary:,.0f})")
+John Smith: 12 jobs, avg $92,500 ($75,000-$120,000)
+Sarah Johnson: 8 jobs, avg $85,000 ($70,000-$105,000)
+Mike Chen: 6 jobs, avg $78,000 ($65,000-$95,000)
+
+# Analytics export verification
+>>> import json, csv, os
+>>> analytics_files = [
+...     '/app/exports/author_metrics.json',
+...     '/app/exports/author_performance.csv'
+... ]
+>>> all(os.path.exists(f) for f in analytics_files)
+True
+
+# Deep analysis insights
+>>> high_performers = Author.objects.filter(
+...     avg_job_salary__gte=90000,
+...     job_count__gte=5
+... )
+>>> high_performers.count()
+3  # Authors with consistently high-value job postings
+</code></pre>
+                        </div>
                     </div>
                 </div>
 
@@ -17344,73 +18552,526 @@ StartupXYZ: 2 authors, 12 jobs
                         <li><strong>podReplacementPolicy (string)</strong>: When to create replacement Pods. Values: "TerminatingOrFailed" or "Failed". Controls pod recreation timing.</li>
                     </ul>
 
-                    <h5>5 short examples with Django models</h5>
+                    <h5>5 comprehensive examples with Django anihpj models</h5>
 
                     <div class="example">
-                        <h6>Example 1: Per-Index Backoff</h6>
-                        <pre><code class="language-yaml">spec:
-  completionMode: Indexed
-  backoffLimitPerIndex: 2
-  maxFailedIndexes: 3</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 2 retries per index, fail job after 3 failed indexes.
-                        </div>
-                        <div class="queryset-output">Per-Index Output:
->>> JobPost.objects.filter(salary__gte=75000).count()
-5</div>
-                    </div>
-
-                    <div class="example">
-                        <h6>Example 2: Custom Controller</h6>
-                        <pre><code class="language-yaml">spec:
-  managedBy: acme.com/custom-job-controller</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Job managed by custom controller, not k8s Job controller.
-                        </div>
-                        <div class="queryset-output">Custom Controller Output:
->>> User.objects.all().count()
-5</div>
-                    </div>
-
-                    <div class="example">
-                        <h6>Example 3: Pod Replacement Policy</h6>
-                        <pre><code class="language-yaml">spec:
-  podReplacementPolicy: Failed
-  backoffLimit: 3</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Wait for pod full termination before creating replacement.
-                        </div>
-                        <div class="queryset-output">Replacement Policy Output:
->>> Skills.objects.all().count()
-5</div>
-                    </div>
-
-                    <div class="example">
-                        <h6>Example 4: Indexed Job Limits</h6>
+                        <h6>Example 1: Per-Index Backoff for JobPost Processing</h6>
                         <pre><code class="language-yaml">spec:
   completionMode: Indexed
   completions: 10
-  backoffLimitPerIndex: 1
-  maxFailedIndexes: 2</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 10 indexed tasks, 1 retry each, fail after 2 failed indexes.
+  parallelism: 3
+  backoffLimitPerIndex: 2
+  maxFailedIndexes: 3
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: jobpost-indexer
+        processing-mode: fault-tolerant
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: jobpost-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_jobpost_index"]
+        args: ["--index", "$(JOB_COMPLETION_INDEX)", "--fault-tolerant"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        - name: MAX_RETRIES_PER_INDEX
+          value: "2"
+        - name: PROCESSING_MODE
+          value: "indexed"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: index-state
+          mountPath: /app/index-state
+      volumes:
+      - name: index-state
+        emptyDir: {}</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor per-index backoff limits:</h6>
+                            <pre><code class="language-bash"># Deploy indexed JobPost processing
+kubectl apply -f jobpost-per-index-backoff.yaml
+
+# Monitor individual index failures
+kubectl get job jobpost-indexer-job -w
+
+# Check per-index retry annotations
+kubectl get pods -l app=anihpj,component=jobpost-indexer -o yaml | grep -A 2 "batch.kubernetes.io/job-index-failure-count"
+
+# View processing progress per index
+kubectl logs -l app=anihpj,component=jobpost-indexer --all-containers=true</code></pre>
                         </div>
-                        <div class="queryset-output">Indexed Limits Output:
->>> Location.objects.all().count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Each index allows 2 retries before marking failed; job fails after 3 total failed indexes.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>JobPost Processing with Per-Index Backoff:</h6>
+                            <pre><code class="language-python"># Check JobPost processing results by index
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.count()
+700  # 7 successful indexes × 100 jobs each
+
+# Check processing success by index
+>>> index_results = {}
+>>> for i in range(10):
+...     index_jobs = JobPost.objects.filter(processing_index=i)
+...     index_results[i] = {
+...         'total': index_jobs.count(),
+...         'successful': index_jobs.filter(status='processed').count(),
+...         'failed': index_jobs.filter(status='failed').count()
+...     }
+...     print(f"Index {i}: {index_results[i]}")
+Index 0: {'total': 100, 'successful': 100, 'failed': 0}
+Index 1: {'total': 100, 'successful': 100, 'failed': 0}
+Index 2: {'total': 0, 'successful': 0, 'failed': 0}     # Failed after 2 retries
+Index 3: {'total': 100, 'successful': 100, 'failed': 0}
+Index 4: {'total': 0, 'successful': 0, 'failed': 0}     # Failed after 2 retries
+Index 5: {'total': 100, 'successful': 100, 'failed': 0}
+Index 6: {'total': 0, 'successful': 0, 'failed': 0}     # Failed after 2 retries - job stops
+Index 7: {'total': 0, 'successful': 0, 'failed': 0}     # Not processed due to max failures
+Index 8: {'total': 100, 'successful': 100, 'failed': 0}
+Index 9: {'total': 100, 'successful': 100, 'failed': 0}
+
+# Verify job stopped after 3 failed indexes
+>>> successful_indexes = [i for i, result in index_results.items() if result['successful'] > 0]
+>>> len(successful_indexes)
+7  # Job completed 7 out of 10 indexes before hitting maxFailedIndexes
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 5: Terminating Replacement</h6>
+                        <h6>Example 2: Custom Controller Management</h6>
+                        <pre><code class="language-yaml">spec:
+  managedBy: anihpj.com/batch-job-controller
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: custom-batch-processor
+        controller: external
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: batch-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "custom_batch_process"]
+        args: ["--controller", "external", "--integration-mode"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: CONTROLLER_MODE
+          value: "external"
+        - name: BATCH_INTEGRATION
+          value: "enabled"
+        - name: WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: webhook-secret
+              key: controller-webhook
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor custom controller managed job:</h6>
+                            <pre><code class="language-bash"># Deploy job with custom controller
+kubectl apply -f custom-controller-job.yaml
+
+# Check managedBy field
+kubectl get job custom-batch-job -o jsonpath='{.spec.managedBy}'
+
+# Monitor external controller integration
+kubectl logs -l app=anihpj,component=custom-batch-processor -f
+
+# Verify custom controller webhook calls
+kubectl exec deploy/anihpj-web -- python manage.py shell -c "
+import requests
+print('Custom controller integration active')
+"</code></pre>
+                        </div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Job managed by custom external controller instead of default Kubernetes Job controller.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Custom Controller Batch Processing:</h6>
+                            <pre><code class="language-python"># Check custom batch processing results
+>>> from jobpost.models import JobPost, Author, Location, Skills
+>>> 
+# Verify external controller integration
+>>> from django.conf import settings
+>>> hasattr(settings, 'EXTERNAL_CONTROLLER_ACTIVE')
+True
+
+# Check batch processing managed by external controller
+>>> batch_results = {
+...     'jobposts': JobPost.objects.filter(batch_processor='external').count(),
+...     'authors': Author.objects.filter(processed_by='external_controller').count(),
+...     'locations': Location.objects.filter(sync_source='external_batch').count(),
+...     'skills': Skills.objects.filter(enhancement_source='external').count()
+... }
+>>> batch_results
+{'jobposts': 100, 'authors': 15, 'locations': 25, 'skills': 45}
+
+# Verify webhook integration logs
+>>> import json
+>>> webhook_logs = getattr(settings, 'WEBHOOK_LOGS', [])
+>>> len(webhook_logs)
+5  # External controller webhook calls
+
+# Check external controller status tracking
+>>> controller_status = getattr(settings, 'CONTROLLER_STATUS', {})
+>>> controller_status.get('name')
+'anihpj.com/batch-job-controller'
+>>> controller_status.get('integration_mode')
+'active'
+</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h6>Example 3: Pod Replacement Policy for Failed Jobs</h6>
+                        <pre><code class="language-yaml">spec:
+  podReplacementPolicy: Failed
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: data-migrator
+        replacement-policy: wait-for-termination
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: data-migrator
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "migrate_legacy_data"]
+        args: ["--cleanup-on-failure", "--validate-integrity"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: LEGACY_DB_URL
+          valueFrom:
+            secretKeyRef:
+              name: legacy-db-secret
+              key: connection-url
+        - name: MIGRATION_BATCH_SIZE
+          value: "1000"
+        - name: VALIDATE_DATA_INTEGRITY
+          value: "true"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: migration-state
+          mountPath: /app/migration-state
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - python
+              - -c
+              - "import os; os.system('python manage.py cleanup_failed_migration')"
+      volumes:
+      - name: migration-state
+        emptyDir: {}</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor pod replacement policy:</h6>
+                            <pre><code class="language-bash"># Deploy data migration with replacement policy
+kubectl apply -f data-migration-replacement-policy.yaml
+
+# Monitor pod lifecycle and replacements
+kubectl get pods -l app=anihpj,component=data-migrator -w
+
+# Check replacement timing
+kubectl describe pods -l app=anihpj,component=data-migrator | grep -A 3 "Events"
+
+# Verify cleanup on failed pods
+kubectl logs -l app=anihpj,component=data-migrator --previous</code></pre>
+                        </div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Waits for pod full termination and cleanup before creating replacement pods.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Data Migration with Replacement Policy:</h6>
+                            <pre><code class="language-python"># Check data migration results
+>>> from jobpost.models import JobPost, Author, Location, Skills
+>>> 
+# Verify legacy data migration
+>>> legacy_migrated = {
+...     'jobposts': JobPost.objects.filter(migrated_from='legacy').count(),
+...     'authors': Author.objects.filter(migration_source='legacy_system').count(),
+...     'locations': Location.objects.filter(legacy_id__isnull=False).count(),
+...     'skills': Skills.objects.filter(legacy_mapping__isnull=False).count()
+... }
+>>> legacy_migrated
+{'jobposts': 500, 'authors': 25, 'locations': 15, 'skills': 60}
+
+# Check data integrity validation
+>>> integrity_results = {
+...     'jobposts_valid': JobPost.objects.filter(
+...         migrated_from='legacy',
+...         integrity_validated=True
+...     ).count(),
+...     'orphaned_records': JobPost.objects.filter(
+...         migrated_from='legacy',
+...         author__isnull=True
+...     ).count()
+... }
+>>> integrity_results
+{'jobposts_valid': 500, 'orphaned_records': 0}
+
+# Verify cleanup happened for failed attempts
+>>> from django.db import connection
+>>> cursor = connection.cursor()
+>>> cursor.execute("SELECT COUNT(*) FROM migration_cleanup_log")
+>>> cursor.fetchone()[0]
+2  # Two cleanup operations for failed migration attempts
+
+# Check final migration status
+>>> migration_status = getattr(settings, 'MIGRATION_STATUS', {})
+>>> migration_status.get('legacy_migration_complete')
+True
+>>> migration_status.get('replacement_policy_used')
+'Failed'
+</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h6>Example 4: Indexed Job with Comprehensive Limits</h6>
+                        <pre><code class="language-yaml">spec:
+  completionMode: Indexed
+  completions: 10
+  parallelism: 3
+  backoffLimitPerIndex: 1
+  maxFailedIndexes: 2
+  podReplacementPolicy: TerminatingOrFailed
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: skills-enhancer
+        processing-type: indexed-fault-tolerant
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: skills-enhancer
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "enhance_skills_index"]
+        args: ["--index", "$(JOB_COMPLETION_INDEX)", "--api-enhanced"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        - name: ENHANCEMENT_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: enhancement-api-secret
+              key: api-key
+        - name: API_RATE_LIMIT
+          value: "10"  # 10 calls per second
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor indexed job with comprehensive limits:</h6>
+                            <pre><code class="language-bash"># Deploy indexed skills enhancement
+kubectl apply -f skills-indexed-limits.yaml
+
+# Monitor index completion and failures
+kubectl get job skills-enhancer-job -w
+
+# Check failed index annotations
+kubectl get pods -l app=anihpj,component=skills-enhancer -o yaml | grep -A 3 "job-index"
+
+# Track pod replacement timing
+kubectl get events --field-selector involvedObject.kind=Pod</code></pre>
+                        </div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Indexed skills enhancement with 1 retry per index, fails after 2 failed indexes, immediate pod replacement.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Skills Enhancement with Indexed Limits:</h6>
+                            <pre><code class="language-python"># Check skills enhancement by index
+>>> from jobpost.models import Skills
+>>> Skills.objects.count()
+45
+
+# Check enhancement results by index
+>>> enhancement_results = {}
+>>> for i in range(10):
+...     index_skills = Skills.objects.filter(enhancement_index=i)
+...     enhanced_count = index_skills.filter(api_enhanced=True).count()
+...     enhancement_results[i] = {
+...         'total': index_skills.count(),
+...         'enhanced': enhanced_count,
+...         'success_rate': enhanced_count / max(index_skills.count(), 1) * 100
+...     }
+...     if index_skills.exists():
+...         print(f"Index {i}: {enhanced_count}/{index_skills.count()} enhanced ({enhancement_results[i]['success_rate']:.1f}%)")
+Index 0: 5/5 enhanced (100.0%)
+Index 1: 5/5 enhanced (100.0%)
+Index 2: 0/0 enhanced (0.0%)     # Failed index - no processing
+Index 3: 5/5 enhanced (100.0%)
+Index 4: 5/5 enhanced (100.0%)
+Index 5: 0/0 enhanced (0.0%)     # Failed index - no processing  
+Index 6: 5/5 enhanced (100.0%)   # Job stopped here due to maxFailedIndexes
+Index 7: 5/5 enhanced (100.0%)
+Index 8: 5/5 enhanced (100.0%)
+Index 9: 5/5 enhanced (100.0%)
+
+# Verify API enhancement data
+>>> api_enhanced_skills = Skills.objects.filter(api_enhanced=True)
+>>> api_enhanced_skills.count()
+40  # 8 successful indexes × 5 skills each
+
+# Check enhancement quality
+>>> for skill in api_enhanced_skills[:5]:
+...     print(f"{skill.name}: {skill.api_description[:50]}...")
+Python: Advanced programming language with extensive library...
+JavaScript: Dynamic language for web and server applications...
+React: Component-based library for building user interfaces...
+</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <h6>Example 5: Terminating Pod Replacement for High Availability</h6>
                         <pre><code class="language-yaml">spec:
   podReplacementPolicy: TerminatingOrFailed
-  parallelism: 2</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Create replacements for terminating or failed pods immediately.
+  parallelism: 2
+  completions: 4
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: author-sync
+        availability: high
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: author-sync
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "sync_author_profiles"]
+        args: ["--external-api", "--update-social-links", "--verify-employment"]
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: EXTERNAL_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: author-sync-config
+              key: api-url
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: author-api-secret
+              key: api-key
+        - name: SYNC_BATCH_SIZE
+          value: "5"
+        - name: HIGH_AVAILABILITY_MODE
+          value: "true"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor high availability pod replacement:</h6>
+                            <pre><code class="language-bash"># Deploy high availability author sync
+kubectl apply -f author-sync-terminating-replacement.yaml
+
+# Monitor immediate pod replacement
+kubectl get pods -l app=anihpj,component=author-sync -w
+
+# Simulate pod disruption
+kubectl delete pod -l app=anihpj,component=author-sync --force --grace-period=0
+
+# Verify immediate replacement creation
+kubectl get pods -l app=anihpj,component=author-sync</code></pre>
                         </div>
-                        <div class="queryset-output">Terminating Output:
->>> Author.objects.filter(company__endswith='Corp').count()
-1</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Creates replacement pods immediately when pods start terminating or fail for high availability.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Author Sync with High Availability:</h6>
+                            <pre><code class="language-python"># Check author synchronization results
+>>> from jobpost.models import Author
+>>> Author.objects.count()
+20
+
+# Verify external API synchronization
+>>> synced_authors = Author.objects.filter(external_api_synced=True)
+>>> synced_authors.count()
+20
+
+# Check social links updates
+>>> authors_with_social = Author.objects.exclude(social_links__isnull=True)
+>>> authors_with_social.count()
+18  # 2 authors may not have social media
+
+# Check employment verification
+>>> verified_employment = Author.objects.filter(employment_verified=True)
+>>> verified_employment.count()
+20
+
+# View synchronized author data
+>>> for author in Author.objects.all()[:5]:
+...     print(f"{author.name} ({author.company}): {author.social_links or 'No social'}")
+John Smith (TechCorp): {'linkedin': 'https://linkedin.com/in/johnsmith', 'github': 'https://github.com/jsmith'}
+Sarah Johnson (DataCo): {'linkedin': 'https://linkedin.com/in/sarahjohnson', 'twitter': '@sarahj_data'}
+Mike Chen (StartupXYZ): {'github': 'https://github.com/mikechen', 'portfolio': 'https://mikechen.dev'}
+
+# Check high availability metrics
+>>> sync_metrics = getattr(settings, 'SYNC_METRICS', {})
+>>> sync_metrics.get('pod_replacements')
+3  # Three immediate replacements during sync
+>>> sync_metrics.get('availability_percentage')
+99.2  # High availability maintained
+</code></pre>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -17476,72 +19137,460 @@ StartupXYZ: 2 authors, 12 jobs
                         <li><strong>ready (int32)</strong>: Number of active pods which have a Ready condition and are not terminating. Provides insight into pods ready to process Django tasks.</li>
                     </ul>
 
-                    <h5>5 short examples with Django models</h5>
+                    <h5>5 comprehensive examples with Django anihpj models</h5>
 
                     <div class="example">
-                        <h6>Example 1: Ready Pods Check</h6>
-                        <pre><code class="language-bash">kubectl get job jobpost-processor -o jsonpath='{.status.ready}'</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Returns number of ready pods for JobPost processing.
+                        <h6>Example 1: JobPost Processing Ready Pods Monitoring</h6>
+                        <pre><code class="language-bash"># Check ready pods for JobPost processing job
+kubectl get job jobpost-processor-job -o jsonpath='{.status.ready}' && echo " ready pods"
+
+# Get detailed status including ready, active, and succeeded
+kubectl get job jobpost-processor-job -o jsonpath='{.status.ready}/{.status.active}/{.status.succeeded}' && echo " (ready/active/succeeded)"
+
+# Monitor readiness changes over time
+kubectl get job jobpost-processor-job -w -o jsonpath='{.metadata.name} Ready:{.status.ready} Active:{.status.active}{"\n"}'
+
+# Check individual pod readiness conditions
+kubectl get pods -l job-name=jobpost-processor-job -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor JobPost processing readiness:</h6>
+                            <pre><code class="language-bash"># Deploy JobPost processing job
+kubectl apply -f jobpost-processor.yaml
+
+# Watch readiness progression
+kubectl get job jobpost-processor-job -w
+
+# Check ready pod count during processing
+watch kubectl get job jobpost-processor-job -o jsonpath='{.status.ready}'
+
+# Verify pod readiness conditions
+kubectl describe pods -l job-name=jobpost-processor-job | grep -A 5 "Ready"</code></pre>
                         </div>
-                        <div class="queryset-output">Ready Pods Output:
->>> JobPost.objects.filter(salary__gte=80000).count()
-4</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows real-time ready pod count for JobPost processing with detailed readiness monitoring.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>JobPost Processing Readiness Status:</h6>
+                            <pre><code class="language-python"># Check JobPost processing readiness
+>>> from jobpost.models import JobPost
+>>> JobPost.objects.filter(processing_status='ready').count()
+300
+
+# Monitor processing progress
+>>> processing_stats = {
+...     'ready_for_processing': JobPost.objects.filter(status='pending').count(),
+...     'currently_processing': JobPost.objects.filter(status='processing').count(),
+...     'processed': JobPost.objects.filter(status='processed').count(),
+...     'failed': JobPost.objects.filter(status='failed').count()
+... }
+>>> processing_stats
+{'ready_for_processing': 100, 'currently_processing': 3, 'processed': 195, 'failed': 2}
+
+# Check high-value jobs ready for processing
+>>> high_value_ready = JobPost.objects.filter(
+...     salary__gte=80000,
+...     status='pending'
+... ).count()
+>>> high_value_ready
+25
+
+# View sample ready JobPosts
+>>> ready_jobs = JobPost.objects.filter(status='pending')[:5]
+>>> for job in ready_jobs:
+...     print(f"{job.title} at {job.company} - ${job.salary:,}")
+Senior Python Developer at TechCorp - $95,000
+Data Scientist at DataCo - $105,000
+Product Manager at StartupXYZ - $120,000
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 2: User Migration Ready Status</h6>
-                        <pre><code class="language-yaml">status:
-  ready: 2
-  active: 2
-  succeeded: 0</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 2 pods ready and active for user migration.
+                        <h6>Example 2: User Migration Ready Status with Health Checks</h6>
+                        <pre><code class="language-yaml"># Get migration job status with ready pods
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: migration-monitor
+data:
+  check-ready.sh: |
+    #!/bin/bash
+    READY=$(kubectl get job user-migration-job -o jsonpath='{.status.ready}')
+    ACTIVE=$(kubectl get job user-migration-job -o jsonpath='{.status.active}')
+    SUCCEEDED=$(kubectl get job user-migration-job -o jsonpath='{.status.succeeded}')
+    echo "Migration Status: Ready=$READY, Active=$ACTIVE, Succeeded=$SUCCEEDED"
+    
+    if [ "$READY" -eq "$ACTIVE" ] && [ "$ACTIVE" -gt 0 ]; then
+      echo "All active pods are ready for migration processing"
+    else
+      echo "Some pods are not ready - waiting for readiness"
+    fi</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor user migration readiness:</h6>
+                            <pre><code class="language-bash"># Deploy migration monitoring
+kubectl apply -f migration-monitor.yaml
+
+# Execute readiness check
+kubectl create job --from=cronjob/migration-monitor migration-check
+
+# Watch migration readiness in real-time
+while true; do
+  kubectl get job user-migration-job -o jsonpath='Ready: {.status.ready}, Active: {.status.active}, Total: {.spec.parallelism}{"\n"}'
+  sleep 5
+done
+
+# Check migration pod conditions
+kubectl get pods -l job-name=user-migration-job -o custom-columns="NAME:.metadata.name,READY:.status.conditions[?(@.type=='Ready')].status"</code></pre>
                         </div>
-                        <div class="queryset-output">Migration Ready Output:
->>> User.objects.filter(migration_ready=True).count()
-100</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows 2 pods ready and active for user migration with automated readiness monitoring.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>User Migration Readiness Results:</h6>
+                            <pre><code class="language-python"># Check user migration readiness
+>>> from django.contrib.auth.models import User
+>>> migration_ready_users = User.objects.filter(migration_ready=True)
+>>> migration_ready_users.count()
+150
+
+# Check migration batch status
+>>> migration_batches = {}
+>>> for i in range(3):  # 3 parallel workers
+...     batch_users = User.objects.filter(migration_batch=i)
+...     ready_count = batch_users.filter(migration_ready=True).count()
+...     migration_batches[f'worker_{i}'] = {
+...         'total': batch_users.count(),
+...         'ready': ready_count,
+...         'processing': batch_users.filter(migration_status='processing').count(),
+...         'completed': batch_users.filter(migration_status='completed').count()
+...     }
+...     print(f"Worker {i}: {ready_count} ready, {migration_batches[f'worker_{i}']['processing']} processing")
+Worker 0: 50 ready, 0 processing
+Worker 1: 50 ready, 0 processing  
+Worker 2: 50 ready, 0 processing
+
+# Check migration readiness health
+>>> migration_health = {
+...     'all_workers_ready': all(batch['ready'] > 0 for batch in migration_batches.values()),
+...     'no_failed_migrations': User.objects.filter(migration_status='failed').count() == 0,
+...     'system_ready': True
+... }
+>>> migration_health
+{'all_workers_ready': True, 'no_failed_migrations': True, 'system_ready': True}
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 3: Skills Processing Ready</h6>
-                        <pre><code class="language-yaml">status:
-  ready: 1
-  active: 1
-  conditions:
-  - type: Ready
-    status: "True"</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 1 pod ready for skills data processing.
+                        <h6>Example 3: Skills Processing Ready with Resource Monitoring</h6>
+                        <pre><code class="language-yaml"># Skills processing job with readiness tracking
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skills-processor-ready
+spec:
+  parallelism: 2
+  template:
+    spec:
+      containers:
+      - name: skills-processor
+        image: anihpj:v2.1.0
+        command: ["python", "manage.py", "process_skills_enhanced"]
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - |
+              import psutil, os
+              # Check memory usage < 80%
+              if psutil.virtual_memory().percent > 80:
+                  exit(1)
+              # Check if processing pipeline is ready
+              if not os.path.exists('/tmp/skills_pipeline_ready'):
+                  exit(1)
+              # Check database connection
+              from django.db import connection
+              try:
+                  connection.ensure_connection()
+                  exit(0)
+              except:
+                  exit(1)
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor skills processing readiness:</h6>
+                            <pre><code class="language-bash"># Deploy skills processing with readiness checks
+kubectl apply -f skills-processor-ready.yaml
+
+# Monitor readiness progression
+kubectl get job skills-processor-ready -o jsonpath='{.status.ready}/{.spec.parallelism}' -w
+
+# Check detailed readiness conditions
+kubectl describe pods -l job-name=skills-processor-ready | grep -A 10 "Readiness"
+
+# Verify resource usage and pipeline status
+kubectl exec -l job-name=skills-processor-ready -- cat /tmp/skills_pipeline_ready</code></pre>
                         </div>
-                        <div class="queryset-output">Skills Ready Output:
->>> Skills.objects.filter(ready_for_processing=True).count()
-50</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows 1 pod ready for skills processing with comprehensive readiness validation.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Skills Processing Readiness Results:</h6>
+                            <pre><code class="language-python"># Check skills processing readiness
+>>> from jobpost.models import Skills
+>>> skills_ready = Skills.objects.filter(ready_for_processing=True)
+>>> skills_ready.count()
+45
+
+# Check processing pipeline status
+>>> import os, psutil
+>>> pipeline_status = {
+...     'pipeline_ready': os.path.exists('/tmp/skills_pipeline_ready'),
+...     'memory_usage': psutil.virtual_memory().percent,
+...     'cpu_usage': psutil.cpu_percent(interval=1),
+...     'database_connected': True  # Assuming connection successful
+... }
+>>> pipeline_status
+{'pipeline_ready': True, 'memory_usage': 65.2, 'cpu_usage': 25.1, 'database_connected': True}
+
+# Check skills by readiness status
+>>> readiness_stats = {
+...     'ready': Skills.objects.filter(ready_for_processing=True).count(),
+...     'processing': Skills.objects.filter(processing_status='active').count(),
+...     'enhanced': Skills.objects.filter(enhancement_complete=True).count(),
+...     'failed': Skills.objects.filter(processing_status='failed').count()
+... }
+>>> readiness_stats
+{'ready': 20, 'processing': 15, 'enhanced': 10, 'failed': 0}
+
+# View skills ready for enhancement
+>>> ready_skills = Skills.objects.filter(ready_for_processing=True)[:5]
+>>> for skill in ready_skills:
+...     print(f"{skill.name} - {skill.category} (Priority: {skill.processing_priority})")
+Python - Programming (Priority: high)
+JavaScript - Programming (Priority: high)
+React - Framework (Priority: medium)
+Django - Framework (Priority: high)
+PostgreSQL - Database (Priority: medium)
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 4: Location Sync Ready Count</h6>
-                        <pre><code class="language-bash">kubectl get job location-sync -o jsonpath='{.status.ready}/{.status.active}'</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Shows ready/active ratio for location sync job.
+                        <h6>Example 4: Location Sync Ready/Active Ratio Analysis</h6>
+                        <pre><code class="language-bash"># Advanced location sync readiness monitoring
+#!/bin/bash
+
+# Function to get job status metrics
+get_job_metrics() {
+    local job_name=$1
+    local ready=$(kubectl get job $job_name -o jsonpath='{.status.ready}' 2>/dev/null || echo "0")
+    local active=$(kubectl get job $job_name -o jsonpath='{.status.active}' 2>/dev/null || echo "0")
+    local succeeded=$(kubectl get job $job_name -o jsonpath='{.status.succeeded}' 2>/dev/null || echo "0")
+    local failed=$(kubectl get job $job_name -o jsonpath='{.status.failed}' 2>/dev/null || echo "0")
+    
+    echo "Job: $job_name"
+    echo "  Ready: $ready/$active ($(( ready * 100 / (active == 0 ? 1 : active) ))% ready ratio)"
+    echo "  Progress: $succeeded completed, $failed failed"
+    echo "  Efficiency: $(( (succeeded * 100) / (succeeded + failed == 0 ? 1 : succeeded + failed) ))% success rate"
+}
+
+# Monitor location sync job
+get_job_metrics "location-sync-job"
+
+# Check external API health
+curl -s https://geocoding-api.example.com/health | jq '.status'
+
+# Verify sync readiness
+kubectl get pods -l job-name=location-sync-job -o jsonpath='{range .items[*]}{.metadata.name}: Ready={.status.conditions[?(@.type=="Ready")].status}, RestartCount={.status.containerStatuses[0].restartCount}{"\n"}{end}'</code></pre>
+                        <div class="command-example">
+                            <h6>Analyze location sync readiness efficiency:</h6>
+                            <pre><code class="language-bash"># Execute comprehensive readiness analysis
+bash location-sync-analysis.sh
+
+# Monitor ready/active ratio over time
+while true; do
+  READY=$(kubectl get job location-sync-job -o jsonpath='{.status.ready}')
+  ACTIVE=$(kubectl get job location-sync-job -o jsonpath='{.status.active}')
+  RATIO=$(( READY * 100 / (ACTIVE == 0 ? 1 : ACTIVE) ))
+  echo "$(date): Ready=$READY, Active=$ACTIVE, Ratio=${RATIO}%"
+  sleep 10
+done</code></pre>
                         </div>
-                        <div class="queryset-output">Location Ready Output:
->>> Location.objects.filter(sync_ready=True).count()
-75</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows ready/active ratio analysis for location sync job with efficiency metrics.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Location Sync Readiness Analysis:</h6>
+                            <pre><code class="language-python"># Check location sync readiness metrics
+>>> from jobpost.models import Location
+>>> from django.db.models import Count, Q
+
+# Location sync readiness status
+>>> sync_readiness = {
+...     'ready_for_sync': Location.objects.filter(sync_ready=True).count(),
+...     'currently_syncing': Location.objects.filter(sync_status='active').count(),
+...     'sync_completed': Location.objects.filter(sync_status='completed').count(),
+...     'sync_failed': Location.objects.filter(sync_status='failed').count()
+... }
+>>> sync_readiness
+{'ready_for_sync': 10, 'currently_syncing': 5, 'sync_completed': 20, 'sync_failed': 0}
+
+# Calculate efficiency metrics
+>>> total_processed = sync_readiness['sync_completed'] + sync_readiness['sync_failed']
+>>> efficiency_metrics = {
+...     'ready_ratio': (sync_readiness['ready_for_sync'] / 25) * 100,
+...     'success_rate': (sync_readiness['sync_completed'] / max(total_processed, 1)) * 100,
+...     'processing_efficiency': (sync_readiness['currently_syncing'] / max(sync_readiness['ready_for_sync'], 1)) * 100
+... }
+>>> efficiency_metrics
+{'ready_ratio': 40.0, 'success_rate': 100.0, 'processing_efficiency': 50.0}
+
+# Check geocoding API readiness
+>>> api_ready_locations = Location.objects.filter(
+...     sync_ready=True,
+...     api_response_time__lt=2000  # Less than 2 seconds response time
+... )
+>>> api_ready_locations.count()
+8  # 8 locations have fast API response times
+
+# View high-priority locations ready for sync
+>>> priority_locations = Location.objects.filter(
+...     sync_ready=True,
+...     priority='high'
+... ).order_by('last_sync_attempt')[:3]
+>>> for loc in priority_locations:
+...     print(f"{loc.name}: {loc.sync_priority} priority, last attempt: {loc.last_sync_attempt}")
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 5: Author Report Ready State</h6>
-                        <pre><code class="language-yaml">status:
-  ready: 0
-  active: 1
-  succeeded: 2</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> No ready pods, 1 active, 2 completed author reports.
+                        <h6>Example 5: Author Report Generation Ready State Dashboard</h6>
+                        <pre><code class="language-yaml"># Author report job with comprehensive readiness monitoring
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: author-report-dashboard
+data:
+  monitor.py: |
+    #!/usr/bin/env python3
+    import subprocess, json, time
+    
+    def get_job_status(job_name):
+        try:
+            cmd = f"kubectl get job {job_name} -o json"
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            return json.loads(result.stdout)
+        except:
+            return None
+    
+    def monitor_readiness():
+        job_status = get_job_status("author-report-job")
+        if not job_status:
+            print("Job not found")
+            return
+            
+        status = job_status.get('status', {})
+        ready = status.get('ready', 0)
+        active = status.get('active', 0)
+        succeeded = status.get('succeeded', 0)
+        
+        print(f"Author Report Generation Status:")
+        print(f"  Ready Pods: {ready}")
+        print(f"  Active Pods: {active}")
+        print(f"  Completed Reports: {succeeded}")
+        print(f"  Readiness Ratio: {(ready/max(active,1)*100):.1f}%")
+        
+        if ready == 0 and active > 0:
+            print("  ⚠️  Warning: No pods ready - check resource constraints")
+        elif ready == active and active > 0:
+            print("  ✅ All active pods are ready for processing")
+        
+    if __name__ == "__main__":
+        monitor_readiness()</code></pre>
+                        <div class="command-example">
+                            <h6>Deploy author report readiness dashboard:</h6>
+                            <pre><code class="language-bash"># Deploy monitoring dashboard
+kubectl apply -f author-report-dashboard.yaml
+
+# Execute readiness monitoring
+kubectl create job --from=configmap/author-report-dashboard readiness-check
+
+# Watch readiness in dashboard format
+kubectl logs job/readiness-check -f
+
+# Check report generation pod conditions
+kubectl get pods -l job-name=author-report-job -o custom-columns="NAME:.metadata.name,READY:.status.conditions[?(@.type=='Ready')].status,MEMORY:.status.containerStatuses[0].state"</code></pre>
                         </div>
-                        <div class="queryset-output">Author Ready Output:
->>> Author.objects.filter(company__isnull=False).count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows no ready pods, 1 active, 2 completed author reports with comprehensive dashboard monitoring.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Author Report Readiness Dashboard:</h6>
+                            <pre><code class="language-python"># Check author report readiness status
+>>> from jobpost.models import Author
+>>> from django.db.models import Count, Q
+>>> import datetime
+
+# Author report generation readiness
+>>> report_readiness = {
+...     'authors_ready': Author.objects.filter(report_ready=True).count(),
+...     'reports_generating': Author.objects.filter(report_status='generating').count(),
+...     'reports_completed': Author.objects.filter(report_status='completed').count(),
+...     'reports_failed': Author.objects.filter(report_status='failed').count()
+... }
+>>> report_readiness
+{'authors_ready': 5, 'reports_generating': 1, 'reports_completed': 9, 'reports_failed': 0}
+
+# Check recent report completions
+>>> recent_reports = Author.objects.filter(
+...     report_status='completed',
+...     report_generated_at__gte=datetime.datetime.now() - datetime.timedelta(hours=1)
+... )
+>>> recent_reports.count()
+2
+
+# Dashboard metrics calculation
+>>> dashboard_metrics = {
+...     'readiness_percentage': (report_readiness['authors_ready'] / 15) * 100,
+...     'completion_rate': (report_readiness['reports_completed'] / 15) * 100,
+...     'failure_rate': (report_readiness['reports_failed'] / 15) * 100,
+...     'active_processing': report_readiness['reports_generating']
+... }
+>>> dashboard_metrics
+{'readiness_percentage': 33.3, 'completion_rate': 60.0, 'failure_rate': 0.0, 'active_processing': 1}
+
+# View authors with completed reports
+>>> completed_authors = Author.objects.filter(report_status='completed')[:5]
+>>> for author in completed_authors:
+...     print(f"{author.name} ({author.company}): Report completed at {author.report_generated_at}")
+John Smith (TechCorp): Report completed at 2024-01-15 14:30:00
+Sarah Johnson (DataCo): Report completed at 2024-01-15 14:25:00
+
+# Check report quality metrics
+>>> report_quality = {
+...     'comprehensive_reports': Author.objects.filter(
+...         report_status='completed',
+...         report_size__gte=1024000  # Reports >= 1MB
+...     ).count(),
+...     'quick_generation': Author.objects.filter(
+...         report_status='completed',
+...         generation_time__lt=300  # Less than 5 minutes
+...     ).count()
+... }
+>>> report_quality
+{'comprehensive_reports': 8, 'quick_generation': 9}
+</code></pre>
+                        </div>
                     </div>
                 </div>
 
@@ -17556,72 +19605,616 @@ StartupXYZ: 2 authors, 12 jobs
                         <li><strong>terminating (int32)</strong>: Number of pods which are terminating. Useful for tracking job shutdown progress and pod lifecycle management.</li>
                     </ul>
 
-                    <h5>5 short examples with Django models</h5>
+                    <h5>5 comprehensive examples with Django anihpj models</h5>
 
                     <div class="example">
-                        <h6>Example 1: Failed Indexes Tracking</h6>
-                        <pre><code class="language-yaml">status:
-  failedIndexes: "1,3,5"
-  succeeded: 2
-  failed: 3</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Indexes 1, 3, and 5 failed in JobPost processing.
+                        <h6>Example 1: Failed Indexes Tracking for JobPost Processing</h6>
+                        <pre><code class="language-bash"># Monitor failed indexes in JobPost processing
+kubectl get job jobpost-indexed-processor -o jsonpath='{.status.failedIndexes}' && echo
+
+# Get comprehensive status including failed and completed indexes
+kubectl get job jobpost-indexed-processor -o jsonpath='Failed: {.status.failedIndexes}, Completed: {.status.completedIndexes}, Succeeded: {.status.succeeded}'
+
+# Check specific failed index details
+FAILED_INDEXES=$(kubectl get job jobpost-indexed-processor -o jsonpath='{.status.failedIndexes}')
+echo "Failed indexes: $FAILED_INDEXES"
+for index in $(echo $FAILED_INDEXES | tr ',' ' '); do
+  echo "Checking pods for failed index $index"
+  kubectl get pods -l job-name=jobpost-indexed-processor,batch.kubernetes.io/job-completion-index=$index
+done
+
+# Analyze failure patterns
+kubectl get events --field-selector involvedObject.kind=Job,involvedObject.name=jobpost-indexed-processor</code></pre>
+                        <div class="command-example">
+                            <h6>Track and analyze failed index patterns:</h6>
+                            <pre><code class="language-bash"># Deploy indexed JobPost processing
+kubectl apply -f jobpost-indexed-processing.yaml
+
+# Monitor index failure progression
+kubectl get job jobpost-indexed-processor -w -o jsonpath='{.metadata.name}: Failed[{.status.failedIndexes}] Completed[{.status.completedIndexes}]{"\n"}'
+
+# Generate failure analysis report
+kubectl get job jobpost-indexed-processor -o json | jq '.status | {failedIndexes, completedIndexes, succeeded, failed}'
+
+# Check failure reasons from pod logs
+kubectl logs -l job-name=jobpost-indexed-processor --all-containers=true | grep -i error</code></pre>
                         </div>
-                        <div class="queryset-output">Failed Indexes Output:
->>> JobPost.objects.filter(id__in=[1,3,5]).count()
-3</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows indexes 1, 3, and 5 failed in JobPost processing with detailed failure analysis.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>JobPost Failed Index Analysis:</h6>
+                            <pre><code class="language-python"># Analyze JobPost processing failures by index
+>>> from jobpost.models import JobPost
+>>> from django.db.models import Count, Q
+
+# Check processing results by failed indexes
+>>> failed_indexes = [1, 3, 5]
+>>> failed_analysis = {}
+>>> for index in failed_indexes:
+...     index_jobs = JobPost.objects.filter(processing_index=index)
+...     failed_analysis[index] = {
+...         'total_jobs': index_jobs.count(),
+...         'failed_jobs': index_jobs.filter(processing_status='failed').count(),
+...         'error_types': list(index_jobs.filter(
+...             processing_status='failed'
+...         ).values_list('error_type', flat=True).distinct())
+...     }
+...     print(f"Index {index}: {failed_analysis[index]}")
+Index 1: {'total_jobs': 100, 'failed_jobs': 100, 'error_types': ['database_timeout']}
+Index 3: {'total_jobs': 100, 'failed_jobs': 100, 'error_types': ['memory_overflow']}
+Index 5: {'total_jobs': 100, 'failed_jobs': 100, 'error_types': ['api_rate_limit']}
+
+# Check successful indexes for comparison
+>>> successful_indexes = [0, 2, 4, 6, 7, 8, 9]
+>>> successful_count = 0
+>>> for index in successful_indexes:
+...     index_jobs = JobPost.objects.filter(
+...         processing_index=index,
+...         processing_status='completed'
+...     )
+...     successful_count += index_jobs.count()
+>>> successful_count
+700  # 7 successful indexes × 100 jobs each
+
+# Analyze failure patterns
+>>> failure_patterns = JobPost.objects.filter(
+...     processing_index__in=failed_indexes,
+...     processing_status='failed'
+... ).values('error_type').annotate(count=Count('id')).order_by('-count')
+>>> dict(failure_patterns.values_list('error_type', 'count'))
+{'database_timeout': 100, 'memory_overflow': 100, 'api_rate_limit': 100}
+
+# Check if failed jobs can be reprocessed
+>>> reprocessable_jobs = JobPost.objects.filter(
+...     processing_index__in=failed_indexes,
+...     retry_eligible=True
+... )
+>>> reprocessable_jobs.count()
+250  # All failed jobs can be retried with different configuration
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 2: Terminating Pods Count</h6>
-                        <pre><code class="language-bash">kubectl get job user-migration -o jsonpath='{.status.terminating}'</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Returns number of terminating pods for user migration.
+                        <h6>Example 2: Terminating Pods Count for User Migration</h6>
+                        <pre><code class="language-bash"># Monitor terminating pods during user migration
+kubectl get job user-migration-job -o jsonpath='{.status.terminating}' && echo " pods terminating"
+
+# Get complete termination status
+kubectl get job user-migration-job -o jsonpath='Terminating: {.status.terminating}, Active: {.status.active}, Succeeded: {.status.succeeded}'
+
+# Watch termination progression in real-time
+watch -n 2 'kubectl get job user-migration-job -o jsonpath="$(date): Terminating={.status.terminating} Active={.status.active} Total={.spec.parallelism}{\"\\n\"}"'
+
+# Check individual pod termination status
+kubectl get pods -l job-name=user-migration-job -o custom-columns="NAME:.metadata.name,PHASE:.status.phase,TERMINATING:.metadata.deletionTimestamp"
+
+# Monitor graceful shutdown progress
+kubectl describe pods -l job-name=user-migration-job | grep -A 5 "Terminating\|Shutdown"</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor user migration termination handling:</h6>
+                            <pre><code class="language-bash"># Deploy user migration with graceful termination
+kubectl apply -f user-migration-termination.yaml
+
+# Simulate controlled shutdown
+kubectl scale job user-migration-job --replicas=0
+
+# Watch termination sequence
+kubectl get pods -l job-name=user-migration-job -w
+
+# Check cleanup completion
+kubectl get job user-migration-job -o jsonpath='{.status.terminating}' | grep -q "0" && echo "All pods terminated cleanly"</code></pre>
                         </div>
-                        <div class="queryset-output">Terminating Output:
->>> User.objects.filter(email__endswith='@example.com').count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows terminating pod count during user migration with graceful shutdown monitoring.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>User Migration Termination Analysis:</h6>
+                            <pre><code class="language-python"># Check user migration termination status
+>>> from django.contrib.auth.models import User
+>>> from jobpost.models import Author
+
+# Check migration progress during termination
+>>> migration_status = {
+...     'users_migrated': User.objects.filter(migration_status='completed').count(),
+...     'users_in_progress': User.objects.filter(migration_status='processing').count(),
+...     'users_pending': User.objects.filter(migration_status='pending').count(),
+...     'migration_paused': User.objects.filter(migration_status='paused').count()
+... }
+>>> migration_status
+{'users_migrated': 120, 'users_in_progress': 25, 'users_pending': 5, 'migration_paused': 0}
+
+# Check graceful termination handling
+>>> termination_metrics = {
+...     'clean_shutdowns': User.objects.filter(
+...         migration_status='completed',
+...         migration_notes__icontains='graceful_shutdown'
+...     ).count(),
+...     'interrupted_migrations': User.objects.filter(
+...         migration_status='processing',
+...         last_heartbeat__lt=datetime.datetime.now() - datetime.timedelta(minutes=5)
+...     ).count(),
+...     'successful_rollbacks': User.objects.filter(
+...         migration_notes__icontains='rollback_successful'
+...     ).count()
+... }
+>>> termination_metrics
+{'clean_shutdowns': 15, 'interrupted_migrations': 0, 'successful_rollbacks': 2}
+
+# Check data integrity after termination
+>>> integrity_check = {
+...     'orphaned_users': User.objects.filter(
+...         migration_status='completed',
+...         profile__isnull=True
+...     ).count(),
+...     'duplicate_emails': User.objects.values('email').annotate(
+...         count=Count('id')
+...     ).filter(count__gt=1).count(),
+...     'corrupted_data': User.objects.filter(
+...         migration_status='completed',
+...         username__exact=''
+...     ).count()
+... }
+>>> integrity_check
+{'orphaned_users': 0, 'duplicate_emails': 0, 'corrupted_data': 0}
+
+# Verify termination was clean
+>>> termination_summary = {
+...     'termination_completed': True,
+...     'data_consistency': all(v == 0 for v in integrity_check.values()),
+...     'migration_resumable': migration_status['users_pending'] > 0
+... }
+>>> termination_summary
+{'termination_completed': True, 'data_consistency': True, 'migration_resumable': True}
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 3: Skills Index Failures</h6>
-                        <pre><code class="language-yaml">status:
-  failedIndexes: "0,2-4,7"
-  completedIndexes: "1,5-6,8-9"</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Shows failed vs completed indexes for skills processing.
+                        <h6>Example 3: Skills Index Failures with Range Analysis</h6>
+                        <pre><code class="language-bash"># Complex skills processing with index ranges
+kubectl get job skills-range-processor -o jsonpath='{.status.failedIndexes}' && echo
+
+# Parse complex failed index ranges
+FAILED=$(kubectl get job skills-range-processor -o jsonpath='{.status.failedIndexes}')
+COMPLETED=$(kubectl get job skills-range-processor -o jsonpath='{.status.completedIndexes}')
+
+echo "Failed indexes: $FAILED"
+echo "Completed indexes: $COMPLETED"
+
+# Analyze index range patterns
+python3 -c "
+failed = '$FAILED'
+completed = '$COMPLETED'
+
+def parse_ranges(range_str):
+    indexes = set()
+    if not range_str:
+        return indexes
+    for part in range_str.split(','):
+        if '-' in part:
+            start, end = map(int, part.split('-'))
+            indexes.update(range(start, end + 1))
+        else:
+            indexes.add(int(part))
+    return indexes
+
+failed_set = parse_ranges(failed)
+completed_set = parse_ranges(completed)
+
+print(f'Failed indexes: {sorted(failed_set)}')
+print(f'Completed indexes: {sorted(completed_set)}')
+print(f'Success rate: {len(completed_set)/(len(failed_set)+len(completed_set))*100:.1f}%')
+"
+
+# Check resource usage correlation with failures
+kubectl top pods -l job-name=skills-range-processor</code></pre>
+                        <div class="command-example">
+                            <h6>Analyze skills processing index failures:</h6>
+                            <pre><code class="language-bash"># Deploy skills processing with index ranges
+kubectl apply -f skills-range-processing.yaml
+
+# Monitor index completion patterns
+kubectl get job skills-range-processor -w -o jsonpath='{.metadata.name}: Failed[{.status.failedIndexes}] Completed[{.status.completedIndexes}]{"\n"}'
+
+# Generate index failure heatmap
+kubectl get events --field-selector involvedObject.kind=Pod | grep skills-range-processor | grep -i failed
+
+# Analyze memory/CPU correlation with failures
+kubectl describe pods -l job-name=skills-range-processor | grep -A 10 -B 5 "OOMKilled\|OutOfCpu"</code></pre>
                         </div>
-                        <div class="queryset-output">Skills Indexes Output:
->>> Skills.objects.all().count()
-5</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows complex failed vs completed index ranges for skills processing with detailed pattern analysis.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Skills Index Range Analysis:</h6>
+                            <pre><code class="language-python"># Analyze skills processing by index ranges
+>>> from jobpost.models import Skills
+>>> from collections import defaultdict
+
+# Parse failed and completed index ranges
+>>> failed_indexes = [0, 2, 3, 4, 7]  # Parsed from "0,2-4,7"
+>>> completed_indexes = [1, 5, 6, 8, 9]  # Parsed from "1,5-6,8-9"
+
+# Analyze skills processing by index groups
+>>> index_analysis = {}
+>>> for index in range(10):
+...     skills_in_index = Skills.objects.filter(processing_index=index)
+...     if index in failed_indexes:
+...         status = 'failed'
+...     elif index in completed_indexes:
+...         status = 'completed'
+...     else:
+...         status = 'pending'
+...     
+...     index_analysis[index] = {
+...         'status': status,
+...         'skills_count': skills_in_index.count(),
+...         'processing_time': skills_in_index.aggregate(
+...             avg_time=models.Avg('processing_duration')
+...         )['avg_time'] or 0
+...     }
+...     print(f"Index {index}: {status} - {index_analysis[index]['skills_count']} skills")
+Index 0: failed - 5 skills
+Index 1: completed - 5 skills
+Index 2: failed - 5 skills
+Index 3: failed - 5 skills
+Index 4: failed - 5 skills
+Index 5: completed - 5 skills
+Index 6: completed - 5 skills
+Index 7: failed - 5 skills
+Index 8: completed - 5 skills
+Index 9: completed - 5 skills
+
+# Calculate success metrics
+>>> success_metrics = {
+...     'total_indexes': 10,
+...     'failed_indexes': len(failed_indexes),
+...     'completed_indexes': len(completed_indexes),
+...     'success_rate': (len(completed_indexes) / 10) * 100,
+...     'skills_processed': sum(
+...         index_analysis[i]['skills_count'] 
+...         for i in completed_indexes
+...     )
+... }
+>>> success_metrics
+{'total_indexes': 10, 'failed_indexes': 5, 'completed_indexes': 5, 'success_rate': 50.0, 'skills_processed': 25}
+
+# Identify failure patterns by resource usage
+>>> failure_patterns = {}
+>>> for index in failed_indexes:
+...     failed_skills = Skills.objects.filter(
+...         processing_index=index,
+...         processing_status='failed'
+...     )
+...     common_errors = failed_skills.values('error_reason').annotate(
+...         count=Count('id')
+...     ).order_by('-count')
+...     failure_patterns[index] = list(common_errors.values_list('error_reason', 'count'))
+
+>>> failure_patterns
+{0: [('memory_limit_exceeded', 5)], 
+ 2: [('cpu_timeout', 5)], 
+ 3: [('api_quota_exceeded', 5)], 
+ 4: [('database_lock_timeout', 5)], 
+ 7: [('network_timeout', 5)]}
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 4: Location Termination Status</h6>
-                        <pre><code class="language-yaml">status:
-  terminating: 1
-  active: 2
-  succeeded: 5</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> 1 pod terminating, 2 active, 5 succeeded for location sync.
+                        <h6>Example 4: Location Termination Status with Cleanup Monitoring</h6>
+                        <pre><code class="language-bash"># Advanced location sync termination monitoring
+#!/bin/bash
+
+monitor_location_termination() {
+    local job_name="location-sync-cleanup"
+    
+    echo "=== Location Sync Termination Monitor ==="
+    
+    # Get current termination status
+    local terminating=$(kubectl get job $job_name -o jsonpath='{.status.terminating}' 2>/dev/null || echo "0")
+    local active=$(kubectl get job $job_name -o jsonpath='{.status.active}' 2>/dev/null || echo "0")
+    local succeeded=$(kubectl get job $job_name -o jsonpath='{.status.succeeded}' 2>/dev/null || echo "0")
+    
+    echo "Current Status:"
+    echo "  Terminating: $terminating pods"
+    echo "  Active: $active pods"
+    echo "  Succeeded: $succeeded pods"
+    
+    # Check if graceful termination is in progress
+    if [ "$terminating" -gt 0 ]; then
+        echo "  🔄 Graceful termination in progress..."
+        
+        # Monitor cleanup activities
+        kubectl logs -l job-name=$job_name --tail=20 | grep -i "cleanup\|shutdown\|terminating"
+        
+        # Check remaining cleanup tasks
+        local cleanup_tasks=$(kubectl exec -l job-name=$job_name -- find /tmp/cleanup -name "*.lock" 2>/dev/null | wc -l)
+        echo "  Remaining cleanup tasks: $cleanup_tasks"
+    else
+        echo "  ✅ No pods currently terminating"
+    fi
+    
+    # Check pod termination reasons
+    kubectl get events --field-selector involvedObject.kind=Pod | grep $job_name | grep "Terminating\|Killing" | tail -5
+}
+
+# Execute monitoring
+monitor_location_termination
+
+# Watch termination progress
+kubectl get pods -l job-name=location-sync-cleanup -w</code></pre>
+                        <div class="command-example">
+                            <h6>Monitor location sync termination with cleanup:</h6>
+                            <pre><code class="language-bash"># Deploy location sync with termination monitoring
+kubectl apply -f location-sync-cleanup-termination.yaml
+
+# Execute termination monitoring script
+bash location-termination-monitor.sh
+
+# Trigger graceful termination
+kubectl delete job location-sync-cleanup --grace-period=300
+
+# Monitor cleanup completion
+while kubectl get job location-sync-cleanup 2>/dev/null; do
+  echo "Waiting for cleanup completion..."
+  sleep 5
+done
+echo "Cleanup completed successfully"</code></pre>
                         </div>
-                        <div class="queryset-output">Location Termination Output:
->>> Location.objects.filter(zip_code__isnull=True).count()
-1</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows 1 pod terminating, 2 active, 5 succeeded for location sync with comprehensive cleanup monitoring.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Location Termination and Cleanup Analysis:</h6>
+                            <pre><code class="language-python"># Check location sync termination status
+>>> from jobpost.models import Location
+>>> import datetime, os
+
+# Location sync termination metrics
+>>> termination_status = {
+...     'locations_syncing': Location.objects.filter(sync_status='active').count(),
+...     'locations_terminating': Location.objects.filter(sync_status='terminating').count(),
+...     'locations_completed': Location.objects.filter(sync_status='completed').count(),
+...     'locations_failed': Location.objects.filter(sync_status='failed').count()
+... }
+>>> termination_status
+{'locations_syncing': 2, 'locations_terminating': 1, 'locations_completed': 20, 'locations_failed': 2}
+
+# Check cleanup progress
+>>> cleanup_metrics = {
+...     'temp_files_cleaned': not any(
+...         os.path.exists(f'/tmp/location_sync_{i}.lock') 
+...         for i in range(10)
+...     ),
+...     'api_connections_closed': Location.objects.filter(
+...         api_connection_active=True
+...     ).count() == 0,
+...     'database_transactions_committed': Location.objects.filter(
+...         transaction_pending=True
+...     ).count() == 0
+... }
+>>> cleanup_metrics
+{'temp_files_cleaned': True, 'api_connections_closed': True, 'database_transactions_committed': True}
+
+# Verify graceful termination
+>>> graceful_termination = {
+...     'no_data_corruption': Location.objects.filter(
+...         sync_status='completed',
+...         data_integrity_verified=False
+...     ).count() == 0,
+...     'all_connections_closed': True,  # From cleanup_metrics
+...     'no_orphaned_processes': Location.objects.filter(
+...         sync_process_id__isnull=False,
+...         sync_status__in=['completed', 'failed']
+...     ).count() == 0
+... }
+>>> graceful_termination
+{'no_data_corruption': True, 'all_connections_closed': True, 'no_orphaned_processes': True}
+
+# Check locations that were successfully terminated
+>>> terminated_locations = Location.objects.filter(
+...     sync_status='completed',
+...     termination_handled=True
+... )
+>>> for loc in terminated_locations[:3]:
+...     print(f"{loc.name}: Synced successfully, terminated gracefully at {loc.sync_completed_at}")
+New York, NY: Synced successfully, terminated gracefully at 2024-01-15 15:45:00
+San Francisco, CA: Synced successfully, terminated gracefully at 2024-01-15 15:44:30
+Chicago, IL: Synced successfully, terminated gracefully at 2024-01-15 15:44:15
+
+# Summary of termination health
+>>> termination_health = {
+...     'successful_termination': all(graceful_termination.values()),
+...     'cleanup_complete': all(cleanup_metrics.values()),
+...     'data_integrity_maintained': True,
+...     'ready_for_restart': True
+... }
+>>> termination_health
+{'successful_termination': True, 'cleanup_complete': True, 'data_integrity_maintained': True, 'ready_for_restart': True}
+</code></pre>
+                        </div>
                     </div>
 
                     <div class="example">
-                        <h6>Example 5: Author Report Failures</h6>
-                        <pre><code class="language-yaml">status:
-  failedIndexes: "2,4"
-  terminating: 0
-  succeeded: 3</code></pre>
-                        <div class="example-output">
-                            <strong>Result:</strong> Author report indexes 2 and 4 failed, others succeeded.
+                        <h6>Example 5: Author Report Index Failures with Recovery Analysis</h6>
+                        <pre><code class="language-bash"># Comprehensive author report failure analysis and recovery
+#!/bin/bash
+
+analyze_author_report_failures() {
+    local job_name="author-report-indexed"
+    
+    echo "=== Author Report Index Failure Analysis ==="
+    
+    # Get failure status
+    local failed_indexes=$(kubectl get job $job_name -o jsonpath='{.status.failedIndexes}')
+    local terminating=$(kubectl get job $job_name -o jsonpath='{.status.terminating}')
+    local succeeded=$(kubectl get job $job_name -o jsonpath='{.status.succeeded}')
+    
+    echo "Failure Status:"
+    echo "  Failed Indexes: $failed_indexes"
+    echo "  Terminating Pods: $terminating"
+    echo "  Successful Reports: $succeeded"
+    
+    # Analyze failure patterns
+    if [ -n "$failed_indexes" ]; then
+        echo ""
+        echo "Failure Analysis:"
+        for index in $(echo $failed_indexes | tr ',' ' '); do
+            echo "  Index $index:"
+            kubectl logs -l job-name=$job_name,batch.kubernetes.io/job-completion-index=$index --tail=10 | grep -i "error\|failed\|exception" | head -3
+        done
+    fi
+    
+    # Check recovery options
+    echo ""
+    echo "Recovery Analysis:"
+    local total_indexes=$(kubectl get job $job_name -o jsonpath='{.spec.completions}')
+    local success_rate=$(( (succeeded * 100) / total_indexes ))
+    echo "  Success Rate: $success_rate%"
+    
+    if [ $success_rate -lt 70 ]; then
+        echo "  🔴 Low success rate - consider job restart with different configuration"
+    elif [ $success_rate -lt 90 ]; then
+        echo "  🟡 Moderate success rate - retry failed indexes only"
+    else
+        echo "  🟢 High success rate - minor failures, acceptable completion"
+    fi
+}
+
+# Execute analysis
+analyze_author_report_failures
+
+# Generate recovery plan
+kubectl get job author-report-indexed -o jsonpath='{.status.failedIndexes}' | tr ',' '\n' > failed_indexes.txt
+echo "Recovery plan generated for failed indexes"</code></pre>
+                        <div class="command-example">
+                            <h6>Analyze author report failures and plan recovery:</h6>
+                            <pre><code class="language-bash"># Deploy author report processing with failure tracking
+kubectl apply -f author-report-indexed-failure-tracking.yaml
+
+# Execute comprehensive failure analysis
+bash author-report-failure-analysis.sh
+
+# Plan targeted recovery for failed indexes
+FAILED_INDEXES=$(kubectl get job author-report-indexed -o jsonpath='{.status.failedIndexes}')
+echo "Planning recovery for indexes: $FAILED_INDEXES"
+
+# Create recovery job for failed indexes only
+envsubst < author-report-recovery-template.yaml | kubectl apply -f -</code></pre>
                         </div>
-                        <div class="queryset-output">Author Failures Output:
->>> Author.objects.filter(id__in=[2,4]).count()
-2</div>
+                        <div class="example-output">
+                            <strong>Result:</strong> Shows author report indexes 2 and 4 failed with comprehensive failure analysis and recovery planning.
+                        </div>
+                        <div class="queryset-output">
+                            <h6>Author Report Failure and Recovery Analysis:</h6>
+                            <pre><code class="language-python"># Analyze author report index failures
+>>> from jobpost.models import Author
+>>> from django.db.models import Count, Q, Avg
+>>> import datetime
+
+# Check author report processing by failed indexes
+>>> failed_indexes = [2, 4]
+>>> successful_indexes = [0, 1, 3]
+>>> 
+>>> failure_analysis = {}
+>>> for index in failed_indexes:
+...     index_authors = Author.objects.filter(report_index=index)
+...     failure_analysis[index] = {
+...         'total_authors': index_authors.count(),
+...         'failed_reports': index_authors.filter(report_status='failed').count(),
+...         'error_types': list(index_authors.filter(
+...             report_status='failed'
+...         ).values_list('report_error_type', flat=True).distinct()),
+...         'processing_time': index_authors.filter(
+...             report_status='failed'
+...         ).aggregate(avg_time=Avg('processing_duration'))['avg_time']
+...     }
+...     print(f"Failed Index {index}: {failure_analysis[index]}")
+Failed Index 2: {'total_authors': 3, 'failed_reports': 3, 'error_types': ['memory_exhaustion'], 'processing_time': 1800.0}
+Failed Index 4: {'total_authors': 3, 'failed_reports': 3, 'error_types': ['pdf_generation_timeout'], 'processing_time': 2400.0}
+
+# Check successful indexes for comparison
+>>> success_analysis = {}
+>>> for index in successful_indexes:
+...     index_authors = Author.objects.filter(report_index=index)
+...     success_analysis[index] = {
+...         'total_authors': index_authors.count(),
+...         'successful_reports': index_authors.filter(report_status='completed').count(),
+...         'avg_processing_time': index_authors.filter(
+...             report_status='completed'
+...         ).aggregate(avg_time=Avg('processing_duration'))['avg_time']
+...     }
+>>> success_analysis
+{0: {'total_authors': 3, 'successful_reports': 3, 'avg_processing_time': 600.0},
+ 1: {'total_authors': 3, 'successful_reports': 3, 'avg_processing_time': 650.0},
+ 3: {'total_authors': 3, 'successful_reports': 3, 'avg_processing_time': 580.0}}
+
+# Calculate recovery metrics
+>>> recovery_metrics = {
+...     'total_authors': Author.objects.count(),
+...     'successful_reports': Author.objects.filter(report_status='completed').count(),
+...     'failed_reports': Author.objects.filter(report_status='failed').count(),
+...     'success_rate': (Author.objects.filter(report_status='completed').count() / Author.objects.count()) * 100,
+...     'recoverable_failures': Author.objects.filter(
+...         report_status='failed',
+...         retry_eligible=True
+...     ).count()
+... }
+>>> recovery_metrics
+{'total_authors': 15, 'successful_reports': 9, 'failed_reports': 6, 'success_rate': 60.0, 'recoverable_failures': 6}
+
+# Plan recovery strategy
+>>> recovery_plan = {
+...     'retry_failed_indexes': [2, 4],
+...     'increase_memory_limit': True,  # For index 2 memory issues
+...     'increase_timeout': True,       # For index 4 timeout issues
+...     'estimated_recovery_time': 30,  # minutes
+...     'resource_adjustments': {
+...         'memory': '1Gi',  # Increased from 512Mi
+...         'cpu': '800m',    # Increased from 500m
+...         'timeout': '3600s'  # Increased from 1800s
+...     }
+... }
+
+# Check authors available for recovery
+>>> recoverable_authors = Author.objects.filter(
+...     report_index__in=[2, 4],
+...     report_status='failed',
+...     retry_eligible=True
+... )
+>>> for author in recoverable_authors:
+...     print(f"{author.name} (Index {author.report_index}): {author.report_error_type}")
+Mike Chen (Index 2): memory_exhaustion
+Alice Brown (Index 2): memory_exhaustion  
+Bob Wilson (Index 2): memory_exhaustion
+Carol Davis (Index 4): pdf_generation_timeout
+Tom Miller (Index 4): pdf_generation_timeout
+Lisa Johnson (Index 4): pdf_generation_timeout
+</code></pre>
+                        </div>
                     </div>
                 </div>
             </div>
