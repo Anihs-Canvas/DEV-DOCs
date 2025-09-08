@@ -4389,25 +4389,42 @@ anihpj-location-prod-rc     4         4         4       15m   app=anihpj,environ
 
             <!-- Deployment -->
             <div class="api-block" id="deployment">
+            <!-- Deployment -->
+            <div class="api-block" id="deployment">
                 <h3>Deployment</h3>
+                <div class="api-overview">
+                    <h4>Deployment Overview</h4>
+                    <div class="api-grid">
+                        <div><strong><a href="#deploymentspec">DeploymentSpec</a></strong> - Desired state specification</div>
+                        <div><strong><a href="#deploymentstatus">DeploymentStatus</a></strong> - Current observed status</div>
+                        <div><strong><a href="#deploymentlist">DeploymentList</a></strong> - Collection of deployments</div>
+                        <div><strong><a href="#deployment-operations">Operations</a></strong> - API operations for management</div>
+                    </div>
+                </div>
                 <div class="api-meta">
                     Official Docs: <a href="https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/deployment-v1/" target="_blank" rel="noopener">Deployment v1 API</a> | 
                     API Version: <code class="inline">apps/v1</code>
                 </div>
-                <p class="api-subtitle">Deployment provides declarative updates for Pods and ReplicaSets. Deployments are the recommended way to deploy stateless Django applications in Kubernetes.</p>
+                <p class="api-subtitle">Deployment enables declarative updates for Pods and ReplicaSets, providing advanced deployment strategies for Django applications.</p>
 
                 <h4>Full Description</h4>
-                <p>Deployment represents the configuration of a deployment that provides declarative updates to Pods and ReplicaSets. It enables rolling updates, rollbacks, and scaling for Django applications. Unlike ReplicationController, Deployments support advanced deployment strategies and are the modern standard for managing stateless workloads.</p>
+                <p>Deployment is the recommended way to deploy stateless applications in Kubernetes. It provides declarative updates for Pods and ReplicaSets, enabling rolling updates, rollbacks, and scaling for your anihpj Django application. Unlike ReplicationController, Deployments support advanced deployment strategies and are the modern standard for managing stateless workloads in production environments.</p>
+                
+                <p>For Django applications, Deployments are ideal for web servers, API services, and background workers that don't require persistent state. They automatically manage ReplicaSets and provide features like rolling updates, which allow you to update your jobpost application without downtime.</p>
 
                 <h4>Syntax</h4>
-                <pre><code class="language-bash"># Create a Deployment with specified name and image
+                <pre><code class="language-bash"># Create a Deployment from YAML file
+kubectl create -f deployment.yaml
+# Create a Deployment directly with kubectl
 kubectl create deployment {name} --image={image}
-# Apply a Deployment from YAML file
-kubectl apply -f deployment.yaml
 # List all Deployments
 kubectl get deployments
+# List all Deployments (short form)
+kubectl get deploy
 # Get detailed information about a specific Deployment
 kubectl describe deployment {name}
+# Get detailed information about a specific Deployment (short form)
+kubectl describe deploy {name}
 # Scale Deployment to specified number of replicas
 kubectl scale deployment {name} --replicas={count}
 # Check the rollout status of a Deployment
@@ -4415,7 +4432,17 @@ kubectl rollout status deployment/{name}
 # View the rollout history of a Deployment
 kubectl rollout history deployment/{name}
 # Rollback to previous version of a Deployment
-kubectl rollout undo deployment/{name}</code></pre>
+kubectl rollout undo deployment/{name}
+# Rollback to specific revision of a Deployment
+kubectl rollout undo deployment/{name} --to-revision={number}
+# Pause a deployment rollout
+kubectl rollout pause deployment/{name}
+# Resume a paused deployment rollout
+kubectl rollout resume deployment/{name}
+# Delete a specific Deployment
+kubectl delete deployment {name}
+# Delete a specific Deployment (short form)
+kubectl delete deploy {name}</code></pre>
 
                 <h4>YAML Structure</h4>
                 <pre><code class="language-yaml">apiVersion: apps/v1
@@ -4426,8 +4453,17 @@ metadata:
   labels:
     app: anihpj
     component: web
+    version: v1.0.0
 spec:
   replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  minReadySeconds: 10
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
   selector:
     matchLabels:
       app: anihpj
@@ -4437,15 +4473,22 @@ spec:
       labels:
         app: anihpj
         component: web
+        version: v1.0.0
     spec:
       containers:
       - name: django-web
         image: anihpj/jobpost-app:v1.0.0
         ports:
         - containerPort: 8000
+          name: django-port
         env:
         - name: DJANGO_SETTINGS_MODULE
-          value: "anihpj.settings"
+          value: "anihpj.settings.production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-secrets
+              key: database-url
         resources:
           requests:
             memory: "256Mi"
@@ -4459,26 +4502,34 @@ spec:
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /ready/
             port: 8000
           initialDelaySeconds: 5
-          periodSeconds: 5</code></pre>
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3</code></pre>
 
                 <h4>Parameters Description</h4>
                 <ul>
-                    <li><strong>apiVersion (string, required)</strong>: apps/v1 for Deployment</li>
-                    <li><strong>kind (string, required)</strong>: Deployment</li>
-                    <li><strong>metadata (ObjectMeta)</strong>: Standard object metadata including name, namespace, labels</li>
-                    <li><strong>spec (DeploymentSpec)</strong>: Desired state specification</li>
-                    <li><strong>spec.replicas (integer)</strong>: Number of desired pods</li>
-                    <li><strong>spec.selector (LabelSelector, required)</strong>: Label selector for pods</li>
-                    <li><strong>spec.template (PodTemplateSpec, required)</strong>: Template for pod creation</li>
-                    <li><strong>spec.strategy (DeploymentStrategy)</strong>: Deployment strategy (RollingUpdate, Recreate)</li>
-                    <li><strong>spec.minReadySeconds (integer)</strong>: Minimum ready time before considering pod available</li>
-                    <li><strong>spec.revisionHistoryLimit (integer)</strong>: Number of old ReplicaSets to retain</li>
-                    <li><strong>spec.progressDeadlineSeconds (integer)</strong>: Maximum time for deployment to make progress</li>
+                    <li><strong>apiVersion</strong>: Always "apps/v1" for Deployment. This indicates the API version being used.</li>
+                    <li><strong>kind</strong>: Must be "Deployment" to specify the resource type.</li>
+                    <li><strong>metadata.name</strong>: Unique name for the Deployment within the namespace. Use descriptive names like "anihpj-django-deployment".</li>
+                    <li><strong>metadata.namespace</strong>: Kubernetes namespace where the Deployment will be created. Defaults to "default".</li>
+                    <li><strong>metadata.labels</strong>: Key-value pairs for organizing and selecting Deployments. Useful for grouping Django app components.</li>
+                    <li><strong>spec.replicas</strong>: Number of desired pod replicas. For Django apps, start with 2-3 for high availability.</li>
+                    <li><strong>spec.selector.matchLabels</strong>: Label selector to identify which pods belong to this Deployment. Must match template labels.</li>
+                    <li><strong>spec.template</strong>: Pod template specification that defines how new pods should be created.</li>
+                    <li><strong>spec.strategy</strong>: Deployment strategy (RollingUpdate or Recreate). RollingUpdate is recommended for Django apps.</li>
+                    <li><strong>spec.strategy.rollingUpdate.maxUnavailable</strong>: Maximum number of pods that can be unavailable during update.</li>
+                    <li><strong>spec.strategy.rollingUpdate.maxSurge</strong>: Maximum number of pods that can be created above desired number during update.</li>
+                    <li><strong>spec.minReadySeconds</strong>: Minimum seconds a pod must be ready before considered available. Important for Django apps with startup time.</li>
+                    <li><strong>spec.revisionHistoryLimit</strong>: Number of old ReplicaSets to retain for rollback. Defaults to 10.</li>
+                    <li><strong>spec.progressDeadlineSeconds</strong>: Maximum time in seconds for deployment to make progress before considered failed.</li>
                 </ul>
 
                 <h4>Return Value</h4>
@@ -4490,6 +4541,392 @@ spec:
                     <li><strong>400 Bad Request</strong>: Invalid Deployment specification</li>
                     <li><strong>401 Unauthorized</strong>: Authentication required</li>
                     <li><strong>403 Forbidden</strong>: Insufficient permissions</li>
+                    <li><strong>404 Not Found</strong>: Namespace not found</li>
+                    <li><strong>409 Conflict</strong>: Deployment already exists</li>
+                    <li><strong>422 Unprocessable Entity</strong>: Invalid field values</li>
+                </ul>
+
+                <h4>5 Practical Django Examples</h4>
+
+                <h5>Example 1: Skills API Deployment (jobpost app)</h5>
+                <p><em>This example demonstrates deploying a Deployment for the Skills API service (/jobpost/skills/), providing JSON endpoints for managing job skills in the anihpj Django project with rolling update strategy.</em></p>
+                <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-jobpost-skills-deployment
+  namespace: default
+  labels:
+    app: anihpj
+    component: jobpost
+    service: skills-api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: anihpj
+      component: jobpost
+      service: skills-api
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: jobpost
+        service: skills-api
+    spec:
+      containers:
+      - name: jobpost-skills
+        image: anihpj/jobpost-app:v1.2.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DJANGO_APP
+          value: "jobpost"
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.production"
+        - name: SERVICE_TYPE
+          value: "skills_api"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /jobpost/skills/health/
+            port: 8000
+          initialDelaySeconds: 45
+          periodSeconds: 30</code></pre>
+                    
+                    <pre><code class="language-bash"># Apply the Skills API Deployment
+kubectl apply -f anihpj-jobpost-skills-deployment.yaml
+# Check deployment status and rollout progress
+kubectl rollout status deployment/anihpj-jobpost-skills-deployment
+# Get deployment details
+kubectl get deployment anihpj-jobpost-skills-deployment -o wide</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-jobpost-skills-deployment created
+Waiting for deployment "anihpj-jobpost-skills-deployment" rollout to finish: 0 of 3 updated replicas are available...
+Waiting for deployment "anihpj-jobpost-skills-deployment" rollout to finish: 1 of 3 updated replicas are available...
+Waiting for deployment "anihpj-jobpost-skills-deployment" rollout to finish: 2 of 3 updated replicas are available...
+deployment "anihpj-jobpost-skills-deployment" successfully rolled out
+
+NAME                                 READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS      IMAGES                      SELECTOR
+anihpj-jobpost-skills-deployment     3/3     3            3           2m    jobpost-skills  anihpj/jobpost-app:v1.2.0   app=anihpj,component=jobpost,service=skills-api</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Author Management Deployment (jobpost app)</h5>
+                    <p><em>This example shows creating a Deployment for Author management service with configurable rolling update strategy and health checks for anihpj Django application.</em></p>
+                    <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-author-mgmt-deployment
+  namespace: production
+  labels:
+    app: anihpj
+    component: author
+    service: management
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  minReadySeconds: 30
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: anihpj
+      component: author
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: author
+        service: management
+    spec:
+      containers:
+      - name: author-mgmt
+        image: anihpj/author-service:v2.0.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.author_production"
+        - name: AUTHOR_SERVICE_MODE
+          value: "management"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
+        readinessProbe:
+          httpGet:
+            path: /author/ready/
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10</code></pre>
+                    
+                    <pre><code class="language-bash"># Create the Author Management Deployment in production namespace
+kubectl apply -f anihpj-author-mgmt-deployment.yaml -n production
+# Watch the rollout progress in real-time
+kubectl rollout status deployment/anihpj-author-mgmt-deployment -n production --watch
+# Check deployment history and revisions
+kubectl rollout history deployment/anihpj-author-mgmt-deployment -n production</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-author-mgmt-deployment created
+Waiting for deployment "anihpj-author-mgmt-deployment" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "anihpj-author-mgmt-deployment" rollout to finish: 1 of 2 updated replicas are available...
+deployment "anihpj-author-mgmt-deployment" successfully rolled out
+
+REVISION  CHANGE-CAUSE
+1         kubectl apply --filename=anihpj-author-mgmt-deployment.yaml --namespace=production --record=true</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Location Service Deployment with Advanced Configuration</h5>
+                    <p><em>This example demonstrates a comprehensive Deployment for Location service with advanced configuration including resource limits, probes, and environment-specific settings.</em></p>
+                    <pre><code class="language-bash"># Create Location Service Deployment directly with kubectl
+kubectl create deployment anihpj-location-service \
+  --image=anihpj/location-service:v1.5.0 \
+  --replicas=4 \
+  --port=8000 \
+  --namespace=default
+# Set environment variables for the deployment
+kubectl set env deployment/anihpj-location-service \
+  DJANGO_SETTINGS_MODULE=anihpj.settings.location_production \
+  SERVICE_TYPE=location_api \
+  CACHE_BACKEND=redis
+# Configure resource limits for the deployment
+kubectl patch deployment anihpj-location-service -p '{"spec":{"template":{"spec":{"containers":[{"name":"location-service","resources":{"requests":{"memory":"256Mi","cpu":"200m"},"limits":{"memory":"512Mi","cpu":"400m"}}}]}}}}'</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-location-service created
+deployment.apps/anihpj-location-service env updated
+deployment.apps/anihpj-location-service patched</div>
+                    
+                    <pre><code class="language-bash"># Check the deployment status
+kubectl get deployment anihpj-location-service -o wide
+# View deployment details including strategy and conditions
+kubectl describe deployment anihpj-location-service</code></pre>
+                    
+                    <div class="kubectl-output">NAME                       READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS        IMAGES                           SELECTOR
+anihpj-location-service    4/4     4            4           3m    location-service  anihpj/location-service:v1.5.0   app=anihpj-location-service
+
+Name:                   anihpj-location-service
+Namespace:              default
+CreationTimestamp:      Sun, 08 Sep 2025 14:30:00 +0000
+Labels:                 app=anihpj-location-service
+Annotations:            deployment.kubernetes.io/revision: 2
+Selector:               app=anihpj-location-service
+Replicas:               4 desired | 4 updated | 4 total | 4 available | 0 unavailable
+StrategyType:           RollingUpdate
+MinReadySeconds:        0
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=anihpj-location-service
+  Containers:
+   location-service:
+    Image:      anihpj/location-service:v1.5.0
+    Port:       8000/TCP
+    Host Port:  0/TCP
+    Limits:
+      cpu:     400m
+      memory:  512Mi
+    Requests:
+      cpu:        200m
+      memory:     256Mi
+    Environment:
+      DJANGO_SETTINGS_MODULE:  anihpj.settings.location_production
+      SERVICE_TYPE:            location_api
+      CACHE_BACKEND:           redis</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: JobPost Main API Deployment with Rollback Strategy</h5>
+                    <p><em>This example shows how to deploy the main JobPost API service and demonstrate rollback capabilities when issues are detected.</em></p>
+                    <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-jobpost-api-deployment
+  namespace: api-services
+  labels:
+    app: anihpj
+    component: api
+    service: jobpost-main
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 20%
+      maxSurge: 2
+  minReadySeconds: 20
+  progressDeadlineSeconds: 300
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: anihpj
+      service: jobpost-main
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        service: jobpost-main
+        version: v3.0.0
+    spec:
+      containers:
+      - name: jobpost-api
+        image: anihpj/jobpost-main-api:v3.0.0
+        ports:
+        - containerPort: 8000
+          name: api-port
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.api_production"
+        - name: API_VERSION
+          value: "v3.0.0"
+        - name: JOBPOST_SERVICE_MODE
+          value: "main_api"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "300m"
+          limits:
+            memory: "1Gi"
+            cpu: "600m"
+        livenessProbe:
+          httpGet:
+            path: /jobpost/api/health/
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /jobpost/api/ready/
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10</code></pre>
+                    
+                    <pre><code class="language-bash"># Apply the JobPost API Deployment
+kubectl apply -f anihpj-jobpost-api-deployment.yaml
+# Monitor rollout progress
+kubectl rollout status deployment/anihpj-jobpost-api-deployment -n api-services
+# Simulate a rollback scenario - rollback to previous version
+kubectl rollout undo deployment/anihpj-jobpost-api-deployment -n api-services
+# Check rollout history to see revisions
+kubectl rollout history deployment/anihpj-jobpost-api-deployment -n api-services</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-jobpost-api-deployment created
+Waiting for deployment "anihpj-jobpost-api-deployment" rollout to finish: 2 of 5 updated replicas are available...
+Waiting for deployment "anihpj-jobpost-api-deployment" rollout to finish: 3 of 5 updated replicas are available...
+Waiting for deployment "anihpj-jobpost-api-deployment" rollout to finish: 4 of 5 updated replicas are available...
+deployment "anihpj-jobpost-api-deployment" successfully rolled out
+
+deployment.apps/anihpj-jobpost-api-deployment rolled back
+
+REVISION  CHANGE-CAUSE
+1         kubectl apply --filename=anihpj-jobpost-api-deployment.yaml --record=true
+2         kubectl apply --filename=anihpj-jobpost-api-deployment.yaml --record=true</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: User Authentication Service Deployment with Canary Strategy</h5>
+                    <p><em>This example demonstrates deploying User authentication service using a canary deployment strategy for safe releases with the anihpj Django User model.</em></p>
+                    <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-user-auth-deployment
+  namespace: auth-services
+  labels:
+    app: anihpj
+    component: auth
+    service: user-authentication
+    deployment-strategy: canary
+spec:
+  replicas: 6
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  minReadySeconds: 30
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app: anihpj
+      component: auth
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        component: auth
+        service: user-authentication
+    spec:
+      containers:
+      - name: user-auth
+        image: anihpj/user-auth-service:v2.5.0
+        ports:
+        - containerPort: 8000
+          name: auth-port
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings.auth_production"
+        - name: USER_SERVICE_MODE
+          value: "authentication"
+        - name: AUTH_BACKEND
+          value: "django_user_model"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "150m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+        livenessProbe:
+          httpGet:
+            path: /auth/health/
+            port: 8000
+          initialDelaySeconds: 45
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /auth/ready/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5</code></pre>
+                    
+                    <pre><code class="language-bash"># Apply the User Authentication Deployment
+kubectl apply -f anihpj-user-auth-deployment.yaml
+# Monitor deployment progress with detailed output
+kubectl rollout status deployment/anihpj-user-auth-deployment -n auth-services --watch
+# Scale deployment for canary testing (temporarily increase replicas)
+kubectl scale deployment anihpj-user-auth-deployment --replicas=8 -n auth-services
+# Check deployment events for any issues
+kubectl get events --field-selector involvedObject.name=anihpj-user-auth-deployment -n auth-services</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-user-auth-deployment created
+Waiting for deployment "anihpj-user-auth-deployment" rollout to finish: 0 of 6 updated replicas are available...
+Waiting for deployment "anihpj-user-auth-deployment" rollout to finish: 2 of 6 updated replicas are available...
+Waiting for deployment "anihpj-user-auth-deployment" rollout to finish: 4 of 6 updated replicas are available...
+Waiting for deployment "anihpj-user-auth-deployment" rollout to finish: 5 of 6 updated replicas are available...
+deployment "anihpj-user-auth-deployment" successfully rolled out
+
+deployment.apps/anihpj-user-auth-deployment scaled
+
+LAST SEEN   TYPE     REASON              OBJECT                                            MESSAGE
+5m2s        Normal   ScalingReplicaSet   deployment/anihpj-user-auth-deployment            Scaled up replica set anihpj-user-auth-deployment-7b8f9c5d6 to 6
+2m1s        Normal   ScalingReplicaSet   deployment/anihpj-user-auth-deployment            Scaled up replica set anihpj-user-auth-deployment-7b8f9c5d6 to 8</div>
+                </div>
                     <li><strong>404 Not Found</strong>: Namespace not found</li>
                     <li><strong>409 Conflict</strong>: Deployment already exists</li>
                     <li><strong>422 Unprocessable Entity</strong>: Invalid field values</li>
@@ -4832,6 +5269,1426 @@ deployment "location-service-deployment" successfully rolled out</div>
                         <li>Keep revision history limit reasonable (5-10) to avoid cluttering</li>
                         <li>Set appropriate progressDeadlineSeconds for deployment timeout</li>
                     </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- DeploymentSpec Section -->
+        <section id="deploymentspec" class="api-section">
+            <div class="api-content">
+                <h2>DeploymentSpec</h2>
+                <p>DeploymentSpec is a description of the deployment specification. It defines the desired state for a Deployment object, including the number of replicas, the pod template, and the update strategy. This specification ensures that the deployment maintains the desired number of pods and can perform rolling updates when changes are needed.</p>
+
+                <h3>API Definition</h3>
+                <div class="spec-box">
+                    <strong>Group:</strong> apps<br>
+                    <strong>Version:</strong> v1<br>
+                    <strong>Kind:</strong> DeploymentSpec<br>
+                    <strong>Scope:</strong> Namespaced
+                </div>
+
+                <h3>Syntax</h3>
+                <pre><code class="language-bash"># Create deployment with custom spec from YAML file
+kubectl apply -f deployment-spec.yaml
+
+# Update deployment spec directly with kubectl patch
+kubectl patch deployment my-deployment -p '{"spec":{"replicas":5}}'
+
+# Get deployment spec details in YAML format
+kubectl get deployment my-deployment -o yaml | grep -A 20 "spec:"
+
+# Scale deployment by modifying spec replicas
+kubectl scale deployment my-deployment --replicas=3
+
+# Set deployment spec strategy (RollingUpdate/Recreate)
+kubectl patch deployment my-deployment -p '{"spec":{"strategy":{"type":"RollingUpdate"}}}'</code></pre>
+
+                <h3>YAML Structure</h3>
+                <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-deployment
+  namespace: default
+spec:
+  replicas: 3                    # Number of desired pods
+  selector:                      # Label selector for pods
+    matchLabels:
+      app: example-app
+  template:                      # Pod template specification
+    metadata:
+      labels:
+        app: example-app
+    spec:
+      containers:
+      - name: app-container
+        image: nginx:1.21
+        ports:
+        - containerPort: 80
+  strategy:                      # Update strategy
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  revisionHistoryLimit: 10       # Number of old ReplicaSets to retain
+  progressDeadlineSeconds: 600   # Maximum time for deployment to progress
+  paused: false                  # Whether deployment is paused</code></pre>
+
+                <h3>Parameters</h3>
+                <div class="param-list">
+                    <div class="param-item">
+                        <strong>replicas</strong> <span class="param-type">integer</span>
+                        <p>Number of desired pods. This is a pointer to distinguish between explicit zero and not specified. Defaults to 1.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>selector</strong> <span class="param-type">LabelSelector</span>
+                        <p>Label selector for pods. Existing ReplicaSets whose pods are selected by this will be affected by this deployment.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>template</strong> <span class="param-type">PodTemplateSpec</span>
+                        <p>Template describes the pods that will be created. This is required.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>strategy</strong> <span class="param-type">DeploymentStrategy</span>
+                        <p>The deployment strategy to use to replace existing pods with new ones.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>revisionHistoryLimit</strong> <span class="param-type">integer</span>
+                        <p>Number of old ReplicaSets to retain to allow rollback. This is a pointer to distinguish between explicit zero and not specified. Defaults to 10.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>progressDeadlineSeconds</strong> <span class="param-type">integer</span>
+                        <p>The maximum time in seconds for a deployment to make progress before it is considered to be failed.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>paused</strong> <span class="param-type">boolean</span>
+                        <p>Indicates that the deployment is paused. Defaults to false.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>minReadySeconds</strong> <span class="param-type">integer</span>
+                        <p>Minimum number of seconds for which a newly created pod should be ready without any of its container crashing.</p>
+                    </div>
+                </div>
+
+                <h3>Return Value</h3>
+                <p>Returns a DeploymentSpec object containing the deployment specification with all configured parameters for pod management and update strategies.</p>
+
+                <h4>5 Practical Django Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Basic Django App DeploymentSpec</h5>
+                    <p><em>This example shows how to create a basic anihpj Django deployment spec with standard configuration for the jobpost application.</em></p>
+                    <pre><code class="language-yaml"># anihpj-jobpost-spec.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-jobpost-deployment
+  namespace: anihpj-services
+  labels:
+    app: anihpj-jobpost
+    component: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-jobpost
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        app: anihpj-jobpost
+        tier: frontend
+    spec:
+      containers:
+      - name: jobpost-container
+        image: anihpj/jobpost:v1.2.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DJANGO_SETTINGS_MODULE
+          value: "anihpj.settings"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-db-secret
+              key: url
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 300</code></pre>
+                    
+                    <pre><code class="language-bash"># Apply the JobPost deployment spec
+kubectl apply -f anihpj-jobpost-spec.yaml
+# Check deployment spec details
+kubectl get deployment anihpj-jobpost-deployment -o jsonpath='{.spec}' | jq
+# Monitor rollout based on spec configuration
+kubectl rollout status deployment/anihpj-jobpost-deployment -n anihpj-services
+# Verify spec replicas are maintained
+kubectl get deployment anihpj-jobpost-deployment -o jsonpath='{.spec.replicas}' -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-jobpost-deployment created
+{
+  "replicas": 3,
+  "selector": {
+    "matchLabels": {
+      "app": "anihpj-jobpost",
+      "tier": "frontend"
+    }
+  },
+  "strategy": {
+    "type": "RollingUpdate",
+    "rollingUpdate": {
+      "maxSurge": 1,
+      "maxUnavailable": 1
+    }
+  }
+}
+Waiting for deployment "anihpj-jobpost-deployment" rollout to finish: 0 of 3 updated replicas are available...
+deployment "anihpj-jobpost-deployment" successfully rolled out
+3</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: High Availability Django API DeploymentSpec</h5>
+                    <p><em>This example demonstrates a high-availability anihpj Django deployment spec with multiple replicas and resource constraints.</em></p>
+                    <pre><code class="language-yaml"># anihpj-api-ha-spec.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-api-ha-deployment
+  namespace: anihpj-production
+  labels:
+    app: anihpj-api
+    environment: production
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: anihpj-api
+      version: stable
+  template:
+    metadata:
+      labels:
+        app: anihpj-api
+        version: stable
+    spec:
+      containers:
+      - name: api-container
+        image: anihpj/api:stable-v2.1.0
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready/
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  minReadySeconds: 30</code></pre>
+                    
+                    <pre><code class="language-bash"># Deploy high-availability API spec
+kubectl apply -f anihpj-api-ha-spec.yaml
+# Scale deployment to handle increased load
+kubectl scale deployment anihpj-api-ha-deployment --replicas=10 -n anihpj-production
+# Update strategy for zero-downtime deployment
+kubectl patch deployment anihpj-api-ha-deployment -p '{"spec":{"strategy":{"rollingUpdate":{"maxUnavailable":"0"}}}}' -n anihpj-production
+# Check spec configuration details
+kubectl describe deployment anihpj-api-ha-deployment -n anihpj-production | grep -A 10 "StrategyType"</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-api-ha-deployment created
+deployment.apps/anihpj-api-ha-deployment scaled
+deployment.apps/anihpj-api-ha-deployment patched
+StrategyType:           RollingUpdate
+MinReadySeconds:        30
+RollingUpdateStrategy:  0 max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=anihpj-api
+           version=stable
+  Containers:
+   api-container:
+    Image:      anihpj/api:stable-v2.1.0</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Canary Deployment Spec for Django Updates</h5>
+                    <p><em>This example shows how to configure a canary deployment spec for anihpj Django application updates with controlled rollout.</em></p>
+                    <pre><code class="language-yaml"># anihpj-canary-spec.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-canary-deployment
+  namespace: anihpj-staging
+  labels:
+    app: anihpj-web
+    deployment-type: canary
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anihpj-web
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: anihpj-web
+        version: canary
+    spec:
+      containers:
+      - name: web-container
+        image: anihpj/web:canary-v2.2.0-rc1
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DEPLOYMENT_TYPE
+          value: "canary"
+        - name: FEATURE_FLAGS
+          value: "new_ui=true,enhanced_search=true"
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  revisionHistoryLimit: 15
+  progressDeadlineSeconds: 900
+  paused: false</code></pre>
+                    
+                    <pre><code class="language-bash"># Apply canary deployment spec
+kubectl apply -f anihpj-canary-spec.yaml
+# Pause deployment for manual verification
+kubectl rollout pause deployment/anihpj-canary-deployment -n anihpj-staging
+# Resume after testing
+kubectl rollout resume deployment/anihpj-canary-deployment -n anihpj-staging
+# Check canary deployment spec status
+kubectl get deployment anihpj-canary-deployment -o jsonpath='{.spec.paused}' -n anihpj-staging</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-canary-deployment created
+deployment.apps/anihpj-canary-deployment paused
+deployment.apps/anihpj-canary-deployment resumed
+false</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Blue-Green Deployment Spec Configuration</h5>
+                    <p><em>This example demonstrates configuring a blue-green deployment spec for anihpj Django application with environment-specific settings.</em></p>
+                    <pre><code class="language-yaml"># anihpj-blue-green-spec.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-green-deployment
+  namespace: anihpj-production
+  labels:
+    app: anihpj-web
+    environment: green
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: anihpj-web
+      slot: green
+  template:
+    metadata:
+      labels:
+        app: anihpj-web
+        slot: green
+    spec:
+      containers:
+      - name: web-container
+        image: anihpj/web:v2.3.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: SLOT_COLOR
+          value: "green"
+        - name: DATABASE_POOL
+          value: "green-pool"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "300m"
+          limits:
+            memory: "1Gi"
+            cpu: "600m"
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  progressDeadlineSeconds: 1200</code></pre>
+                    
+                    <pre><code class="language-bash"># Deploy green environment spec
+kubectl apply -f anihpj-blue-green-spec.yaml
+# Wait for green deployment to be ready
+kubectl rollout status deployment/anihpj-green-deployment -n anihpj-production --timeout=600s
+# Switch traffic by updating service selector
+kubectl patch service anihpj-web-service -p '{"spec":{"selector":{"slot":"green"}}}' -n anihpj-production
+# Verify green deployment spec is active
+kubectl get deployment anihpj-green-deployment -o jsonpath='{.spec.template.metadata.labels.slot}' -n anihpj-production</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-green-deployment created
+Waiting for deployment "anihpj-green-deployment" rollout to finish: 0 of 4 updated replicas are available...
+deployment "anihpj-green-deployment" successfully rolled out
+service/anihpj-web-service patched
+green</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Maintenance Mode DeploymentSpec</h5>
+                    <p><em>This example shows how to configure a maintenance mode deployment spec for anihpj Django application during system updates.</em></p>
+                    <pre><code class="language-yaml"># anihpj-maintenance-spec.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-maintenance-deployment
+  namespace: anihpj-services
+  labels:
+    app: anihpj-web
+    mode: maintenance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anihpj-web
+      mode: maintenance
+  template:
+    metadata:
+      labels:
+        app: anihpj-web
+        mode: maintenance
+    spec:
+      containers:
+      - name: maintenance-container
+        image: anihpj/maintenance:v1.0.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MAINTENANCE_MESSAGE
+          value: "System maintenance in progress. Please try again later."
+        - name: ESTIMATED_DURATION
+          value: "2 hours"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 180
+  paused: false</code></pre>
+                    
+                    <pre><code class="language-bash"># Apply maintenance mode deployment spec
+kubectl apply -f anihpj-maintenance-spec.yaml
+# Scale down main application
+kubectl scale deployment anihpj-web-deployment --replicas=0 -n anihpj-services
+# Update service to point to maintenance deployment
+kubectl patch service anihpj-web-service -p '{"spec":{"selector":{"mode":"maintenance"}}}' -n anihpj-services
+# Check maintenance deployment spec status
+kubectl get deployment anihpj-maintenance-deployment -o jsonpath='{.spec.replicas}' -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-maintenance-deployment created
+deployment.apps/anihpj-web-deployment scaled
+service/anihpj-web-service patched
+1</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- DeploymentStatus Section -->
+        <section id="deploymentstatus" class="api-section">
+            <div class="api-content">
+                <h2>DeploymentStatus</h2>
+                <p>DeploymentStatus represents the current status of a Deployment. It provides information about the deployment's observed state, including the number of available replicas, conditions, and the current revision. This status helps monitor the health and progress of deployments in real-time.</p>
+
+                <h3>API Definition</h3>
+                <div class="spec-box">
+                    <strong>Group:</strong> apps<br>
+                    <strong>Version:</strong> v1<br>
+                    <strong>Kind:</strong> DeploymentStatus<br>
+                    <strong>Scope:</strong> Namespaced
+                </div>
+
+                <h3>Syntax</h3>
+                <pre><code class="language-bash"># Get deployment status details
+kubectl get deployment my-deployment -o jsonpath='{.status}'
+
+# Watch deployment status changes in real-time
+kubectl get deployment my-deployment --watch -o jsonpath='{.status.replicas}'
+
+# Check deployment conditions
+kubectl get deployment my-deployment -o jsonpath='{.status.conditions[*].type}'
+
+# Get available replica count
+kubectl get deployment my-deployment -o jsonpath='{.status.availableReplicas}'
+
+# Check deployment rollout status
+kubectl rollout status deployment/my-deployment --timeout=300s</code></pre>
+
+                <h3>YAML Structure</h3>
+                <pre><code class="language-yaml">status:
+  replicas: 3                      # Total number of non-terminated pods
+  updatedReplicas: 3               # Number of non-terminated pods that have the desired template spec
+  readyReplicas: 3                 # Number of pods targeted by this deployment with Ready Condition
+  availableReplicas: 3             # Total number of available pods targeted by this deployment
+  unavailableReplicas: 0           # Total number of unavailable pods targeted by this deployment
+  observedGeneration: 2            # The generation observed by the deployment controller
+  conditions:                      # Represents the latest available observations
+  - type: Progressing
+    status: "True"
+    lastUpdateTime: "2024-01-15T10:30:45Z"
+    lastTransitionTime: "2024-01-15T10:25:30Z"
+    reason: NewReplicaSetAvailable
+    message: "ReplicaSet \"my-deployment-7b8f9c5d6\" has successfully progressed."
+  - type: Available
+    status: "True"
+    lastUpdateTime: "2024-01-15T10:30:45Z"
+    lastTransitionTime: "2024-01-15T10:30:45Z"
+    reason: MinimumReplicasAvailable
+    message: "Deployment has minimum availability."
+  collisionCount: 0                # Count of hash collisions for the Deployment</code></pre>
+
+                <h3>Parameters</h3>
+                <div class="param-list">
+                    <div class="param-item">
+                        <strong>replicas</strong> <span class="param-type">integer</span>
+                        <p>Total number of non-terminated pods targeted by this deployment (their labels match the selector).</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>updatedReplicas</strong> <span class="param-type">integer</span>
+                        <p>Total number of non-terminated pods targeted by this deployment that have the desired template spec.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>readyReplicas</strong> <span class="param-type">integer</span>
+                        <p>Total number of ready pods targeted by this deployment.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>availableReplicas</strong> <span class="param-type">integer</span>
+                        <p>Total number of available pods (ready for at least minReadySeconds) targeted by this deployment.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>unavailableReplicas</strong> <span class="param-type">integer</span>
+                        <p>Total number of unavailable pods targeted by this deployment.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>conditions</strong> <span class="param-type">[]DeploymentCondition</span>
+                        <p>Represents the latest available observations of a deployment's current state.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>observedGeneration</strong> <span class="param-type">integer</span>
+                        <p>The generation observed by the deployment controller.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>collisionCount</strong> <span class="param-type">integer</span>
+                        <p>Count of hash collisions for the Deployment. The Deployment controller uses this field as a collision avoidance mechanism.</p>
+                    </div>
+                </div>
+
+                <h3>Return Value</h3>
+                <p>Returns a DeploymentStatus object containing the current state information of the deployment including replica counts, conditions, and generation details.</p>
+
+                <h4>5 Practical Django Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Monitor anihpj JobPost Deployment Status</h5>
+                    <p><em>This example shows how to monitor the deployment status of the anihpj jobpost application and check its health indicators.</em></p>
+                    <pre><code class="language-bash"># Check current status of anihpj jobpost deployment
+kubectl get deployment anihpj-jobpost-deployment -o yaml | grep -A 20 "status:"
+
+# Monitor replica status continuously
+kubectl get deployment anihpj-jobpost-deployment --watch -o custom-columns=NAME:.metadata.name,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas,UPDATED:.status.updatedReplicas
+
+# Check deployment conditions for troubleshooting
+kubectl get deployment anihpj-jobpost-deployment -o jsonpath='{.status.conditions[?(@.type=="Progressing")].message}'
+
+# Verify all replicas are available
+kubectl get deployment anihpj-jobpost-deployment -o jsonpath='{.status.availableReplicas}{" / "}{.spec.replicas}'</code></pre>
+                    
+                    <div class="kubectl-output">status:
+  availableReplicas: 3
+  conditions:
+  - lastTransitionTime: "2024-01-15T10:30:45Z"
+    lastUpdateTime: "2024-01-15T10:30:45Z"
+    message: Deployment has minimum availability.
+    reason: MinimumReplicasAvailable
+    status: "True"
+    type: Available
+  - lastTransitionTime: "2024-01-15T10:25:30Z"
+    lastUpdateTime: "2024-01-15T10:30:45Z"
+    message: ReplicaSet "anihpj-jobpost-deployment-7b8f9c5d6" has successfully progressed.
+    reason: NewReplicaSetAvailable
+    status: "True"
+    type: Progressing
+  observedGeneration: 2
+  readyReplicas: 3
+  replicas: 3
+  updatedReplicas: 3
+
+NAME                          READY   AVAILABLE   UPDATED
+anihpj-jobpost-deployment     3       3           3
+
+ReplicaSet "anihpj-jobpost-deployment-7b8f9c5d6" has successfully progressed.
+
+3 / 3</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Check anihpj API Deployment Health Status</h5>
+                    <p><em>This example demonstrates how to check the health status of the anihpj API deployment and identify any issues.</em></p>
+                    <pre><code class="language-bash"># Check comprehensive deployment status
+kubectl describe deployment anihpj-api-deployment -n anihpj-services | grep -A 15 "Conditions:"
+
+# Get deployment status in JSON format for programmatic analysis
+kubectl get deployment anihpj-api-deployment -n anihpj-services -o json | jq '.status'
+
+# Check for any unavailable replicas
+kubectl get deployment anihpj-api-deployment -n anihpj-services -o jsonpath='{.status.unavailableReplicas}'
+
+# Monitor deployment status during rolling update
+kubectl rollout status deployment/anihpj-api-deployment -n anihpj-services --watch=true</code></pre>
+                    
+                    <div class="kubectl-output">Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Available      True    MinimumReplicasAvailable
+  Progressing    True    NewReplicaSetAvailable
+
+{
+  "availableReplicas": 5,
+  "conditions": [
+    {
+      "lastTransitionTime": "2024-01-15T11:00:15Z",
+      "lastUpdateTime": "2024-01-15T11:00:15Z",
+      "message": "Deployment has minimum availability.",
+      "reason": "MinimumReplicasAvailable",
+      "status": "True",
+      "type": "Available"
+    }
+  ],
+  "observedGeneration": 3,
+  "readyReplicas": 5,
+  "replicas": 5,
+  "updatedReplicas": 5
+}
+
+<no output - no unavailable replicas>
+
+Waiting for deployment "anihpj-api-deployment" rollout to finish: 4 of 5 updated replicas are available...
+deployment "anihpj-api-deployment" successfully rolled out</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Troubleshoot anihpj Web Deployment Status Issues</h5>
+                    <p><em>This example shows how to troubleshoot deployment status issues when the anihpj web application deployment is not progressing as expected.</em></p>
+                    <pre><code class="language-bash"># Check for failed deployment conditions
+kubectl get deployment anihpj-web-deployment -o jsonpath='{.status.conditions[?(@.status=="False")].message}'
+
+# Get detailed status with timestamps
+kubectl get deployment anihpj-web-deployment -o custom-columns=NAME:.metadata.name,GENERATION:.metadata.generation,OBSERVED:.status.observedGeneration,PROGRESSING:.status.conditions[0].status
+
+# Check replica mismatch issues
+kubectl get deployment anihpj-web-deployment -o jsonpath='Desired: {.spec.replicas}, Updated: {.status.updatedReplicas}, Ready: {.status.readyReplicas}, Available: {.status.availableReplicas}'
+
+# Get events related to deployment status changes
+kubectl get events --field-selector involvedObject.name=anihpj-web-deployment --sort-by='.lastTimestamp'</code></pre>
+                    
+                    <div class="kubectl-output">Deployment exceeded its progress deadline
+
+NAME                     GENERATION   OBSERVED   PROGRESSING
+anihpj-web-deployment    3            2          False
+
+Desired: 4, Updated: 2, Ready: 2, Available: 2
+
+LAST SEEN   TYPE      REASON              OBJECT                                    MESSAGE
+2m15s       Warning   ProgressDeadlineExceeded   deployment/anihpj-web-deployment      progress deadline exceeded
+5m30s       Normal    ScalingReplicaSet   deployment/anihpj-web-deployment         Scaled up replica set anihpj-web-deployment-abc123 to 4
+8m45s       Normal    ScalingReplicaSet   deployment/anihpj-web-deployment         Scaled down replica set anihpj-web-deployment-def456 to 2</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Monitor anihpj Database Migration Deployment Status</h5>
+                    <p><em>This example demonstrates monitoring the status of an anihpj database migration deployment during Django migrations.</em></p>
+                    <pre><code class="language-bash"># Monitor migration deployment status
+kubectl get deployment anihpj-migration-deployment -n anihpj-services --watch -o custom-columns=NAME:.metadata.name,READY:.status.readyReplicas,CONDITIONS:.status.conditions[0].type
+
+# Check if migration deployment completed successfully
+kubectl get deployment anihpj-migration-deployment -n anihpj-services -o jsonpath='{.status.conditions[?(@.type=="Progressing")].reason}'
+
+# Get collision count for migration deployment
+kubectl get deployment anihpj-migration-deployment -n anihpj-services -o jsonpath='{.status.collisionCount}'
+
+# Verify migration deployment reached desired state
+kubectl wait --for=condition=available --timeout=600s deployment/anihpj-migration-deployment -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">NAME                           READY   CONDITIONS
+anihpj-migration-deployment    0       Progressing
+anihpj-migration-deployment    1       Progressing
+anihpj-migration-deployment    1       Available
+
+NewReplicaSetAvailable
+
+0
+
+deployment.apps/anihpj-migration-deployment condition met</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: anihpj Canary Deployment Status Validation</h5>
+                    <p><em>This example shows how to validate the status of a canary deployment for the anihpj application during a staged rollout.</em></p>
+                    <pre><code class="language-bash"># Check canary deployment status
+kubectl get deployment anihpj-canary-deployment -n anihpj-staging -o jsonpath='{.status}' | jq
+
+# Compare canary vs production deployment status
+kubectl get deployment anihpj-canary-deployment anihpj-production-deployment -o custom-columns=NAME:.metadata.name,READY:.status.readyReplicas,UPDATED:.status.updatedReplicas,AVAILABLE:.status.availableReplicas
+
+# Monitor canary deployment progression
+kubectl get deployment anihpj-canary-deployment -n anihpj-staging -o jsonpath='{.status.conditions[?(@.type=="Progressing")].message}'
+
+# Check for any status anomalies in canary
+kubectl get deployment anihpj-canary-deployment -n anihpj-staging -o jsonpath='{.status.unavailableReplicas}'</code></pre>
+                    
+                    <div class="kubectl-output">{
+  "availableReplicas": 2,
+  "conditions": [
+    {
+      "lastTransitionTime": "2024-01-15T12:15:30Z",
+      "lastUpdateTime": "2024-01-15T12:15:30Z",
+      "message": "Deployment has minimum availability.",
+      "reason": "MinimumReplicasAvailable",
+      "status": "True",
+      "type": "Available"
+    }
+  ],
+  "observedGeneration": 1,
+  "readyReplicas": 2,
+  "replicas": 2,
+  "updatedReplicas": 2
+}
+
+NAME                         READY   UPDATED   AVAILABLE
+anihpj-canary-deployment     2       2         2
+anihpj-production-deployment 5       5         5
+
+Deployment has minimum availability.
+
+<no output - no unavailable replicas></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- DeploymentList Section -->
+        <section id="deploymentlist" class="api-section">
+            <div class="api-content">
+                <h2>DeploymentList</h2>
+                <p>DeploymentList is a list of deployments. It contains an array of Deployment items and metadata about the list itself. This resource is typically used when querying multiple deployments across namespaces or when performing batch operations on deployments.</p>
+
+                <h3>API Definition</h3>
+                <div class="spec-box">
+                    <strong>Group:</strong> apps<br>
+                    <strong>Version:</strong> v1<br>
+                    <strong>Kind:</strong> DeploymentList<br>
+                    <strong>Scope:</strong> Namespaced
+                </div>
+
+                <h3>Syntax</h3>
+                <pre><code class="language-bash"># List all deployments in current namespace
+kubectl get deployments
+
+# List all deployments across all namespaces
+kubectl get deployments --all-namespaces
+
+# Get deployment list in YAML format
+kubectl get deployments -o yaml
+
+# List deployments with specific labels
+kubectl get deployments -l app=anihpj
+
+# List deployments with custom columns
+kubectl get deployments -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas</code></pre>
+
+                <h3>YAML Structure</h3>
+                <pre><code class="language-yaml">apiVersion: apps/v1
+kind: DeploymentList
+metadata:
+  resourceVersion: "12345"
+  selfLink: /apis/apps/v1/deployments
+items:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: anihpj-web-deployment
+    namespace: anihpj-services
+    labels:
+      app: anihpj-web
+  spec:
+    replicas: 3
+    selector:
+      matchLabels:
+        app: anihpj-web
+    template:
+      # Pod template specification
+  status:
+    replicas: 3
+    readyReplicas: 3
+    availableReplicas: 3
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: anihpj-api-deployment
+    namespace: anihpj-services
+    labels:
+      app: anihpj-api
+  spec:
+    replicas: 5
+    selector:
+      matchLabels:
+        app: anihpj-api
+    template:
+      # Pod template specification
+  status:
+    replicas: 5
+    readyReplicas: 5
+    availableReplicas: 5</code></pre>
+
+                <h3>Parameters</h3>
+                <div class="param-list">
+                    <div class="param-item">
+                        <strong>apiVersion</strong> <span class="param-type">string</span>
+                        <p>APIVersion defines the versioned schema of this representation of an object. Always "apps/v1" for DeploymentList.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>kind</strong> <span class="param-type">string</span>
+                        <p>Kind is a string value representing the REST resource this object represents. Always "DeploymentList".</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>metadata</strong> <span class="param-type">ListMeta</span>
+                        <p>Standard list metadata containing resource version and self link information.</p>
+                    </div>
+                    <div class="param-item">
+                        <strong>items</strong> <span class="param-type">[]Deployment</span>
+                        <p>Items is the list of deployments. Each item is a complete Deployment object.</p>
+                    </div>
+                </div>
+
+                <h3>Return Value</h3>
+                <p>Returns a DeploymentList object containing an array of Deployment objects and associated metadata for list operations.</p>
+
+                <h4>5 Practical Django Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: List All anihpj Django Deployments</h5>
+                    <p><em>This example shows how to list all anihpj Django application deployments across different namespaces and environments.</em></p>
+                    <pre><code class="language-bash"># List all anihpj deployments with labels
+kubectl get deployments -l project=anihpj --all-namespaces -o wide
+
+# Get deployment list in JSON format for processing
+kubectl get deployments -l app.kubernetes.io/name=anihpj -o json | jq '.items[].metadata.name'
+
+# List deployments with custom columns showing Django-specific info
+kubectl get deployments -l framework=django -o custom-columns=NAME:.metadata.name,NAMESPACE:.metadata.namespace,REPLICAS:.spec.replicas,IMAGE:.spec.template.spec.containers[0].image,READY:.status.readyReplicas
+
+# Count total anihpj deployments
+kubectl get deployments -l project=anihpj --all-namespaces --no-headers | wc -l</code></pre>
+                    
+                    <div class="kubectl-output">NAMESPACE         NAME                        READY   UP-TO-DATE   AVAILABLE   AGE     CONTAINERS      IMAGES                    SELECTOR
+anihpj-services   anihpj-web-deployment       3/3     3            3           2d      web-container   anihpj/web:v2.1.0        app=anihpj-web
+anihpj-services   anihpj-api-deployment       5/5     5            5           2d      api-container   anihpj/api:v2.1.0        app=anihpj-api
+anihpj-staging    anihpj-staging-deployment   2/2     2            2           1d      web-container   anihpj/web:v2.2.0-rc1    app=anihpj-web
+
+"anihpj-web-deployment"
+"anihpj-api-deployment"
+"anihpj-staging-deployment"
+
+NAME                        NAMESPACE         REPLICAS   IMAGE                     READY
+anihpj-web-deployment       anihpj-services   3          anihpj/web:v2.1.0        3
+anihpj-api-deployment       anihpj-services   5          anihpj/api:v2.1.0        5
+anihpj-staging-deployment   anihpj-staging    2          anihpj/web:v2.2.0-rc1    2
+
+3</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Filter anihpj Deployments by Environment</h5>
+                    <p><em>This example demonstrates how to filter and list anihpj Django deployments based on environment labels and statuses.</em></p>
+                    <pre><code class="language-bash"># List production anihpj deployments only
+kubectl get deployments -l environment=production,project=anihpj -o yaml
+
+# List staging deployments with specific output format
+kubectl get deployments -n anihpj-staging -o jsonpath='{.items[*].metadata.name}'
+
+# Get deployment list filtered by Django version
+kubectl get deployments -l django-version=4.2 --all-namespaces -o custom-columns=NAME:.metadata.name,ENV:.metadata.labels.environment,VERSION:.metadata.labels.django-version
+
+# List deployments that are not fully available
+kubectl get deployments --all-namespaces -o json | jq '.items[] | select(.status.replicas != .status.availableReplicas) | .metadata.name'</code></pre>
+                    
+                    <div class="kubectl-output">apiVersion: v1
+kind: List
+metadata:
+  resourceVersion: ""
+  selfLink: ""
+items:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    labels:
+      environment: production
+      project: anihpj
+    name: anihpj-prod-deployment
+    namespace: anihpj-production
+  spec:
+    replicas: 8
+    # ... deployment specification
+
+anihpj-staging-deployment anihpj-canary-deployment
+
+NAME                      ENV          VERSION
+anihpj-web-deployment     production   4.2
+anihpj-api-deployment     production   4.2
+anihpj-staging-deployment staging      4.2
+
+"anihpj-maintenance-deployment"</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Monitor anihpj Deployment Health Across Environments</h5>
+                    <p><em>This example shows how to monitor the health status of all anihpj Django deployments across different environments.</em></p>
+                    <pre><code class="language-bash"># Get health status of all anihpj deployments
+kubectl get deployments -l project=anihpj --all-namespaces -o custom-columns=NAME:.metadata.name,NAMESPACE:.metadata.namespace,DESIRED:.spec.replicas,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas,STATUS:.status.conditions[0].type
+
+# List deployments with unhealthy status
+kubectl get deployments --all-namespaces -o json | jq '.items[] | select(.metadata.labels.project == "anihpj" and (.status.replicas != .status.readyReplicas)) | {name: .metadata.name, namespace: .metadata.namespace, replicas: .status.replicas, ready: .status.readyReplicas}'
+
+# Watch deployment list changes in real-time
+kubectl get deployments -l project=anihpj --all-namespaces --watch
+
+# Generate deployment health report
+kubectl get deployments -l project=anihpj --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.namespace}{"\t"}{.status.readyReplicas}{"/"}{.spec.replicas}{"\n"}{end}'</code></pre>
+                    
+                    <div class="kubectl-output">NAME                        NAMESPACE         DESIRED   READY   AVAILABLE   STATUS
+anihpj-web-deployment       anihpj-services   3         3       3           Available
+anihpj-api-deployment       anihpj-services   5         5       5           Available
+anihpj-staging-deployment   anihpj-staging    2         2       2           Available
+anihpj-canary-deployment    anihpj-staging    1         0       0           Progressing
+
+{
+  "name": "anihpj-canary-deployment",
+  "namespace": "anihpj-staging",
+  "replicas": 1,
+  "ready": 0
+}
+
+NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
+anihpj-web-deployment       3/3     3            3           2d
+anihpj-api-deployment       5/5     5            5           2d
+anihpj-staging-deployment   2/2     2            2           1d
+anihpj-canary-deployment    0/1     1            0           5m
+
+anihpj-web-deployment        anihpj-services   3/3
+anihpj-api-deployment        anihpj-services   5/5
+anihpj-staging-deployment    anihpj-staging    2/2
+anihpj-canary-deployment     anihpj-staging    0/1</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Batch Operations on anihpj Deployment Lists</h5>
+                    <p><em>This example demonstrates performing batch operations on a list of anihpj Django deployments for maintenance tasks.</em></p>
+                    <pre><code class="language-bash"># Scale all anihpj deployments in staging environment
+kubectl get deployments -n anihpj-staging -l project=anihpj -o name | xargs -I {} kubectl scale {} --replicas=1
+
+# Update image for all anihpj web deployments
+kubectl get deployments -l app=anihpj-web --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' | while read namespace name; do kubectl set image deployment/$name -n $namespace web-container=anihpj/web:v2.3.0; done
+
+# Apply resource limits to all anihpj deployments
+kubectl get deployments -l project=anihpj --all-namespaces -o json > anihpj-deployments-backup.json
+
+# Get deployment list for backup purposes
+kubectl get deployments -l project=anihpj --all-namespaces -o yaml > anihpj-deployments-$(date +%Y%m%d).yaml</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-staging-deployment scaled
+deployment.apps/anihpj-canary-deployment scaled
+
+deployment.apps/anihpj-web-deployment image updated
+deployment.apps/anihpj-staging-deployment image updated
+
+# Backup file created successfully
+
+# Backup file anihpj-deployments-20240115.yaml created</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: anihpj Deployment Resource Analysis</h5>
+                    <p><em>This example shows how to analyze resource usage and configuration across all anihpj Django deployments for optimization.</em></p>
+                    <pre><code class="language-bash"># Analyze resource requests across all anihpj deployments
+kubectl get deployments -l project=anihpj --all-namespaces -o json | jq '.items[] | {name: .metadata.name, namespace: .metadata.namespace, containers: [.spec.template.spec.containers[] | {name: .name, requests: .resources.requests, limits: .resources.limits}]}'
+
+# List deployments by creation date
+kubectl get deployments -l project=anihpj --all-namespaces --sort-by=.metadata.creationTimestamp
+
+# Get deployment list with revision history information
+kubectl get deployments -l project=anihpj --all-namespaces -o custom-columns=NAME:.metadata.name,NAMESPACE:.metadata.namespace,REVISION:.metadata.generation,HISTORY_LIMIT:.spec.revisionHistoryLimit
+
+# Analyze deployment strategies across anihpj applications
+kubectl get deployments -l project=anihpj --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.strategy.type}{"\t"}{.spec.strategy.rollingUpdate.maxUnavailable}{"\t"}{.spec.strategy.rollingUpdate.maxSurge}{"\n"}{end}'</code></pre>
+                    
+                    <div class="kubectl-output">{
+  "name": "anihpj-web-deployment",
+  "namespace": "anihpj-services",
+  "containers": [
+    {
+      "name": "web-container",
+      "requests": {
+        "cpu": "200m",
+        "memory": "256Mi"
+      },
+      "limits": {
+        "cpu": "500m",
+        "memory": "512Mi"
+      }
+    }
+  ]
+}
+
+NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
+anihpj-web-deployment       3/3     3            3           3d
+anihpj-api-deployment       5/5     5            5           2d
+anihpj-staging-deployment   2/2     2            2           1d
+anihpj-canary-deployment    1/1     1            1           6h
+
+NAME                        NAMESPACE         REVISION   HISTORY_LIMIT
+anihpj-web-deployment       anihpj-services   3          10
+anihpj-api-deployment       anihpj-services   2          10
+anihpj-staging-deployment   anihpj-staging    1          5
+
+anihpj-web-deployment       RollingUpdate   1       1
+anihpj-api-deployment       RollingUpdate   25%     25%
+anihpj-staging-deployment   RollingUpdate   0       1</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Operations Section -->
+        <section id="deployment-operations" class="api-section">
+            <div class="api-content">
+                <h2>Operations</h2>
+                <p>This section covers the available operations for Deployment resources in Kubernetes. These operations allow you to create, read, update, delete, and manage Deployment objects through the Kubernetes API.</p>
+
+                <div class="api-overview">
+                    <div class="api-grid">
+                        <a href="#create-deployment" class="api-card">
+                            <h3>Create</h3>
+                            <p>Create a new Deployment</p>
+                        </a>
+                        <a href="#read-deployment" class="api-card">
+                            <h3>Read</h3>
+                            <p>Get Deployment information</p>
+                        </a>
+                        <a href="#update-deployment" class="api-card">
+                            <h3>Update</h3>
+                            <p>Update Deployment configuration</p>
+                        </a>
+                        <a href="#patch-deployment" class="api-card">
+                            <h3>Patch</h3>
+                            <p>Partially update Deployment</p>
+                        </a>
+                        <a href="#delete-deployment" class="api-card">
+                            <h3>Delete</h3>
+                            <p>Remove Deployment</p>
+                        </a>
+                        <a href="#list-deployment" class="api-card">
+                            <h3>List</h3>
+                            <p>List all Deployments</p>
+                        </a>
+                        <a href="#watch-deployment" class="api-card">
+                            <h3>Watch</h3>
+                            <p>Watch Deployment changes</p>
+                        </a>
+                        <a href="#scale-deployment" class="api-card">
+                            <h3>Scale</h3>
+                            <p>Scale Deployment replicas</p>
+                        </a>
+                        <a href="#rollout-deployment" class="api-card">
+                            <h3>Rollout</h3>
+                            <p>Manage Deployment rollouts</p>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Create Operation -->
+                <div id="create-deployment" class="operation">
+                    <h3>Create Deployment</h3>
+                    <p>Create a new Deployment resource in the specified namespace. This operation allows you to define a new deployment with the desired pod template and replica configuration.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>POST /apis/apps/v1/namespaces/{namespace}/deployments</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Create deployment from YAML file
+kubectl apply -f deployment.yaml
+
+# Create deployment directly with kubectl create
+kubectl create deployment my-deployment --image=nginx:1.21 --replicas=3
+
+# Create deployment with specific namespace
+kubectl create deployment my-deployment --image=nginx:1.21 -n my-namespace
+
+# Create deployment with resource limits
+kubectl create deployment my-deployment --image=nginx:1.21 --replicas=3 --requests=cpu=100m,memory=128Mi
+
+# Create deployment with environment variables
+kubectl create deployment my-deployment --image=nginx:1.21 --env="ENV=production"</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Create an anihpj Django deployment for the jobpost application with proper configuration.</em></p>
+                    <pre><code class="language-bash"># Create anihpj jobpost deployment
+kubectl create deployment anihpj-jobpost --image=anihpj/jobpost:v1.2.0 --replicas=3 -n anihpj-services --env="DJANGO_SETTINGS_MODULE=anihpj.settings"
+
+# Verify deployment creation
+kubectl get deployment anihpj-jobpost -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-jobpost created
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+anihpj-jobpost   3/3     3            3           30s</div>
+                </div>
+
+                <!-- Read Operation -->
+                <div id="read-deployment" class="operation">
+                    <h3>Read Deployment</h3>
+                    <p>Retrieve information about a specific Deployment resource, including its current status, configuration, and metadata.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>GET /apis/apps/v1/namespaces/{namespace}/deployments/{name}</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Get deployment details
+kubectl get deployment my-deployment
+
+# Get deployment in YAML format
+kubectl get deployment my-deployment -o yaml
+
+# Get deployment in JSON format
+kubectl get deployment my-deployment -o json
+
+# Describe deployment with detailed information
+kubectl describe deployment my-deployment
+
+# Get specific field from deployment
+kubectl get deployment my-deployment -o jsonpath='{.status.replicas}'</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Read anihpj Django deployment information to check status and configuration.</em></p>
+                    <pre><code class="language-bash"># Get anihpj web deployment details
+kubectl get deployment anihpj-web-deployment -n anihpj-services -o wide
+
+# Describe anihpj API deployment
+kubectl describe deployment anihpj-api-deployment -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">NAME                    READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES               SELECTOR
+anihpj-web-deployment   3/3     3            3           2d    web          anihpj/web:v2.1.0   app=anihpj-web
+
+Name:                   anihpj-api-deployment
+Namespace:              anihpj-services
+CreationTimestamp:      Mon, 13 Jan 2024 10:30:45 +0000
+Labels:                 app=anihpj-api
+Annotations:            deployment.kubernetes.io/revision: 2
+Selector:               app=anihpj-api
+Replicas:               5 desired | 5 updated | 5 total | 5 available | 0 unavailable</div>
+                </div>
+
+                <!-- Update Operation -->
+                <div id="update-deployment" class="operation">
+                    <h3>Update Deployment</h3>
+                    <p>Update a Deployment resource by replacing the entire resource definition. This triggers a rolling update of the pods managed by the deployment.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>PUT /apis/apps/v1/namespaces/{namespace}/deployments/{name}</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Update deployment from modified YAML file
+kubectl apply -f updated-deployment.yaml
+
+# Update deployment image
+kubectl set image deployment/my-deployment container-name=new-image:tag
+
+# Update deployment with environment variables
+kubectl set env deployment/my-deployment ENV=production
+
+# Update deployment resources
+kubectl set resources deployment my-deployment --limits=cpu=200m,memory=256Mi --requests=cpu=100m,memory=128Mi
+
+# Replace deployment entirely
+kubectl replace -f deployment.yaml</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Update anihpj Django deployment with new image version and configuration changes.</em></p>
+                    <pre><code class="language-bash"># Update anihpj web deployment image
+kubectl set image deployment/anihpj-web-deployment web-container=anihpj/web:v2.2.0 -n anihpj-services
+
+# Update anihpj API deployment environment
+kubectl set env deployment/anihpj-api-deployment DEBUG=False -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-web-deployment image updated
+deployment.apps/anihpj-api-deployment env updated</div>
+                </div>
+
+                <!-- Patch Operation -->
+                <div id="patch-deployment" class="operation">
+                    <h3>Patch Deployment</h3>
+                    <p>Partially update a Deployment resource by modifying specific fields without replacing the entire resource definition.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>PATCH /apis/apps/v1/namespaces/{namespace}/deployments/{name}</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Patch deployment replicas
+kubectl patch deployment my-deployment -p '{"spec":{"replicas":5}}'
+
+# Patch deployment strategy
+kubectl patch deployment my-deployment -p '{"spec":{"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":2}}}}'
+
+# Patch deployment with merge strategy
+kubectl patch deployment my-deployment --type merge -p '{"spec":{"template":{"spec":{"containers":[{"name":"app","image":"new-image:tag"}]}}}}'
+
+# Patch deployment annotations
+kubectl patch deployment my-deployment -p '{"metadata":{"annotations":{"deployment.kubernetes.io/revision":"3"}}}'
+
+# Patch deployment with JSON file
+kubectl patch deployment my-deployment --patch-file patch.json</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Patch anihpj Django deployment to modify specific configuration without full replacement.</em></p>
+                    <pre><code class="language-bash"># Patch anihpj jobpost deployment replicas
+kubectl patch deployment anihpj-jobpost-deployment -p '{"spec":{"replicas":6}}' -n anihpj-services
+
+# Patch anihpj API deployment strategy
+kubectl patch deployment anihpj-api-deployment -p '{"spec":{"strategy":{"rollingUpdate":{"maxUnavailable":"0"}}}}' -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-jobpost-deployment patched
+deployment.apps/anihpj-api-deployment patched</div>
+                </div>
+
+                <!-- Delete Operation -->
+                <div id="delete-deployment" class="operation">
+                    <h3>Delete Deployment</h3>
+                    <p>Delete a Deployment resource and its associated ReplicaSets and Pods. This operation removes the deployment and all resources it manages.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>DELETE /apis/apps/v1/namespaces/{namespace}/deployments/{name}</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Delete deployment
+kubectl delete deployment my-deployment
+
+# Delete deployment with grace period
+kubectl delete deployment my-deployment --grace-period=30
+
+# Delete deployment immediately
+kubectl delete deployment my-deployment --force --grace-period=0
+
+# Delete deployment from file
+kubectl delete -f deployment.yaml
+
+# Delete multiple deployments
+kubectl delete deployment deployment1 deployment2 deployment3</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Delete anihpj Django deployment safely with proper cleanup procedures.</em></p>
+                    <pre><code class="language-bash"># Delete anihpj staging deployment
+kubectl delete deployment anihpj-staging-deployment -n anihpj-staging
+
+# Delete anihpj canary deployment with grace period
+kubectl delete deployment anihpj-canary-deployment --grace-period=60 -n anihpj-staging</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps "anihpj-staging-deployment" deleted
+deployment.apps "anihpj-canary-deployment" deleted</div>
+                </div>
+
+                <!-- List Operation -->
+                <div id="list-deployment" class="operation">
+                    <h3>List Deployments</h3>
+                    <p>Retrieve a list of all Deployment resources in a namespace or across all namespaces. This operation returns a DeploymentList object.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>GET /apis/apps/v1/namespaces/{namespace}/deployments</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># List deployments in current namespace
+kubectl get deployments
+
+# List deployments in all namespaces
+kubectl get deployments --all-namespaces
+
+# List deployments with labels
+kubectl get deployments -l app=myapp
+
+# List deployments with custom output
+kubectl get deployments -o wide
+
+# List deployments with custom columns
+kubectl get deployments -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>List all anihpj Django deployments across different environments and namespaces.</em></p>
+                    <pre><code class="language-bash"># List all anihpj deployments
+kubectl get deployments -l project=anihpj --all-namespaces
+
+# List anihpj production deployments
+kubectl get deployments -l environment=production -n anihpj-production</code></pre>
+                    
+                    <div class="kubectl-output">NAMESPACE         NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
+anihpj-services   anihpj-web-deployment       3/3     3            3           2d
+anihpj-services   anihpj-api-deployment       5/5     5            5           2d
+anihpj-staging    anihpj-staging-deployment   2/2     2            2           1d
+
+NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
+anihpj-prod-deployment   8/8     8            8           3d</div>
+                </div>
+
+                <!-- Watch Operation -->
+                <div id="watch-deployment" class="operation">
+                    <h3>Watch Deployments</h3>
+                    <p>Watch for changes to Deployment resources in real-time. This operation establishes a persistent connection to receive updates as deployments are modified.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>GET /apis/apps/v1/namespaces/{namespace}/deployments?watch=true</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Watch deployments for changes
+kubectl get deployments --watch
+
+# Watch specific deployment
+kubectl get deployment my-deployment --watch
+
+# Watch deployments with output format
+kubectl get deployments --watch -o wide
+
+# Watch deployments in all namespaces
+kubectl get deployments --all-namespaces --watch
+
+# Watch with custom columns
+kubectl get deployments --watch -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Watch anihpj Django deployments for real-time monitoring during updates and scaling operations.</em></p>
+                    <pre><code class="language-bash"># Watch anihpj web deployment
+kubectl get deployment anihpj-web-deployment --watch -n anihpj-services
+
+# Watch all anihpj deployments
+kubectl get deployments -l project=anihpj --watch --all-namespaces</code></pre>
+                    
+                    <div class="kubectl-output">NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
+anihpj-web-deployment   3/3     3            3           2d
+anihpj-web-deployment   3/3     3            3           2d
+anihpj-web-deployment   3/5     5            3           2d
+anihpj-web-deployment   4/5     5            4           2d
+anihpj-web-deployment   5/5     5            5           2d</div>
+                </div>
+
+                <!-- Scale Operation -->
+                <div id="scale-deployment" class="operation">
+                    <h3>Scale Deployment</h3>
+                    <p>Scale a Deployment by changing the number of replicas. This operation modifies the replica count and triggers the creation or deletion of pods as needed.</p>
+                    
+                    <h4>HTTP Request</h4>
+                    <pre><code>PATCH /apis/apps/v1/namespaces/{namespace}/deployments/{name}/scale</code></pre>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Scale deployment to specific replica count
+kubectl scale deployment my-deployment --replicas=5
+
+# Scale deployment with condition
+kubectl scale deployment my-deployment --replicas=3 --current-replicas=5
+
+# Scale multiple deployments
+kubectl scale deployment deployment1 deployment2 --replicas=3
+
+# Auto-scale deployment (requires HPA)
+kubectl autoscale deployment my-deployment --min=1 --max=10 --cpu-percent=80
+
+# Scale to zero (stop all pods)
+kubectl scale deployment my-deployment --replicas=0</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Scale anihpj Django deployments based on traffic and resource requirements.</em></p>
+                    <pre><code class="language-bash"># Scale anihpj web deployment for high traffic
+kubectl scale deployment anihpj-web-deployment --replicas=8 -n anihpj-services
+
+# Scale down anihpj staging deployment
+kubectl scale deployment anihpj-staging-deployment --replicas=1 -n anihpj-staging</code></pre>
+                    
+                    <div class="kubectl-output">deployment.apps/anihpj-web-deployment scaled
+deployment.apps/anihpj-staging-deployment scaled</div>
+                </div>
+
+                <!-- Rollout Operation -->
+                <div id="rollout-deployment" class="operation">
+                    <h3>Rollout Management</h3>
+                    <p>Manage Deployment rollouts including checking status, history, pausing, resuming, and rolling back to previous versions.</p>
+                    
+                    <h4>kubectl Syntax</h4>
+                    <pre><code class="language-bash"># Check rollout status
+kubectl rollout status deployment/my-deployment
+
+# View rollout history
+kubectl rollout history deployment/my-deployment
+
+# Pause rollout
+kubectl rollout pause deployment/my-deployment
+
+# Resume rollout
+kubectl rollout resume deployment/my-deployment
+
+# Rollback to previous version
+kubectl rollout undo deployment/my-deployment
+
+# Rollback to specific revision
+kubectl rollout undo deployment/my-deployment --to-revision=2
+
+# Restart deployment (rolling restart)
+kubectl rollout restart deployment/my-deployment</code></pre>
+                    
+                    <h4>Django Example</h4>
+                    <p><em>Manage anihpj Django deployment rollouts for safe updates and quick rollbacks.</em></p>
+                    <pre><code class="language-bash"># Check anihpj API deployment rollout status
+kubectl rollout status deployment/anihpj-api-deployment -n anihpj-services
+
+# View anihpj web deployment history
+kubectl rollout history deployment/anihpj-web-deployment -n anihpj-services
+
+# Rollback anihpj web deployment
+kubectl rollout undo deployment/anihpj-web-deployment -n anihpj-services</code></pre>
+                    
+                    <div class="kubectl-output">Waiting for deployment "anihpj-api-deployment" rollout to finish: 3 of 5 updated replicas are available...
+deployment "anihpj-api-deployment" successfully rolled out
+
+REVISION  CHANGE-CAUSE
+1         <none>
+2         kubectl set image deployment/anihpj-web-deployment web-container=anihpj/web:v2.1.0
+3         kubectl set image deployment/anihpj-web-deployment web-container=anihpj/web:v2.2.0
+
+deployment.apps/anihpj-web-deployment rolled back</div>
                 </div>
             </div>
         </section>
