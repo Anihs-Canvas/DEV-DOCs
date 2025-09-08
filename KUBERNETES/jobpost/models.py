@@ -70,9 +70,8 @@ class JobPost(models.Model):
             self.slug = candidate
         super().save(*args, **kwargs)
 
-
-        def __str__(self):
-            return self.title
+    def __str__(self):
+        return self.title
 
 
 
