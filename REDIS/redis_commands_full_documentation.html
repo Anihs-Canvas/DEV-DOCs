@@ -5055,6 +5055,109 @@ print(f"   Duration: {hotreload_result['duration_ms']:.1f}ms")</code></pre>
                     </div>
                 </div>
 
+                <!-- ACL LOG -->
+                <div class="command-block">
+                    <h3 id="acl-log">ACL LOG</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/acl-log/" target="_blank" rel="noopener">Redis ACL LOG Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Shows a list of recent ACL security events (authentication failures, command denials).</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Monitor Django authentication failures</h5>
+                        <pre><code class="language-python"># Check recent ACL security events
+import redis
+r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+
+# Get recent ACL log entries
+log_entries = r.execute_command('ACL', 'LOG')
+print(f"Recent ACL events: {len(log_entries)}")
+
+for i, entry in enumerate(log_entries[:3]):  # Show first 3
+    print(f"\nEvent {i+1}:")
+    print(f"  Count: {entry[1]}")
+    print(f"  Reason: {entry[3]}")  
+    print(f"  Context: {entry[5]}")
+    print(f"  Object: {entry[7]}")
+    print(f"  Username: {entry[9]}")
+    print(f"  Age: {entry[11]}s ago")</code></pre>
+                        <div class="printout">Recent ACL events: 2
+
+Event 1:
+  Count: 1
+  Reason: command
+  Context: toplevel
+  Object: del
+  Username: django_readonly
+  Age: 127s ago
+
+Event 2:
+  Count: 3
+  Reason: auth
+  Context: toplevel  
+  Object: nopass
+  Username: django_sessions
+  Age: 245s ago</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Django security monitoring with alerts</h5>
+                        <pre><code class="language-python"># Django view for security monitoring
+from django.http import JsonResponse
+from django.core.mail import send_mail
+from django.conf import settings
+
+def security_monitor_view(request):
+    """Monitor Redis ACL security events for Django app"""
+    
+    # Get ACL log entries
+    log_entries = r.execute_command('ACL', 'LOG')
+    
+    security_alerts = []
+    critical_events = 0
+    
+    for entry in log_entries:
+        age_seconds = entry[11]  # Age in seconds
+        reason = entry[3]        # Failure reason
+        username = entry[9]      # Username
+        object_name = entry[7]   # Command or other object
+        count = entry[1]         # Number of occurrences
+        
+        # Alert on recent failures (within 5 minutes)
+        if age_seconds < 300:
+            alert = {
+                'username': username,
+                'reason': reason,
+                'object': object_name,
+                'count': count,
+                'age_minutes': round(age_seconds / 60, 1)
+            }
+            security_alerts.append(alert)
+            
+            # Critical: Multiple auth failures
+            if reason == 'auth' and count >= 3:
+                critical_events += 1
+    
+    # Send email alert for critical events
+    if critical_events > 0 and settings.DEBUG is False:
+        send_mail(
+            'Redis Security Alert',
+            f'Detected {critical_events} critical ACL events',
+            settings.DEFAULT_FROM_EMAIL,
+            [settings.ADMINS[0][1]]
+        )
+    
+    return JsonResponse({
+        'total_events': len(log_entries),
+        'recent_alerts': security_alerts,
+        'critical_events': critical_events,
+        'status': 'critical' if critical_events > 0 else 'normal'
+    })</code></pre>
+                        <div class="printout">{"total_events": 5, "recent_alerts": [{"username": "django_readonly", "reason": "command", "object": "del", "count": 1, "age_minutes": 2.1}], "critical_events": 0, "status": "normal"}</div>
+                    </div>
+                </div>
+
             </section>
 
             <!-- Hash Commands Section -->
@@ -6802,11 +6905,11 @@ else:
                             <div><strong><a href="#lmove">LMOVE</a></strong> - Move between lists</div>
                             <div><strong><a href="#blmove">BLMOVE</a></strong> - Blocking move</div>
                             <div><strong><a href="#lmpop">LMPOP</a></strong> - Pop multiple elements</div>
-                            <div><strong>BLMPOP</strong> - Blocking pop multiple</div>
+                            <div><strong><a href="#blmpop">BLMPOP</a></strong> - Blocking pop multiple</div>
                             <div><strong><a href="#lpushx">LPUSHX</a></strong> - Push if list exists</div>
                             <div><strong><a href="#rpushx">RPUSHX</a></strong> - Push if list exists</div>
                             <div><strong><a href="#rpoplpush">RPOPLPUSH</a></strong> - Pop from end, push to start</div>
-                            <div><strong>BRPOPLPUSH</strong> - Blocking pop/push</div>
+                            <div><strong><a href="#brpoplpush">BRPOPLPUSH</a></strong> - Blocking pop/push</div>
                         </div>
                     </div>
                     
@@ -7541,6 +7644,75 @@ else:
                     </div>
                 </div>
 
+                <!-- BLMPOP -->
+                <div class="command-block">
+                    <h3 id="blmpop">BLMPOP</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/blmpop/" target="_blank" rel="noopener">Redis BLMPOP Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Blocking version of LMPOP. Blocks until elements are available or timeout is reached.</p>
+
+                    <h4>Full description</h4>
+                    <p>BLMPOP blocks until elements become available in one of the specified lists, then pops them. Perfect for priority-based job processing where workers need to handle multiple queue priorities efficiently.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT count]</code></pre>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Priority job worker (blocking)</h5>
+                        <pre><code class="language-python">result = r.blmpop(30, 3, "jobs:critical", "jobs:high", "jobs:normal", "LEFT", count=5)
+if result:
+    queue_name, jobs = result
+    print(f"Processing {len(jobs)} jobs from {queue_name}")
+    for job in jobs:
+        print(f"  - {job}")
+else:
+    print("No jobs available, worker timeout")</code></pre>
+                        <div class="printout">Processing 3 jobs from jobs:critical
+  - job:urgent:001
+  - job:urgent:002
+  - job:urgent:003</div>
+                    </div>
+                </div>
+
+                <!-- BRPOPLPUSH -->
+                <div class="command-block">
+                    <h3 id="brpoplpush">BRPOPLPUSH</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/brpoplpush/" target="_blank" rel="noopener">Redis BRPOPLPUSH Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Blocking version of RPOPLPUSH. Blocks until an element is available or timeout is reached.</p>
+
+                    <h4>Full description</h4>
+                    <p>BRPOPLPUSH atomically pops from source list's tail and pushes to destination list's head, with blocking behavior. Essential for reliable job processing pipelines where jobs must not be lost during processing.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BRPOPLPUSH source destination timeout</code></pre>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Reliable job processing pipeline</h5>
+                        <pre><code class="language-python"># Worker waits for jobs and moves them to processing queue
+job_id = r.brpoplpush("jobs:pending", "jobs:processing", timeout=60)
+if job_id:
+    print(f"Started processing job: {job_id}")
+    try:
+        # Process the job...
+        print(f"Job {job_id} completed successfully")
+        # Remove from processing queue when done
+        r.lrem("jobs:processing", 1, job_id)
+    except Exception as e:
+        print(f"Job {job_id} failed: {e}")
+        # Move failed job to retry queue
+        r.lmove("jobs:processing", "jobs:retry", "LEFT", "RIGHT")
+else:
+    print("No jobs available, worker idle")</code></pre>
+                        <div class="printout">Started processing job: job:batch:456
+Job job:batch:456 completed successfully</div>
+                    </div>
+                </div>
+
             </section>
 
             <!-- Set Commands Section -->
@@ -8224,26 +8396,26 @@ print(f"Total skills found: {len(all_skills)}")</code></pre>
                         <div class="command-grid">
                             <div><strong><a href="#zadd">ZADD</a></strong> - Add members with scores</div>
                             <div><strong><a href="#zrange">ZRANGE</a></strong> - Get range by index</div>
-                            <div><strong>ZRANGEBYSCORE</strong> - Get range by score</div>
+                            <div><strong><a href="#zrangebyscore">ZRANGEBYSCORE</a></strong> - Get range by score</div>
                             <div><strong><a href="#zrank">ZRANK</a></strong> - Get member rank</div>
                             <div><strong><a href="#zscore">ZSCORE</a></strong> - Get member score</div>
                             <div><strong><a href="#zcard">ZCARD</a></strong> - Get set size</div>
                             <div><strong><a href="#zcount">ZCOUNT</a></strong> - Count by score range</div>
                             <div><strong><a href="#zrem">ZREM</a></strong> - Remove members</div>
                             <div><strong><a href="#zincrby">ZINCRBY</a></strong> - Increment score</div>
-                            <div><strong>ZREVRANGE</strong> - Get reverse range</div>
-                            <div><strong>ZREVRANK</strong> - Get reverse rank</div>
-                            <div><strong>ZPOPMAX</strong> - Pop highest score</div>
-                            <div><strong>ZPOPMIN</strong> - Pop lowest score</div>
-                            <div><strong>ZRANGEBYLEX</strong> - Get range by lexical order</div>
-                            <div><strong>ZREMRANGEBYRANK</strong> - Remove by rank range</div>
-                            <div><strong>ZREMRANGEBYSCORE</strong> - Remove by score range</div>
+                            <div><strong><a href="#zrevrange">ZREVRANGE</a></strong> - Get reverse range</div>
+                            <div><strong><a href="#zrevrank">ZREVRANK</a></strong> - Get reverse rank</div>
+                            <div><strong><a href="#zpopmax">ZPOPMAX</a></strong> - Pop highest score</div>
+                            <div><strong><a href="#zpopmin">ZPOPMIN</a></strong> - Pop lowest score</div>
+                            <div><strong><a href="#zrangebylex">ZRANGEBYLEX</a></strong> - Get range by lexical order</div>
+                            <div><strong><a href="#zremrangebyrank">ZREMRANGEBYRANK</a></strong> - Remove by rank range</div>
+                            <div><strong><a href="#zremrangebyscore">ZREMRANGEBYSCORE</a></strong> - Remove by score range</div>
                             <div><strong>ZREMRANGEBYLEX</strong> - Remove by lexical range</div>
                             <div><strong>ZUNION</strong> - Union multiple sorted sets</div>
                             <div><strong>ZINTER</strong> - Intersection of sorted sets</div>
                             <div><strong>ZDIFF</strong> - Difference of sorted sets</div>
-                            <div><strong>ZUNIONSTORE</strong> - Store union result</div>
-                            <div><strong>ZINTERSTORE</strong> - Store intersection result</div>
+                            <div><strong><a href="#zunionstore">ZUNIONSTORE</a></strong> - Store union result</div>
+                            <div><strong><a href="#zinterstore">ZINTERSTORE</a></strong> - Store intersection result</div>
                             <div><strong>ZDIFFSTORE</strong> - Store difference result</div>
                             <div><strong>ZINTERCARD</strong> - Count intersection</div>
                             <div><strong>ZMSCORE</strong> - Get multiple scores</div>
@@ -8738,6 +8910,326 @@ print(f"Players with scores 1000-2000: {count}")</code></pre>
                     </div>
                 </div>
 
+                <!-- ZRANGEBYSCORE -->
+                <div class="command-block">
+                    <h3 id="zrangebyscore">ZRANGEBYSCORE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zrangebyscore/" target="_blank" rel="noopener">Redis ZRANGEBYSCORE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns members in a sorted set within a given score range.</p>
+
+                    <h4>Full description</h4>
+                    <p>ZRANGEBYSCORE returns members with scores between min and max values. Essential for leaderboard queries, finding top performers, or filtering results by score criteria in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]</code></pre>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Get top performers in score range</h5>
+                        <pre><code class="language-python">top_players = r.zrangebyscore("game:leaderboard", 1500, 2000, withscores=True)
+print("Top performers (1500-2000 points):")
+for player, score in top_players:
+    print(f"  {player}: {score}")</code></pre>
+                        <div class="printout">Top performers (1500-2000 points):
+  player456: 1650.0
+  player789: 1850.0
+  player123: 1950.0</div>
+                    </div>
+                </div>
+
+                <!-- ZREVRANGE -->
+                <div class="command-block">
+                    <h3 id="zrevrange">ZREVRANGE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zrevrange/" target="_blank" rel="noopener">Redis ZREVRANGE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns members in a sorted set in reverse order (highest to lowest score).</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Get top 5 players (highest scores first)</h5>
+                        <pre><code class="language-python">top_5 = r.zrevrange("game:leaderboard", 0, 4, withscores=True)
+print("🏆 Top 5 Leaderboard:")
+for i, (player, score) in enumerate(top_5, 1):
+    print(f"  #{i} {player}: {score} points")</code></pre>
+                        <div class="printout">🏆 Top 5 Leaderboard:
+  #1 player999: 2500.0 points
+  #2 player888: 2350.0 points
+  #3 player777: 2200.0 points
+  #4 player666: 2100.0 points
+  #5 player555: 2050.0 points</div>
+                    </div>
+                </div>
+
+                <!-- ZREVRANK -->
+                <div class="command-block">
+                    <h3 id="zrevrank">ZREVRANK</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zrevrank/" target="_blank" rel="noopener">Redis ZREVRANK Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns the rank of a member in reverse order (0-based, highest score has rank 0).</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Get player's ranking from the top</h5>
+                        <pre><code class="language-python">rank = r.zrevrank("game:leaderboard", "player123")
+if rank is not None:
+    print(f"player123 is ranked #{rank + 1} from the top")
+else:
+    print("Player not found")</code></pre>
+                        <div class="printout">player123 is ranked #12 from the top</div>
+                    </div>
+                </div>
+
+                <!-- ZPOPMAX -->
+                <div class="command-block">
+                    <h3 id="zpopmax">ZPOPMAX</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zpopmax/" target="_blank" rel="noopener">Redis ZPOPMAX Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Removes and returns members with the highest scores from a sorted set.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Process highest priority tasks</h5>
+                        <pre><code class="language-python">top_task = r.zpopmax("tasks:priority", 1)
+if top_task:
+    task_id, priority = top_task[0]
+    print(f"Processing highest priority task: {task_id} (priority: {priority})")
+else:
+    print("No tasks available")</code></pre>
+                        <div class="printout">Processing highest priority task: task:urgent:456 (priority: 95.0)</div>
+                    </div>
+                </div>
+
+                <!-- ZPOPMIN -->
+                <div class="command-block">
+                    <h3 id="zpopmin">ZPOPMIN</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zpopmin/" target="_blank" rel="noopener">Redis ZPOPMIN Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Removes and returns members with the lowest scores from a sorted set.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Process oldest items first (FIFO with timestamps)</h5>
+                        <pre><code class="language-python">oldest_item = r.zpopmin("items:by_timestamp", 1)
+if oldest_item:
+                            item_id, timestamp = oldest_item[0]
+    print(f"Processing oldest item: {item_id} (timestamp: {timestamp})")
+else:
+    print("No items to process")</code></pre>
+                        <div class="printout">Processing oldest item: item:abc123 (timestamp: 1640995200.0)</div>
+                    </div>
+                </div>
+
+                <!-- ZRANGEBYLEX -->
+                <div class="command-block">
+                    <h3 id="zrangebylex">ZRANGEBYLEX</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zrangebylex/" target="_blank" rel="noopener">Redis ZRANGEBYLEX Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns members in a sorted set within a lexicographical range when all members have the same score.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Get users alphabetically (same score scenario)</h5>
+                        <pre><code class="language-python"># All users have the same score, ordered lexicographically
+users_range = r.zrangebylex("users:alphabetical", "[alice", "[john")
+print(f"Users from 'alice' to 'john': {users_range}")</code></pre>
+                        <div class="printout">Users from 'alice' to 'john': ['alice', 'bob', 'charlie', 'diana', 'eve', 'frank', 'george', 'helen', 'ian', 'john']</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Get products by name prefix</h5>
+                        <pre><code class="language-python"># Get all products starting with 'laptop'
+laptop_products = r.zrangebylex("products:names", "[laptop", "[laptou")
+print(f"Laptop products: {laptop_products}")</code></pre>
+                        <div class="printout">Laptop products: ['laptop-dell-xps', 'laptop-hp-pavilion', 'laptop-lenovo-thinkpad', 'laptop-macbook-air']</div>
+                    </div>
+                </div>
+
+                <!-- ZREMRANGEBYRANK -->
+                <div class="command-block">
+                    <h3 id="zremrangebyrank">ZREMRANGEBYRANK</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zremrangebyrank/" target="_blank" rel="noopener">Redis ZREMRANGEBYRANK Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Removes members from a sorted set by their rank (position).</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Keep only top 10 in leaderboard</h5>
+                        <pre><code class="language-python"># Remove all but top 10 players (ranks 0-9 are kept, 10+ removed)
+removed = r.zremrangebyrank("game:leaderboard", 10, -1)
+print(f"Players removed from leaderboard: {removed}")
+
+# Check remaining count
+remaining = r.zcard("game:leaderboard")
+print(f"Players remaining in leaderboard: {remaining}")</code></pre>
+                        <div class="printout">Players removed from leaderboard: 47
+Players remaining in leaderboard: 10</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Remove bottom performers from job applicants</h5>
+                        <pre><code class="language-python"># Remove bottom 20% of applicants (lowest scores)
+total_applicants = r.zcard("job:1:applicants")
+bottom_20_percent = int(total_applicants * 0.2)
+removed = r.zremrangebyrank("job:1:applicants", 0, bottom_20_percent - 1)
+print(f"Bottom {bottom_20_percent} applicants removed: {removed}")</code></pre>
+                        <div class="printout">Bottom 6 applicants removed: 6</div>
+                    </div>
+                </div>
+
+                <!-- ZREMRANGEBYSCORE -->
+                <div class="command-block">
+                    <h3 id="zremrangebyscore">ZREMRANGEBYSCORE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zremrangebyscore/" target="_blank" rel="noopener">Redis ZREMRANGEBYSCORE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Removes members from a sorted set with scores within a given range.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Remove expired job applications</h5>
+                        <pre><code class="language-python">import time
+
+# Remove applications older than 30 days
+thirty_days_ago = int(time.time()) - (30 * 24 * 3600)
+expired_count = r.zremrangebyscore("job:1:applications", "-inf", thirty_days_ago)
+print(f"Expired applications removed: {expired_count}")
+
+# Check remaining applications
+remaining = r.zcard("job:1:applications")
+print(f"Active applications remaining: {remaining}")</code></pre>
+                        <div class="printout">Expired applications removed: 12
+Active applications remaining: 8</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Remove low-quality reviews</h5>
+                        <pre><code class="language-python"># Remove reviews with rating below 2.0
+low_reviews = r.zremrangebyscore("product:123:reviews", "-inf", "(2.0")
+print(f"Low-quality reviews removed: {low_reviews}")
+
+# Get average rating of remaining reviews
+remaining_reviews = r.zrange("product:123:reviews", 0, -1, withscores=True)
+if remaining_reviews:
+    avg_score = sum(score for _, score in remaining_reviews) / len(remaining_reviews)
+    print(f"New average rating: {avg_score:.2f}")</code></pre>
+                        <div class="printout">Low-quality reviews removed: 3
+New average rating: 3.85</div>
+                    </div>
+                </div>
+
+                <!-- ZUNIONSTORE -->
+                <div class="command-block">
+                    <h3 id="zunionstore">ZUNIONSTORE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zunionstore/" target="_blank" rel="noopener">Redis ZUNIONSTORE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Computes the union of multiple sorted sets and stores the result in a new sorted set.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Combine user activity scores from multiple sources</h5>
+                        <pre><code class="language-python"># Combine login activity, post activity, and comment activity scores
+# By default, scores are summed for members that appear in multiple sets
+combined_count = r.zunionstore(
+    "user:activity:combined",
+    ["user:login_activity", "user:post_activity", "user:comment_activity"]
+)
+print(f"Combined activity scores created for {combined_count} users")
+
+# Get top 5 most active users
+top_users = r.zrevrange("user:activity:combined", 0, 4, withscores=True)
+for user, score in top_users:
+    print(f"  {user}: {score:.0f} points")</code></pre>
+                        <div class="printout">Combined activity scores created for 47 users
+  user:alice: 850 points
+  user:bob: 720 points
+  user:charlie: 680 points
+  user:diana: 590 points
+  user:eve: 520 points</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Merge skill assessments with weighted scoring</h5>
+                        <pre><code class="language-python"># Combine technical and soft skills with different weights
+# Technical skills weighted 70%, soft skills 30%
+combined_skills = r.zunionstore(
+    "candidate:123:total_score",
+    {
+        "candidate:123:technical_skills": 0.7,
+        "candidate:123:soft_skills": 0.3
+    }
+)
+print(f"Combined skill assessment complete for {combined_skills} skills")
+
+# Get candidate's top skills
+top_skills = r.zrevrange("candidate:123:total_score", 0, 2, withscores=True)
+for skill, weighted_score in top_skills:
+    print(f"  {skill}: {weighted_score:.2f}")</code></pre>
+                        <div class="printout">Combined skill assessment complete for 8 skills
+  python_programming: 8.40
+  problem_solving: 7.80
+  communication: 6.90</div>
+                    </div>
+                </div>
+
+                <!-- ZINTERSTORE -->
+                <div class="command-block">
+                    <h3 id="zinterstore">ZINTERSTORE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/zinterstore/" target="_blank" rel="noopener">Redis ZINTERSTORE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Computes the intersection of multiple sorted sets and stores the result in a new sorted set.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Find users active in multiple areas</h5>
+                        <pre><code class="language-python"># Find users who are active in both forums AND have made purchases
+active_buyers = r.zinterstore(
+    "users:active_buyers",
+    ["users:forum_activity", "users:purchase_activity"]
+)
+print(f"Active buyers (forum + purchase): {active_buyers}")
+
+# Get their combined engagement scores
+engaged_buyers = r.zrevrange("users:active_buyers", 0, 4, withscores=True)
+for user, combined_score in engaged_buyers:
+    print(f"  {user}: {combined_score:.0f} engagement points")</code></pre>
+                        <div class="printout">Active buyers (forum + purchase): 23
+  user:alice: 145 engagement points
+  user:charlie: 120 engagement points
+  user:eve: 98 engagement points
+  user:george: 87 engagement points
+  user:ian: 76 engagement points</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Match candidates with overlapping skills</h5>
+                        <pre><code class="language-python"># Find candidates who have skills that match job requirements
+matching_candidates = r.zinterstore(
+    "job:1:matching_candidates",
+    ["job:1:required_skills", "candidates:available_skills"],
+    aggregate="MIN"  # Use minimum score to ensure quality threshold
+)
+print(f"Candidates with matching skills: {matching_candidates}")
+
+# Get best matches (highest minimum skill levels)
+best_matches = r.zrevrange("job:1:matching_candidates", 0, 2, withscores=True)
+for candidate, min_skill_score in best_matches:
+    print(f"  {candidate}: minimum skill level {min_skill_score:.1f}")</code></pre>
+                        <div class="printout">Candidates with matching skills: 8
+  candidate:sarah: minimum skill level 8.5
+  candidate:mike: minimum skill level 7.8
+  candidate:anna: minimum skill level 7.2</div>
+                    </div>
+                </div>
+
             </section>
 
             <!-- Generic Commands Section -->
@@ -8756,20 +9248,20 @@ print(f"Players with scores 1000-2000: {count}")</code></pre>
                             <div><strong><a href="#expire">EXPIRE</a></strong> - Set key expiration (seconds)</div>
                             <div><strong>EXPIREAT</strong> - Set expiration timestamp</div>
                             <div><strong>EXPIRETIME</strong> - Get expiration timestamp</div>
-                            <div><strong>KEYS</strong> - Find keys by pattern</div>
+                            <div><strong><a href="#keys">KEYS</a></strong> - Find keys by pattern</div>
                             <div><strong>MIGRATE</strong> - Move key to another instance</div>
                             <div><strong>MOVE</strong> - Move key to another database</div>
                             <div><strong>OBJECT ENCODING</strong> - Get object encoding</div>
                             <div><strong>OBJECT FREQ</strong> - Get access frequency</div>
                             <div><strong>OBJECT IDLETIME</strong> - Get idle time</div>
                             <div><strong>OBJECT REFCOUNT</strong> - Get reference count</div>
-                            <div><strong>PERSIST</strong> - Remove key expiration</div>
+                            <div><strong><a href="#persist">PERSIST</a></strong> - Remove key expiration</div>
                             <div><strong>PEXPIRE</strong> - Set expiration (milliseconds)</div>
                             <div><strong>PEXPIREAT</strong> - Set expiration timestamp (ms)</div>
                             <div><strong>PEXPIRETIME</strong> - Get expiration timestamp (ms)</div>
                             <div><strong>PTTL</strong> - Get TTL in milliseconds</div>
                             <div><strong>RANDOMKEY</strong> - Get random key</div>
-                            <div><strong>RENAME</strong> - Rename key</div>
+                            <div><strong><a href="#rename">RENAME</a></strong> - Rename key</div>
                             <div><strong>RENAMENX</strong> - Rename if target doesn't exist</div>
                             <div><strong>RESTORE</strong> - Restore from serialized value</div>
                             <div><strong>SCAN</strong> - Iterate over keys</div>
@@ -8777,7 +9269,7 @@ print(f"Players with scores 1000-2000: {count}")</code></pre>
                             <div><strong>SORT_RO</strong> - Sort (read-only)</div>
                             <div><strong>TOUCH</strong> - Update access time</div>
                             <div><strong><a href="#ttl">TTL</a></strong> - Get time to live</div>
-                            <div><strong>TYPE</strong> - Get key data type</div>
+                            <div><strong><a href="#type">TYPE</a></strong> - Get key data type</div>
                             <div><strong>UNLINK</strong> - Async delete</div>
                             <div><strong>WAIT</strong> - Wait for replication</div>
                             <div><strong>WAITAOF</strong> - Wait for AOF sync</div>
@@ -9226,6 +9718,187 @@ for key in cache_keys:
                         <div class="printout">session:user123: active (1765s)
 search:python_developer: active (3569s)
 rate_limit:192.168.1.100: active (53s)</div>
+                    </div>
+                </div>
+
+                <!-- KEYS -->
+                <div class="command-block">
+                    <h3 id="keys">KEYS</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/keys/" target="_blank" rel="noopener">Redis KEYS Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns all keys matching a pattern. Use with caution in production - prefer SCAN for large datasets.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Find all user session keys</h5>
+                        <pre><code class="language-python"># Find all active user sessions
+session_keys = r.keys("session:user:*")
+print(f"Active sessions: {len(session_keys)}")
+for key in session_keys[:5]:  # Show first 5
+    print(f"  {key}")</code></pre>
+                        <div class="printout">Active sessions: 47
+  session:user:alice
+  session:user:bob
+  session:user:charlie
+  session:user:diana
+  session:user:eve</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Cleanup pattern - find expired job caches</h5>
+                        <pre><code class="language-python"># Find all job-related cache keys for cleanup
+import time
+
+job_cache_keys = r.keys("job:*:cache")
+expired_keys = []
+
+for key in job_cache_keys:
+    ttl = r.ttl(key)
+    if ttl <= 60:  # Expire soon or already expired
+        expired_keys.append(key)
+
+print(f"Cache keys expiring soon: {len(expired_keys)}")
+if expired_keys:
+    r.delete(*expired_keys)
+    print("Expired caches cleaned up")</code></pre>
+                        <div class="printout">Cache keys expiring soon: 8
+Expired caches cleaned up</div>
+                    </div>
+                </div>
+
+                <!-- RENAME -->
+                <div class="command-block">
+                    <h3 id="rename">RENAME</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/rename/" target="_blank" rel="noopener">Redis RENAME Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Renames a key. If newkey already exists, it is overwritten.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Rename user session after login</h5>
+                        <pre><code class="language-python"># Rename temporary session to permanent session
+try:
+    r.rename("session:temp:abc123", "session:user:alice")
+    print("Session upgraded to permanent")
+except redis.ResponseError as e:
+    print(f"Rename failed: {e}")</code></pre>
+                        <div class="printout">Session upgraded to permanent</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Archive completed job data</h5>
+                        <pre><code class="language-python"># Archive completed job to historical data
+job_id = 123
+old_key = f"job:{job_id}:active"
+archive_key = f"job:{job_id}:archived"
+
+if r.exists(old_key):
+    r.rename(old_key, archive_key)
+    print(f"Job {job_id} archived successfully")
+else:
+    print("Job data not found")</code></pre>
+                        <div class="printout">Job 123 archived successfully</div>
+                    </div>
+                </div>
+
+                <!-- TYPE -->
+                <div class="command-block">
+                    <h3 id="type">TYPE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/type/" target="_blank" rel="noopener">Redis TYPE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns the data type of a key's value.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Debug cache data types</h5>
+                        <pre><code class="language-python"># Check what type of data is cached
+cache_keys = ["user:1:profile", "user:1:permissions", "job:search:results"]
+for key in cache_keys:
+    if r.exists(key):
+        data_type = r.type(key)
+        print(f"{key}: {data_type}")
+    else:
+        print(f"{key}: not found")</code></pre>
+                        <div class="printout">user:1:profile: hash
+user:1:permissions: set
+job:search:results: list</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Type-safe cache retrieval</h5>
+                        <pre><code class="language-python"># Safely retrieve data based on type
+def get_cache_data(key):
+    if not r.exists(key):
+        return None
+    
+    data_type = r.type(key)
+    
+    if data_type == "string":
+        return r.get(key)
+    elif data_type == "hash":
+        return r.hgetall(key)
+    elif data_type == "list":
+        return r.lrange(key, 0, -1)
+    elif data_type == "set":
+        return r.smembers(key)
+    elif data_type == "zset":
+        return r.zrange(key, 0, -1, withscores=True)
+    else:
+        return f"Unsupported type: {data_type}"
+
+# Test with different data types
+user_data = get_cache_data("user:1:profile")
+print(f"User profile: {user_data}")</code></pre>
+                        <div class="printout">User profile: {'name': 'Alice Johnson', 'email': 'alice@example.com', 'role': 'developer'}</div>
+                    </div>
+                </div>
+
+                <!-- PERSIST -->
+                <div class="command-block">
+                    <h3 id="persist">PERSIST</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/persist/" target="_blank" rel="noopener">Redis PERSIST Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Removes the expiration from a key, making it persistent.</p>
+
+                    <h4>Examples with Django models</h4>
+                    <div class="example">
+                        <h5>Example 1: Make important cache persistent</h5>
+                        <pre><code class="language-python"># Remove expiration from critical configuration
+config_key = "app:config:production"
+r.setex(config_key, 3600, "temporary_config")  # Set with 1 hour TTL
+
+print(f"TTL before persist: {r.ttl(config_key)}s")
+
+# Make it persistent (no expiration)
+made_persistent = r.persist(config_key)
+print(f"Made persistent: {bool(made_persistent)}")
+print(f"TTL after persist: {r.ttl(config_key)}s")</code></pre>
+                        <div class="printout">TTL before persist: 3600s
+Made persistent: True
+TTL after persist: -1s</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: User promotion - remove session expiration</h5>
+                        <pre><code class="language-python"># When user becomes premium, extend their session indefinitely
+user_session_key = "session:premium_user:alice"
+
+# Check current TTL
+current_ttl = r.ttl(user_session_key)
+if current_ttl > 0:
+    # Remove expiration for premium users
+    r.persist(user_session_key)
+    print("Premium user session made permanent")
+    
+    # Add flag to indicate premium status
+    r.hset(user_session_key, "premium", "true")
+else:
+    print("Session not found or already persistent")</code></pre>
+                        <div class="printout">Premium user session made permanent</div>
                     </div>
                 </div>
 

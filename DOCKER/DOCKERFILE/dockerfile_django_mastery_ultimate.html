@@ -179,6 +179,68 @@
       </li>
       <li><a href="#dockerfile-examples">Dockerfile Examples</a></li>
       <li><a href="#cheatsheet">Dockerfile API Cheat Sheet</a></li>
+      <li><a href="#security-hardening">Security Hardening & Best Practices</a>
+        <ol>
+          <li><a href="#non-root-users">Non-Root User Configuration</a></li>
+          <li><a href="#minimal-base-images">Minimal Base Images & Distroless</a></li>
+          <li><a href="#secrets-management">Secrets Management</a></li>
+          <li><a href="#vulnerability-scanning">Vulnerability Scanning Integration</a></li>
+          <li><a href="#runtime-security">Runtime Security Hardening</a></li>
+          <li><a href="#dockerfile-security-checklist">Docker Security Checklist</a></li>
+        </ol>
+      </li>
+      <li><a href="#performance-optimization">Performance Optimization & Build Efficiency</a>
+        <ol>
+          <li><a href="#layer-caching-strategies">Layer Caching Strategies</a></li>
+          <li><a href="#image-size-minimization">Image Size Minimization</a></li>
+          <li><a href="#build-context-optimization">Build Context Optimization</a></li>
+          <li><a href="#dependency-optimization">Dependency Management Optimization</a></li>
+          <li><a href="#buildkit-advanced-features">Advanced BuildKit Features</a></li>
+          <li><a href="#performance-monitoring">Build Performance Monitoring</a></li>
+          <li><a href="#performance-best-practices">Performance Optimization Checklist</a></li>
+        </ol>
+      </li>
+      <li><a href="#multistage-build-mastery">Multi-Stage Build Mastery</a>
+        <ol>
+          <li><a href="#development-production-separation">Development vs Production Builds</a></li>
+          <li><a href="#asset-compilation-builds">Asset Compilation & Frontend Builds</a></li>
+          <li><a href="#testing-builds">Testing & Quality Assurance Builds</a></li>
+          <li><a href="#microservices-builds">Microservices Multi-Stage Patterns</a></li>
+          <li><a href="#optimized-production-builds">Production Optimization Builds</a></li>
+          <li><a href="#multistage-best-practices">Multi-Stage Build Best Practices</a></li>
+        </ol>
+      </li>
+      <li><a href="#troubleshooting-debugging">Troubleshooting & Debugging Guide</a>
+        <ol>
+          <li><a href="#common-build-errors">Common Build Errors & Solutions</a></li>
+          <li><a href="#dependency-resolution">Dependency Resolution Issues</a></li>
+          <li><a href="#runtime-debugging">Runtime Debugging Techniques</a></li>
+          <li><a href="#diagnostic-commands">Diagnostic Commands & Techniques</a></li>
+          <li><a href="#memory-performance-debugging">Memory & Performance Debugging</a></li>
+          <li><a href="#error-troubleshooting-matrix">Error Troubleshooting Matrix</a></li>
+          <li><a href="#debugging-best-practices">Debugging Best Practices</a></li>
+        </ol>
+      </li>
+      <li><a href="#cicd-integration">CI/CD Integration & Automation</a>
+        <ol>
+          <li><a href="#github-actions-workflows">GitHub Actions Workflows</a></li>
+          <li><a href="#multi-platform-builds">Multi-Platform Build Support</a></li>
+          <li><a href="#registry-integration">Container Registry Integration</a></li>
+          <li><a href="#automated-testing">Automated Testing in CI/CD</a></li>
+          <li><a href="#deployment-automation">Deployment Automation</a></li>
+          <li><a href="#cicd-best-practices">CI/CD Best Practices</a></li>
+        </ol>
+      </li>
+      <li><a href="#advanced-django-architecture">Advanced Django Architecture Patterns</a>
+        <ol>
+          <li><a href="#microservices-architecture">Django Microservices with Docker</a></li>
+          <li><a href="#celery-workers">Celery Worker Containers</a></li>
+          <li><a href="#database-initialization">Database Initialization Containers</a></li>
+          <li><a href="#monitoring-containers">Monitoring & Observability Containers</a></li>
+          <li><a href="#development-environment">Development Environment Containers</a></li>
+          <li><a href="#architecture-best-practices">Advanced Architecture Best Practices</a></li>
+        </ol>
+      </li>
     </ol>
   </nav>
   <button id="backToTop" class="back-to-top" aria-label="Back to top" title="Back to top" hidden>↑</button>
@@ -5653,10 +5715,2690 @@ RUN flake8 . && \
       </div>
     </section>
 
+    <!-- Security Hardening Section -->
+    <section id="security-hardening">
+      <h2>24) Security Hardening & Best Practices</h2>
+      <p>Enterprise-grade security practices for Django Docker deployments:</p>
+
+      <h3 id="non-root-users">Non-Root User Configuration</h3>
+      <p>Always run Django applications as non-root users:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Security-hardened Django Dockerfile
+FROM python:3.11-slim
+
+# Create dedicated user and group
+RUN groupadd -r django --gid=1000 && \
+    useradd -r -g django --uid=1000 --home-dir=/app --shell=/bin/bash django
+
+# Create app directories with proper ownership
+RUN mkdir -p /app/src /app/static /app/media /app/logs && \
+    chown -R django:django /app
+
+# Install system dependencies as root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Switch to non-root user
+USER django
+WORKDIR /app
+
+# Install Python dependencies
+COPY --chown=django:django requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY --chown=django:django . /app/src/
+
+# Set Python path
+ENV PATH="/home/django/.local/bin:$PATH"
+ENV PYTHONPATH="/app/src:$PYTHONPATH"
+
+# Expose port (note: ports < 1024 require root)
+EXPOSE 8000
+
+# Run as non-root user
+CMD ["python", "src/manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="minimal-base-images">Minimal Base Images & Distroless</h3>
+      <p>Use minimal base images to reduce attack surface:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Multi-stage build with distroless final image
+FROM python:3.11-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        python3-dev \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build wheels for all dependencies
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
+
+# Production stage with minimal runtime image
+FROM gcr.io/distroless/python3-debian12:latest
+
+# Copy Python wheels and install
+COPY --from=builder /wheels /wheels
+COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
+
+# Copy application
+COPY --chown=nonroot:nonroot jobboard/ /app/
+WORKDIR /app
+
+# Use distroless nonroot user
+USER nonroot
+
+EXPOSE 8000
+CMD ["manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="secrets-management">Secrets Management</h3>
+      <p>Secure handling of sensitive data during build and runtime:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Using BuildKit secrets for secure builds
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.11-slim
+
+# Install dependencies securely
+RUN --mount=type=secret,id=pypi_token \
+    pip install --index-url https://$(cat /run/secrets/pypi_token)@pypi.org/simple/ \
+        private-package
+
+# Use build-time secrets for private repositories
+RUN --mount=type=ssh \
+    --mount=type=secret,id=github_token \
+    git clone https://$(cat /run/secrets/github_token)@github.com/company/private-repo.git
+
+# Runtime secrets through environment variables (never in image)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source without sensitive files
+COPY . .
+
+# Remove any potential secrets from image layers
+RUN find /app -name "*.key" -delete && \
+    find /app -name "*.pem" -delete && \
+    find /app -name "*secret*" -delete
+
+# Runtime expects secrets via environment or mounted volumes
+ENV DATABASE_URL_FILE=/run/secrets/database_url
+ENV SECRET_KEY_FILE=/run/secrets/secret_key
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="vulnerability-scanning">Vulnerability Scanning Integration</h3>
+      <p>Integrate security scanning into your build process:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Dockerfile with security scanning metadata
+FROM python:3.11-slim
+
+# Add security labels for tracking
+LABEL org.opencontainers.image.vendor="JobBoard Inc." \
+      org.opencontainers.image.title="Django JobBoard API" \
+      org.opencontainers.image.description="Secure Django application for job postings" \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.created="2024-01-15T10:00:00Z" \
+      org.opencontainers.image.source="https://github.com/company/jobboard" \
+      security.scan.policy="critical-high-only"
+
+# Install security updates
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r django && \
+    useradd -r -g django django
+
+# Install Python dependencies with security checks
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install safety bandit && \
+    safety check -r requirements.txt && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy and scan application code
+COPY . /app/
+WORKDIR /app
+
+# Run security analysis during build
+RUN bandit -r . -f json -o bandit-report.json || true
+
+# Set up proper file permissions
+RUN chown -R django:django /app && \
+    chmod -R 755 /app && \
+    chmod -R 644 /app/*.py
+
+USER django
+
+# Health check for security monitoring
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health/ || exit 1
+
+EXPOSE 8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="runtime-security">Runtime Security Hardening</h3>
+      <p>Additional runtime security configurations:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Production-hardened Django container
+FROM python:3.11-slim
+
+# Install security packages
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libpq-dev \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* \
+        /tmp/* \
+        /var/tmp/*
+
+# Create restricted user
+RUN groupadd -g 1001 django && \
+    useradd -r -u 1001 -g django -m -d /app -s /sbin/nologin django
+
+# Set up application directory
+WORKDIR /app
+RUN mkdir -p /app/{static,media,logs} && \
+    chown -R django:django /app
+
+# Copy and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip cache purge
+
+# Copy application with proper ownership
+COPY --chown=django:django . .
+
+# Remove unnecessary files and set permissions
+RUN find . -type f -name "*.pyc" -delete && \
+    find . -type d -name "__pycache__" -delete && \
+    chmod -R 755 /app && \
+    chmod 644 manage.py
+
+# Security: Remove package managers and build tools
+RUN apt-get remove -y \
+        gcc \
+        python3-dev \
+        && \
+    apt-get autoremove -y && \
+    apt-get clean
+
+# Drop privileges
+USER django
+
+# Security environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Secure Django settings
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.production \
+    SECURE_SSL_REDIRECT=1 \
+    SECURE_HSTS_SECONDS=31536000 \
+    SECURE_CONTENT_TYPE_NOSNIFF=1 \
+    SECURE_BROWSER_XSS_FILTER=1 \
+    SECURE_HSTS_INCLUDE_SUBDOMAINS=1 \
+    SECURE_HSTS_PRELOAD=1 \
+    SESSION_COOKIE_SECURE=1 \
+    CSRF_COOKIE_SECURE=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python manage.py check --deploy || exit 1
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "jobboard.wsgi:application"]</code></pre>
+      </div>
+
+      <h3 id="dockerfile-security-checklist">Docker Security Checklist</h3>
+      <div class="callout">
+        <h4>🔍 Pre-Production Security Audit</h4>
+        <ul>
+          <li><strong>✅ User Context</strong>: Never run as root in production</li>
+          <li><strong>✅ Base Image</strong>: Use official, minimal, regularly updated images</li>
+          <li><strong>✅ Dependencies</strong>: Pin exact versions, scan for vulnerabilities</li>
+          <li><strong>✅ Secrets</strong>: Never embed secrets in image layers</li>
+          <li><strong>✅ File Permissions</strong>: Set minimal required permissions</li>
+          <li><strong>✅ Network</strong>: Expose only necessary ports</li>
+          <li><strong>✅ Environment</strong>: Secure Django settings for production</li>
+          <li><strong>✅ Health Checks</strong>: Implement application-aware health monitoring</li>
+          <li><strong>✅ Logging</strong>: Configure secure, centralized logging</li>
+          <li><strong>✅ Updates</strong>: Regular security updates and base image refreshes</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Performance Optimization Section -->
+    <section id="performance-optimization">
+      <h2>25) Performance Optimization & Build Efficiency</h2>
+      <p>Advanced techniques for faster builds and optimized runtime performance:</p>
+
+      <h3 id="layer-caching-strategies">Layer Caching Strategies</h3>
+      <p>Optimize Docker layer caching for faster builds:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Optimized layer caching for Django development
+FROM python:3.11-slim
+
+# Install system dependencies first (rarely change)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        gcc \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for dependency caching
+COPY requirements.txt requirements-prod.txt ./
+
+# Install Python dependencies (cache when requirements don't change)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Copy source code last (changes frequently)
+COPY . /app/
+WORKDIR /app
+
+# Collect static files (cache when static files don't change)
+RUN --mount=type=cache,target=/app/staticfiles \
+    python manage.py collectstatic --noinput
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="image-size-minimization">Image Size Minimization</h3>
+      <p>Techniques to dramatically reduce image size:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Multi-stage build for minimal production image
+FROM python:3.11-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        python3-dev \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build dependencies
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
+
+# Production stage
+FROM python:3.11-slim AS production
+
+# Install only runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq5 \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* \
+        /tmp/* \
+        /var/tmp/* \
+        /usr/share/doc/* \
+        /usr/share/man/* \
+        /usr/share/locale/*
+
+# Install wheels from builder stage
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links /wheels /wheels/* && \
+    rm -rf /wheels
+
+# Create non-root user
+RUN groupadd -r django && useradd -r -g django django
+
+# Copy only necessary application files
+COPY --chown=django:django jobboard/ /app/
+COPY --chown=django:django manage.py /app/
+COPY --chown=django:django static/ /app/static/
+
+WORKDIR /app
+USER django
+
+# Remove Python cache and optimize
+RUN python -m compileall . && \
+    find . -type d -name "__pycache__" -exec rm -rf {} + && \
+    find . -name "*.pyc" -delete
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="build-context-optimization">Build Context Optimization</h3>
+      <p>Optimize .dockerignore for faster builds:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Optimized Dockerfile with minimal build context
+FROM python:3.11-slim
+
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install dependencies first
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# Copy only necessary source files
+COPY jobboard/ /app/jobboard/
+COPY manage.py /app/
+COPY static/ /app/static/
+
+WORKDIR /app
+
+# Create optimized .dockerignore example:
+# .git
+# .gitignore
+# README.md
+# Dockerfile
+# .dockerignore
+# node_modules
+# npm-debug.log
+# .env
+# .env.local
+# .env.*.local
+# .pytest_cache
+# .coverage
+# htmlcov/
+# .tox/
+# .cache
+# .mypy_cache
+# .pytest_cache
+# .coverage
+# *.egg-info/
+# dist/
+# build/
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="dependency-optimization">Dependency Management Optimization</h3>
+      <p>Optimize Python dependency installation:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Advanced dependency optimization
+FROM python:3.11-slim
+
+# Install system dependencies efficiently
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        gcc \
+        libc6-dev \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Separate requirements for better caching
+COPY requirements/base.txt requirements/production.txt ./requirements/
+
+# Use BuildKit cache mounts for pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,target=/root/.cache/wheels \
+    pip install --upgrade pip setuptools wheel && \
+    pip wheel -r requirements/production.txt && \
+    pip install -r requirements/production.txt
+
+# Copy source with optimized layering
+COPY jobboard/models.py /app/jobboard/
+COPY jobboard/settings/ /app/jobboard/settings/
+COPY jobboard/__init__.py jobboard/urls.py jobboard/wsgi.py /app/jobboard/
+
+# Copy remaining application files
+COPY . /app/
+WORKDIR /app
+
+# Pre-compile Python files for faster startup
+RUN python -m compileall -q .
+
+# Optimize Python environment
+ENV PYTHONOPTIMIZE=2 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="buildkit-advanced-features">Advanced BuildKit Features</h3>
+      <p>Leverage BuildKit for maximum performance:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># syntax=docker/dockerfile:1.7
+# Use latest BuildKit features
+
+FROM python:3.11-slim
+
+# Parallel dependency installation with cache mounts
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl
+
+# Copy requirements with cache mount for pip
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Copy source code
+COPY . /app/
+WORKDIR /app
+
+# Use cache mount for Django operations
+RUN --mount=type=cache,target=/app/.django_cache \
+    export DJANGO_CACHE_DIR=/app/.django_cache && \
+    python manage.py collectstatic --noinput
+
+# Multi-platform build optimization
+RUN --mount=type=cache,target=/tmp/build-cache \
+    python -m compileall .
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="performance-monitoring">Build Performance Monitoring</h3>
+      <p>Monitor and analyze build performance:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Performance-monitored build
+FROM python:3.11-slim
+
+# Label for build tracking
+LABEL build.start-time="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+      build.stage="production"
+
+# Timed system dependency installation
+RUN echo "Installing system dependencies..." && \
+    start_time=$(date +%s) && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    end_time=$(date +%s) && \
+    echo "System dependencies installed in $((end_time - start_time)) seconds"
+
+# Timed Python dependency installation
+COPY requirements.txt .
+RUN echo "Installing Python dependencies..." && \
+    start_time=$(date +%s) && \
+    pip install --no-cache-dir -r requirements.txt && \
+    end_time=$(date +%s) && \
+    echo "Python dependencies installed in $((end_time - start_time)) seconds"
+
+# Application setup with timing
+COPY . /app/
+WORKDIR /app
+
+RUN echo "Setting up Django application..." && \
+    start_time=$(date +%s) && \
+    python manage.py collectstatic --noinput && \
+    python -m compileall . && \
+    end_time=$(date +%s) && \
+    echo "Django setup completed in $((end_time - start_time)) seconds"
+
+# Final build timestamp
+LABEL build.completion-time="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="performance-best-practices">Performance Optimization Checklist</h3>
+      <div class="callout">
+        <h4>🚀 Build Performance Best Practices</h4>
+        <ul>
+          <li><strong>✅ Layer Ordering</strong>: Most stable layers first, frequently changing layers last</li>
+          <li><strong>✅ Cache Mounts</strong>: Use BuildKit cache mounts for package managers</li>
+          <li><strong>✅ Multi-Stage</strong>: Separate build and runtime stages for smaller images</li>
+          <li><strong>✅ .dockerignore</strong>: Exclude unnecessary files from build context</li>
+          <li><strong>✅ Dependency Splitting</strong>: Separate base, dev, and production requirements</li>
+          <li><strong>✅ Parallel Processing</strong>: Use BuildKit parallel execution features</li>
+          <li><strong>✅ Image Cleanup</strong>: Remove build artifacts and caches in production stages</li>
+          <li><strong>✅ Pre-compilation</strong>: Compile Python files during build for faster startup</li>
+          <li><strong>✅ Minimal Base Images</strong>: Use slim or alpine variants when appropriate</li>
+          <li><strong>✅ Build Monitoring</strong>: Track build times and optimize bottlenecks</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Multi-Stage Build Mastery Section -->
+    <section id="multistage-build-mastery">
+      <h2>26) Multi-Stage Build Mastery</h2>
+      <p>Advanced multi-stage build patterns for optimal Django deployments:</p>
+
+      <h3 id="development-production-separation">Development vs Production Builds</h3>
+      <p>Separate build targets for different environments:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Multi-target Dockerfile for Django development and production
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-slim AS base
+
+# Common system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create application user
+RUN groupadd -r django && \
+    useradd -r -g django django && \
+    mkdir -p /app && \
+    chown django:django /app
+
+WORKDIR /app
+
+# Development stage
+FROM base AS development
+
+# Install development dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        python3-dev \
+        git \
+        vim \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install development Python packages
+COPY requirements/dev.txt requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Development configuration
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.development \
+    DEBUG=1 \
+    PYTHONPATH=/app
+
+USER django
+
+# Mount source code as volume in development
+VOLUME ["/app/src"]
+
+EXPOSE 8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+
+# Production stage
+FROM base AS production
+
+# Install only runtime dependencies
+COPY requirements/prod.txt requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy application source
+COPY --chown=django:django . .
+
+# Collect static files and compile Python files
+RUN python manage.py collectstatic --noinput && \
+    python -m compileall -q .
+
+# Production configuration
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.production \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER django
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health/ || exit 1
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "jobboard.wsgi:application"]</code></pre>
+      </div>
+
+      <h3 id="asset-compilation-builds">Asset Compilation & Frontend Builds</h3>
+      <p>Multi-stage builds for Django with frontend asset compilation:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Django with Node.js frontend compilation
+FROM node:18-slim AS frontend
+
+# Frontend build stage
+WORKDIR /frontend
+
+# Copy package files for dependency caching
+COPY package*.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --only=production
+
+# Copy frontend source and build
+COPY frontend/ ./
+RUN npm run build
+
+# Python build stage
+FROM python:3.11-slim AS python-builder
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        python3-dev \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build Python wheels
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
+
+# Final production stage
+FROM python:3.11-slim AS production
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq5 \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies from wheels
+COPY --from=python-builder /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links /wheels /wheels/* && \
+    rm -rf /wheels
+
+# Create application user
+RUN groupadd -r django && useradd -r -g django django
+
+# Copy Django application
+COPY --chown=django:django . /app/
+
+# Copy built frontend assets
+COPY --from=frontend --chown=django:django /frontend/dist/ /app/static/
+
+WORKDIR /app
+
+# Collect all static files
+RUN python manage.py collectstatic --noinput
+
+USER django
+
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.production
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "jobboard.wsgi:application"]</code></pre>
+      </div>
+
+      <h3 id="testing-builds">Testing & Quality Assurance Builds</h3>
+      <p>Multi-stage builds with integrated testing:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Multi-stage build with testing
+FROM python:3.11-slim AS base
+
+# Common dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies stage
+FROM base AS dependencies
+
+COPY requirements/ requirements/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements/test.txt
+
+# Testing stage
+FROM dependencies AS testing
+
+# Copy source code
+COPY . .
+
+# Run tests and quality checks
+RUN python -m pytest tests/ --cov=jobboard --cov-report=html && \
+    python -m flake8 jobboard/ && \
+    python -m mypy jobboard/ && \
+    python -m bandit -r jobboard/ && \
+    python manage.py check --deploy
+
+# Save test results
+RUN mkdir -p /test-results && \
+    cp -r htmlcov/ /test-results/ && \
+    cp .coverage /test-results/
+
+# Production dependencies stage
+FROM base AS prod-dependencies
+
+COPY requirements/prod.txt requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
+
+# Production stage (only built if tests pass)
+FROM prod-dependencies AS production
+
+# Create application user
+RUN groupadd -r django && useradd -r -g django django
+
+# Copy application (excluding test files)
+COPY --chown=django:django jobboard/ /app/jobboard/
+COPY --chown=django:django manage.py /app/
+COPY --chown=django:django static/ /app/static/
+
+# Production setup
+RUN python manage.py collectstatic --noinput && \
+    python -m compileall -q .
+
+USER django
+
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.production
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health/ || exit 1
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "jobboard.wsgi:application"]</code></pre>
+      </div>
+
+      <h3 id="microservices-builds">Microservices Multi-Stage Patterns</h3>
+      <p>Optimized builds for Django microservices architecture:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Shared base for microservices
+FROM python:3.11-slim AS microservice-base
+
+# Common system dependencies for all services
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        redis-tools \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Common Python dependencies
+COPY requirements/base.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r base.txt
+
+# Create shared user
+RUN groupadd -r django && useradd -r -g django django
+WORKDIR /app
+
+# API service stage
+FROM microservice-base AS api-service
+
+# API-specific dependencies
+COPY requirements/api.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r api.txt
+
+# Copy API service code
+COPY --chown=django:django api/ /app/
+COPY --chown=django:django shared/ /app/shared/
+
+USER django
+
+ENV DJANGO_SETTINGS_MODULE=api.settings.production
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "api.wsgi:application"]
+
+# Worker service stage
+FROM microservice-base AS worker-service
+
+# Worker-specific dependencies
+COPY requirements/worker.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r worker.txt
+
+# Copy worker service code
+COPY --chown=django:django worker/ /app/
+COPY --chown=django:django shared/ /app/shared/
+
+USER django
+
+ENV DJANGO_SETTINGS_MODULE=worker.settings.production
+
+CMD ["celery", "-A", "worker", "worker", "--loglevel=info"]
+
+# Scheduler service stage
+FROM microservice-base AS scheduler-service
+
+# Scheduler-specific dependencies
+COPY requirements/scheduler.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r scheduler.txt
+
+# Copy scheduler service code
+COPY --chown=django:django scheduler/ /app/
+COPY --chown=django:django shared/ /app/shared/
+
+USER django
+
+ENV DJANGO_SETTINGS_MODULE=scheduler.settings.production
+
+CMD ["celery", "-A", "scheduler", "beat", "--loglevel=info"]</code></pre>
+      </div>
+
+      <h3 id="optimized-production-builds">Production Optimization Builds</h3>
+      <p>Ultra-optimized multi-stage builds for production:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Ultra-optimized production build
+FROM python:3.11-slim AS builder
+
+# Install build tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        python3-dev \
+        git \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build all dependencies as wheels
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
+
+# Build application wheel
+COPY . /src
+WORKDIR /src
+RUN python setup.py bdist_wheel -d /wheels
+
+# Runtime stage with distroless
+FROM gcr.io/distroless/python3-debian12:latest AS runtime
+
+# Copy wheels and install
+COPY --from=builder /wheels /wheels
+COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
+
+# Copy application
+COPY --from=builder --chown=nonroot:nonroot /src/jobboard/ /app/jobboard/
+COPY --from=builder --chown=nonroot:nonroot /src/manage.py /app/
+
+# Copy static files
+COPY --from=builder --chown=nonroot:nonroot /src/static/ /app/static/
+
+WORKDIR /app
+USER nonroot
+
+# Production environment
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.production \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="multistage-best-practices">Multi-Stage Build Best Practices</h3>
+      <div class="callout">
+        <h4>🎯 Multi-Stage Optimization Guidelines</h4>
+        <ul>
+          <li><strong>✅ Stage Naming</strong>: Use descriptive names for build stages (base, builder, production)</li>
+          <li><strong>✅ Dependency Separation</strong>: Separate build and runtime dependencies</li>
+          <li><strong>✅ Artifact Copying</strong>: Only copy necessary files between stages</li>
+          <li><strong>✅ Build Targets</strong>: Use --target flag for specific stage deployment</li>
+          <li><strong>✅ Cache Optimization</strong>: Order stages to maximize cache reuse</li>
+          <li><strong>✅ Security Isolation</strong>: Remove build tools from production stages</li>
+          <li><strong>✅ Size Optimization</strong>: Use minimal base images for final stages</li>
+          <li><strong>✅ Testing Integration</strong>: Include testing stages in CI/CD pipelines</li>
+          <li><strong>✅ Environment Variants</strong>: Support multiple deployment environments</li>
+          <li><strong>✅ Asset Management</strong>: Efficiently handle static files and compiled assets</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Troubleshooting & Debugging Section -->
+    <section id="troubleshooting-debugging">
+      <h2>27) Troubleshooting & Debugging Guide</h2>
+      <p>Comprehensive guide to diagnosing and resolving Django Docker build and runtime issues:</p>
+
+      <h3 id="common-build-errors">Common Build Errors & Solutions</h3>
+      <p>Most frequent Docker build issues and their fixes:</p>
+      <div class="code-block">
+        <pre><code class="language-bash"># Error: Package installation fails
+ERROR: Could not find a version that satisfies the requirement Django==5.2
+
+# Solution: Check Python version compatibility
+FROM python:3.11-slim  # Ensure compatible Python version
+
+# Alternative: Use specific package versions
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt || \
+    (pip install --upgrade pip && pip install -r requirements.txt)
+
+# Error: Permission denied when copying files
+COPY: permission denied
+
+# Solution: Fix file ownership in multi-stage builds
+COPY --chown=django:django . /app/
+
+# Error: BuildKit cache mount permission issues
+RUN --mount=type=cache,target=/root/.cache/pip,uid=1000,gid=1000 \
+    pip install -r requirements.txt
+
+# Error: Database connection during build
+django.db.utils.OperationalError: could not connect to server
+
+# Solution: Avoid database operations during build
+RUN python manage.py collectstatic --noinput --settings=jobboard.settings.build
+
+# Build-time settings that don't require database
+COPY build_settings.py /app/jobboard/settings/</code></pre>
+      </div>
+
+      <h3 id="dependency-resolution">Dependency Resolution Issues</h3>
+      <p>Debugging Python dependency conflicts:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Debug dependency conflicts
+FROM python:3.11-slim AS debug
+
+# Install pip-tools for dependency analysis
+RUN pip install pip-tools pipdeptree
+
+# Copy requirements for analysis
+COPY requirements*.txt ./
+
+# Analyze dependency tree
+RUN pipdeptree --help || pip install pipdeptree
+RUN pipdeptree > dependency-tree.txt
+
+# Check for conflicts
+RUN pip-compile --dry-run requirements.in || \
+    echo "Dependency conflicts detected"
+
+# Detailed pip installation with verbose output
+RUN pip install -v -r requirements.txt 2>&1 | tee pip-install.log
+
+# Production stage with fixed dependencies
+FROM python:3.11-slim AS production
+
+# Install dependencies with retry logic
+COPY requirements.txt .
+RUN for i in 1 2 3; do \
+        pip install --no-cache-dir -r requirements.txt && break || \
+        (echo "Retry $i failed, retrying in 5 seconds..." && sleep 5); \
+    done
+
+# Verify installation
+RUN python -c "import django; print(f'Django {django.VERSION} installed successfully')"</code></pre>
+      </div>
+
+      <h3 id="runtime-debugging">Runtime Debugging Techniques</h3>
+      <p>Debugging running containers and Django applications:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Development Dockerfile with debugging tools
+FROM python:3.11-slim AS debug-base
+
+# Install debugging tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        strace \
+        gdb \
+        procps \
+        net-tools \
+        telnet \
+        curl \
+        vim \
+        htop \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python debugging packages
+RUN pip install \
+    pdb \
+    ipdb \
+    django-debug-toolbar \
+    django-extensions \
+    werkzeug
+
+WORKDIR /app
+
+# Copy application with debug settings
+COPY . .
+
+# Create debug entrypoint
+RUN cat > debug-entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting Django in debug mode..."
+echo "Available environment variables:"
+env | grep DJANGO || true
+echo "---"
+
+echo "Django check:"
+python manage.py check || echo "Django check failed"
+echo "---"
+
+echo "Database connectivity:"
+python manage.py dbshell --command="SELECT 1;" || echo "Database connection failed"
+echo "---"
+
+echo "Starting development server with debugging..."
+exec python manage.py runserver 0.0.0.0:8000 --verbosity=2
+EOF
+
+RUN chmod +x debug-entrypoint.sh
+
+# Enable Django debugging
+ENV DEBUG=1 \
+    DJANGO_LOG_LEVEL=DEBUG \
+    PYTHONPATH=/app
+
+EXPOSE 8000
+
+# Debug-friendly entrypoint
+CMD ["./debug-entrypoint.sh"]
+
+# Production debugging variant
+FROM python:3.11-slim AS production-debug
+
+# Minimal debugging tools for production
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        procps \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY . /app/
+WORKDIR /app
+
+# Health check with detailed output
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health/ -v || \
+        (echo "Health check failed" && ps aux && netstat -tlnp && exit 1)
+
+# Logging configuration for debugging
+ENV DJANGO_LOG_LEVEL=INFO \
+    PYTHONUNBUFFERED=1
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--log-level", "debug", "--access-logfile", "-", "jobboard.wsgi:application"]</code></pre>
+      </div>
+
+      <h3 id="diagnostic-commands">Diagnostic Commands & Techniques</h3>
+      <p>Useful commands for diagnosing container issues:</p>
+      <div class="code-block">
+        <pre><code class="language-bash"># Build diagnostics
+# Check build context size
+docker build --no-cache --progress=plain . 2>&1 | grep "transferring context"
+
+# Analyze layer sizes
+docker history jobboard:latest --format "table {{.CreatedBy}}\t{{.Size}}"
+
+# Debug failed builds
+docker build --target=debug --progress=plain .
+
+# Runtime diagnostics
+# Inspect running container
+docker exec -it container_name bash
+
+# Check container resource usage
+docker stats container_name
+
+# View container processes
+docker exec container_name ps aux
+
+# Check network connectivity
+docker exec container_name curl -v http://database:5432
+
+# Django-specific diagnostics
+# Check Django configuration
+docker exec container_name python manage.py check --deploy
+
+# Database connectivity test
+docker exec container_name python manage.py dbshell --command="SELECT version();"
+
+# View Django logs with context
+docker logs container_name --follow --timestamps
+
+# Container filesystem inspection
+docker exec container_name find /app -type f -name "*.py" -exec wc -l {} + | sort -n
+
+# Environment variable debugging
+docker exec container_name env | grep DJANGO
+
+# Port and network debugging
+docker exec container_name netstat -tlnp
+docker port container_name</code></pre>
+      </div>
+
+      <h3 id="memory-performance-debugging">Memory & Performance Debugging</h3>
+      <p>Debugging memory usage and performance issues:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Performance debugging Dockerfile
+FROM python:3.11-slim
+
+# Install performance monitoring tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        htop \
+        iotop \
+        strace \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python profiling tools
+RUN pip install \
+    memory-profiler \
+    py-spy \
+    django-silk \
+    psutil
+
+WORKDIR /app
+
+# Copy application
+COPY . .
+
+# Memory monitoring script
+RUN cat > monitor-memory.sh << 'EOF'
+#!/bin/bash
+echo "Memory usage monitoring for Django container"
+while true; do
+    echo "$(date): $(free -h | grep Mem | awk '{print $3 "/" $2}')"
+    ps aux --sort=-%mem | head -10
+    echo "---"
+    sleep 30
+done
+EOF
+
+RUN chmod +x monitor-memory.sh
+
+# Performance test script
+RUN cat > performance-test.sh << 'EOF'
+#!/bin/bash
+echo "Django performance diagnostics"
+python manage.py check --deploy
+echo "Static files check:"
+python manage.py collectstatic --dry-run --noinput
+echo "Database queries test:"
+python manage.py shell -c "
+from django.db import connection
+from django.test.utils import override_settings
+with override_settings(DEBUG=True):
+    from jobboard.models import JobPost
+    posts = list(JobPost.objects.all()[:10])
+    print(f'Executed {len(connection.queries)} queries')
+"
+EOF
+
+RUN chmod +x performance-test.sh
+
+# Configure Django for performance monitoring
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.performance \
+    DJANGO_LOG_LEVEL=DEBUG
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]</code></pre>
+      </div>
+
+      <h3 id="error-troubleshooting-matrix">Error Troubleshooting Matrix</h3>
+      <div class="callout">
+        <h4>🚨 Quick Error Resolution Guide</h4>
+        <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+          <thead>
+            <tr style="background-color: #f5f5f5;">
+              <th style="border: 1px solid #ddd; padding: 8px;">Error Type</th>
+              <th style="border: 1px solid #ddd; padding: 8px;">Symptoms</th>
+              <th style="border: 1px solid #ddd; padding: 8px;">Solution</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="border: 1px solid #ddd; padding: 8px;"><strong>Permission Denied</strong></td>
+              <td style="border: 1px solid #ddd; padding: 8px;">COPY fails, file access errors</td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Use --chown flag, check USER directive</td>
+            </tr>
+            <tr>
+              <td style="border: 1px solid #ddd; padding: 8px;"><strong>Package Not Found</strong></td>
+              <td style="border: 1px solid #ddd; padding: 8px;">pip install fails</td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Update pip, check Python version compatibility</td>
+            </tr>
+            <tr>
+              <td style="border: 1px solid #ddd; padding: 8px;"><strong>Database Connection</strong></td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Django can't connect to DB</td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Check network, environment variables, wait-for-it scripts</td>
+            </tr>
+            <tr>
+              <td style="border: 1px solid #ddd; padding: 8px;"><strong>Static Files Missing</strong></td>
+              <td style="border: 1px solid #ddd; padding: 8px;">CSS/JS not loading</td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Run collectstatic, check STATIC_ROOT settings</td>
+            </tr>
+            <tr>
+              <td style="border: 1px solid #ddd; padding: 8px;"><strong>Memory Issues</strong></td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Container crashes, OOM kills</td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Increase memory limits, optimize queries, use pagination</td>
+            </tr>
+            <tr>
+              <td style="border: 1px solid #ddd; padding: 8px;"><strong>Build Cache Issues</strong></td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Slow builds, outdated dependencies</td>
+              <td style="border: 1px solid #ddd; padding: 8px;">Use --no-cache, optimize layer ordering</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="debugging-best-practices">Debugging Best Practices</h3>
+      <div class="callout">
+        <h4>🔍 Systematic Debugging Approach</h4>
+        <ul>
+          <li><strong>✅ Reproduce Locally</strong>: Always test Docker builds locally first</li>
+          <li><strong>✅ Layer Analysis</strong>: Use docker history to identify problematic layers</li>
+          <li><strong>✅ Incremental Building</strong>: Build and test each stage separately</li>
+          <li><strong>✅ Verbose Logging</strong>: Enable detailed output during builds and runtime</li>
+          <li><strong>✅ Health Checks</strong>: Implement comprehensive health check endpoints</li>
+          <li><strong>✅ Debug Images</strong>: Maintain separate debug versions with additional tools</li>
+          <li><strong>✅ Environment Parity</strong>: Ensure dev/staging/prod environment consistency</li>
+          <li><strong>✅ Monitoring Integration</strong>: Set up proper logging and monitoring</li>
+          <li><strong>✅ Documentation</strong>: Document known issues and their solutions</li>
+          <li><strong>✅ Automated Testing</strong>: Test Docker builds in CI/CD pipelines</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- CI/CD Integration Section -->
+    <section id="cicd-integration">
+      <h2>28) CI/CD Integration & Automation</h2>
+      <p>Enterprise-grade CI/CD patterns for Django Docker deployments:</p>
+
+      <h3 id="github-actions-workflows">GitHub Actions Workflows</h3>
+      <p>Complete GitHub Actions workflow for Django Docker builds:</p>
+      <div class="code-block">
+        <pre><code class="language-yaml"># .github/workflows/django-docker.yml
+name: Django Docker CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/jobboard
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: jobboard_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build test image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: testing
+        push: false
+        tags: jobboard:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Run tests in container
+      run: |
+        docker run --rm \
+          --network ${{ job.services.postgres.network }} \
+          -e DATABASE_URL=postgresql://postgres:postgres@postgres:5432/jobboard_test \
+          jobboard:test \
+          python -m pytest tests/ --cov=jobboard --cov-report=xml
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'jobboard:test'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: production
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+    
+    steps:
+    - name: Deploy to production
+      run: |
+        echo "Deploying ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        # Add your deployment logic here</code></pre>
+      </div>
+
+      <h3 id="multi-platform-builds">Multi-Platform Build Support</h3>
+      <p>Building for multiple architectures (AMD64, ARM64):</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Multi-platform optimized Dockerfile
+# syntax=docker/dockerfile:1.7
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
+FROM --platform=$BUILDPLATFORM python:3.11-slim AS base
+
+# Platform-specific optimizations
+RUN echo "Building on $BUILDPLATFORM for $TARGETPLATFORM"
+
+# Install platform-specific packages
+RUN case "$TARGETPLATFORM" in \
+        "linux/amd64") \
+            apt-get update && \
+            apt-get install -y --no-install-recommends \
+                libpq-dev \
+                curl \
+            ;; \
+        "linux/arm64") \
+            apt-get update && \
+            apt-get install -y --no-install-recommends \
+                libpq-dev \
+                curl \
+            ;; \
+        *) \
+            echo "Unsupported platform: $TARGETPLATFORM" && exit 1 \
+            ;; \
+    esac && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Cross-platform dependency building
+FROM base AS builder
+
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip wheel --no-cache-dir --no-deps --wheel-dir /wheels -r requirements.txt
+
+# Production stage
+FROM --platform=$TARGETPLATFORM python:3.11-slim AS production
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq5 \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy wheels and install
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links /wheels /wheels/* && \
+    rm -rf /wheels
+
+# Create application user
+RUN groupadd -r django && useradd -r -g django django
+
+# Copy application
+COPY --chown=django:django . /app/
+WORKDIR /app
+
+USER django
+
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.production
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "jobboard.wsgi:application"]</code></pre>
+      </div>
+
+      <h3 id="registry-integration">Container Registry Integration</h3>
+      <p>Advanced registry management and deployment patterns:</p>
+      <div class="code-block">
+        <pre><code class="language-yaml"># Advanced registry workflow
+name: Registry Management
+
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+
+jobs:
+  multi-registry-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        registry:
+          - { url: "ghcr.io", username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+          - { url: "docker.io", username: "${{ secrets.DOCKER_USERNAME }}", password: "${{ secrets.DOCKER_PASSWORD }}" }
+          - { url: "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com", aws: true }
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Configure AWS credentials
+      if: matrix.registry.aws
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      if: matrix.registry.aws
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Login to Registry
+      if: "!matrix.registry.aws"
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ matrix.registry.url }}
+        username: ${{ matrix.registry.username }}
+        password: ${{ matrix.registry.password }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ matrix.registry.url }}/jobboard
+        tags: |
+          type=ref,event=branch
+          type=ref,event=tag
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+
+    - name: Build and push
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: production
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  sign-and-attest:
+    runs-on: ubuntu-latest
+    needs: multi-registry-push
+    
+    steps:
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Sign container image
+      run: |
+        cosign sign --yes ghcr.io/${{ github.repository }}/jobboard:${{ github.ref_name }}
+
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ghcr.io/${{ github.repository }}/jobboard:${{ github.ref_name }}
+        format: spdx-json</code></pre>
+      </div>
+
+      <h3 id="automated-testing">Automated Testing in CI/CD</h3>
+      <p>Comprehensive testing pipeline for Django Docker applications:</p>
+      <div class="code-block">
+        <pre><code class="language-yaml"># Complete testing workflow
+name: Comprehensive Testing
+
+on: [push, pull_request]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+        django-version: ['4.2', '5.0', '5.1']
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build test matrix image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: testing
+        build-args: |
+          PYTHON_VERSION=${{ matrix.python-version }}
+          DJANGO_VERSION=${{ matrix.django-version }}
+        tags: jobboard:test-py${{ matrix.python-version }}-django${{ matrix.django-version }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Run unit tests
+      run: |
+        docker run --rm \
+          -e DATABASE_URL=sqlite:///test.db \
+          jobboard:test-py${{ matrix.python-version }}-django${{ matrix.django-version }} \
+          python -m pytest tests/unit/ -v --tb=short
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: jobboard_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build integration test image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: testing
+        tags: jobboard:integration
+        cache-from: type=gha
+
+    - name: Run integration tests
+      run: |
+        docker run --rm \
+          --network ${{ job.services.postgres.network }} \
+          -e DATABASE_URL=postgresql://postgres:postgres@postgres:5432/jobboard_test \
+          -e REDIS_URL=redis://redis:6379/0 \
+          jobboard:integration \
+          python -m pytest tests/integration/ -v
+
+  performance-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build performance test image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: production
+        tags: jobboard:perf
+
+    - name: Run performance tests
+      run: |
+        docker run -d --name jobboard-perf \
+          -p 8000:8000 \
+          -e DATABASE_URL=sqlite:///perf.db \
+          jobboard:perf
+        
+        sleep 10
+        
+        # Install and run load testing
+        pip install locust
+        locust --host=http://localhost:8000 \
+               --users=10 \
+               --spawn-rate=2 \
+               --run-time=60s \
+               --headless \
+               --html=performance-report.html
+
+    - name: Upload performance report
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-report
+        path: performance-report.html
+
+  security-scanning:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build security scan image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: production
+        tags: jobboard:security
+        cache-from: type=gha
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'jobboard:security'
+        format: 'table'
+        exit-code: '1'
+        ignore-unfixed: true
+        severity: 'CRITICAL,HIGH'
+
+    - name: Run Docker Bench Security
+      run: |
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          docker/docker-bench-security
+
+    - name: Run container structure tests
+      run: |
+        curl -LO https://storage.googleapis.com/container-structure-test/latest/container-structure-test-linux-amd64
+        chmod +x container-structure-test-linux-amd64
+        ./container-structure-test-linux-amd64 test \
+          --image jobboard:security \
+          --config tests/container-structure.yaml</code></pre>
+      </div>
+
+      <h3 id="deployment-automation">Deployment Automation</h3>
+      <p>Automated deployment patterns for different environments:</p>
+      <div class="code-block">
+        <pre><code class="language-yaml"># Production deployment workflow
+name: Production Deployment
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up environment variables
+      run: |
+        case "${{ github.event.inputs.environment || 'staging' }}" in
+          "staging")
+            echo "DEPLOY_HOST=${{ secrets.STAGING_HOST }}" >> $GITHUB_ENV
+            echo "DEPLOY_USER=${{ secrets.STAGING_USER }}" >> $GITHUB_ENV
+            echo "DEPLOY_KEY=${{ secrets.STAGING_KEY }}" >> $GITHUB_ENV
+            echo "IMAGE_TAG=staging-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+            ;;
+          "production")
+            echo "DEPLOY_HOST=${{ secrets.PRODUCTION_HOST }}" >> $GITHUB_ENV
+            echo "DEPLOY_USER=${{ secrets.PRODUCTION_USER }}" >> $GITHUB_ENV
+            echo "DEPLOY_KEY=${{ secrets.PRODUCTION_KEY }}" >> $GITHUB_ENV
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+            ;;
+        esac
+
+    - name: Deploy via SSH
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ env.DEPLOY_HOST }}
+        username: ${{ env.DEPLOY_USER }}
+        key: ${{ env.DEPLOY_KEY }}
+        script: |
+          # Pull latest image
+          docker pull ghcr.io/${{ github.repository }}/jobboard:${{ env.IMAGE_TAG }}
+          
+          # Stop and remove existing container
+          docker stop jobboard-app || true
+          docker rm jobboard-app || true
+          
+          # Run database migrations
+          docker run --rm \
+            --network jobboard_network \
+            -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
+            ghcr.io/${{ github.repository }}/jobboard:${{ env.IMAGE_TAG }} \
+            python manage.py migrate
+          
+          # Start new container
+          docker run -d \
+            --name jobboard-app \
+            --network jobboard_network \
+            -p 8000:8000 \
+            -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
+            -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
+            -e ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }} \
+            --restart unless-stopped \
+            ghcr.io/${{ github.repository }}/jobboard:${{ env.IMAGE_TAG }}
+          
+          # Health check
+          sleep 10
+          curl -f http://localhost:8000/health/ || exit 1
+          
+          # Clean up old images
+          docker image prune -f
+
+    - name: Notify deployment status
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: |
+          Deployment to ${{ github.event.inputs.environment || 'staging' }} 
+          ${{ job.status == 'success' && 'succeeded' || 'failed' }}
+          Image: ghcr.io/${{ github.repository }}/jobboard:${{ env.IMAGE_TAG }}</code></pre>
+      </div>
+
+      <h3 id="cicd-best-practices">CI/CD Best Practices</h3>
+      <div class="callout">
+        <h4>🚀 Deployment Excellence Guidelines</h4>
+        <ul>
+          <li><strong>✅ Environment Parity</strong>: Use identical Docker images across all environments</li>
+          <li><strong>✅ Immutable Deployments</strong>: Tag images with git SHA for traceability</li>
+          <li><strong>✅ Zero-Downtime Deployments</strong>: Implement rolling updates and health checks</li>
+          <li><strong>✅ Automated Testing</strong>: Run comprehensive test suites before deployment</li>
+          <li><strong>✅ Security Scanning</strong>: Integrate vulnerability scanning in CI pipeline</li>
+          <li><strong>✅ Multi-Platform Builds</strong>: Support ARM64 and AMD64 architectures</li>
+          <li><strong>✅ Registry Security</strong>: Sign images and generate SBOMs</li>
+          <li><strong>✅ Monitoring Integration</strong>: Set up deployment notifications and alerts</li>
+          <li><strong>✅ Rollback Strategy</strong>: Maintain ability to quickly rollback deployments</li>
+          <li><strong>✅ Documentation</strong>: Document deployment procedures and troubleshooting steps</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Advanced Django Architecture Section -->
+    <section id="advanced-django-architecture">
+      <h2>29) Advanced Django Architecture Patterns</h2>
+      <p>Enterprise-scale Django containerization patterns for complex applications:</p>
+
+      <h3 id="microservices-architecture">Django Microservices with Docker</h3>
+      <p>Containerized microservices architecture for Django applications:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Base microservice Dockerfile template
+FROM python:3.11-slim AS microservice-base
+
+# Common system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        redis-tools \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create shared user
+RUN groupadd -r django && useradd -r -g django django
+
+# Common Python dependencies
+COPY requirements/base.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r base.txt
+
+WORKDIR /app
+
+# User Management Service
+FROM microservice-base AS user-service
+
+COPY requirements/user-service.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r user-service.txt
+
+# Copy shared libraries
+COPY --chown=django:django shared/ /app/shared/
+COPY --chown=django:django user_service/ /app/
+
+# Service-specific configuration
+ENV DJANGO_SETTINGS_MODULE=user_service.settings.production \
+    SERVICE_NAME=user-service \
+    SERVICE_PORT=8001
+
+USER django
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8001/health/ || exit 1
+
+EXPOSE 8001
+CMD ["gunicorn", "--bind", "0.0.0.0:8001", "--workers", "2", "user_service.wsgi:application"]
+
+# Job Management Service
+FROM microservice-base AS job-service
+
+COPY requirements/job-service.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r job-service.txt
+
+COPY --chown=django:django shared/ /app/shared/
+COPY --chown=django:django job_service/ /app/
+
+ENV DJANGO_SETTINGS_MODULE=job_service.settings.production \
+    SERVICE_NAME=job-service \
+    SERVICE_PORT=8002
+
+USER django
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8002/health/ || exit 1
+
+EXPOSE 8002
+CMD ["gunicorn", "--bind", "0.0.0.0:8002", "--workers", "3", "job_service.wsgi:application"]
+
+# API Gateway Service
+FROM microservice-base AS gateway-service
+
+COPY requirements/gateway.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r gateway.txt
+
+COPY --chown=django:django gateway/ /app/
+COPY --chown=django:django shared/ /app/shared/
+
+ENV DJANGO_SETTINGS_MODULE=gateway.settings.production \
+    SERVICE_NAME=api-gateway \
+    SERVICE_PORT=8000
+
+USER django
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health/ || exit 1
+
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "gateway.wsgi:application"]</code></pre>
+      </div>
+
+      <h3 id="celery-workers">Celery Worker Containers</h3>
+      <p>Specialized Dockerfiles for Celery background task processing:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Celery Worker Dockerfile
+FROM python:3.11-slim AS celery-base
+
+# Install system dependencies for task processing
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        redis-tools \
+        imagemagick \
+        ffmpeg \
+        wkhtmltopdf \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements/celery.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r celery.txt
+
+# Create celery user
+RUN groupadd -r celery && useradd -r -g celery celery
+
+WORKDIR /app
+
+# General Worker
+FROM celery-base AS celery-worker
+
+COPY --chown=celery:celery . .
+
+# Worker-specific environment
+ENV CELERY_APP=jobboard \
+    CELERY_LOGLEVEL=info \
+    CELERY_CONCURRENCY=4 \
+    C_FORCE_ROOT=true
+
+USER celery
+
+# Health check for worker
+HEALTHCHECK --interval=60s --timeout=30s --start-period=30s --retries=3 \
+    CMD celery -A $CELERY_APP inspect ping || exit 1
+
+CMD ["celery", "-A", "jobboard", "worker", "--loglevel=info", "--concurrency=4"]
+
+# CPU-Intensive Worker (for data processing)
+FROM celery-base AS celery-cpu-worker
+
+# Install additional CPU-intensive task dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        pandas \
+        numpy \
+        scipy \
+        scikit-learn
+
+COPY --chown=celery:celery . .
+
+ENV CELERY_APP=jobboard \
+    CELERY_LOGLEVEL=info \
+    CELERY_CONCURRENCY=2 \
+    CELERY_QUEUES=cpu_intensive
+
+USER celery
+
+CMD ["celery", "-A", "jobboard", "worker", "--loglevel=info", "--concurrency=2", "--queues=cpu_intensive"]
+
+# I/O Intensive Worker (for file processing)
+FROM celery-base AS celery-io-worker
+
+# Install file processing dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        Pillow \
+        python-magic \
+        PyPDF2
+
+COPY --chown=celery:celery . .
+
+ENV CELERY_APP=jobboard \
+    CELERY_LOGLEVEL=info \
+    CELERY_CONCURRENCY=8 \
+    CELERY_QUEUES=file_processing
+
+USER celery
+
+# Health check with queue-specific inspection
+HEALTHCHECK --interval=60s --timeout=30s --start-period=30s --retries=3 \
+    CMD celery -A $CELERY_APP inspect active_queues | grep file_processing || exit 1
+
+CMD ["celery", "-A", "jobboard", "worker", "--loglevel=info", "--concurrency=8", "--queues=file_processing"]
+
+# Beat Scheduler
+FROM celery-base AS celery-beat
+
+COPY --chown=celery:celery . .
+
+# Create beat database directory
+RUN mkdir -p /app/celerybeat && \
+    chown celery:celery /app/celerybeat
+
+ENV CELERY_APP=jobboard \
+    CELERY_BEAT_SCHEDULE_FILENAME=/app/celerybeat/celerybeat-schedule
+
+USER celery
+
+# Health check for beat scheduler
+HEALTHCHECK --interval=120s --timeout=30s --start-period=30s --retries=3 \
+    CMD test -f $CELERY_BEAT_SCHEDULE_FILENAME || exit 1
+
+CMD ["celery", "-A", "jobboard", "beat", "--loglevel=info", "--schedule=/app/celerybeat/celerybeat-schedule"]
+
+# Flower Monitoring
+FROM celery-base AS celery-flower
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install flower
+
+COPY --chown=celery:celery . .
+
+ENV CELERY_APP=jobboard \
+    FLOWER_PORT=5555 \
+    FLOWER_BASIC_AUTH=$FLOWER_USER:$FLOWER_PASSWORD
+
+USER celery
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:5555/ || exit 1
+
+EXPOSE 5555
+CMD ["celery", "-A", "jobboard", "flower", "--port=5555"]</code></pre>
+      </div>
+
+      <h3 id="database-initialization">Database Initialization Containers</h3>
+      <p>Specialized containers for database setup and migrations:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Database Initialization Dockerfile
+FROM python:3.11-slim AS db-init-base
+
+# Install database clients
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        postgresql-client \
+        mysql-client \
+        redis-tools \
+        curl \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements/db.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r db.txt
+
+WORKDIR /app
+
+# Migration Runner
+FROM db-init-base AS migration-runner
+
+COPY --chown=django:django . .
+
+# Create migration scripts
+RUN cat > migrate.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting database migration process..."
+
+# Wait for database to be ready
+echo "Waiting for database connection..."
+python manage.py check --database default
+
+# Run migrations
+echo "Running Django migrations..."
+python manage.py migrate --noinput
+
+# Create superuser if specified
+if [ "$CREATE_SUPERUSER" = "true" ]; then
+    echo "Creating superuser..."
+    python manage.py shell -c "
+from django.contrib.auth import get_user_model
+User = get_user_model()
+if not User.objects.filter(username='$DJANGO_SUPERUSER_USERNAME').exists():
+    User.objects.create_superuser('$DJANGO_SUPERUSER_USERNAME', '$DJANGO_SUPERUSER_EMAIL', '$DJANGO_SUPERUSER_PASSWORD')
+    print('Superuser created successfully')
+else:
+    print('Superuser already exists')
+"
+fi
+
+# Collect static files
+echo "Collecting static files..."
+python manage.py collectstatic --noinput
+
+echo "Database initialization completed successfully"
+EOF
+
+RUN chmod +x migrate.sh
+
+# Data Seeder
+FROM db-init-base AS data-seeder
+
+COPY --chown=django:django . .
+COPY --chown=django:django fixtures/ /app/fixtures/
+
+RUN cat > seed_data.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting data seeding process..."
+
+# Load initial data
+if [ -d "/app/fixtures" ]; then
+    echo "Loading fixture data..."
+    for fixture in /app/fixtures/*.json; do
+        if [ -f "$fixture" ]; then
+            echo "Loading $fixture"
+            python manage.py loaddata "$fixture"
+        fi
+    done
+fi
+
+# Run custom seed commands
+if [ -f "/app/management/commands/seed_sample_data.py" ]; then
+    echo "Running custom seed command..."
+    python manage.py seed_sample_data
+fi
+
+echo "Data seeding completed successfully"
+EOF
+
+RUN chmod +x seed_data.sh
+
+# Database Backup Container
+FROM db-init-base AS db-backup
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        cron \
+        gzip \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --chown=django:django . .
+
+RUN cat > backup.sh << 'EOF'
+#!/bin/bash
+set -e
+
+BACKUP_DIR="/backups"
+DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="$BACKUP_DIR/jobboard_backup_$DATE.sql.gz"
+
+mkdir -p $BACKUP_DIR
+
+echo "Starting database backup..."
+
+# Create backup based on database type
+if [ "$DATABASE_TYPE" = "postgresql" ]; then
+    pg_dump $DATABASE_URL | gzip > $BACKUP_FILE
+elif [ "$DATABASE_TYPE" = "mysql" ]; then
+    mysqldump --single-transaction --routines --triggers $DATABASE_URL | gzip > $BACKUP_FILE
+fi
+
+echo "Backup created: $BACKUP_FILE"
+
+# Clean up old backups (keep last 7 days)
+find $BACKUP_DIR -name "*.sql.gz" -mtime +7 -delete
+
+echo "Backup process completed"
+EOF
+
+RUN chmod +x backup.sh
+
+# Set up cron for automated backups
+RUN echo "0 2 * * * /app/backup.sh" | crontab -
+
+CMD ["cron", "-f"]</code></pre>
+      </div>
+
+      <h3 id="monitoring-containers">Monitoring & Observability Containers</h3>
+      <p>Specialized monitoring containers for Django applications:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Monitoring Stack Dockerfile
+FROM python:3.11-slim AS monitoring-base
+
+# Install monitoring tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        netcat-openbsd \
+        procps \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Django Prometheus Exporter
+FROM monitoring-base AS django-exporter
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        django-prometheus \
+        prometheus-client
+
+COPY --chown=django:django . .
+
+# Create metrics endpoint
+RUN cat > metrics_server.py << 'EOF'
+import os
+import django
+from django.conf import settings
+from django.core.wsgi import get_wsgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'jobboard.settings.monitoring')
+django.setup()
+
+from prometheus_client import start_http_server, Counter, Histogram, Gauge
+import time
+
+# Custom metrics
+REQUEST_COUNT = Counter('django_requests_total', 'Total Django requests', ['method', 'endpoint'])
+REQUEST_LATENCY = Histogram('django_request_duration_seconds', 'Django request latency')
+ACTIVE_USERS = Gauge('django_active_users', 'Number of active users')
+
+def collect_custom_metrics():
+    while True:
+        # Collect custom application metrics
+        from django.contrib.auth import get_user_model
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        User = get_user_model()
+        
+        # Active users in last 24 hours
+        active_users = User.objects.filter(
+            last_login__gte=timezone.now() - timedelta(hours=24)
+        ).count()
+        ACTIVE_USERS.set(active_users)
+        
+        time.sleep(60)
+
+if __name__ == '__main__':
+    start_http_server(8001)
+    collect_custom_metrics()
+EOF
+
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.monitoring
+
+EXPOSE 8001
+CMD ["python", "metrics_server.py"]
+
+# Health Check Service
+FROM monitoring-base AS health-checker
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install requests pyyaml
+
+COPY --chown=django:django . .
+
+RUN cat > health_checker.py << 'EOF'
+#!/usr/bin/env python3
+import requests
+import time
+import json
+import yaml
+import os
+from datetime import datetime
+
+class HealthChecker:
+    def __init__(self, config_file='health_config.yaml'):
+        with open(config_file, 'r') as f:
+            self.config = yaml.safe_load(f)
+    
+    def check_service(self, service):
+        try:
+            response = requests.get(
+                service['url'], 
+                timeout=service.get('timeout', 10)
+            )
+            
+            if response.status_code == 200:
+                return {
+                    'status': 'healthy',
+                    'response_time': response.elapsed.total_seconds(),
+                    'timestamp': datetime.now().isoformat()
+                }
+            else:
+                return {
+                    'status': 'unhealthy',
+                    'status_code': response.status_code,
+                    'timestamp': datetime.now().isoformat()
+                }
+        except Exception as e:
+            return {
+                'status': 'unhealthy',
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
+    
+    def run_checks(self):
+        results = {}
+        for service_name, service_config in self.config['services'].items():
+            results[service_name] = self.check_service(service_config)
+        
+        return results
+    
+    def continuous_monitoring(self):
+        while True:
+            results = self.run_checks()
+            
+            # Log results
+            print(json.dumps(results, indent=2))
+            
+            # Send alerts if configured
+            self.send_alerts(results)
+            
+            time.sleep(self.config.get('interval', 60))
+    
+    def send_alerts(self, results):
+        for service_name, result in results.items():
+            if result['status'] == 'unhealthy':
+                print(f"ALERT: {service_name} is unhealthy: {result}")
+
+if __name__ == '__main__':
+    checker = HealthChecker()
+    checker.continuous_monitoring()
+EOF
+
+# Create sample health config
+RUN cat > health_config.yaml << 'EOF'
+services:
+  api_gateway:
+    url: "http://gateway:8000/health/"
+    timeout: 10
+  user_service:
+    url: "http://user-service:8001/health/"
+    timeout: 10
+  job_service:
+    url: "http://job-service:8002/health/"
+    timeout: 10
+  database:
+    url: "http://postgres:5432/"
+    timeout: 5
+  redis:
+    url: "http://redis:6379/"
+    timeout: 5
+
+interval: 30
+EOF
+
+RUN chmod +x health_checker.py
+
+CMD ["python", "health_checker.py"]
+
+# Log Aggregator
+FROM monitoring-base AS log-aggregator
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        python-json-logger \
+        elasticsearch \
+        redis
+
+COPY --chown=django:django . .
+
+RUN cat > log_aggregator.py << 'EOF'
+#!/usr/bin/env python3
+import json
+import redis
+import time
+from datetime import datetime
+from elasticsearch import Elasticsearch
+
+class LogAggregator:
+    def __init__(self):
+        self.redis_client = redis.Redis(host='redis', port=6379, db=0)
+        self.es = Elasticsearch(['elasticsearch:9200'])
+    
+    def process_logs(self):
+        while True:
+            try:
+                # Get logs from Redis queue
+                log_data = self.redis_client.blpop(['django_logs'], timeout=5)
+                
+                if log_data:
+                    log_entry = json.loads(log_data[1])
+                    
+                    # Enhance log entry
+                    log_entry['@timestamp'] = datetime.now().isoformat()
+                    log_entry['environment'] = 'production'
+                    
+                    # Index to Elasticsearch
+                    self.es.index(
+                        index=f"django-logs-{datetime.now().strftime('%Y-%m')}",
+                        body=log_entry
+                    )
+                    
+                    print(f"Processed log: {log_entry.get('message', 'No message')}")
+                
+            except Exception as e:
+                print(f"Error processing logs: {e}")
+                time.sleep(1)
+
+if __name__ == '__main__':
+    aggregator = LogAggregator()
+    aggregator.process_logs()
+EOF
+
+RUN chmod +x log_aggregator.py
+
+CMD ["python", "log_aggregator.py"]</code></pre>
+      </div>
+
+      <h3 id="development-environment">Development Environment Containers</h3>
+      <p>Optimized development containers with hot reloading and debugging:</p>
+      <div class="code-block">
+        <pre><code class="language-dockerfile"># Development Environment Dockerfile
+FROM python:3.11-slim AS dev-base
+
+# Install development tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        vim \
+        curl \
+        wget \
+        tree \
+        htop \
+        postgresql-client \
+        redis-tools \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python development tools
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        ipython \
+        ipdb \
+        django-debug-toolbar \
+        django-extensions \
+        werkzeug \
+        watchdog
+
+WORKDIR /app
+
+# Django Development Server
+FROM dev-base AS django-dev
+
+# Install all development dependencies
+COPY requirements/dev.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r dev.txt
+
+# Create development user
+RUN groupadd -r dev && useradd -r -g dev dev && \
+    chown -R dev:dev /app
+
+# Development settings
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.development \
+    DEBUG=1 \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1
+
+USER dev
+
+# Use volume mounts for source code in docker-compose
+VOLUME ["/app/src"]
+
+EXPOSE 8000
+
+# Development with auto-reload
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+
+# Jupyter Notebook Development
+FROM dev-base AS jupyter-dev
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        jupyter \
+        jupyterlab \
+        django-extensions \
+        pandas \
+        matplotlib \
+        seaborn
+
+# Create Jupyter configuration
+RUN mkdir -p /root/.jupyter && \
+    cat > /root/.jupyter/jupyter_notebook_config.py << 'EOF'
+c.NotebookApp.ip = '0.0.0.0'
+c.NotebookApp.port = 8888
+c.NotebookApp.open_browser = False
+c.NotebookApp.allow_root = True
+c.NotebookApp.token = ''
+c.NotebookApp.password = ''
+EOF
+
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.development \
+    DJANGO_ALLOW_ASYNC_UNSAFE=1
+
+EXPOSE 8888
+
+# Start Jupyter with Django integration
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--allow-root", "--no-browser"]
+
+# Testing Environment
+FROM dev-base AS test-runner
+
+# Install test dependencies
+COPY requirements/test.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r test.txt
+
+# Install additional testing tools
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        pytest-django \
+        pytest-cov \
+        pytest-xdist \
+        factory-boy \
+        coverage
+
+COPY . /app/
+
+# Test environment settings
+ENV DJANGO_SETTINGS_MODULE=jobboard.settings.test \
+    PYTHONPATH=/app
+
+# Create test runner script
+RUN cat > run_tests.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Running Django tests..."
+
+# Run Django system checks
+python manage.py check
+
+# Run pytest with coverage
+pytest tests/ \
+    --cov=jobboard \
+    --cov-report=html \
+    --cov-report=term \
+    --cov-fail-under=80 \
+    --verbose
+
+echo "Tests completed successfully"
+EOF
+
+RUN chmod +x run_tests.sh
+
+CMD ["./run_tests.sh"]</code></pre>
+      </div>
+
+      <h3 id="architecture-best-practices">Advanced Architecture Best Practices</h3>
+      <div class="callout">
+        <h4>🏛️ Enterprise Django Architecture Guidelines</h4>
+        <ul>
+          <li><strong>✅ Service Separation</strong>: Use dedicated containers for each microservice</li>
+          <li><strong>✅ Shared Libraries</strong>: Create common base images for code reuse</li>
+          <li><strong>✅ Configuration Management</strong>: Externalize configuration via environment variables</li>
+          <li><strong>✅ Health Monitoring</strong>: Implement comprehensive health checks for all services</li>
+          <li><strong>✅ Resource Isolation</strong>: Use appropriate resource limits for each container type</li>
+          <li><strong>✅ Scaling Strategy</strong>: Design containers for horizontal scaling</li>
+          <li><strong>✅ Data Persistence</strong>: Use volumes for persistent data, avoid container state</li>
+          <li><strong>✅ Service Discovery</strong>: Implement proper service discovery mechanisms</li>
+          <li><strong>✅ Monitoring Integration</strong>: Include observability in container design</li>
+          <li><strong>✅ Development Parity</strong>: Maintain development/production environment consistency</li>
+        </ul>
+      </div>
+    </section>
+
   </main>
 
   <footer>
-    <p>Ultimate complete Dockerfile reference for Django development. Every official Docker instruction covered with JobPost, Skills, Author, Location, User model examples. Production-ready with security, performance, and operational best practices for enterprise deployment.</p>
+    <p>Ultimate complete Dockerfile reference for Django development. Every official Docker instruction covered with JobPost, Skills, Author, Location, User model examples. Production-ready with security, performance, and operational best practices for enterprise deployment. Enhanced with comprehensive guides for security hardening, performance optimization, multi-stage builds, troubleshooting, CI/CD integration, and advanced Django architecture patterns.</p>
   </footer>
 
   <!-- JavaScript for interactive features -->
