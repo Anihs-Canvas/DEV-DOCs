@@ -3264,52 +3264,327 @@ kubectl get pods -l app=jobpost-api -o wide --sort-by=.spec.nodeName</code></pre
                 </div>
                 <p class="api-subtitle">Probe describes a health check to be performed against a container to determine whether it is alive or ready to receive traffic.</p>
 
-                <p><strong>exec (ExecAction)</strong> - Exec specifies a command to execute in the container.</p>
+                <h4>Full Description</h4>
+                <p>Probes are essential health checking mechanisms that monitor your anihpj Django application's container health and readiness. Kubernetes uses three types of probes: liveness probes to restart unhealthy containers, readiness probes to control traffic routing, and startup probes for slow-starting applications. For your jobpost application, properly configured probes ensure automatic recovery from failures, prevent traffic to unhealthy instances, and provide reliable service availability.</p>
+                
+                <p>Probes can execute commands inside containers, make HTTP requests to endpoints, test TCP connections, or use gRPC health checks. Configure appropriate timing parameters to balance responsiveness with stability, avoiding false positives that could cause unnecessary restarts of healthy Django applications.</p>
+
+                <h4>Syntax</h4>
+                <pre><code class="language-yaml"># Pod with comprehensive health probes
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: django-app
+    image: anihpj/jobpost-app:v1.0.0
+    livenessProbe:
+      httpGet:
+        path: /health/
+        port: 8000
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      exec:
+        command: ["python", "manage.py", "check", "--database", "default"]
+      initialDelaySeconds: 15
+      periodSeconds: 5
+    startupProbe:
+      tcpSocket:
+        port: 8000
+      failureThreshold: 30
+      periodSeconds: 10</code></pre>
+
+                <h4>Parameters Description</h4>
                 <ul>
-                    <li><strong>Django Usage:</strong> Run Django management commands like ["python", "manage.py", "check", "--database", "default"]</li>
+                    <li><strong>exec</strong>: Execute a command inside the container. Perfect for Django management commands that check database connectivity, cache availability, or application-specific health conditions. Return code 0 indicates success.</li>
+                    <li><strong>httpGet</strong>: Make HTTP GET request to a specific path and port. Ideal for Django health endpoints that validate database connections, external service availability, and application readiness. Success is determined by HTTP status codes 200-399.</li>
+                    <li><strong>tcpSocket</strong>: Test TCP connection to a specific port. Useful for checking if Django web server is accepting connections without requiring HTTP response validation. Success means successful TCP connection establishment.</li>
+                    <li><strong>grpc</strong>: Send gRPC health check request. Use for Django applications that expose gRPC services alongside HTTP endpoints, providing standardized health checking for microservice architectures.</li>
+                    <li><strong>initialDelaySeconds</strong>: Wait time before starting probes. Set to 30-60 seconds for Django applications to complete startup, migrations, and dependency initialization.</li>
+                    <li><strong>periodSeconds</strong>: Probe execution frequency. Use 10-30 seconds for production Django health checks, balancing responsiveness with resource usage.</li>
+                    <li><strong>timeoutSeconds</strong>: Maximum probe execution time. Set to 5-10 seconds for Django database-dependent health checks to account for query execution time.</li>
+                    <li><strong>failureThreshold</strong>: Consecutive failures before considering probe failed. Use 3-5 failures to prevent false positives from temporary Django application delays.</li>
+                    <li><strong>successThreshold</strong>: Consecutive successes required after failure. Defaults to 1, must be 1 for liveness and startup probes to ensure rapid recovery detection.</li>
                 </ul>
 
-                <p><strong>httpGet (HTTPGetAction)</strong> - HTTPGet specifies an HTTP GET request to perform.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Check Django health endpoints like /health/ or /ready/ for application status</li>
-                </ul>
+                <h4>Return Value</h4>
+                <p>Returns probe execution results including success/failure status, response time, and error details. Kubernetes uses probe results to make decisions about container restarts, traffic routing, and pod readiness status.</p>
 
-                <p><strong>tcpSocket (TCPSocketAction)</strong> - TCPSocket specifies a connection to a TCP port.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Check if Django web server is listening on port 8000</li>
-                </ul>
+                <h4>Examples</h4>
 
-                <p><strong>grpc (GRPCAction)</strong> - GRPC specifies a GRPC HealthCheckRequest.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Use for Django applications that expose gRPC services alongside HTTP</li>
-                </ul>
+                <h5>Example 1: Skills Model Database Health Check</h5>
+                <p>Configure liveness probe to check Skills model database connectivity and restart container on failures.</p>
+                <pre><code class="language-bash"># Apply Skills service with database health probe
+kubectl apply -f - &lt;&lt;EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-skills-health-check
+  labels:
+    app: skills-service
+    component: web
+spec:
+  containers:
+  - name: skills-service
+    image: anihpj/jobpost-app:v1.0.0
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    livenessProbe:
+      exec:
+        command: 
+        - python
+        - manage.py
+        - shell
+        - -c
+        - "from jobpost.models import Skills; Skills.objects.count()"
+      initialDelaySeconds: 45
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /api/skills/health/
+        port: 8000
+        httpHeaders:
+        - name: X-Health-Check
+          value: readiness
+      initialDelaySeconds: 20
+      periodSeconds: 10
+      timeoutSeconds: 5
+    ports:
+    - containerPort: 8000
+      name: http
+EOF
 
-                <p><strong>initialDelaySeconds (int32)</strong> - Number of seconds after the container has started before liveness probes are initiated.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Set to 30-60 seconds for Django apps to complete startup and migrations</li>
-                </ul>
+# Monitor probe status
+kubectl describe pod anihpj-skills-health-check | grep -A 15 "Liveness\|Readiness"</code></pre>
 
-                <p><strong>periodSeconds (int32)</strong> - How often (in seconds) to perform the probe. Default to 10 seconds. Minimum value is 1.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Use 10-30 seconds for production Django health checks</li>
-                </ul>
+                <h5>Example 2: User Authentication Service Readiness</h5>
+                <p>Configure readiness probe to ensure User authentication service is ready before receiving traffic.</p>
+                <pre><code class="language-bash"># Apply User auth with comprehensive probes
+kubectl apply -f - &lt;&lt;EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-user-auth-probes
+  labels:
+    app: user-auth
+    component: api
+spec:
+  containers:
+  - name: user-auth
+    image: anihpj/jobpost-app:v1.0.0
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "anihpj.wsgi:application"]
+    startupProbe:
+      tcpSocket:
+        port: 8000
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      failureThreshold: 30
+      timeoutSeconds: 3
+    livenessProbe:
+      httpGet:
+        path: /api/auth/ping/
+        port: 8000
+        scheme: HTTP
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      timeoutSeconds: 8
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /api/auth/ready/
+        port: 8000
+        httpHeaders:
+        - name: User-Agent
+          value: Kubernetes-HealthCheck
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      successThreshold: 1
+      failureThreshold: 2
+EOF
 
-                <p><strong>timeoutSeconds (int32)</strong> - Number of seconds after which the probe times out. Defaults to 1 second. Minimum value is 1.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Set to 5-10 seconds for Django database-dependent health checks</li>
-                </ul>
+# Check probe execution results
+kubectl get pod anihpj-user-auth-probes -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'</code></pre>
 
-                <p><strong>failureThreshold (int32)</strong> - Minimum consecutive failures for the probe to be considered failed after having succeeded. Defaults to 3.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Use 3-5 failures before restarting Django containers</li>
-                </ul>
+                <h5>Example 3: Author Content Processing Startup Probe</h5>
+                <p>Configure startup probe for Author content processing that requires extended initialization time.</p>
+                <pre><code class="language-bash"># Apply Author processor with startup probe
+kubectl apply -f - &lt;&lt;EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-author-content-startup
+  labels:
+    app: author-processor
+    component: worker
+spec:
+  containers:
+  - name: author-processor
+    image: anihpj/jobpost-app:v1.0.0
+    command: ["python", "manage.py", "run_content_processor"]
+    env:
+    - name: DJANGO_SETTINGS_MODULE
+      value: "anihpj.settings"
+    startupProbe:
+      exec:
+        command:
+        - python
+        - manage.py
+        - shell
+        - -c
+        - "from jobpost.models import Author; from django.db import connection; connection.ensure_connection(); print('Startup complete')"
+      initialDelaySeconds: 20
+      periodSeconds: 10
+      failureThreshold: 60
+      timeoutSeconds: 15
+    livenessProbe:
+      httpGet:
+        path: /status/alive/
+        port: 8080
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      failureThreshold: 3
+    readinessProbe:
+      exec:
+        command: ["test", "-f", "/tmp/author-processor-ready"]
+      initialDelaySeconds: 25
+      periodSeconds: 15
+    ports:
+    - containerPort: 8080
+      name: status
+EOF
 
-                <p><strong>successThreshold (int32)</strong> - Minimum consecutive successes for the probe to be considered successful after having failed. Defaults to 1. Must be 1 for liveness and startup.</p>
+# Monitor startup progression
+kubectl get pod anihpj-author-content-startup -w</code></pre>
 
-                <p><strong>terminationGracePeriodSeconds (int64)</strong> - Optional duration in seconds the pod needs to terminate gracefully upon probe failure.</p>
-                <ul>
-                    <li><strong>Django Usage:</strong> Allow 60-120 seconds for Django to finish processing requests before termination</li>
-                </ul>
+                <h5>Example 4: Location Service TCP and HTTP Probes</h5>
+                <p>Configure multiple probe types for Location service to validate different health aspects.</p>
+                <pre><code class="language-bash"># Apply Location service with multi-probe setup
+kubectl apply -f - &lt;&lt;EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-location-multi-probe
+  labels:
+    app: location-service
+    component: geo-api
+spec:
+  containers:
+  - name: location-service
+    image: anihpj/jobpost-app:v1.0.0
+    command: ["python", "manage.py", "run_location_service"]
+    livenessProbe:
+      tcpSocket:
+        port: 8000
+      initialDelaySeconds: 30
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 4
+    readinessProbe:
+      httpGet:
+        path: /api/location/health/
+        port: 8000
+        httpHeaders:
+        - name: Accept
+          value: application/json
+        - name: X-Service-Check
+          value: location-readiness
+      initialDelaySeconds: 20
+      periodSeconds: 10
+      timeoutSeconds: 8
+      successThreshold: 1
+      failureThreshold: 2
+    startupProbe:
+      httpGet:
+        path: /api/location/startup/
+        port: 8000
+      initialDelaySeconds: 15
+      periodSeconds: 8
+      failureThreshold: 20
+    ports:
+    - containerPort: 8000
+      name: http
+EOF
+
+# View detailed probe information
+kubectl describe pod anihpj-location-multi-probe | grep -A 25 Containers</code></pre>
+
+                <h5>Example 5: JobPost API with Custom Health Endpoint</h5>
+                <p>Configure JobPost API with custom health endpoints that validate full application stack health.</p>
+                <pre><code class="language-bash"># Apply JobPost API with comprehensive health checking
+kubectl apply -f - &lt;&lt;EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-jobpost-api-health
+  labels:
+    app: jobpost-api
+    component: backend
+spec:
+  containers:
+  - name: jobpost-api
+    image: anihpj/jobpost-app:v1.0.0
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    env:
+    - name: DEBUG
+      value: "False"
+    - name: DATABASE_URL
+      value: "postgresql://user:pass@postgres:5432/anihpj"
+    livenessProbe:
+      httpGet:
+        path: /api/jobpost/liveness/
+        port: 8000
+        httpHeaders:
+        - name: Content-Type
+          value: application/json
+        - name: X-Probe-Type
+          value: liveness
+      initialDelaySeconds: 40
+      periodSeconds: 25
+      timeoutSeconds: 10
+      failureThreshold: 3
+      successThreshold: 1
+    readinessProbe:
+      httpGet:
+        path: /api/jobpost/readiness/
+        port: 8000
+        httpHeaders:
+        - name: X-Probe-Type
+          value: readiness
+      initialDelaySeconds: 25
+      periodSeconds: 12
+      timeoutSeconds: 8
+      failureThreshold: 2
+    startupProbe:
+      exec:
+        command:
+        - python
+        - manage.py
+        - check
+        - --deploy
+        - --fail-level
+        - ERROR
+      initialDelaySeconds: 20
+      periodSeconds: 15
+      failureThreshold: 40
+      timeoutSeconds: 20
+    ports:
+    - containerPort: 8000
+      name: django-http
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+EOF
+
+# Monitor all probe types
+kubectl get pod anihpj-jobpost-api-health -o jsonpath='{.status.containerStatuses[0].state}' | jq</code></pre>
             </div>
 
             <!-- PodStatus -->
