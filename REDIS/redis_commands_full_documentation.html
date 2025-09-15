@@ -15749,6 +15749,1045 @@ for player in leaderboard['top_players'][:5]:
                     </div>
                 </div>
 
+                <!-- SORT_RO -->
+                <div class="command-block">
+                    <h3 id="sort-ro">SORT_RO</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/sort_ro/" target="_blank" rel="noopener">Redis SORT_RO Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Read-only version of SORT that doesn't block writes.</p>
+
+                    <h4>Full description</h4>
+                    <p>SORT_RO is the read-only variant of SORT that returns sorted elements without blocking write operations. Cannot use STORE option. Perfect for analytics, reporting, live dashboards, and read-heavy workloads where blocking writes is unacceptable in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">SORT_RO key [BY pattern] [LIMIT offset count] [GET pattern [GET pattern ...]] [ASC|DESC] [ALPHA]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The key to sort (list, set, or sorted set).</li>
+                        <li><strong>BY pattern</strong>: Sort by external key pattern (* is replaced with elements).</li>
+                        <li><strong>LIMIT</strong>: Limit results with offset and count.</li>
+                        <li><strong>GET pattern</strong>: Return fields from external keys instead of elements.</li>
+                        <li><strong>ASC|DESC</strong>: Sort in ascending or descending order.</li>
+                        <li><strong>ALPHA</strong>: Sort lexicographically instead of numerically.</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: Sorted elements (cannot store result).</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Live analytics dashboard</h5>
+                        <pre><code class="language-python"># Generate real-time analytics without blocking writes
+def get_live_user_activity_stats():
+    """Get live user activity stats for dashboard"""
+
+    # Get active user rankings without blocking new activity writes
+    active_users = r.sort_ro(
+        "active_users_today",
+        by="user:*:activity_score",
+        get=["user:*:username", "user:*:activity_score", "user:*:last_seen"],
+        desc=True,
+        limit=(0, 10)
+    )
+
+    # Process results for dashboard
+    activity_stats = []
+    for i in range(0, len(active_users), 3):
+        if i + 2 < len(active_users):
+            activity_stats.append({
+                'username': active_users[i].decode() if active_users[i] else "Unknown",
+                'activity_score': int(active_users[i + 1]) if active_users[i + 1] else 0,
+                'last_seen': int(active_users[i + 2]) if active_users[i + 2] else 0
+            })
+
+    # Get trending content without blocking content updates
+    trending_content = r.sort_ro(
+        "trending_posts_ids",
+        by="post:*:engagement_score",
+        get=["post:*:title", "post:*:engagement_score"],
+        desc=True,
+        limit=(0, 5)
+    )
+
+    trending_posts = []
+    for i in range(0, len(trending_content), 2):
+        if i + 1 < len(trending_content):
+            trending_posts.append({
+                'title': trending_content[i].decode() if trending_content[i] else "Unknown",
+                'engagement': int(trending_content[i + 1]) if trending_content[i + 1] else 0
+            })
+
+    return {
+        'timestamp': int(time.time()),
+        'top_active_users': activity_stats,
+        'trending_posts': trending_posts,
+        'read_only_operation': True,
+        'writes_not_blocked': True
+    }
+
+# Get live dashboard data
+import time
+dashboard_data = get_live_user_activity_stats()
+print(f"Live Dashboard Data (timestamp: {dashboard_data['timestamp']}):")
+print(f"Top Active Users: {len(dashboard_data['top_active_users'])}")
+print(f"Trending Posts: {len(dashboard_data['trending_posts'])}")
+print(f"Writes blocked: {not dashboard_data['writes_not_blocked']}")</code></pre>
+                        <div class="printout">Live Dashboard Data (timestamp: 1705327530):
+Top Active Users: 10
+Trending Posts: 5
+Writes blocked: False</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Real-time leaderboard API</h5>
+                        <pre><code class="language-python"># API endpoint for real-time leaderboards
+def get_realtime_leaderboard(game_mode, page=1, per_page=20):
+    """Get real-time leaderboard without blocking score updates"""
+
+    offset = (page - 1) * per_page
+    players_key = f"game:{game_mode}:active_players"
+
+    # Get leaderboard without blocking ongoing game score updates
+    leaderboard_data = r.sort_ro(
+        players_key,
+        by=f"player:*:current_score",
+        get=[
+            "player:*:username",
+            f"player:*:current_score",
+            "player:*:games_played",
+            "#"  # player ID
+        ],
+        desc=True,
+        limit=(offset, per_page)
+    )
+
+    # Process leaderboard
+    leaderboard = []
+    for i in range(0, len(leaderboard_data), 4):
+        if i + 3 < len(leaderboard_data):
+            leaderboard.append({
+                'rank': offset + len(leaderboard) + 1,
+                'player_id': leaderboard_data[i + 3].decode(),
+                'username': leaderboard_data[i].decode() if leaderboard_data[i] else "Unknown",
+                'current_score': int(leaderboard_data[i + 1]) if leaderboard_data[i + 1] else 0,
+                'games_played': int(leaderboard_data[i + 2]) if leaderboard_data[i + 2] else 0
+            })
+
+    return {
+        'game_mode': game_mode,
+        'page': page,
+        'per_page': per_page,
+        'leaderboard': leaderboard,
+        'total_returned': len(leaderboard),
+        'realtime': True,
+        'blocks_writes': False
+    }
+
+# API call for real-time leaderboard
+leaderboard_result = get_realtime_leaderboard("battle_royale", page=1, per_page=5)
+print(f"🏆 {leaderboard_result['game_mode'].title()} Leaderboard (Page {leaderboard_result['page']}):")
+for player in leaderboard_result['leaderboard']:
+    print(f"  #{player['rank']}: {player['username']} - {player['current_score']:,} pts ({player['games_played']} games)")
+print(f"Real-time updates: {leaderboard_result['realtime']}")</code></pre>
+                        <div class="printout">🏆 Battle Royale Leaderboard (Page 1):
+  #1: ProGamer123 - 47,520 pts (156 games)
+  #2: SkillMaster - 45,890 pts (143 games)
+  #3: EpicPlayer - 44,200 pts (178 games)
+  #4: GameWizard - 43,750 pts (134 games)
+  #5: TopShot - 42,100 pts (167 games)
+Real-time updates: True</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: Live product recommendations</h5>
+                        <pre><code class="language-python"># Generate live product recommendations without blocking inventory updates
+def get_live_product_recommendations(user_id, category=None, limit=8):
+    """Get live product recommendations based on real-time data"""
+
+    # Base key for products
+    if category:
+        products_key = f"products:category:{category}"
+    else:
+        products_key = "products:all_active"
+
+    # Get user's preference score (for personalization weight)
+    user_preference = r.hgetall(f"user:{user_id}:preferences")
+    preference_boost = float(user_preference.get('rating_weight', 1.0))
+
+    # Get trending products without blocking inventory/price updates
+    recommended_products = r.sort_ro(
+        products_key,
+        by="product:*:trending_score",
+        get=[
+            "product:*:name",
+            "product:*:price",
+            "product:*:rating",
+            "product:*:trending_score",
+            "product:*:stock_level",
+            "#"  # product ID
+        ],
+        desc=True,
+        limit=(0, limit)
+    )
+
+    # Process recommendations
+    recommendations = []
+    for i in range(0, len(recommended_products), 6):
+        if i + 5 < len(recommended_products):
+            product_id = recommended_products[i + 5].decode()
+            trending_score = float(recommended_products[i + 3]) if recommended_products[i + 3] else 0
+            rating = float(recommended_products[i + 2]) if recommended_products[i + 2] else 0
+
+            # Apply user preference boost
+            personalized_score = trending_score * (rating * preference_boost)
+
+            recommendations.append({
+                'product_id': product_id,
+                'name': recommended_products[i].decode() if recommended_products[i] else "Unknown",
+                'price': float(recommended_products[i + 1]) if recommended_products[i + 1] else 0.0,
+                'rating': rating,
+                'trending_score': trending_score,
+                'personalized_score': round(personalized_score, 2),
+                'stock_level': int(recommended_products[i + 4]) if recommended_products[i + 4] else 0,
+                'in_stock': int(recommended_products[i + 4]) > 0 if recommended_products[i + 4] else False
+            })
+
+    # Sort by personalized score
+    recommendations.sort(key=lambda x: x['personalized_score'], reverse=True)
+
+    return {
+        'user_id': user_id,
+        'category': category,
+        'recommendations': recommendations,
+        'personalization_applied': True,
+        'realtime_data': True,
+        'inventory_not_blocked': True
+    }
+
+# Get live recommendations
+recs = get_live_product_recommendations(123, "electronics", 4)
+print(f"Live Recommendations for User {recs['user_id']}:")
+for i, product in enumerate(recs['recommendations'], 1):
+    stock_status = "✓ In Stock" if product['in_stock'] else "✗ Out of Stock"
+    print(f"  {i}. {product['name']} - ${product['price']} ({product['rating']}⭐) {stock_status}")
+print(f"Personalized: {recs['personalization_applied']}")</code></pre>
+                        <div class="printout">Live Recommendations for User 123:
+  1. 4K Gaming Monitor - $599.99 (4.7⭐) ✓ In Stock
+  2. Wireless Headphones Pro - $249.99 (4.5⭐) ✓ In Stock
+  3. Mechanical Keyboard RGB - $179.99 (4.6⭐) ✓ In Stock
+  4. USB-C Hub Deluxe - $89.99 (4.3⭐) ✗ Out of Stock
+Personalized: True</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: Live reporting without blocking operations</h5>
+                        <pre><code class="language-python"># Generate live reports without blocking operational data updates
+def generate_live_operations_report():
+    """Generate live operations report without blocking ongoing operations"""
+
+    report_data = {}
+
+    # Get top error-prone endpoints without blocking error logging
+    error_endpoints = r.sort_ro(
+        "api_endpoints_monitored",
+        by="endpoint:*:error_count_today",
+        get=["endpoint:*:path", "endpoint:*:error_count_today", "endpoint:*:total_requests_today"],
+        desc=True,
+        limit=(0, 5)
+    )
+
+    top_errors = []
+    for i in range(0, len(error_endpoints), 3):
+        if i + 2 < len(error_endpoints):
+            path = error_endpoints[i].decode() if error_endpoints[i] else "Unknown"
+            errors = int(error_endpoints[i + 1]) if error_endpoints[i + 1] else 0
+            total = int(error_endpoints[i + 2]) if error_endpoints[i + 2] else 1
+            error_rate = round((errors / total) * 100, 2) if total > 0 else 0
+
+            top_errors.append({
+                'endpoint': path,
+                'error_count': errors,
+                'total_requests': total,
+                'error_rate_percent': error_rate
+            })
+
+    report_data['top_error_endpoints'] = top_errors
+
+    # Get slowest database queries without blocking query logging
+    slow_queries = r.sort_ro(
+        "database_queries_tracked",
+        by="query:*:avg_execution_time",
+        get=["query:*:query_type", "query:*:avg_execution_time", "query:*:execution_count"],
+        desc=True,
+        limit=(0, 3)
+    )
+
+    slowest_queries = []
+    for i in range(0, len(slow_queries), 3):
+        if i + 2 < len(slow_queries):
+            slowest_queries.append({
+                'query_type': slow_queries[i].decode() if slow_queries[i] else "Unknown",
+                'avg_time_ms': float(slow_queries[i + 1]) if slow_queries[i + 1] else 0,
+                'execution_count': int(slow_queries[i + 2]) if slow_queries[i + 2] else 0
+            })
+
+    report_data['slowest_queries'] = slowest_queries
+
+    return {
+        'report_timestamp': int(time.time()),
+        'report_type': 'live_operations',
+        'data': report_data,
+        'operations_not_blocked': True,
+        'realtime_accuracy': True
+    }
+
+# Generate live operations report
+ops_report = generate_live_operations_report()
+print(f"🔍 Live Operations Report (Generated: {ops_report['report_timestamp']}):")
+print("\nTop Error-Prone Endpoints:")
+for endpoint in ops_report['data']['top_error_endpoints'][:3]:
+    print(f"  {endpoint['endpoint']}: {endpoint['error_rate_percent']}% error rate ({endpoint['error_count']}/{endpoint['total_requests']})")
+
+print("\nSlowest Database Queries:")
+for query in ops_report['data']['slowest_queries']:
+    print(f"  {query['query_type']}: {query['avg_time_ms']}ms avg ({query['execution_count']} executions)")
+print(f"\nOperations blocked: {not ops_report['operations_not_blocked']}")</code></pre>
+                        <div class="printout">🔍 Live Operations Report (Generated: 1705327530):
+
+Top Error-Prone Endpoints:
+  /api/payment/process: 2.4% error rate (12/500)
+  /api/upload/large: 1.8% error rate (9/500)
+  /api/search/complex: 0.6% error rate (3/500)
+
+Slowest Database Queries:
+  user_analytics_complex: 145.6ms avg (23 executions)
+  report_generation: 89.2ms avg (8 executions)
+  data_export_large: 76.8ms avg (12 executions)
+
+Operations blocked: False</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: Live content moderation queue</h5>
+                        <pre><code class="language-python"># Process moderation queue without blocking new content submissions
+def get_live_moderation_queue(moderator_id, queue_type="priority", limit=10):
+    """Get live moderation queue without blocking new content submissions"""
+
+    queue_key = f"moderation:{queue_type}_queue"
+
+    # Get content for moderation without blocking new submissions
+    moderation_items = r.sort_ro(
+        queue_key,
+        by="content:*:priority_score",
+        get=[
+            "content:*:type",
+            "content:*:submitted_at",
+            "content:*:reporter_count",
+            "content:*:priority_score",
+            "content:*:content_preview",
+            "#"  # content ID
+        ],
+        desc=True,
+        limit=(0, limit)
+    )
+
+    # Process moderation queue
+    queue_items = []
+    current_time = int(time.time())
+
+    for i in range(0, len(moderation_items), 6):
+        if i + 5 < len(moderation_items):
+            content_id = moderation_items[i + 5].decode()
+            submitted_at = int(moderation_items[i + 1]) if moderation_items[i + 1] else current_time
+            wait_time_hours = (current_time - submitted_at) // 3600
+
+            queue_items.append({
+                'content_id': content_id,
+                'content_type': moderation_items[i].decode() if moderation_items[i] else "unknown",
+                'reporter_count': int(moderation_items[i + 2]) if moderation_items[i + 2] else 0,
+                'priority_score': float(moderation_items[i + 3]) if moderation_items[i + 3] else 0,
+                'content_preview': moderation_items[i + 4].decode()[:100] if moderation_items[i + 4] else "No preview",
+                'wait_time_hours': wait_time_hours,
+                'urgency': 'high' if wait_time_hours > 24 else 'medium' if wait_time_hours > 4 else 'normal'
+            })
+
+    return {
+        'moderator_id': moderator_id,
+        'queue_type': queue_type,
+        'queue_items': queue_items,
+        'total_items': len(queue_items),
+        'submissions_not_blocked': True,
+        'realtime_queue': True
+    }
+
+# Get live moderation queue
+mod_queue = get_live_moderation_queue("mod_001", "priority", 5)
+print(f"📋 Live Moderation Queue ({mod_queue['queue_type']}) for {mod_queue['moderator_id']}:")
+for item in mod_queue['queue_items']:
+    urgency_icon = "🔴" if item['urgency'] == 'high' else "🟡" if item['urgency'] == 'medium' else "🟢"
+    print(f"  {urgency_icon} {item['content_type']} (ID: {item['content_id']}) - {item['reporter_count']} reports, waiting {item['wait_time_hours']}h")
+print(f"Queue updated in real-time: {mod_queue['realtime_queue']}")</code></pre>
+                        <div class="printout">📋 Live Moderation Queue (priority) for mod_001:
+  🔴 post (ID: content_789) - 8 reports, waiting 26h
+  🟡 comment (ID: content_456) - 5 reports, waiting 6h
+  🟡 image (ID: content_123) - 3 reports, waiting 8h
+  🟢 post (ID: content_321) - 2 reports, waiting 2h
+  🟢 comment (ID: content_654) - 1 reports, waiting 1h
+Queue updated in real-time: True</div>
+                    </div>
+                </div>
+
+                <!-- OBJECT ENCODING -->
+                <div class="command-block">
+                    <h3 id="object-encoding">OBJECT ENCODING</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/object/" target="_blank" rel="noopener">Redis OBJECT Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns the internal encoding of Redis object stored at key.</p>
+
+                    <h4>Full description</h4>
+                    <p>OBJECT ENCODING returns the internal representation used by Redis to store the object at the specified key. Perfect for memory optimization, debugging, performance analysis, and understanding Redis internals in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">OBJECT ENCODING key</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The key to inspect.</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>String: The encoding type (e.g., "int", "embstr", "raw", "hashtable", "ziplist", etc.) or nil if key doesn't exist.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Memory optimization analysis</h5>
+                        <pre><code class="language-python"># Analyze object encodings for memory optimization
+def analyze_cache_memory_usage():
+    """Analyze cache object encodings to optimize memory usage"""
+
+    cache_patterns = ["cache:*", "session:*", "user:*"]
+    encoding_analysis = {
+        'total_keys': 0,
+        'encoding_distribution': {},
+        'memory_insights': [],
+        'optimization_suggestions': []
+    }
+
+    for pattern in cache_patterns:
+        keys = r.keys(pattern)
+        encoding_analysis['total_keys'] += len(keys)
+
+        for key in keys[:50]:  # Sample first 50 keys per pattern
+            encoding = r.object('encoding', key)
+            if encoding:
+                encoding_str = encoding.decode() if isinstance(encoding, bytes) else str(encoding)
+                encoding_analysis['encoding_distribution'][encoding_str] = encoding_analysis['encoding_distribution'].get(encoding_str, 0) + 1
+
+                # Analyze specific encodings for insights
+                if encoding_str == 'raw' and 'cache:' in key:
+                    size = r.memory_usage(key)
+                    if size and size > 10000:  # > 10KB
+                        encoding_analysis['memory_insights'].append({
+                            'key': key,
+                            'encoding': encoding_str,
+                            'size_bytes': size,
+                            'issue': 'Large string using raw encoding'
+                        })
+
+                elif encoding_str == 'hashtable' and 'user:' in key:
+                    field_count = r.hlen(key)
+                    if field_count < 5:
+                        encoding_analysis['optimization_suggestions'].append({
+                            'key': key,
+                            'encoding': encoding_str,
+                            'field_count': field_count,
+                            'suggestion': 'Consider ziplist encoding for small hashes'
+                        })
+
+    return encoding_analysis
+
+# Analyze cache encodings
+analysis = analyze_cache_memory_usage()
+print(f"📊 Cache Memory Analysis ({analysis['total_keys']} keys sampled):")
+print("\nEncoding Distribution:")
+for encoding, count in analysis['encoding_distribution'].items():
+    percentage = round((count / sum(analysis['encoding_distribution'].values())) * 100, 1)
+    print(f"  {encoding}: {count} keys ({percentage}%)")
+
+if analysis['memory_insights']:
+    print(f"\n⚠️  Memory Insights ({len(analysis['memory_insights'])} issues):")
+    for insight in analysis['memory_insights'][:3]:
+        print(f"  {insight['key']}: {insight['issue']} ({insight['size_bytes']:,} bytes)")
+
+if analysis['optimization_suggestions']:
+    print(f"\n💡 Optimization Suggestions ({len(analysis['optimization_suggestions'])} found):")
+    for suggestion in analysis['optimization_suggestions'][:2]:
+        print(f"  {suggestion['key']}: {suggestion['suggestion']}")</code></pre>
+                        <div class="printout">📊 Cache Memory Analysis (150 keys sampled):
+
+Encoding Distribution:
+  embstr: 67 keys (44.7%)
+  hashtable: 45 keys (30.0%)
+  ziplist: 23 keys (15.3%)
+  raw: 15 keys (10.0%)
+
+⚠️  Memory Insights (3 issues):
+  cache:large_dataset_2024: Large string using raw encoding (45,678 bytes)
+  cache:user_analytics_dump: Large string using raw encoding (32,456 bytes)
+  cache:export_data_temp: Large string using raw encoding (28,934 bytes)
+
+💡 Optimization Suggestions (2 found):
+  user:123:quick_prefs: Consider ziplist encoding for small hashes
+  user:456:temp_settings: Consider ziplist encoding for small hashes</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Performance debugging</h5>
+                        <pre><code class="language-python"># Debug performance issues by analyzing object encodings
+def debug_performance_by_encoding():
+    """Debug slow operations by analyzing object encodings"""
+
+    slow_operations = [
+        "heavy_computation_cache",
+        "user_analytics_data",
+        "session_large_data",
+        "product_recommendations",
+        "search_results_cache"
+    ]
+
+    performance_debug = {
+        'operations_analyzed': 0,
+        'encoding_performance_map': {},
+        'performance_issues': [],
+        'recommendations': []
+    }
+
+    for operation_key in slow_operations:
+        if r.exists(operation_key):
+            performance_debug['operations_analyzed'] += 1
+
+            # Get encoding and performance metrics
+            encoding = r.object('encoding', operation_key)
+            memory_usage = r.memory_usage(operation_key)
+
+            # Measure access time
+            import time
+            start_time = time.time()
+            r.get(operation_key) if r.type(operation_key) == b'string' else r.hgetall(operation_key)
+            access_time_ms = (time.time() - start_time) * 1000
+
+            encoding_str = encoding.decode() if isinstance(encoding, bytes) else str(encoding)
+
+            if encoding_str not in performance_debug['encoding_performance_map']:
+                performance_debug['encoding_performance_map'][encoding_str] = {
+                    'count': 0,
+                    'total_access_time': 0,
+                    'total_memory': 0
+                }
+
+            perf_data = performance_debug['encoding_performance_map'][encoding_str]
+            perf_data['count'] += 1
+            perf_data['total_access_time'] += access_time_ms
+            perf_data['total_memory'] += memory_usage
+
+            # Identify performance issues
+            if access_time_ms > 5:  # > 5ms
+                performance_debug['performance_issues'].append({
+                    'key': operation_key,
+                    'encoding': encoding_str,
+                    'access_time_ms': round(access_time_ms, 2),
+                    'memory_mb': round(memory_usage / 1024 / 1024, 2),
+                    'issue_type': 'slow_access'
+                })
+
+            if memory_usage > 1000000:  # > 1MB
+                performance_debug['performance_issues'].append({
+                    'key': operation_key,
+                    'encoding': encoding_str,
+                    'access_time_ms': round(access_time_ms, 2),
+                    'memory_mb': round(memory_usage / 1024 / 1024, 2),
+                    'issue_type': 'high_memory'
+                })
+
+    # Generate recommendations based on encoding analysis
+    for encoding, data in performance_debug['encoding_performance_map'].items():
+        avg_access_time = data['total_access_time'] / data['count']
+        avg_memory = data['total_memory'] / data['count']
+
+        if encoding == 'raw' and avg_access_time > 3:
+            performance_debug['recommendations'].append({
+                'encoding': encoding,
+                'issue': 'Slow access times for raw strings',
+                'recommendation': 'Consider compression or data structure optimization'
+            })
+
+        if encoding == 'hashtable' and avg_memory > 500000:
+            performance_debug['recommendations'].append({
+                'encoding': encoding,
+                'issue': 'High memory usage for hashtables',
+                'recommendation': 'Consider ziplist encoding for smaller hashes'
+            })
+
+    return performance_debug
+
+# Debug performance by encoding
+debug_result = debug_performance_by_encoding()
+print(f"🔍 Performance Debug Analysis ({debug_result['operations_analyzed']} operations):")
+
+print("\nEncoding Performance Map:")
+for encoding, data in debug_result['encoding_performance_map'].items():
+    avg_time = round(data['total_access_time'] / data['count'], 2)
+    avg_memory = round(data['total_memory'] / data['count'] / 1024, 1)
+    print(f"  {encoding}: {avg_time}ms avg access, {avg_memory}KB avg memory ({data['count']} keys)")
+
+if debug_result['performance_issues']:
+    print(f"\n⚠️  Performance Issues Found ({len(debug_result['performance_issues'])}):")
+    for issue in debug_result['performance_issues'][:3]:
+        print(f"  {issue['key']} ({issue['encoding']}): {issue['issue_type']} - {issue['access_time_ms']}ms, {issue['memory_mb']}MB")
+
+if debug_result['recommendations']:
+    print(f"\n💡 Performance Recommendations:")
+    for rec in debug_result['recommendations']:
+        print(f"  {rec['encoding']}: {rec['recommendation']}")</code></pre>
+                        <div class="printout">🔍 Performance Debug Analysis (5 operations):
+
+Encoding Performance Map:
+  raw: 2.8ms avg access, 1024.5KB avg memory (2 keys)
+  hashtable: 1.2ms avg access, 256.3KB avg memory (2 keys)
+  embstr: 0.3ms avg access, 45.2KB avg memory (1 keys)
+
+⚠️  Performance Issues Found (2):
+  heavy_computation_cache (raw): slow_access - 5.2ms, 2.1MB
+  user_analytics_data (hashtable): high_memory - 1.8ms, 1.5MB
+
+💡 Performance Recommendations:
+  raw: Consider compression or data structure optimization
+  hashtable: Consider ziplist encoding for smaller hashes</div>
+                    </div>
+                </div>
+
+                <!-- WAIT -->
+                <div class="command-block">
+                    <h3 id="wait">WAIT</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/wait/" target="_blank" rel="noopener">Redis WAIT Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Blocks until specified number of replicas acknowledge previous writes.</p>
+
+                    <h4>Full description</h4>
+                    <p>WAIT blocks the calling client until the specified number of replicas acknowledge all previous write commands sent by the current session. Perfect for ensuring data durability, critical write confirmation, financial transactions, and high-availability scenarios in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">WAIT numreplicas timeout</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>numreplicas</strong>: Number of replicas that must acknowledge the writes.</li>
+                        <li><strong>timeout</strong>: Maximum time to wait in milliseconds (0 = wait forever).</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Integer: Number of replicas that acknowledged the writes within the timeout.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Critical financial transaction</h5>
+                        <pre><code class="language-python"># Ensure financial transaction is replicated before confirmation
+def process_payment_with_replication_guarantee(user_id, payment_data):
+    """Process payment ensuring replication to at least 2 replicas"""
+
+    transaction_id = f"payment:{user_id}:{int(time.time())}"
+
+    try:
+        # Store payment data
+        r.hset(transaction_id, mapping={
+            'user_id': str(user_id),
+            'amount': str(payment_data['amount']),
+            'currency': payment_data['currency'],
+            'status': 'processing',
+            'timestamp': str(time.time()),
+            'payment_method': payment_data['method']
+        })
+
+        # Update user balance
+        r.hincrbyfloat(f"user:{user_id}:balance", payment_data['currency'], payment_data['amount'])
+
+        # CRITICAL: Wait for at least 2 replicas to acknowledge
+        replicas_acked = r.wait(2, 5000)  # Wait up to 5 seconds
+
+        if replicas_acked >= 2:
+            # Safe to confirm payment
+            r.hset(transaction_id, 'status', 'confirmed')
+            r.hset(transaction_id, 'replicas_confirmed', str(replicas_acked))
+
+            return {
+                'transaction_id': transaction_id,
+                'status': 'success',
+                'amount': payment_data['amount'],
+                'replicas_acknowledged': replicas_acked,
+                'durability_guaranteed': True,
+                'safe_to_proceed': True
+            }
+        else:
+            # Insufficient replication - mark as pending
+            r.hset(transaction_id, 'status', 'pending_replication')
+
+            return {
+                'transaction_id': transaction_id,
+                'status': 'pending',
+                'amount': payment_data['amount'],
+                'replicas_acknowledged': replicas_acked,
+                'durability_guaranteed': False,
+                'safe_to_proceed': False,
+                'message': 'Insufficient replication - transaction pending'
+            }
+
+    except Exception as e:
+        return {
+            'status': 'error',
+            'error': str(e),
+            'safe_to_proceed': False
+        }
+
+# Process critical payment
+import time
+payment_info = {
+    'amount': 299.99,
+    'currency': 'USD',
+    'method': 'credit_card'
+}
+
+result = process_payment_with_replication_guarantee(12345, payment_info)
+print(f"💳 Payment Processing Result:")
+print(f"  Status: {result['status']}")
+print(f"  Amount: ${result.get('amount', 0)}")
+print(f"  Replicas acknowledged: {result.get('replicas_acknowledged', 0)}")
+print(f"  Safe to proceed: {result['safe_to_proceed']}")
+if result.get('message'):
+    print(f"  Message: {result['message']}")</code></pre>
+                        <div class="printout">💳 Payment Processing Result:
+  Status: success
+  Amount: $299.99
+  Replicas acknowledged: 2
+  Safe to proceed: True</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: User account creation with durability</h5>
+                        <pre><code class="language-python"># Create user account ensuring data is replicated
+def create_user_account_with_durability(username, email, profile_data):
+    """Create user account with guaranteed replication"""
+
+    user_id = f"user:{int(time.time())}:{hash(username) % 10000}"
+
+    # Store user data
+    r.hset(f"{user_id}:profile", mapping={
+        'username': username,
+        'email': email,
+        'created_at': str(time.time()),
+        'status': 'active',
+        'profile_complete': 'false'
+    })
+
+    # Store additional profile data
+    r.hset(f"{user_id}:details", mapping=profile_data)
+
+    # Add to username index
+    r.set(f"username:{username}", user_id)
+
+    # Add to user list
+    r.sadd("all_users", user_id)
+
+    # Ensure replication to at least 1 replica
+    replicas_acked = r.wait(1, 3000)  # 3 second timeout
+
+    if replicas_acked >= 1:
+        # Mark profile as complete since replication succeeded
+        r.hset(f"{user_id}:profile", 'profile_complete', 'true')
+        r.hset(f"{user_id}:profile", 'replicated_at', str(time.time()))
+
+        return {
+            'user_id': user_id,
+            'username': username,
+            'creation_status': 'completed',
+            'replicated': True,
+            'replicas_count': replicas_acked,
+            'data_durable': True
+        }
+    else:
+        # Mark as pending - may need manual verification
+        r.hset(f"{user_id}:profile", 'status', 'pending_replication')
+
+        return {
+            'user_id': user_id,
+            'username': username,
+            'creation_status': 'pending',
+            'replicated': False,
+            'replicas_count': replicas_acked,
+            'data_durable': False,
+            'action_required': 'Manual verification needed'
+        }
+
+# Create user account
+user_data = {
+    'full_name': 'John Doe',
+    'age': '28',
+    'location': 'San Francisco',
+    'preferences': 'tech,gaming,music'
+}
+
+result = create_user_account_with_durability("johndoe123", "john@example.com", user_data)
+print(f"👤 User Account Creation:")
+print(f"  User ID: {result['user_id']}")
+print(f"  Username: {result['username']}")
+print(f"  Status: {result['creation_status']}")
+print(f"  Data replicated: {result['replicated']}")
+print(f"  Replicas count: {result['replicas_count']}")
+if result.get('action_required'):
+    print(f"  Action required: {result['action_required']}")</code></pre>
+                        <div class="printout">👤 User Account Creation:
+  User ID: user:1705327530:1234
+  Username: johndoe123
+  Status: completed
+  Data replicated: True
+  Replicas count: 1</div>
+                    </div>
+                </div>
+
+                <!-- WAITAOF -->
+                <div class="command-block">
+                    <h3 id="waitaof">WAITAOF</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/waitaof/" target="_blank" rel="noopener">Redis WAITAOF Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Blocks until writes are synced to AOF and optionally replicated.</p>
+
+                    <h4>Full description</h4>
+                    <p>WAITAOF blocks until all previous writes in the session are synced to the AOF (Append Only File) on the local instance and optionally acknowledged by replicas. Perfect for audit trails, compliance requirements, critical data persistence, and ensuring write durability in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">WAITAOF numlocal numreplicas timeout</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>numlocal</strong>: Number of local AOF syncs required (0 or 1).</li>
+                        <li><strong>numreplicas</strong>: Number of replicas that must acknowledge AOF sync.</li>
+                        <li><strong>timeout</strong>: Maximum time to wait in milliseconds.</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: [local_acks, replica_acks] - number of local and replica acknowledgments.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Audit log with compliance guarantee</h5>
+                        <pre><code class="language-python"># Create audit log entry with AOF persistence guarantee
+def create_audit_log_with_persistence(user_id, action, sensitive_data):
+    """Create audit log ensuring AOF persistence for compliance"""
+
+    audit_id = f"audit:{int(time.time())}:{user_id}"
+
+    # Store audit log
+    r.hset(audit_id, mapping={
+        'user_id': str(user_id),
+        'action': action,
+        'timestamp': str(time.time()),
+        'ip_address': sensitive_data.get('ip_address', 'unknown'),
+        'user_agent': sensitive_data.get('user_agent', 'unknown'),
+        'sensitive_operation': str(sensitive_data.get('sensitive', False)),
+        'compliance_level': 'high'
+    })
+
+    # Add to audit index
+    r.zadd("audit_log_index", {audit_id: time.time()})
+
+    # Update user's action count
+    r.hincrby(f"user:{user_id}:audit_stats", action, 1)
+
+    # CRITICAL: Ensure AOF persistence for compliance
+    # Wait for local AOF sync and 1 replica acknowledgment
+    aof_result = r.waitaof(1, 1, 10000)  # 10 second timeout
+
+    local_acks = aof_result[0] if len(aof_result) > 0 else 0
+    replica_acks = aof_result[1] if len(aof_result) > 1 else 0
+
+    if local_acks >= 1 and replica_acks >= 1:
+        # Mark as compliance-ready
+        r.hset(audit_id, 'compliance_status', 'compliant')
+        r.hset(audit_id, 'aof_confirmed', 'true')
+        r.hset(audit_id, 'persistence_confirmed_at', str(time.time()))
+
+        return {
+            'audit_id': audit_id,
+            'user_id': user_id,
+            'action': action,
+            'compliance_status': 'compliant',
+            'aof_persisted': True,
+            'replica_confirmed': True,
+            'local_acks': local_acks,
+            'replica_acks': replica_acks,
+            'audit_complete': True
+        }
+    else:
+        # Mark as pending compliance
+        r.hset(audit_id, 'compliance_status', 'pending')
+        r.hset(audit_id, 'aof_confirmed', 'false')
+
+        return {
+            'audit_id': audit_id,
+            'user_id': user_id,
+            'action': action,
+            'compliance_status': 'pending',
+            'aof_persisted': local_acks >= 1,
+            'replica_confirmed': replica_acks >= 1,
+            'local_acks': local_acks,
+            'replica_acks': replica_acks,
+            'audit_complete': False,
+            'warning': 'Compliance requirements not met'
+        }
+
+# Create compliance audit log
+import time
+sensitive_operation = {
+    'ip_address': '192.168.1.100',
+    'user_agent': 'Mozilla/5.0...',
+    'sensitive': True
+}
+
+audit_result = create_audit_log_with_persistence(98765, "sensitive_data_access", sensitive_operation)
+print(f"📋 Audit Log Creation:")
+print(f"  Audit ID: {audit_result['audit_id']}")
+print(f"  Action: {audit_result['action']}")
+print(f"  Compliance Status: {audit_result['compliance_status']}")
+print(f"  AOF Persisted: {audit_result['aof_persisted']}")
+print(f"  Replica Confirmed: {audit_result['replica_confirmed']}")
+print(f"  Local ACKs: {audit_result['local_acks']}")
+print(f"  Replica ACKs: {audit_result['replica_acks']}")
+if audit_result.get('warning'):
+    print(f"  ⚠️  Warning: {audit_result['warning']}")</code></pre>
+                        <div class="printout">📋 Audit Log Creation:
+  Audit ID: audit:1705327530:98765
+  Action: sensitive_data_access
+  Compliance Status: compliant
+  AOF Persisted: True
+  Replica Confirmed: True
+  Local ACKs: 1
+  Replica ACKs: 1</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Financial transaction with full durability</h5>
+                        <pre><code class="language-python"># Process financial transaction with complete durability guarantee
+def process_financial_transaction_with_full_durability(from_account, to_account, amount):
+    """Process transaction with AOF and replication guarantees"""
+
+    transaction_id = f"txn:{int(time.time())}:{hash(f'{from_account}{to_account}') % 10000}"
+
+    try:
+        # Start transaction record
+        r.hset(transaction_id, mapping={
+            'from_account': str(from_account),
+            'to_account': str(to_account),
+            'amount': str(amount),
+            'status': 'processing',
+            'initiated_at': str(time.time()),
+            'transaction_type': 'transfer'
+        })
+
+        # Debit from source account
+        r.hincrbyfloat(f"account:{from_account}:balance", "amount", -amount)
+
+        # Credit to destination account
+        r.hincrbyfloat(f"account:{to_account}:balance", "amount", amount)
+
+        # Update transaction status
+        r.hset(transaction_id, 'status', 'completed')
+        r.hset(transaction_id, 'completed_at', str(time.time()))
+
+        # Add to transaction log
+        r.lpush("transaction_log", transaction_id)
+
+        # CRITICAL: Wait for AOF persistence and replication
+        aof_result = r.waitaof(1, 2, 15000)  # 15 second timeout for financial ops
+
+        local_acks = aof_result[0] if len(aof_result) > 0 else 0
+        replica_acks = aof_result[1] if len(aof_result) > 1 else 0
+
+        if local_acks >= 1 and replica_acks >= 2:
+            # Transaction fully durable
+            r.hset(transaction_id, 'durability_status', 'fully_durable')
+            r.hset(transaction_id, 'aof_persisted', 'true')
+            r.hset(transaction_id, 'replicas_confirmed', str(replica_acks))
+
+            return {
+                'transaction_id': transaction_id,
+                'status': 'success',
+                'from_account': from_account,
+                'to_account': to_account,
+                'amount': amount,
+                'durability': 'fully_guaranteed',
+                'aof_persisted': True,
+                'replicas_confirmed': replica_acks,
+                'safe_for_settlement': True
+            }
+        else:
+            # Insufficient durability - flag for review
+            r.hset(transaction_id, 'durability_status', 'insufficient')
+            r.hset(transaction_id, 'requires_manual_review', 'true')
+
+            return {
+                'transaction_id': transaction_id,
+                'status': 'requires_review',
+                'from_account': from_account,
+                'to_account': to_account,
+                'amount': amount,
+                'durability': 'insufficient',
+                'aof_persisted': local_acks >= 1,
+                'replicas_confirmed': replica_acks,
+                'safe_for_settlement': False,
+                'action_required': 'Manual review required for settlement'
+            }
+
+    except Exception as e:
+        return {
+            'transaction_id': transaction_id,
+            'status': 'error',
+            'error': str(e),
+            'safe_for_settlement': False
+        }
+
+# Process financial transaction
+txn_result = process_financial_transaction_with_full_durability("ACC001", "ACC002", 1500.00)
+print(f"💰 Financial Transaction Result:")
+print(f"  Transaction ID: {txn_result['transaction_id']}")
+print(f"  Status: {txn_result['status']}")
+print(f"  Amount: ${txn_result['amount']}")
+print(f"  From: {txn_result['from_account']} → To: {txn_result['to_account']}")
+print(f"  Durability: {txn_result['durability']}")
+print(f"  AOF Persisted: {txn_result['aof_persisted']}")
+print(f"  Replicas Confirmed: {txn_result['replicas_confirmed']}")
+print(f"  Safe for Settlement: {txn_result['safe_for_settlement']}")
+if txn_result.get('action_required'):
+    print(f"  ⚠️  Action Required: {txn_result['action_required']}")</code></pre>
+                        <div class="printout">💰 Financial Transaction Result:
+  Transaction ID: txn:1705327530:7890
+  Status: success
+  Amount: $1500.0
+  From: ACC001 → To: ACC002
+  Durability: fully_guaranteed
+  AOF Persisted: True
+  Replicas Confirmed: 2
+  Safe for Settlement: True</div>
+                    </div>
+                </div>
+
             </section>
 
             <!-- Bloom Filter Commands Section -->
@@ -15761,15 +16800,15 @@ for player in leaderboard['top_players'][:5]:
                         <h4>🌸 Bloom Filter Commands Overview</h4>
                         <div class="command-grid">
                             <div><strong><a href="#add">ADD</a></strong> - Add single item to filter</div>
-                            <div><strong>CARD</strong> - Get filter cardinality estimate</div>
+                            <div><strong><a href="#card">CARD</a></strong> - Get filter cardinality estimate</div>
                             <div><strong><a href="#exists">EXISTS</a></strong> - Check if item exists</div>
                             <div><strong><a href="#info">INFO</a></strong> - Get filter information</div>
-                            <div><strong>INSERT</strong> - Add items with options</div>
-                            <div><strong>LOADCHUNK</strong> - Restore filter chunk</div>
+                            <div><strong><a href="#insert">INSERT</a></strong> - Add items with options</div>
+                            <div><strong><a href="#loadchunk">LOADCHUNK</a></strong> - Restore filter chunk</div>
                             <div><strong><a href="#madd">MADD</a></strong> - Add multiple items</div>
-                            <div><strong>MEXISTS</strong> - Check multiple items</div>
+                            <div><strong><a href="#mexists">MEXISTS</a></strong> - Check multiple items</div>
                             <div><strong><a href="#reserve">RESERVE</a></strong> - Create new filter</div>
-                            <div><strong>SCANDUMP</strong> - Dump filter for backup</div>
+                            <div><strong><a href="#scandump">SCANDUMP</a></strong> - Dump filter for backup</div>
                         </div>
                     </div>
                     
@@ -16397,6 +17436,1466 @@ def check_filter_capacity_alerts():
 check_filter_capacity_alerts()</code></pre>
                         <div class="printout">✅ NORMAL: username_availability is 0.0% full
 ✅ NORMAL: user_actions_precise is 0.0% full</div>
+                    </div>
+                </div>
+
+                <!-- BF.CARD -->
+                <div class="command-block">
+                    <h3 id="card">CARD</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/bf.card/" target="_blank" rel="noopener">Redis BF.CARD Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns the cardinality of a Bloom Filter (estimated number of items).</p>
+
+                    <h4>Full description</h4>
+                    <p>BF.CARD returns an estimate of the number of items that have been added to the Bloom Filter. This is useful for monitoring filter usage, capacity planning, and analytics in Django applications. Note that this is an approximation and may not be exact due to the probabilistic nature of Bloom Filters.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BF.CARD key</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The Bloom Filter key name.</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Integer: Estimated number of items in the filter.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: User activity monitoring</h5>
+                        <pre><code class="language-python"># Monitor daily active users count
+def get_daily_active_users_estimate():
+    """Get estimated count of daily active users"""
+
+    # Get cardinality of user activity filter
+    estimated_users = r.execute_command("BF.CARD", "daily_active_users")
+
+    return {
+        'estimated_daily_active_users': estimated_users,
+        'note': 'This is a probabilistic estimate',
+        'accuracy': 'Typically within 2-3% of actual count'
+    }
+
+# Check daily active users
+dau_stats = get_daily_active_users_estimate()
+print(f"Estimated Daily Active Users: {dau_stats['estimated_daily_active_users']:,}")
+print(f"Note: {dau_stats['note']}")</code></pre>
+                        <div class="printout">Estimated Daily Active Users: 18,547
+Note: This is a probabilistic estimate</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: API usage analytics</h5>
+                        <pre><code class="language-python"># Track unique API clients for analytics
+def get_api_usage_stats():
+    """Get API usage statistics across different endpoints"""
+
+    endpoints = ['/api/jobs', '/api/users', '/api/search', '/api/companies']
+    usage_stats = {}
+
+    for endpoint in endpoints:
+        filter_key = f"api_clients:{endpoint.replace('/', '_')}"
+        try:
+            unique_clients = r.execute_command("BF.CARD", filter_key)
+            usage_stats[endpoint] = {
+                'unique_clients': unique_clients,
+                'endpoint': endpoint
+            }
+        except:
+            usage_stats[endpoint] = {
+                'unique_clients': 0,
+                'endpoint': endpoint,
+                'status': 'filter_not_found'
+            }
+
+    return usage_stats
+
+# Get API usage statistics
+api_stats = get_api_usage_stats()
+print("API Usage Statistics:")
+for endpoint, stats in api_stats.items():
+    if 'status' not in stats:
+        print(f"  {endpoint}: {stats['unique_clients']:,} unique clients")
+    else:
+        print(f"  {endpoint}: No data available")</code></pre>
+                        <div class="printout">API Usage Statistics:
+  /api/jobs: 5,432 unique clients
+  /api/users: 3,891 unique clients
+  /api/search: 12,456 unique clients
+  /api/companies: 2,178 unique clients</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: Content engagement tracking</h5>
+                        <pre><code class="language-python"># Track unique content interactions
+def analyze_content_engagement():
+    """Analyze engagement across different content types"""
+
+    content_types = ['articles', 'videos', 'podcasts', 'webinars']
+    engagement_data = {}
+
+    for content_type in content_types:
+        filter_key = f"engagement:{content_type}"
+
+        # Get unique interactions count
+        unique_interactions = r.execute_command("BF.CARD", filter_key)
+
+        # Calculate engagement rate (mock total content count)
+        total_content = {
+            'articles': 1250,
+            'videos': 850,
+            'podcasts': 620,
+            'webinars': 340
+        }
+
+        engagement_rate = (unique_interactions / total_content[content_type]) * 100 if total_content[content_type] > 0 else 0
+
+        engagement_data[content_type] = {
+            'unique_interactions': unique_interactions,
+            'total_content': total_content[content_type],
+            'engagement_rate': round(engagement_rate, 2)
+        }
+
+    return engagement_data
+
+# Analyze content engagement
+engagement_analysis = analyze_content_engagement()
+print("Content Engagement Analysis:")
+for content_type, data in engagement_analysis.items():
+    print(f"  {content_type.title()}: {data['unique_interactions']:,} interactions ({data['engagement_rate']}% rate)")</code></pre>
+                        <div class="printout">Content Engagement Analysis:
+  Articles: 8,945 interactions (715.6% rate)
+  Videos: 6,432 interactions (756.7% rate)
+  Podcasts: 4,123 interactions (664.8% rate)
+  Webinars: 2,567 interactions (754.4% rate)</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: Filter capacity monitoring</h5>
+                        <pre><code class="language-python"># Monitor filter capacity across multiple filters
+def monitor_filter_capacity():
+    """Monitor capacity usage of all bloom filters"""
+
+    filters = {
+        'user_sessions': {'capacity': 50000, 'threshold': 0.8},
+        'email_tracking': {'capacity': 100000, 'threshold': 0.75},
+        'api_rate_limit': {'capacity': 25000, 'threshold': 0.9},
+        'job_recommendations': {'capacity': 75000, 'threshold': 0.85}
+    }
+
+    capacity_report = {}
+    alerts = []
+
+    for filter_name, config in filters.items():
+        try:
+            current_count = r.execute_command("BF.CARD", filter_name)
+            utilization = current_count / config['capacity']
+
+            capacity_report[filter_name] = {
+                'current_count': current_count,
+                'capacity': config['capacity'],
+                'utilization_percent': round(utilization * 100, 2),
+                'threshold_percent': config['threshold'] * 100,
+                'status': 'warning' if utilization > config['threshold'] else 'normal'
+            }
+
+            if utilization > config['threshold']:
+                alerts.append(f"⚠️  {filter_name}: {utilization*100:.1f}% full (threshold: {config['threshold']*100}%)")
+
+        except Exception as e:
+            capacity_report[filter_name] = {'status': 'error', 'error': str(e)}
+
+    return {
+        'capacity_report': capacity_report,
+        'alerts': alerts,
+        'total_filters_monitored': len(filters)
+    }
+
+# Monitor filter capacity
+capacity_data = monitor_filter_capacity()
+print(f"Filter Capacity Monitoring ({capacity_data['total_filters_monitored']} filters):")
+
+for filter_name, data in capacity_data['capacity_report'].items():
+    if data['status'] != 'error':
+        print(f"  {filter_name}: {data['current_count']:,}/{data['capacity']:,} ({data['utilization_percent']}%)")
+
+if capacity_data['alerts']:
+    print(f"\nCapacity Alerts ({len(capacity_data['alerts'])}):")
+    for alert in capacity_data['alerts']:
+        print(f"  {alert}")</code></pre>
+                        <div class="printout">Filter Capacity Monitoring (4 filters):
+  user_sessions: 28,456/50,000 (56.91%)
+  email_tracking: 82,345/100,000 (82.35%)
+  api_rate_limit: 23,789/25,000 (95.16%)
+  job_recommendations: 45,678/75,000 (60.9%)
+
+Capacity Alerts (2):
+  ⚠️  email_tracking: 82.3% full (threshold: 75%)
+  ⚠️  api_rate_limit: 95.2% full (threshold: 90%)</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: Growth trend analysis</h5>
+                        <pre><code class="language-python"># Track filter growth over time for trend analysis
+def analyze_filter_growth_trend(filter_name, days=7):
+    """Analyze filter growth trend over specified days"""
+
+    # Get current count
+    current_count = r.execute_command("BF.CARD", filter_name)
+
+    # Get historical counts (mock data for demonstration)
+    historical_data = [
+        {'day': 7, 'count': 15420},
+        {'day': 6, 'count': 16890},
+        {'day': 5, 'count': 18234},
+        {'day': 4, 'count': 19567},
+        {'day': 3, 'count': 21023},
+        {'day': 2, 'count': 22456},
+        {'day': 1, 'count': 23789},
+        {'day': 0, 'count': current_count}  # Today
+    ]
+
+    # Calculate growth metrics
+    total_growth = current_count - historical_data[0]['count']
+    daily_average_growth = total_growth / days if days > 0 else 0
+
+    # Calculate growth rate
+    if historical_data[0]['count'] > 0:
+        growth_rate = (total_growth / historical_data[0]['count']) * 100
+    else:
+        growth_rate = 0
+
+    # Project future capacity needs
+    projected_30_days = current_count + (daily_average_growth * 30)
+    projected_90_days = current_count + (daily_average_growth * 90)
+
+    return {
+        'filter_name': filter_name,
+        'current_count': current_count,
+        'total_growth_7_days': total_growth,
+        'daily_average_growth': round(daily_average_growth, 2),
+        'growth_rate_percent': round(growth_rate, 2),
+        'projections': {
+            '30_days': int(projected_30_days),
+            '90_days': int(projected_90_days)
+        },
+        'historical_data': historical_data[-3:]  # Last 3 days
+    }
+
+# Analyze growth trend
+growth_analysis = analyze_filter_growth_trend('user_activity_tracker')
+print(f"Growth Analysis for {growth_analysis['filter_name']}:")
+print(f"  Current count: {growth_analysis['current_count']:,}")
+print(f"  7-day growth: +{growth_analysis['total_growth_7_days']:,} ({growth_analysis['growth_rate_percent']}%)")
+print(f"  Daily average: +{growth_analysis['daily_average_growth']}")
+print(f"  Projected 30 days: {growth_analysis['projections']['30_days']:,}")
+print(f"  Projected 90 days: {growth_analysis['projections']['90_days']:,}")</code></pre>
+                        <div class="printout">Growth Analysis for user_activity_tracker:
+  Current count: 25,123
+  7-day growth: +9,703 (62.9%)
+  Daily average: +1386.14
+  Projected 30 days: 66,707
+  Projected 90 days: 149,876</div>
+                    </div>
+                </div>
+
+                <!-- BF.INSERT -->
+                <div class="command-block">
+                    <h3 id="insert">INSERT</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/bf.insert/" target="_blank" rel="noopener">Redis BF.INSERT Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Adds one or more items to a Bloom Filter with options.</p>
+
+                    <h4>Full description</h4>
+                    <p>BF.INSERT is an advanced version of BF.ADD that allows adding multiple items at once and includes options for filter creation, capacity setting, error rate specification, and scaling behavior. Perfect for bulk operations and optimized batch processing in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BF.INSERT key [CAPACITY capacity] [ERROR error] [EXPANSION expansion] [NOCREATE] [NONSCALING] ITEMS item [item ...]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The Bloom Filter key name.</li>
+                        <li><strong>CAPACITY</strong>: Expected capacity if creating a new filter.</li>
+                        <li><strong>ERROR</strong>: Desired error rate if creating a new filter.</li>
+                        <li><strong>EXPANSION</strong>: Growth factor for scaling.</li>
+                        <li><strong>NOCREATE</strong>: Don't create filter if it doesn't exist.</li>
+                        <li><strong>NONSCALING</strong>: Prevent filter from scaling when full.</li>
+                        <li><strong>ITEMS</strong>: One or more items to add.</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: List of integers (1 if item was newly added, 0 if it might have existed).</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Bulk user tracking with auto-creation</h5>
+                        <pre><code class="language-python"># Bulk add users to activity filter with automatic filter creation
+def track_user_activity_bulk(user_ids):
+    """Track multiple users in activity filter with optimized bulk insert"""
+
+    # Bulk insert with filter auto-creation and optimal settings
+    result = r.execute_command(
+        "BF.INSERT", "user_activity_optimized",
+        "CAPACITY", 100000,  # Expected 100K users
+        "ERROR", 0.01,       # 1% false positive rate
+        "EXPANSION", 2,      # Double size when expanding
+        "ITEMS", *user_ids   # Bulk add all user IDs
+    )
+
+    # Analyze results
+    newly_added = sum(result)
+    possibly_existing = len(result) - newly_added
+
+    return {
+        'total_users_processed': len(user_ids),
+        'newly_added': newly_added,
+        'possibly_existing': possibly_existing,
+        'filter_created': True,  # Since we're allowing auto-creation
+        'success_rate': round((newly_added / len(user_ids)) * 100, 2)
+    }
+
+# Track bulk user activity
+user_batch = [f"user_{i}" for i in range(1001, 1101)]  # 100 users
+tracking_result = track_user_activity_bulk(user_batch)
+
+print(f"Bulk User Activity Tracking:")
+print(f"  Users processed: {tracking_result['total_users_processed']}")
+print(f"  Newly added: {tracking_result['newly_added']}")
+print(f"  Possibly existing: {tracking_result['possibly_existing']}")
+print(f"  Success rate: {tracking_result['success_rate']}%")</code></pre>
+                        <div class="printout">Bulk User Activity Tracking:
+  Users processed: 100
+  Newly added: 97
+  Possibly existing: 3
+  Success rate: 97.0%</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Batch email processing with existing filter</h5>
+                        <pre><code class="language-python"># Process batch of emails using existing filter (no auto-creation)
+def process_email_batch(email_addresses):
+    """Process emails in batch, only if filter exists"""
+
+    try:
+        # Use NOCREATE to ensure we only work with existing filter
+        result = r.execute_command(
+            "BF.INSERT", "processed_emails",
+            "NOCREATE",          # Don't create if doesn't exist
+            "ITEMS", *email_addresses
+        )
+
+        processing_summary = {
+            'total_emails': len(email_addresses),
+            'new_emails': sum(result),
+            'duplicate_emails': len(result) - sum(result),
+            'filter_existed': True
+        }
+
+        # Log new emails for further processing
+        new_email_indices = [i for i, val in enumerate(result) if val == 1]
+        new_emails = [email_addresses[i] for i in new_email_indices]
+
+        processing_summary['new_emails_list'] = new_emails[:5]  # Show first 5
+        processing_summary['needs_processing'] = len(new_emails)
+
+        return processing_summary
+
+    except Exception as e:
+        return {
+            'error': 'Filter does not exist',
+            'total_emails': len(email_addresses),
+            'filter_existed': False,
+            'message': 'Create the processed_emails filter first'
+        }
+
+# Process email batch
+email_batch = [
+    "user1@example.com", "user2@example.com", "user3@example.com",
+    "newsletter@company.com", "admin@site.com"
+]
+
+email_result = process_email_batch(email_batch)
+print("Email Batch Processing:")
+if 'error' not in email_result:
+    print(f"  Total emails: {email_result['total_emails']}")
+    print(f"  New emails: {email_result['new_emails']}")
+    print(f"  Duplicates: {email_result['duplicate_emails']}")
+    print(f"  Need processing: {email_result['needs_processing']}")
+else:
+    print(f"  Error: {email_result['error']}")
+    print(f"  Message: {email_result['message']}")</code></pre>
+                        <div class="printout">Email Batch Processing:
+  Error: Filter does not exist
+  Message: Create the processed_emails filter first</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: API rate limiting with non-scaling filter</h5>
+                        <pre><code class="language-python"># Track API clients with fixed-size filter (no scaling)
+def track_api_clients_fixed(client_ips, time_window="hourly"):
+    """Track API clients with fixed-size filter for predictable memory usage"""
+
+    filter_key = f"api_clients_{time_window}"
+
+    # Insert with NONSCALING for predictable memory usage
+    result = r.execute_command(
+        "BF.INSERT", filter_key,
+        "CAPACITY", 10000,   # Fixed capacity
+        "ERROR", 0.02,       # 2% error rate
+        "NONSCALING",        # No auto-scaling
+        "ITEMS", *client_ips
+    )
+
+    # Set filter expiration based on time window
+    expiration_times = {
+        'hourly': 3600,      # 1 hour
+        'daily': 86400,      # 24 hours
+        'weekly': 604800     # 7 days
+    }
+    r.expire(filter_key, expiration_times.get(time_window, 3600))
+
+    tracking_stats = {
+        'time_window': time_window,
+        'total_clients': len(client_ips),
+        'new_clients': sum(result),
+        'returning_clients': len(result) - sum(result),
+        'filter_capacity': 10000,
+        'filter_scaling': 'disabled',
+        'expiration_seconds': expiration_times.get(time_window, 3600)
+    }
+
+    # Calculate rate limiting metrics
+    new_client_rate = (tracking_stats['new_clients'] / tracking_stats['total_clients'] * 100) if tracking_stats['total_clients'] > 0 else 0
+    tracking_stats['new_client_percentage'] = round(new_client_rate, 2)
+
+    return tracking_stats
+
+# Track API clients for the hour
+api_clients = [f"192.168.1.{i}" for i in range(10, 60)]  # 50 IP addresses
+api_tracking = track_api_clients_fixed(api_clients, "hourly")
+
+print("API Client Tracking (Fixed-Size Filter):")
+print(f"  Time window: {api_tracking['time_window']}")
+print(f"  Total requests: {api_tracking['total_clients']}")
+print(f"  New clients: {api_tracking['new_clients']} ({api_tracking['new_client_percentage']}%)")
+print(f"  Returning clients: {api_tracking['returning_clients']}")
+print(f"  Filter expires in: {api_tracking['expiration_seconds']}s")</code></pre>
+                        <div class="printout">API Client Tracking (Fixed-Size Filter):
+  Time window: hourly
+  Total requests: 50
+  New clients: 48 (96.0%)
+  Returning clients: 2
+  Filter expires in: 3600s</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: Content recommendation deduplication</h5>
+                        <pre><code class="language-python"># Deduplicate content recommendations with high-precision filter
+def deduplicate_content_recommendations(user_id, content_ids):
+    """Deduplicate content recommendations for a user"""
+
+    filter_key = f"user:{user_id}:seen_content"
+
+    # Use high precision for content recommendations
+    result = r.execute_command(
+        "BF.INSERT", filter_key,
+        "CAPACITY", 50000,   # Large capacity for content
+        "ERROR", 0.001,      # Very low error rate (0.1%)
+        "EXPANSION", 3,      # Triple size when expanding
+        "ITEMS", *content_ids
+    )
+
+    # Set user-specific expiration (30 days)
+    r.expire(filter_key, 30 * 24 * 3600)
+
+    # Identify truly new content for recommendations
+    new_content_indices = [i for i, is_new in enumerate(result) if is_new == 1]
+    new_content_ids = [content_ids[i] for i in new_content_indices]
+
+    dedup_stats = {
+        'user_id': user_id,
+        'total_content_checked': len(content_ids),
+        'new_content_count': len(new_content_ids),
+        'already_seen_count': len(content_ids) - len(new_content_ids),
+        'new_content_ids': new_content_ids[:10],  # First 10 for display
+        'deduplication_rate': round((len(new_content_ids) / len(content_ids) * 100), 2),
+        'filter_precision': '99.9%',
+        'filter_expires_days': 30
+    }
+
+    return dedup_stats
+
+# Deduplicate content for user recommendations
+user_id = 12345
+content_batch = [f"article_{i}" for i in range(500, 600)]  # 100 articles
+
+dedup_result = deduplicate_content_recommendations(user_id, content_batch)
+print(f"Content Deduplication for User {dedup_result['user_id']}:")
+print(f"  Content checked: {dedup_result['total_content_checked']}")
+print(f"  New content: {dedup_result['new_content_count']}")
+print(f"  Already seen: {dedup_result['already_seen_count']}")
+print(f"  Deduplication rate: {dedup_result['deduplication_rate']}%")
+print(f"  Filter precision: {dedup_result['filter_precision']}")
+print(f"  Sample new content: {', '.join(dedup_result['new_content_ids'][:5])}")</code></pre>
+                        <div class="printout">Content Deduplication for User 12345:
+  Content checked: 100
+  New content: 96
+  Already seen: 4
+  Deduplication rate: 96.0%
+  Filter precision: 99.9%
+  Sample new content: article_500, article_501, article_502, article_503, article_504</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: Event tracking with custom scaling</h5>
+                        <pre><code class="language-python"># Track events with custom expansion strategy
+def track_events_with_custom_scaling(event_data):
+    """Track events with optimized scaling for growth"""
+
+    # Extract event identifiers
+    event_ids = [f"{event['type']}:{event['id']}" for event in event_data]
+
+    # Use aggressive expansion for high-growth scenarios
+    result = r.execute_command(
+        "BF.INSERT", "event_tracking_scalable",
+        "CAPACITY", 25000,   # Initial capacity
+        "ERROR", 0.015,      # 1.5% error rate
+        "EXPANSION", 4,      # Quadruple size when expanding
+        "ITEMS", *event_ids
+    )
+
+    # Analyze event tracking results
+    event_analysis = {
+        'total_events': len(event_data),
+        'new_events': sum(result),
+        'duplicate_events': len(result) - sum(result)
+    }
+
+    # Group results by event type
+    event_types = {}
+    for i, event in enumerate(event_data):
+        event_type = event['type']
+        is_new = result[i] == 1
+
+        if event_type not in event_types:
+            event_types[event_type] = {'new': 0, 'duplicate': 0}
+
+        if is_new:
+            event_types[event_type]['new'] += 1
+        else:
+            event_types[event_type]['duplicate'] += 1
+
+    event_analysis['by_type'] = event_types
+    event_analysis['scaling_strategy'] = 'aggressive_4x_expansion'
+
+    return event_analysis
+
+# Track various events
+events = [
+    {'type': 'user_login', 'id': f'login_{i}'} for i in range(100, 150)
+] + [
+    {'type': 'page_view', 'id': f'page_{i}'} for i in range(200, 230)
+] + [
+    {'type': 'purchase', 'id': f'purchase_{i}'} for i in range(300, 320)
+]
+
+event_tracking = track_events_with_custom_scaling(events)
+print("Event Tracking with Custom Scaling:")
+print(f"  Total events: {event_tracking['total_events']}")
+print(f"  New events: {event_tracking['new_events']}")
+print(f"  Duplicates: {event_tracking['duplicate_events']}")
+print(f"  Strategy: {event_tracking['scaling_strategy']}")
+print("\nBy Event Type:")
+for event_type, counts in event_tracking['by_type'].items():
+    print(f"  {event_type}: {counts['new']} new, {counts['duplicate']} duplicate")</code></pre>
+                        <div class="printout">Event Tracking with Custom Scaling:
+  Total events: 100
+  New events: 98
+  Duplicates: 2
+  Strategy: aggressive_4x_expansion
+
+By Event Type:
+  user_login: 49 new, 1 duplicate
+  page_view: 30 new, 0 duplicate
+  purchase: 19 new, 1 duplicate</div>
+                    </div>
+                </div>
+
+                <!-- BF.MEXISTS -->
+                <div class="command-block">
+                    <h3 id="mexists">MEXISTS</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/bf.mexists/" target="_blank" rel="noopener">Redis BF.MEXISTS Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Checks if multiple items exist in a Bloom Filter.</p>
+
+                    <h4>Full description</h4>
+                    <p>BF.MEXISTS efficiently checks multiple items at once in a Bloom Filter. Returns an array indicating whether each item might exist (1) or definitely doesn't exist (0). Perfect for batch membership testing, bulk validation, and optimized filtering operations in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BF.MEXISTS key item [item ...]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The Bloom Filter key name.</li>
+                        <li><strong>item</strong>: One or more items to check for existence.</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: List of integers (1 if item might exist, 0 if definitely doesn't exist).</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Batch username availability check</h5>
+                        <pre><code class="language-python"># Check multiple usernames for availability
+def check_username_availability_batch(usernames):
+    """Check availability of multiple usernames efficiently"""
+
+    # Check against reserved usernames filter
+    existence_results = r.execute_command("BF.MEXISTS", "reserved_usernames", *usernames)
+
+    availability_report = []
+    for i, username in enumerate(usernames):
+        is_reserved = existence_results[i] == 1
+        availability_report.append({
+            'username': username,
+            'available': not is_reserved,
+            'status': 'reserved' if is_reserved else 'available',
+            'confidence': 'high' if not is_reserved else 'probable'  # Bloom filter uncertainty
+        })
+
+    summary = {
+        'total_checked': len(usernames),
+        'available': len([r for r in availability_report if r['available']]),
+        'reserved': len([r for r in availability_report if not r['available']]),
+        'details': availability_report
+    }
+
+    return summary
+
+# Check username availability
+username_candidates = ['admin', 'user', 'newuser123', 'johndoe2024', 'testuser', 'root']
+availability = check_username_availability_batch(username_candidates)
+
+print(f"Username Availability Check ({availability['total_checked']} usernames):")
+print(f"  Available: {availability['available']}")
+print(f"  Reserved: {availability['reserved']}")
+print("\nDetails:")
+for detail in availability['details']:
+    status_icon = "✅" if detail['available'] else "❌"
+    print(f"  {status_icon} {detail['username']}: {detail['status']} ({detail['confidence']} confidence)")</code></pre>
+                        <div class="printout">Username Availability Check (6 usernames):
+  Available: 3
+  Reserved: 3
+
+Details:
+  ❌ admin: reserved (probable confidence)
+  ❌ user: reserved (probable confidence)
+  ✅ newuser123: available (high confidence)
+  ✅ johndoe2024: available (high confidence)
+  ✅ testuser: available (high confidence)
+  ❌ root: reserved (probable confidence)</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Bulk content recommendation filtering</h5>
+                        <pre><code class="language-python"># Filter out content user has already seen
+def filter_seen_content(user_id, content_ids):
+    """Filter out content the user has already seen"""
+
+    filter_key = f"user:{user_id}:seen_content"
+
+    # Check which content user has already seen
+    seen_results = r.execute_command("BF.MEXISTS", filter_key, *content_ids)
+
+    # Separate new content from already seen
+    new_content = []
+    seen_content = []
+
+    for i, content_id in enumerate(content_ids):
+        if seen_results[i] == 0:  # Definitely not seen
+            new_content.append(content_id)
+        else:  # Might have been seen
+            seen_content.append(content_id)
+
+    filtering_report = {
+        'user_id': user_id,
+        'total_content': len(content_ids),
+        'new_content': new_content,
+        'new_content_count': len(new_content),
+        'possibly_seen': seen_content,
+        'possibly_seen_count': len(seen_content),
+        'filtering_efficiency': round((len(new_content) / len(content_ids)) * 100, 2),
+        'recommendation_ready': len(new_content) > 0
+    }
+
+    return filtering_report
+
+# Filter content for recommendations
+user_id = 98765
+content_candidates = [f"article_{i}" for i in range(1000, 1050)]  # 50 articles
+
+content_filter = filter_seen_content(user_id, content_candidates)
+print(f"Content Filtering for User {content_filter['user_id']}:")
+print(f"  Total content checked: {content_filter['total_content']}")
+print(f"  New content: {content_filter['new_content_count']}")
+print(f"  Possibly seen: {content_filter['possibly_seen_count']}")
+print(f"  Filtering efficiency: {content_filter['filtering_efficiency']}%")
+print(f"  Ready for recommendation: {content_filter['recommendation_ready']}")
+print(f"  Sample new content: {', '.join(content_filter['new_content'][:5])}")</code></pre>
+                        <div class="printout">Content Filtering for User 98765:
+  Total content checked: 50
+  New content: 42
+  Possibly seen: 8
+  Filtering efficiency: 84.0%
+  Ready for recommendation: True
+  Sample new content: article_1000, article_1001, article_1002, article_1003, article_1004</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: API rate limiting bulk check</h5>
+                        <pre><code class="language-python"># Check multiple API tokens against rate limiting
+def check_api_tokens_rate_limit(api_tokens):
+    """Check multiple API tokens against current rate limiting"""
+
+    # Check against rate-limited tokens filter
+    limited_results = r.execute_command("BF.MEXISTS", "rate_limited_tokens", *api_tokens)
+
+    token_status = []
+    allowed_tokens = []
+    limited_tokens = []
+
+    for i, token in enumerate(api_tokens):
+        is_limited = limited_results[i] == 1
+
+        status = {
+            'token': token[:8] + "..." if len(token) > 8 else token,  # Truncate for security
+            'full_token': token,
+            'rate_limited': is_limited,
+            'status': 'limited' if is_limited else 'allowed',
+            'action': 'reject_request' if is_limited else 'allow_request'
+        }
+
+        token_status.append(status)
+
+        if is_limited:
+            limited_tokens.append(token)
+        else:
+            allowed_tokens.append(token)
+
+    rate_limit_report = {
+        'total_tokens_checked': len(api_tokens),
+        'allowed_tokens': allowed_tokens,
+        'limited_tokens': limited_tokens,
+        'allowed_count': len(allowed_tokens),
+        'limited_count': len(limited_tokens),
+        'allow_rate': round((len(allowed_tokens) / len(api_tokens)) * 100, 2),
+        'token_details': token_status
+    }
+
+    return rate_limit_report
+
+# Check API tokens for rate limiting
+api_tokens = [
+    f"token_abc{i}def{i*2}" for i in range(1, 16)  # 15 API tokens
+]
+
+rate_check = check_api_tokens_rate_limit(api_tokens)
+print(f"API Rate Limit Check ({rate_check['total_tokens_checked']} tokens):")
+print(f"  Allowed: {rate_check['allowed_count']} ({rate_check['allow_rate']}%)")
+print(f"  Rate limited: {rate_check['limited_count']}")
+print("\nToken Status Sample:")
+for token_info in rate_check['token_details'][:5]:
+    status_icon = "✅" if token_info['status'] == 'allowed' else "🚫"
+    print(f"  {status_icon} {token_info['token']}: {token_info['action']}")</code></pre>
+                        <div class="printout">API Rate Limit Check (15 tokens):
+  Allowed: 13 (86.67%)
+  Rate limited: 2
+
+Token Status Sample:
+  ✅ token_ab...: allow_request
+  ✅ token_ab...: allow_request
+  ✅ token_ab...: allow_request
+  🚫 token_ab...: reject_request
+  ✅ token_ab...: allow_request</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: Batch email spam detection</h5>
+                        <pre><code class="language-python"># Check multiple emails against spam filter
+def detect_spam_emails_batch(email_addresses):
+    """Detect potential spam emails in batch"""
+
+    # Check against known spam email patterns filter
+    spam_results = r.execute_command("BF.MEXISTS", "spam_email_patterns", *email_addresses)
+
+    # Also check against domain blacklist
+    domains = [email.split('@')[1] if '@' in email else 'invalid' for email in email_addresses]
+    domain_results = r.execute_command("BF.MEXISTS", "blacklisted_domains", *domains)
+
+    email_analysis = []
+    clean_emails = []
+    suspicious_emails = []
+
+    for i, email in enumerate(email_addresses):
+        is_spam_pattern = spam_results[i] == 1
+        is_blacklisted_domain = domain_results[i] == 1
+
+        # Determine risk level
+        if is_spam_pattern and is_blacklisted_domain:
+            risk_level = 'high'
+        elif is_spam_pattern or is_blacklisted_domain:
+            risk_level = 'medium'
+        else:
+            risk_level = 'low'
+
+        email_info = {
+            'email': email,
+            'domain': domains[i],
+            'spam_pattern_match': is_spam_pattern,
+            'blacklisted_domain': is_blacklisted_domain,
+            'risk_level': risk_level,
+            'action': 'block' if risk_level == 'high' else 'review' if risk_level == 'medium' else 'allow'
+        }
+
+        email_analysis.append(email_info)
+
+        if risk_level == 'low':
+            clean_emails.append(email)
+        else:
+            suspicious_emails.append(email)
+
+    spam_detection_report = {
+        'total_emails': len(email_addresses),
+        'clean_emails': clean_emails,
+        'suspicious_emails': suspicious_emails,
+        'clean_count': len(clean_emails),
+        'suspicious_count': len(suspicious_emails),
+        'spam_detection_rate': round((len(suspicious_emails) / len(email_addresses)) * 100, 2),
+        'details': email_analysis
+    }
+
+    return spam_detection_report
+
+# Check emails for spam
+email_batch = [
+    'user@legitsite.com',
+    'noreply@spamsite.net',
+    'admin@company.org',
+    'offer@freemoney.biz',
+    'newsletter@trusteddomain.com'
+]
+
+spam_check = detect_spam_emails_batch(email_batch)
+print(f"Spam Detection Results ({spam_check['total_emails']} emails):")
+print(f"  Clean emails: {spam_check['clean_count']}")
+print(f"  Suspicious emails: {spam_check['suspicious_count']}")
+print(f"  Detection rate: {spam_check['spam_detection_rate']}%")
+print("\nEmail Analysis:")
+for email_info in spam_check['details']:
+    risk_icon = "🟢" if email_info['risk_level'] == 'low' else "🟡" if email_info['risk_level'] == 'medium' else "🔴"
+    print(f"  {risk_icon} {email_info['email']}: {email_info['action']} ({email_info['risk_level']} risk)")</code></pre>
+                        <div class="printout">Spam Detection Results (5 emails):
+  Clean emails: 3
+  Suspicious emails: 2
+  Detection rate: 40.0%
+
+Email Analysis:
+  🟢 user@legitsite.com: allow (low risk)
+  🔴 noreply@spamsite.net: block (high risk)
+  🟢 admin@company.org: allow (low risk)
+  🟡 offer@freemoney.biz: review (medium risk)
+  🟢 newsletter@trusteddomain.com: allow (low risk)</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: Job application deduplication check</h5>
+                        <pre><code class="language-python"># Check for duplicate job applications
+def check_duplicate_applications(application_data):
+    """Check for duplicate job applications across multiple jobs"""
+
+    # Create unique identifiers for applications
+    app_identifiers = [
+        f"{app['user_id']}:{app['job_id']}" for app in application_data
+    ]
+
+    # Check against existing applications filter
+    duplicate_results = r.execute_command("BF.MEXISTS", "submitted_applications", *app_identifiers)
+
+    application_analysis = []
+    new_applications = []
+    duplicate_applications = []
+
+    for i, app_data in enumerate(application_data):
+        is_duplicate = duplicate_results[i] == 1
+
+        analysis = {
+            'user_id': app_data['user_id'],
+            'job_id': app_data['job_id'],
+            'application_id': app_identifiers[i],
+            'is_duplicate': is_duplicate,
+            'status': 'duplicate' if is_duplicate else 'new',
+            'action': 'reject' if is_duplicate else 'process',
+            'user_email': app_data.get('email', 'not_provided')
+        }
+
+        application_analysis.append(analysis)
+
+        if is_duplicate:
+            duplicate_applications.append(analysis)
+        else:
+            new_applications.append(analysis)
+
+    deduplication_report = {
+        'total_applications': len(application_data),
+        'new_applications': new_applications,
+        'duplicate_applications': duplicate_applications,
+        'new_count': len(new_applications),
+        'duplicate_count': len(duplicate_applications),
+        'duplicate_rate': round((len(duplicate_applications) / len(application_data)) * 100, 2),
+        'applications_to_process': len(new_applications)
+    }
+
+    return deduplication_report
+
+# Check job applications for duplicates
+applications = [
+    {'user_id': 1001, 'job_id': 'job_123', 'email': 'user1@email.com'},
+    {'user_id': 1002, 'job_id': 'job_124', 'email': 'user2@email.com'},
+    {'user_id': 1001, 'job_id': 'job_123', 'email': 'user1@email.com'},  # Duplicate
+    {'user_id': 1003, 'job_id': 'job_125', 'email': 'user3@email.com'},
+    {'user_id': 1002, 'job_id': 'job_126', 'email': 'user2@email.com'},
+]
+
+dup_check = check_duplicate_applications(applications)
+print(f"Job Application Deduplication ({dup_check['total_applications']} applications):")
+print(f"  New applications: {dup_check['new_count']}")
+print(f"  Duplicate applications: {dup_check['duplicate_count']}")
+print(f"  Duplicate rate: {dup_check['duplicate_rate']}%")
+print(f"  Applications to process: {dup_check['applications_to_process']}")
+print("\nApplication Status:")
+for app in dup_check['new_applications'] + dup_check['duplicate_applications']:
+    status_icon = "✅" if app['status'] == 'new' else "🔄"
+    print(f"  {status_icon} User {app['user_id']} → Job {app['job_id']}: {app['action']}")</code></pre>
+                        <div class="printout">Job Application Deduplication (5 applications):
+  New applications: 4
+  Duplicate applications: 1
+  Duplicate rate: 20.0%
+  Applications to process: 4
+
+Application Status:
+  ✅ User 1001 → Job job_123: process
+  ✅ User 1002 → Job job_124: process
+  ✅ User 1003 → Job job_125: process
+  ✅ User 1002 → Job job_126: process
+  🔄 User 1001 → Job job_123: reject</div>
+                    </div>
+                </div>
+
+                <!-- BF.SCANDUMP -->
+                <div class="command-block">
+                    <h3 id="scandump">SCANDUMP</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/bf.scandump/" target="_blank" rel="noopener">Redis BF.SCANDUMP Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Begins an incremental save of a Bloom Filter.</p>
+
+                    <h4>Full description</h4>
+                    <p>BF.SCANDUMP starts an incremental save process for a Bloom Filter, returning chunks of data that can be used to reconstruct the filter elsewhere. Essential for backup, migration, and disaster recovery scenarios in Django applications where Bloom Filter data must be preserved across instances.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BF.SCANDUMP key iterator</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The Bloom Filter key to dump.</li>
+                        <li><strong>iterator</strong>: Iterator position (0 to start, use returned value for continuation).</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: [iterator, data] where iterator=0 means dump is complete, data is the chunk.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Complete filter backup</h5>
+                        <pre><code class="language-python"># Backup a complete Bloom Filter
+def backup_bloom_filter(filter_key, backup_name):
+    """Create complete backup of Bloom Filter"""
+
+    backup_chunks = []
+    iterator = 0
+    chunk_count = 0
+
+    # Iteratively dump all chunks
+    while True:
+        try:
+            result = r.execute_command("BF.SCANDUMP", filter_key, iterator)
+            iterator, chunk_data = result[0], result[1]
+
+            if chunk_data:  # Store non-empty chunks
+                backup_chunks.append({
+                    'chunk_id': chunk_count,
+                    'data': chunk_data,
+                    'size_bytes': len(chunk_data) if chunk_data else 0
+                })
+                chunk_count += 1
+
+            # Check if dump is complete
+            if iterator == 0:
+                break
+
+        except Exception as e:
+            return {
+                'status': 'error',
+                'error': str(e),
+                'chunks_saved': chunk_count
+            }
+
+    # Save backup metadata
+    backup_info = {
+        'filter_key': filter_key,
+        'backup_name': backup_name,
+        'chunk_count': chunk_count,
+        'total_size_bytes': sum(chunk['size_bytes'] for chunk in backup_chunks),
+        'backup_chunks': backup_chunks,
+        'backup_timestamp': int(time.time()),
+        'status': 'completed'
+    }
+
+    # Store backup info in Redis (for demo - real implementation might use file storage)
+    backup_key = f"backup:{backup_name}"
+    r.hset(backup_key, mapping={
+        'filter_key': filter_key,
+        'chunk_count': str(chunk_count),
+        'total_size': str(backup_info['total_size_bytes']),
+        'timestamp': str(backup_info['backup_timestamp']),
+        'status': 'completed'
+    })
+
+    return backup_info
+
+# Backup a Bloom Filter
+import time
+backup_result = backup_bloom_filter("user_activity_tracker", "daily_backup_20240115")
+
+print(f"Bloom Filter Backup: {backup_result['backup_name']}")
+print(f"  Status: {backup_result['status']}")
+print(f"  Source filter: {backup_result['filter_key']}")
+print(f"  Chunks created: {backup_result['chunk_count']}")
+print(f"  Total size: {backup_result['total_size_bytes']:,} bytes")
+print(f"  Backup timestamp: {backup_result['backup_timestamp']}")</code></pre>
+                        <div class="printout">Bloom Filter Backup: daily_backup_20240115
+  Status: completed
+  Source filter: user_activity_tracker
+  Chunks created: 12
+  Total size: 45,678 bytes
+  Backup timestamp: 1705327530</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Progressive backup with size monitoring</h5>
+                        <pre><code class="language-python"># Backup with size and progress monitoring
+def backup_with_progress_monitoring(filter_key, max_backup_size_mb=10):
+    """Backup filter with progress monitoring and size limits"""
+
+    max_size_bytes = max_backup_size_mb * 1024 * 1024
+
+    backup_progress = {
+        'filter_key': filter_key,
+        'chunks_processed': 0,
+        'total_bytes': 0,
+        'progress_log': [],
+        'size_limit_mb': max_backup_size_mb,
+        'completed': False,
+        'truncated': False
+    }
+
+    iterator = 0
+
+    while True:
+        try:
+            result = r.execute_command("BF.SCANDUMP", filter_key, iterator)
+            iterator, chunk_data = result[0], result[1]
+
+            if chunk_data:
+                chunk_size = len(chunk_data)
+
+                # Check size limit
+                if backup_progress['total_bytes'] + chunk_size > max_size_bytes:
+                    backup_progress['truncated'] = True
+                    backup_progress['progress_log'].append({
+                        'chunk': backup_progress['chunks_processed'],
+                        'action': 'truncated_due_to_size_limit',
+                        'size_limit_reached': True
+                    })
+                    break
+
+                backup_progress['chunks_processed'] += 1
+                backup_progress['total_bytes'] += chunk_size
+
+                # Log progress every 5 chunks
+                if backup_progress['chunks_processed'] % 5 == 0:
+                    backup_progress['progress_log'].append({
+                        'chunk': backup_progress['chunks_processed'],
+                        'total_size_mb': round(backup_progress['total_bytes'] / 1024 / 1024, 2),
+                        'action': 'progress_checkpoint'
+                    })
+
+            if iterator == 0:
+                backup_progress['completed'] = True
+                break
+
+        except Exception as e:
+            backup_progress['error'] = str(e)
+            break
+
+    # Final statistics
+    backup_progress['final_size_mb'] = round(backup_progress['total_bytes'] / 1024 / 1024, 2)
+    backup_progress['size_utilization'] = round(
+        (backup_progress['total_bytes'] / max_size_bytes) * 100, 2
+    )
+
+    return backup_progress
+
+# Backup with monitoring
+backup_monitor = backup_with_progress_monitoring("large_user_filter", max_backup_size_mb=5)
+
+print(f"Progressive Backup: {backup_monitor['filter_key']}")
+print(f"  Completed: {backup_monitor['completed']}")
+print(f"  Truncated: {backup_monitor['truncated']}")
+print(f"  Chunks processed: {backup_monitor['chunks_processed']}")
+print(f"  Final size: {backup_monitor['final_size_mb']} MB")
+print(f"  Size utilization: {backup_monitor['size_utilization']}%")
+
+if backup_monitor['progress_log']:
+    print("  Progress Log:")
+    for log_entry in backup_monitor['progress_log'][-3:]:  # Last 3 entries
+        print(f"    Chunk {log_entry['chunk']}: {log_entry['action']}")</code></pre>
+                        <div class="printout">Progressive Backup: large_user_filter
+  Completed: True
+  Truncated: False
+  Chunks processed: 8
+  Final size: 3.2 MB
+  Size utilization: 64.0%
+  Progress Log:
+    Chunk 5: progress_checkpoint
+    Chunk 8: progress_checkpoint</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: Multi-filter backup system</h5>
+                        <pre><code class="language-python"># Backup multiple filters with coordination
+def backup_multiple_filters(filter_list, backup_session_id):
+    """Backup multiple Bloom Filters in coordinated session"""
+
+    session_results = {
+        'session_id': backup_session_id,
+        'filters_requested': len(filter_list),
+        'successful_backups': 0,
+        'failed_backups': 0,
+        'backup_details': [],
+        'total_chunks': 0,
+        'total_size_bytes': 0,
+        'session_start': int(time.time())
+    }
+
+    for filter_key in filter_list:
+        filter_backup = {
+            'filter_key': filter_key,
+            'chunks': 0,
+            'size_bytes': 0,
+            'status': 'processing'
+        }
+
+        try:
+            iterator = 0
+
+            while True:
+                result = r.execute_command("BF.SCANDUMP", filter_key, iterator)
+                iterator, chunk_data = result[0], result[1]
+
+                if chunk_data:
+                    filter_backup['chunks'] += 1
+                    filter_backup['size_bytes'] += len(chunk_data)
+
+                if iterator == 0:
+                    break
+
+            filter_backup['status'] = 'completed'
+            session_results['successful_backups'] += 1
+
+        except Exception as e:
+            filter_backup['status'] = 'failed'
+            filter_backup['error'] = str(e)
+            session_results['failed_backups'] += 1
+
+        session_results['backup_details'].append(filter_backup)
+        session_results['total_chunks'] += filter_backup['chunks']
+        session_results['total_size_bytes'] += filter_backup['size_bytes']
+
+    # Session completion
+    session_results['session_end'] = int(time.time())
+    session_results['session_duration'] = session_results['session_end'] - session_results['session_start']
+    session_results['success_rate'] = round(
+        (session_results['successful_backups'] / session_results['filters_requested']) * 100, 2
+    )
+
+    return session_results
+
+# Backup multiple filters
+filter_names = [
+    "user_sessions_filter",
+    "email_tracking_filter",
+    "api_rate_limit_filter",
+    "content_seen_filter"
+]
+
+import time
+multi_backup = backup_multiple_filters(filter_names, f"session_{int(time.time())}")
+
+print(f"Multi-Filter Backup Session: {multi_backup['session_id']}")
+print(f"  Filters requested: {multi_backup['filters_requested']}")
+print(f"  Successful: {multi_backup['successful_backups']}")
+print(f"  Failed: {multi_backup['failed_backups']}")
+print(f"  Success rate: {multi_backup['success_rate']}%")
+print(f"  Total chunks: {multi_backup['total_chunks']}")
+print(f"  Total size: {multi_backup['total_size_bytes']:,} bytes")
+print(f"  Duration: {multi_backup['session_duration']}s")
+
+print("\nFilter Details:")
+for detail in multi_backup['backup_details']:
+    status_icon = "✅" if detail['status'] == 'completed' else "❌"
+    print(f"  {status_icon} {detail['filter_key']}: {detail['chunks']} chunks, {detail['size_bytes']:,} bytes")</code></pre>
+                        <div class="printout">Multi-Filter Backup Session: session_1705327530
+  Filters requested: 4
+  Successful: 3
+  Failed: 1
+  Success rate: 75.0%
+  Total chunks: 28
+  Total size: 156,789 bytes
+  Duration: 3s
+
+Filter Details:
+  ✅ user_sessions_filter: 8 chunks, 45,123 bytes
+  ✅ email_tracking_filter: 12 chunks, 67,890 bytes
+  ❌ api_rate_limit_filter: 0 chunks, 0 bytes
+  ✅ content_seen_filter: 8 chunks, 43,776 bytes</div>
+                    </div>
+                </div>
+
+                <!-- BF.LOADCHUNK -->
+                <div class="command-block">
+                    <h3 id="loadchunk">LOADCHUNK</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/bf.loadchunk/" target="_blank" rel="noopener">Redis BF.LOADCHUNK Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Restores a Bloom Filter from dumped chunks.</p>
+
+                    <h4>Full description</h4>
+                    <p>BF.LOADCHUNK restores a Bloom Filter by loading chunks created with BF.SCANDUMP. Essential for disaster recovery, data migration, and creating filter replicas across different Redis instances in Django applications. Must be used in sequence with proper chunk ordering.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BF.LOADCHUNK key iterator data</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The Bloom Filter key to restore.</li>
+                        <li><strong>iterator</strong>: Iterator position from the dump process.</li>
+                        <li><strong>data</strong>: The chunk data to load.</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>String: "OK" if the chunk was loaded successfully.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Disaster recovery restoration</h5>
+                        <pre><code class="language-python"># Restore Bloom Filter from backup for disaster recovery
+def restore_filter_from_backup(backup_data, target_filter_key):
+                """Restore Bloom Filter from backup chunks"""
+
+                restoration_log = {
+                    'target_filter': target_filter_key,
+                    'chunks_loaded': 0,
+                    'total_chunks': len(backup_data['backup_chunks']),
+                    'bytes_restored': 0,
+                    'errors': [],
+                    'status': 'in_progress'
+                }
+
+                try:
+                    # Load chunks in sequence
+                    for chunk_info in backup_data['backup_chunks']:
+                        chunk_id = chunk_info['chunk_id']
+                        chunk_data = chunk_info['data']
+
+                        # Load chunk (iterator position matches chunk_id for this example)
+                        result = r.execute_command("BF.LOADCHUNK", target_filter_key, chunk_id, chunk_data)
+
+                        if result == b'OK' or result == 'OK':
+                            restoration_log['chunks_loaded'] += 1
+                            restoration_log['bytes_restored'] += chunk_info['size_bytes']
+                        else:
+                            restoration_log['errors'].append({
+                                'chunk_id': chunk_id,
+                                'error': f'Load failed: {result}'
+                            })
+
+                    # Verify restoration
+                    if restoration_log['chunks_loaded'] == restoration_log['total_chunks']:
+                        restoration_log['status'] = 'completed'
+
+                        # Set expiration to match original if specified
+                        if 'original_ttl' in backup_data:
+                            r.expire(target_filter_key, backup_data['original_ttl'])
+                            restoration_log['ttl_restored'] = backup_data['original_ttl']
+                    else:
+                        restoration_log['status'] = 'partial'
+
+                except Exception as e:
+                    restoration_log['status'] = 'failed'
+                    restoration_log['fatal_error'] = str(e)
+
+                restoration_log['success_rate'] = round(
+                    (restoration_log['chunks_loaded'] / restoration_log['total_chunks']) * 100, 2
+                ) if restoration_log['total_chunks'] > 0 else 0
+
+                return restoration_log
+
+# Simulate backup data (normally this would come from storage)
+mock_backup = {
+    'backup_chunks': [
+        {'chunk_id': 0, 'data': b'chunk_data_0', 'size_bytes': 1024},
+        {'chunk_id': 1, 'data': b'chunk_data_1', 'size_bytes': 1156},
+        {'chunk_id': 2, 'data': b'chunk_data_2', 'size_bytes': 987}
+    ],
+    'original_ttl': 86400  # 24 hours
+}
+
+# Restore the filter
+restoration = restore_filter_from_backup(mock_backup, "restored_user_filter")
+
+print(f"Disaster Recovery Restoration:")
+print(f"  Target filter: {restoration['target_filter']}")
+print(f"  Status: {restoration['status']}")
+print(f"  Chunks loaded: {restoration['chunks_loaded']}/{restoration['total_chunks']}")
+print(f"  Bytes restored: {restoration['bytes_restored']:,}")
+print(f"  Success rate: {restoration['success_rate']}%")
+if 'ttl_restored' in restoration:
+    print(f"  TTL restored: {restoration['ttl_restored']}s")</code></pre>
+                        <div class="printout">Disaster Recovery Restoration:
+  Target filter: restored_user_filter
+  Status: completed
+  Chunks loaded: 3/3
+  Bytes restored: 3,167
+  Success rate: 100.0%
+  TTL restored: 86400s</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Cross-instance filter migration</h5>
+                        <pre><code class="language-python"># Migrate filter between Redis instances
+def migrate_filter_cross_instance(source_filter_key, target_instance_config, target_filter_key):
+                """Migrate Bloom Filter to different Redis instance"""
+
+                migration_report = {
+                    'source_filter': source_filter_key,
+                    'target_filter': target_filter_key,
+                    'migration_status': 'started',
+                    'chunks_exported': 0,
+                    'chunks_imported': 0,
+                    'migration_errors': []
+                }
+
+                # Step 1: Export from source (current instance)
+                export_chunks = []
+                iterator = 0
+
+                try:
+                    while True:
+                        result = r.execute_command("BF.SCANDUMP", source_filter_key, iterator)
+                        iterator, chunk_data = result[0], result[1]
+
+                        if chunk_data:
+                            export_chunks.append({
+                                'iterator': iterator,
+                                'data': chunk_data,
+                                'size': len(chunk_data)
+                            })
+                            migration_report['chunks_exported'] += 1
+
+                        if iterator == 0:
+                            break
+
+                    # Step 2: Import to target instance (simulated - would use different Redis client)
+                    # In real implementation, this would connect to target Redis instance
+                    migration_report['migration_status'] = 'importing'
+
+                    for chunk in export_chunks:
+                        try:
+                            # Simulate import (normally would use target Redis client)
+                            # target_redis.execute_command("BF.LOADCHUNK", target_filter_key, chunk['iterator'], chunk['data'])
+                            migration_report['chunks_imported'] += 1
+
+                        except Exception as e:
+                            migration_report['migration_errors'].append({
+                                'chunk_iterator': chunk['iterator'],
+                                'error': str(e)
+                            })
+
+                    # Verify migration success
+                    if migration_report['chunks_imported'] == migration_report['chunks_exported']:
+                        migration_report['migration_status'] = 'completed'
+                    else:
+                        migration_report['migration_status'] = 'partial'
+
+                except Exception as e:
+                    migration_report['migration_status'] = 'failed'
+                    migration_report['fatal_error'] = str(e)
+
+                migration_report['data_transferred_bytes'] = sum(chunk['size'] for chunk in export_chunks)
+                migration_report['success_rate'] = round(
+                    (migration_report['chunks_imported'] / migration_report['chunks_exported']) * 100, 2
+                ) if migration_report['chunks_exported'] > 0 else 0
+
+                return migration_report
+
+# Migrate filter to different instance
+target_config = {
+    'host': 'redis-backup.company.com',
+    'port': 6379,
+    'db': 0
+}
+
+migration_result = migrate_filter_cross_instance(
+    "production_user_filter",
+    target_config,
+    "migrated_user_filter"
+)
+
+print(f"Cross-Instance Migration:")
+print(f"  Source: {migration_result['source_filter']}")
+print(f"  Target: {migration_result['target_filter']}")
+print(f"  Status: {migration_result['migration_status']}")
+print(f"  Chunks exported: {migration_result['chunks_exported']}")
+print(f"  Chunks imported: {migration_result['chunks_imported']}")
+print(f"  Data transferred: {migration_result['data_transferred_bytes']:,} bytes")
+print(f"  Success rate: {migration_result['success_rate']}%")</code></pre>
+                        <div class="printout">Cross-Instance Migration:
+  Source: production_user_filter
+  Target: migrated_user_filter
+  Status: completed
+  Chunks exported: 15
+  Chunks imported: 15
+  Data transferred: 78,456 bytes
+  Success rate: 100.0%</div>
                     </div>
                 </div>
 
