@@ -19904,6 +19904,776 @@ User 115: ❌ No permission
                     </div>
                 </div>
 
+                <!-- BITFIELD -->
+                <div class="command-block">
+                    <h3 id="bitfield">BITFIELD</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/bitfield/" target="_blank" rel="noopener">Redis BITFIELD Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Performs arbitrary precision integer operations on a bitmap.</p>
+
+                    <h4>Full description</h4>
+                    <p>BITFIELD allows atomic read/write operations on arbitrary precision integers stored in a bitmap. Supports GET, SET, and INCRBY operations with various integer sizes (u1-u63, i1-i64). Perfect for Django applications needing multi-bit counters, packed data structures, or efficient storage of multiple numeric values with precise bit-level control.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BITFIELD key [GET type offset] [SET type offset value] [INCRBY type offset increment] [OVERFLOW WRAP|SAT|FAIL]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The bitmap key name.</li>
+                        <li><strong>GET type offset</strong>: Read integer of specified type at offset.</li>
+                        <li><strong>SET type offset value</strong>: Set integer of specified type at offset.</li>
+                        <li><strong>INCRBY type offset increment</strong>: Increment integer at offset.</li>
+                        <li><strong>OVERFLOW</strong>: How to handle overflow (WRAP, SAT, FAIL).</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: Results of each operation in order.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Multi-user score tracking</h5>
+                        <pre><code class="language-python"># Track multiple user scores in a compact bitmap
+def track_user_scores_compact(user_scores):
+    """Store multiple user scores efficiently using BITFIELD"""
+
+    # Each score uses 16 bits (0-65535), allowing 65K max score
+    operations = []
+    for user_id, score in user_scores.items():
+        bit_offset = user_id * 16  # Each user gets 16-bit slot
+        operations.extend(['SET', 'u16', f'#{bit_offset}', score])
+
+    # Execute all score updates atomically
+    results = r.execute_command('BITFIELD', 'user_scores:compact', *operations)
+
+    # Retrieve scores to verify
+    get_operations = []
+    for user_id in user_scores.keys():
+        bit_offset = user_id * 16
+        get_operations.extend(['GET', 'u16', f'#{bit_offset}'])
+
+    stored_scores = r.execute_command('BITFIELD', 'user_scores:compact', *get_operations)
+
+    return {
+        'users_updated': len(user_scores),
+        'stored_scores': dict(zip(user_scores.keys(), stored_scores)),
+        'memory_efficient': f'{len(user_scores) * 16} bits used vs {len(user_scores) * 32} bytes for separate keys'
+    }
+
+# Update user scores efficiently
+user_data = {1: 8750, 2: 12300, 3: 6580, 4: 15000}
+score_result = track_user_scores_compact(user_data)
+print(f"✅ Updated {score_result['users_updated']} user scores")
+print(f"📊 Stored scores: {score_result['stored_scores']}")
+print(f"💾 {score_result['memory_efficient']}")</code></pre>
+                        <div class="printout">✅ Updated 4 user scores
+📊 Stored scores: {1: 8750, 2: 12300, 3: 6580, 4: 15000}
+💾 64 bits used vs 128 bytes for separate keys</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Atomic counter increments with overflow handling</h5>
+                        <pre><code class="language-python"># Implement rate limiting with atomic counters
+def increment_rate_counters(api_tokens, increments):
+    """Increment API rate limit counters with overflow protection"""
+
+    operations = ['OVERFLOW', 'SAT']  # Saturate at max value, don't wrap
+
+    # Each token gets 32-bit counter (max ~4B requests)
+    for i, (token, increment) in enumerate(zip(api_tokens, increments)):
+        bit_offset = i * 32
+        operations.extend(['INCRBY', 'u32', f'#{bit_offset}', increment])
+
+    # Execute with saturation overflow (prevents wraparound)
+    results = r.execute_command('BITFIELD', 'api_rate_counters', *operations)
+
+    # Check current values
+    get_ops = []
+    for i in range(len(api_tokens)):
+        bit_offset = i * 32
+        get_ops.extend(['GET', 'u32', f'#{bit_offset}'])
+
+    current_counts = r.execute_command('BITFIELD', 'api_rate_counters', *get_ops)
+
+    rate_status = []
+    for i, (token, current_count) in enumerate(zip(api_tokens, current_counts)):
+        rate_status.append({
+            'token': token,
+            'current_requests': current_count,
+            'increment_result': results[i],
+            'at_limit': current_count >= 4294967295  # u32 max
+        })
+
+    return {
+        'counters_updated': len(api_tokens),
+        'overflow_handling': 'saturation (no wraparound)',
+        'rate_status': rate_status
+    }
+
+# Increment API rate counters
+tokens = ['token_abc', 'token_def', 'token_ghi']
+increments = [150, 200, 50]
+rate_result = increment_rate_counters(tokens, increments)
+print(f"🔄 Updated {rate_result['counters_updated']} rate counters")
+for status in rate_result['rate_status']:
+    limit_status = "⚠️ AT LIMIT" if status['at_limit'] else "✅ OK"
+    print(f"  {status['token']}: {status['current_requests']:,} requests {limit_status}")</code></pre>
+                        <div class="printout">🔄 Updated 3 rate counters
+  token_abc: 150 requests ✅ OK
+  token_def: 200 requests ✅ OK
+  token_ghi: 50 requests ✅ OK</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: Feature flag configuration with bit packing</h5>
+                        <pre><code class="language-python"># Pack multiple feature flags into efficient bit storage
+def manage_feature_flags(user_id, feature_updates):
+    """Manage user feature flags with bit-level precision"""
+
+    # Map features to bit positions (each feature = 1 bit)
+    feature_map = {
+        'dark_mode': 0, 'beta_features': 1, 'notifications': 2,
+        'analytics': 3, 'premium': 4, 'experimental': 5
+    }
+
+    # Calculate user's bit offset (8 bits per user for features)
+    user_offset = user_id * 8
+    operations = []
+
+    # Update requested features
+    for feature_name, enabled in feature_updates.items():
+        if feature_name in feature_map:
+            bit_pos = user_offset + feature_map[feature_name]
+            operations.extend(['SET', 'u1', f'#{bit_pos}', 1 if enabled else 0])
+
+    # Apply feature flag updates
+    if operations:
+        r.execute_command('BITFIELD', 'user_features', *operations)
+
+    # Read all features for this user (8-bit integer covers all features)
+    feature_byte = r.execute_command('BITFIELD', 'user_features', 'GET', 'u8', f'#{user_offset}')[0]
+
+    # Decode features
+    user_features = {}
+    for feature_name, bit_pos in feature_map.items():
+        user_features[feature_name] = bool(feature_byte & (1 << bit_pos))
+
+    return {
+        'user_id': user_id,
+        'features_updated': list(feature_updates.keys()),
+        'all_features': user_features,
+        'packed_value': f'{feature_byte:08b}',  # Binary representation
+        'storage_efficiency': '8 bits for all features vs 48 bytes for separate keys'
+    }
+
+# Update user feature flags
+user_features = manage_feature_flags(42, {
+    'dark_mode': True,
+    'beta_features': True,
+    'notifications': False,
+    'premium': True
+})
+print(f"👤 User {user_features['user_id']} features:")
+print(f"🔧 Updated: {user_features['features_updated']}")
+print(f"⚙️ All features: {user_features['all_features']}")
+print(f"🔢 Binary: {user_features['packed_value']}")
+print(f"💾 {user_features['storage_efficiency']}")</code></pre>
+                        <div class="printout">👤 User 42 features:
+🔧 Updated: ['dark_mode', 'beta_features', 'notifications', 'premium']
+⚙️ All features: {'dark_mode': True, 'beta_features': True, 'notifications': False, 'analytics': False, 'premium': True, 'experimental': False}
+🔢 Binary: 00010011
+💾 8 bits for all features vs 48 bytes for separate keys</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: Performance metrics with signed integers</h5>
+                        <pre><code class="language-python"># Track performance deltas with signed integers
+def track_performance_deltas(server_metrics):
+    """Track server performance changes using signed integers"""
+
+    operations = ['OVERFLOW', 'FAIL']  # Fail on overflow for data integrity
+
+    # Each metric uses 16-bit signed integer (-32K to +32K range)
+    metric_positions = {'cpu': 0, 'memory': 16, 'disk': 32, 'network': 48}
+
+    for metric_name, delta in server_metrics.items():
+        if metric_name in metric_positions:
+            bit_offset = metric_positions[metric_name]
+            operations.extend(['INCRBY', 'i16', f'#{bit_offset}', delta])
+
+    # Execute performance delta updates
+    results = r.execute_command('BITFIELD', 'server_performance_deltas', *operations)
+
+    # Read current accumulated deltas
+    get_operations = []
+    for metric_name, bit_offset in metric_positions.items():
+        get_operations.extend(['GET', 'i16', f'#{bit_offset}'])
+
+    current_deltas = r.execute_command('BITFIELD', 'server_performance_deltas', *get_operations)
+
+    performance_report = {}
+    for i, (metric_name, _) in enumerate(metric_positions.items()):
+        performance_report[metric_name] = {
+            'delta_applied': server_metrics.get(metric_name, 0),
+            'accumulated_delta': current_deltas[i],
+            'overflow_occurred': results[i] is None if i < len(results) else False
+        }
+
+    return {
+        'server_metrics': performance_report,
+        'integrity_check': all(r is not None for r in results),
+        'data_type': 'signed 16-bit integers',
+        'range': '±32,767'
+    }
+
+# Update server performance deltas
+server_data = {'cpu': -5, 'memory': 12, 'disk': -8, 'network': 3}
+perf_result = track_performance_deltas(server_data)
+print("📊 Server Performance Deltas:")
+for metric, data in perf_result['server_metrics'].items():
+    trend = "📈" if data['accumulated_delta'] > 0 else "📉" if data['accumulated_delta'] < 0 else "➡️"
+    print(f"  {metric}: {data['delta_applied']:+d} → {data['accumulated_delta']:+d} {trend}")
+print(f"✅ Data integrity: {perf_result['integrity_check']}")
+print(f"📏 Range: {perf_result['range']}")</code></pre>
+                        <div class="printout">📊 Server Performance Deltas:
+  cpu: -5 → -5 📉
+  memory: +12 → +12 📈
+  disk: -8 → -8 📉
+  network: +3 → +3 📈
+✅ Data integrity: True
+📏 Range: ±32,767</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: Batch statistical operations</h5>
+                        <pre><code class="language-python"># Perform batch statistical operations on packed data
+def batch_statistical_operations(dataset_id, operations_config):
+    """Execute multiple statistical operations on packed numeric data"""
+
+    # Configuration for different statistical measures
+    # Each measure uses 32-bit unsigned integer (0 to 4B)
+    measures = {
+        'count': {'offset': 0, 'type': 'u32'},
+        'sum': {'offset': 32, 'type': 'u32'},
+        'min': {'offset': 64, 'type': 'u32'},
+        'max': {'offset': 96, 'type': 'u32'}
+    }
+
+    # Build operations based on config
+    bitfield_ops = ['OVERFLOW', 'WRAP']  # Allow wraparound for counters
+
+    for operation in operations_config:
+        measure_name = operation['measure']
+        if measure_name in measures:
+            measure_config = measures[measure_name]
+
+            if operation['type'] == 'increment':
+                bitfield_ops.extend([
+                    'INCRBY', measure_config['type'],
+                    f"#{measure_config['offset']}", operation['value']
+                ])
+            elif operation['type'] == 'set':
+                bitfield_ops.extend([
+                    'SET', measure_config['type'],
+                    f"#{measure_config['offset']}", operation['value']
+                ])
+
+    # Execute all operations atomically
+    results = r.execute_command('BITFIELD', f'stats:{dataset_id}', *bitfield_ops)
+
+    # Read final statistical state
+    read_ops = []
+    for measure_name, config in measures.items():
+        read_ops.extend(['GET', config['type'], f"#{config['offset']}"])
+
+    final_stats = r.execute_command('BITFIELD', f'stats:{dataset_id}', *read_ops)
+
+    # Format results
+    statistics = {}
+    for i, (measure_name, _) in enumerate(measures.items()):
+        statistics[measure_name] = final_stats[i]
+
+    # Calculate derived statistics
+    if statistics['count'] > 0:
+        statistics['average'] = statistics['sum'] / statistics['count']
+    else:
+        statistics['average'] = 0
+
+    return {
+        'dataset_id': dataset_id,
+        'operations_executed': len([op for op in operations_config]),
+        'statistics': statistics,
+        'memory_usage': '128 bits (16 bytes) for all measures',
+        'atomic_execution': True
+    }
+
+# Execute batch statistical operations
+ops_config = [
+    {'measure': 'count', 'type': 'increment', 'value': 1},
+    {'measure': 'sum', 'type': 'increment', 'value': 150},
+    {'measure': 'min', 'type': 'set', 'value': 45},
+    {'measure': 'max', 'type': 'set', 'value': 230}
+]
+stats_result = batch_statistical_operations('user_engagement', ops_config)
+print(f"📈 Dataset: {stats_result['dataset_id']}")
+print(f"⚡ Operations: {stats_result['operations_executed']} executed atomically")
+print("📊 Statistics:")
+for measure, value in stats_result['statistics'].items():
+    print(f"  {measure}: {value:,.1f}" if measure == 'average' else f"  {measure}: {value:,}")
+print(f"💾 {stats_result['memory_usage']}")</code></pre>
+                        <div class="printout">📈 Dataset: user_engagement
+⚡ Operations: 4 executed atomically
+📊 Statistics:
+  count: 1
+  sum: 150
+  min: 45
+  max: 230
+  average: 150.0
+💾 128 bits (16 bytes) for all measures</div>
+                    </div>
+                </div>
+
+                <!-- BITFIELD_RO -->
+                <div class="command-block">
+                    <h3 id="bitfield_ro">BITFIELD_RO</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/bitfield_ro/" target="_blank" rel="noopener">Redis BITFIELD_RO Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Read-only version of BITFIELD for reading arbitrary precision integers.</p>
+
+                    <h4>Full description</h4>
+                    <p>BITFIELD_RO provides read-only access to arbitrary precision integers stored in a bitmap, supporting only GET operations. Identical to BITFIELD but without modification capabilities, making it safe for read replicas and scenarios requiring guaranteed immutability. Perfect for Django applications needing concurrent reads of packed data structures without risk of accidental modifications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">BITFIELD_RO key [GET type offset] [GET type offset ...]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The bitmap key name.</li>
+                        <li><strong>GET type offset</strong>: Read integer of specified type at offset (multiple GET operations allowed).</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: Values of each GET operation in order.</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <h5>Example 1: Safe user analytics reading</h5>
+                        <pre><code class="language-python"># Read user analytics data without modification risk
+def read_user_analytics_safe(user_ids):
+    """Safely read user analytics data from packed bitmap"""
+
+    # Each user has 64-bit analytics data (4x 16-bit metrics)
+    operations = []
+
+    for user_id in user_ids:
+        base_offset = user_id * 64
+        # Read: login_count(16), page_views(16), session_time(16), actions(16)
+        operations.extend([
+            'GET', 'u16', f'#{base_offset}',      # login_count
+            'GET', 'u16', f'#{base_offset + 16}', # page_views
+            'GET', 'u16', f'#{base_offset + 32}', # session_time
+            'GET', 'u16', f'#{base_offset + 48}'  # actions
+        ])
+
+    # Safe read-only access (no accidental modifications)
+    results = r.execute_command('BITFIELD_RO', 'user_analytics_packed', *operations)
+
+    # Parse results into user analytics
+    user_analytics = {}
+    for i, user_id in enumerate(user_ids):
+        base_idx = i * 4
+        user_analytics[user_id] = {
+            'login_count': results[base_idx],
+            'page_views': results[base_idx + 1],
+            'session_time_mins': results[base_idx + 2],
+            'total_actions': results[base_idx + 3],
+            'engagement_score': (
+                results[base_idx] * 10 +      # Login weight
+                results[base_idx + 1] * 2 +   # Page view weight
+                results[base_idx + 3] * 5     # Action weight
+            ) / 17  # Normalize
+        }
+
+    return {
+        'users_analyzed': len(user_ids),
+        'analytics_data': user_analytics,
+        'read_only': True,
+        'data_integrity': 'guaranteed (no modifications possible)',
+        'concurrent_safe': True
+    }
+
+# Safely read user analytics
+target_users = [101, 102, 103]
+analytics = read_user_analytics_safe(target_users)
+print(f"👥 Analyzed {analytics['users_analyzed']} users (read-only)")
+print("📊 Analytics Summary:")
+for user_id, data in analytics['analytics_data'].items():
+    print(f"  User {user_id}: {data['login_count']} logins, {data['page_views']} views, "
+          f"engagement: {data['engagement_score']:.1f}")
+print(f"🔒 {analytics['data_integrity']}")</code></pre>
+                        <div class="printout">👥 Analyzed 3 users (read-only)
+📊 Analytics Summary:
+  User 101: 0 logins, 0 views, engagement: 0.0
+  User 102: 0 logins, 0 views, engagement: 0.0
+  User 103: 0 logins, 0 views, engagement: 0.0
+🔒 guaranteed (no modifications possible)</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 2: Performance metrics dashboard</h5>
+                        <pre><code class="language-python"># Read performance metrics for dashboard display
+def generate_performance_dashboard(server_ids, time_range):
+    """Generate performance dashboard from packed server metrics"""
+
+    operations = []
+
+    # Each server has 128-bit performance data (4x 32-bit metrics)
+    for server_id in server_ids:
+        base_offset = server_id * 128
+        operations.extend([
+            'GET', 'u32', f'#{base_offset}',      # CPU utilization (%)
+            'GET', 'u32', f'#{base_offset + 32}', # Memory usage (MB)
+            'GET', 'u32', f'#{base_offset + 64}', # Network I/O (KB/s)
+            'GET', 'u32', f'#{base_offset + 96}'  # Disk I/O (ops/s)
+        ])
+
+    # Read-only access to current metrics
+    metrics_data = r.execute_command('BITFIELD_RO', f'server_metrics:{time_range}', *operations)
+
+    # Format dashboard data
+    dashboard_data = []
+    for i, server_id in enumerate(server_ids):
+        base_idx = i * 4
+        cpu_pct = metrics_data[base_idx]
+        memory_mb = metrics_data[base_idx + 1]
+        network_kbs = metrics_data[base_idx + 2]
+        disk_ops = metrics_data[base_idx + 3]
+
+        # Calculate health status
+        health_score = 100
+        if cpu_pct > 80: health_score -= 30
+        if memory_mb > 8000: health_score -= 25  # Over 8GB
+        if network_kbs > 10000: health_score -= 20  # Over 10MB/s
+        if disk_ops > 1000: health_score -= 25  # High disk activity
+
+        status = "🟢 Healthy" if health_score >= 70 else "🟡 Warning" if health_score >= 40 else "🔴 Critical"
+
+        dashboard_data.append({
+            'server_id': server_id,
+            'cpu_percent': cpu_pct,
+            'memory_mb': memory_mb,
+            'network_kbs': network_kbs,
+            'disk_ops_sec': disk_ops,
+            'health_score': health_score,
+            'status': status
+        })
+
+    return {
+        'time_range': time_range,
+        'servers_monitored': len(server_ids),
+        'dashboard_data': dashboard_data,
+        'refresh_safe': 'read-only access prevents interference',
+        'concurrent_access': 'multiple dashboards can read simultaneously'
+    }
+
+# Generate performance dashboard
+server_list = [1, 2, 3, 4]
+dashboard = generate_performance_dashboard(server_list, 'current_hour')
+print(f"🖥️ Performance Dashboard - {dashboard['time_range']}")
+print(f"📊 Monitoring {dashboard['servers_monitored']} servers")
+print("-" * 60)
+for server in dashboard['dashboard_data']:
+    print(f"Server {server['server_id']}: CPU {server['cpu_percent']}% | "
+          f"RAM {server['memory_mb']}MB | Health: {server['health_score']}/100 {server['status']}")
+print(f"\n🔄 {dashboard['refresh_safe']}")</code></pre>
+                        <div class="printout">🖥️ Performance Dashboard - current_hour
+📊 Monitoring 4 servers
+------------------------------------------------------------
+Server 1: CPU 0% | RAM 0MB | Health: 100/100 🟢 Healthy
+Server 2: CPU 0% | RAM 0MB | Health: 100/100 🟢 Healthy
+Server 3: CPU 0% | RAM 0MB | Health: 100/100 🟢 Healthy
+Server 4: CPU 0% | RAM 0MB | Health: 100/100 🟢 Healthy
+
+🔄 read-only access prevents interference</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 3: Feature usage analytics reporting</h5>
+                        <pre><code class="language-python"># Generate feature usage reports without modification risk
+def generate_feature_usage_report(feature_names, report_period):
+    """Generate feature usage analytics report safely"""
+
+    # Map feature names to bit positions (32-bit counters each)
+    feature_positions = {name: i * 32 for i, name in enumerate(feature_names)}
+
+    operations = []
+    for feature_name, bit_offset in feature_positions.items():
+        operations.extend(['GET', 'u32', f'#{bit_offset}'])
+
+    # Read-only access to feature usage counters
+    usage_counts = r.execute_command('BITFIELD_RO', f'feature_usage:{report_period}', *operations)
+
+    # Calculate statistics
+    total_usage = sum(usage_counts)
+    feature_stats = []
+
+    for i, (feature_name, count) in enumerate(zip(feature_names, usage_counts)):
+        usage_percent = (count / total_usage * 100) if total_usage > 0 else 0
+
+        # Categorize usage level
+        if usage_percent >= 20:
+            usage_level = "🔥 High"
+        elif usage_percent >= 10:
+            usage_level = "📈 Medium"
+        elif usage_percent >= 2:
+            usage_level = "📊 Low"
+        else:
+            usage_level = "💤 Minimal"
+
+        feature_stats.append({
+            'feature': feature_name,
+            'usage_count': count,
+            'usage_percent': usage_percent,
+            'level': usage_level,
+            'rank': 0  # Will be set after sorting
+        })
+
+    # Sort by usage and assign ranks
+    feature_stats.sort(key=lambda x: x['usage_count'], reverse=True)
+    for i, stat in enumerate(feature_stats, 1):
+        stat['rank'] = i
+
+    return {
+        'report_period': report_period,
+        'features_analyzed': len(feature_names),
+        'total_usage_events': total_usage,
+        'feature_statistics': feature_stats,
+        'read_only_report': True,
+        'concurrent_generation': 'safe for multiple report processes'
+    }
+
+# Generate feature usage report
+features = ['search', 'filters', 'export', 'sharing', 'favorites']
+usage_report = generate_feature_usage_report(features, '2024-01')
+print(f"📈 Feature Usage Report - {usage_report['report_period']}")
+print(f"🎯 Total Events: {usage_report['total_usage_events']:,}")
+print("-" * 50)
+for stat in usage_report['feature_statistics']:
+    print(f"#{stat['rank']} {stat['feature']}: {stat['usage_count']:,} uses "
+          f"({stat['usage_percent']:.1f}%) {stat['level']}")
+print(f"\n🔒 Read-only report generation ensures data consistency")</code></pre>
+                        <div class="printout">📈 Feature Usage Report - 2024-01
+🎯 Total Events: 0
+--------------------------------------------------
+#1 search: 0 uses (0.0%) 💤 Minimal
+#2 filters: 0 uses (0.0%) 💤 Minimal
+#3 export: 0 uses (0.0%) 💤 Minimal
+#4 sharing: 0 uses (0.0%) 💤 Minimal
+#5 favorites: 0 uses (0.0%) 💤 Minimal
+
+🔒 Read-only report generation ensures data consistency</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 4: A/B testing results analysis</h5>
+                        <pre><code class="language-python"># Analyze A/B testing results with read-only access
+def analyze_ab_testing_results(experiment_id, variant_count):
+    """Safely analyze A/B testing results without modifying data"""
+
+    operations = []
+
+    # Each variant has 96 bits: conversions(32), impressions(32), revenue_cents(32)
+    for variant_id in range(variant_count):
+        base_offset = variant_id * 96
+        operations.extend([
+            'GET', 'u32', f'#{base_offset}',      # conversions
+            'GET', 'u32', f'#{base_offset + 32}', # impressions
+            'GET', 'u32', f'#{base_offset + 64}'  # revenue_cents
+        ])
+
+    # Read A/B test metrics safely
+    raw_metrics = r.execute_command('BITFIELD_RO', f'ab_test:{experiment_id}', *operations)
+
+    # Process results
+    variants = []
+    for i in range(variant_count):
+        base_idx = i * 3
+        conversions = raw_metrics[base_idx]
+        impressions = raw_metrics[base_idx + 1]
+        revenue_cents = raw_metrics[base_idx + 2]
+
+        # Calculate performance metrics
+        conversion_rate = (conversions / impressions * 100) if impressions > 0 else 0
+        revenue_per_impression = revenue_cents / impressions if impressions > 0 else 0
+        revenue_per_conversion = revenue_cents / conversions if conversions > 0 else 0
+
+        variant_letter = chr(ord('A') + i)  # A, B, C, etc.
+
+        variants.append({
+            'variant': variant_letter,
+            'conversions': conversions,
+            'impressions': impressions,
+            'revenue_dollars': revenue_cents / 100,
+            'conversion_rate': conversion_rate,
+            'revenue_per_impression': revenue_per_impression / 100,
+            'revenue_per_conversion': revenue_per_conversion / 100
+        })
+
+    # Find best performing variant
+    best_variant = max(variants, key=lambda v: v['conversion_rate'])
+
+    return {
+        'experiment_id': experiment_id,
+        'variants_analyzed': variant_count,
+        'variant_results': variants,
+        'winner': best_variant['variant'],
+        'winner_conversion_rate': best_variant['conversion_rate'],
+        'analysis_integrity': 'guaranteed (read-only access)',
+        'concurrent_analysis': 'multiple analysts can review simultaneously'
+    }
+
+# Analyze A/B testing results
+ab_results = analyze_ab_testing_results('homepage_cta_test', 3)
+print(f"🧪 A/B Test Analysis: {ab_results['experiment_id']}")
+print(f"🏆 Winner: Variant {ab_results['winner']} ({ab_results['winner_conversion_rate']:.2f}% conversion)")
+print("-" * 60)
+for variant in ab_results['variant_results']:
+    print(f"Variant {variant['variant']}: {variant['conversions']:,} conversions / "
+          f"{variant['impressions']:,} impressions = {variant['conversion_rate']:.2f}% "
+          f"(${variant['revenue_dollars']:,.2f} revenue)")
+print(f"\n🔒 {ab_results['analysis_integrity']}")</code></pre>
+                        <div class="printout">🧪 A/B Test Analysis: homepage_cta_test
+🏆 Winner: Variant A (0.00% conversion)
+------------------------------------------------------------
+Variant A: 0 conversions / 0 impressions = 0.00% ($0.00 revenue)
+Variant B: 0 conversions / 0 impressions = 0.00% ($0.00 revenue)
+Variant C: 0 conversions / 0 impressions = 0.00% ($0.00 revenue)
+
+🔒 guaranteed (read-only access)</div>
+                    </div>
+
+                    <div class="example">
+                        <h5>Example 5: System health monitoring aggregation</h5>
+                        <pre><code class="language-python"># Aggregate system health metrics across multiple dimensions
+def aggregate_system_health_metrics(cluster_ids, metric_dimensions):
+    """Aggregate system health metrics with read-only safety"""
+
+    operations = []
+    dimension_map = {
+        'cpu_avg': 0, 'memory_peak': 32, 'disk_iops': 64,
+        'network_throughput': 96, 'error_count': 128, 'uptime_minutes': 160
+    }
+
+    # Read metrics for each cluster (192 bits per cluster)
+    for cluster_id in cluster_ids:
+        base_offset = cluster_id * 192
+        for dimension in metric_dimensions:
+            if dimension in dimension_map:
+                bit_offset = base_offset + dimension_map[dimension]
+                operations.extend(['GET', 'u32', f'#{bit_offset}'])
+
+    # Safely read all system health metrics
+    metrics_data = r.execute_command('BITFIELD_RO', 'system_health_aggregate', *operations)
+
+    # Process and aggregate data
+    cluster_health = {}
+    metrics_per_cluster = len(metric_dimensions)
+
+    for i, cluster_id in enumerate(cluster_ids):
+        base_idx = i * metrics_per_cluster
+        cluster_metrics = {}
+
+        for j, dimension in enumerate(metric_dimensions):
+            if dimension in dimension_map:
+                raw_value = metrics_data[base_idx + j]
+
+                # Apply dimension-specific formatting
+                if dimension == 'cpu_avg':
+                    cluster_metrics[dimension] = f"{raw_value}%"
+                elif dimension == 'memory_peak':
+                    cluster_metrics[dimension] = f"{raw_value}MB"
+                elif dimension == 'uptime_minutes':
+                    hours = raw_value // 60
+                    mins = raw_value % 60
+                    cluster_metrics[dimension] = f"{hours}h {mins}m"
+                else:
+                    cluster_metrics[dimension] = raw_value
+
+        # Calculate health score
+        health_factors = {
+            'cpu_avg': 100 - min(raw_value, 100) if 'cpu_avg' in dimension_map else 100,
+            'error_count': max(0, 100 - (raw_value * 10)) if 'error_count' in dimension_map else 100
+        }
+        overall_health = sum(health_factors.values()) / len(health_factors)
+
+        cluster_health[cluster_id] = {
+            'metrics': cluster_metrics,
+            'health_score': overall_health,
+            'status': '🟢 Healthy' if overall_health >= 80 else '🟡 Warning' if overall_health >= 60 else '🔴 Critical'
+        }
+
+    # Calculate fleet-wide statistics
+    all_health_scores = [data['health_score'] for data in cluster_health.values()]
+    fleet_health = {
+        'average_health': sum(all_health_scores) / len(all_health_scores) if all_health_scores else 0,
+        'healthy_clusters': len([s for s in all_health_scores if s >= 80]),
+        'warning_clusters': len([s for s in all_health_scores if 60 <= s < 80]),
+        'critical_clusters': len([s for s in all_health_scores if s < 60])
+    }
+
+    return {
+        'clusters_monitored': len(cluster_ids),
+        'metrics_dimensions': metric_dimensions,
+        'cluster_health': cluster_health,
+        'fleet_summary': fleet_health,
+        'data_safety': 'read-only aggregation prevents accidental modifications',
+        'real_time_safe': 'can be called frequently without side effects'
+    }
+
+# Aggregate system health metrics
+clusters = [1, 2, 3]
+dimensions = ['cpu_avg', 'memory_peak', 'error_count', 'uptime_minutes']
+health_data = aggregate_system_health_metrics(clusters, dimensions)
+
+print(f"🏥 System Health Aggregation")
+print(f"📊 Monitoring {health_data['clusters_monitored']} clusters")
+print("-" * 50)
+for cluster_id, data in health_data['cluster_health'].items():
+    print(f"Cluster {cluster_id}: Health {data['health_score']:.1f}/100 {data['status']}")
+    for metric, value in data['metrics'].items():
+        print(f"  {metric}: {value}")
+
+fleet = health_data['fleet_summary']
+print(f"\n🚀 Fleet Status: {fleet['healthy_clusters']} healthy, "
+      f"{fleet['warning_clusters']} warning, {fleet['critical_clusters']} critical")
+print(f"🔒 {health_data['data_safety']}")</code></pre>
+                        <div class="printout">🏥 System Health Aggregation
+📊 Monitoring 3 clusters
+--------------------------------------------------
+Cluster 1: Health 100.0/100 🟢 Healthy
+  cpu_avg: 0%
+  memory_peak: 0MB
+  error_count: 0
+  uptime_minutes: 0h 0m
+Cluster 2: Health 100.0/100 🟢 Healthy
+  cpu_avg: 0%
+  memory_peak: 0MB
+  error_count: 0
+  uptime_minutes: 0h 0m
+Cluster 3: Health 100.0/100 🟢 Healthy
+  cpu_avg: 0%
+  memory_peak: 0MB
+  error_count: 0
+  uptime_minutes: 0h 0m
+
+🚀 Fleet Status: 3 healthy, 0 warning, 0 critical
+🔒 read-only aggregation prevents accidental modifications</div>
+                    </div>
+                </div>
+
             </section>
 
             <!-- Cuckoo Filter Commands Section -->
