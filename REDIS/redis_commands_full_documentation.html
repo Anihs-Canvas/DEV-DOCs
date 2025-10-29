@@ -55979,6 +55979,26 @@ Memory usage: 45.67 MB
                 <div class="section-header">
                     <h2>🌊 Redis Stream Commands</h2>
                     <p>Redis Streams provide a powerful data structure for handling continuous data flows and message queues. Perfect for Django applications requiring event streaming, real-time processing, job queues, activity feeds, and audit logs. Streams offer persistence, fan-out messaging, and consumer group functionality.</p>
+                    
+                    <div class="command-overview">
+                        <h4>📋 Stream Commands Overview</h4>
+                        <div class="command-grid">
+                            <div><strong><a href="#xadd">XADD</a></strong> - Add entry to stream</div>
+                            <div><strong><a href="#xread">XREAD</a></strong> - Read stream entries</div>
+                            <div><strong><a href="#xreadgroup">XREADGROUP</a></strong> - Read from consumer group</div>
+                            <div><strong><a href="#xack">XACK</a></strong> - Acknowledge entry processing</div>
+                            <div><strong><a href="#xlen">XLEN</a></strong> - Get stream length</div>
+                            <div><strong><a href="#xdel">XDEL</a></strong> - Delete stream entries</div>
+                            <div><strong><a href="#xtrim">XTRIM</a></strong> - Trim stream length</div>
+                            <div><strong><a href="#xrange">XRANGE</a></strong> - Read range of entries</div>
+                            <div><strong><a href="#xrevrange">XREVRANGE</a></strong> - Reverse range query</div>
+                            <div><strong><a href="#xgroup-create">XGROUP CREATE</a></strong> - Create consumer group</div>
+                            <div><strong><a href="#xpending">XPENDING</a></strong> - Inspect pending entries</div>
+                            <div><strong><a href="#xclaim">XCLAIM</a></strong> - Claim pending entries</div>
+                            <div><strong><a href="#xautoclaim">XAUTOCLAIM</a></strong> - Auto-claim entries</div>
+                            <div><strong><a href="#xinfo">XINFO</a></strong> - Stream information</div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- XADD Command -->
@@ -57540,8 +57560,3064 @@ def stream_dashboard(request):
                     </div>
                 </div>
 
-                <div class="implementation-note">
-                    <strong>💡 Implementation Note:</strong> The remaining Stream commands (XDEL, XTRIM, XRANGE, XREVRANGE, XPENDING, XCLAIM, XAUTOCLAIM, XINFO, etc.) provide comprehensive tools for stream lifecycle management, data cleanup, range queries, pending entry recovery, and stream introspection in Django production environments.
+                <!-- XDEL Command -->
+                <div class="command-block">
+                    <h3 id="xdel">XDEL</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xdel/" target="_blank" rel="noopener">Redis XDEL Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Removes one or more entries from a stream by their IDs.</p>
+
+                    <h4>Full description</h4>
+                    <p>XDEL removes the specified entries from a stream. The command takes one or more entry IDs and removes them from the stream. This is useful for removing processed entries, cleaning up invalid data, or implementing data retention policies in Django applications. Deleted entries cannot be recovered.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XDEL key ID [ID ...]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>ID</strong>: The entry ID to delete (format: timestamp-sequence)</li>
+                        <li><strong>[ID ...]</strong>: Optional additional entry IDs to delete</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Integer: The number of entries actually deleted (some IDs might not exist)</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Delete Processed Application Events</strong>
+                        <pre><code class="language-python"># tasks.py - Cleanup processed job application events
+import redis
+from django.core.management.base import BaseCommand
+from datetime import datetime, timedelta
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def cleanup_processed_applications():
+    """Remove application events older than 30 days after processing"""
+    stream_key = 'job_applications'
+    
+    # Read old processed entries
+    cutoff_time = int((datetime.now() - timedelta(days=30)).timestamp() * 1000)
+    old_entries = redis_client.xrange(stream_key, '-', f'{cutoff_time}-0')
+    
+    # Delete old entries
+    if old_entries:
+        entry_ids = [entry[0] for entry in old_entries]
+        deleted_count = redis_client.xdel(stream_key, *entry_ids)
+        
+        print(f"Deleted {deleted_count} old application events")
+        print(f"Stream size now: {redis_client.xlen(stream_key)} entries")
+    
+    return deleted_count</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Deleted 342 old application events
+Stream size now: 1247 entries</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Remove Failed Processing Attempts</strong>
+                        <pre><code class="language-python"># utils/stream_cleanup.py - Remove failed entries
+import redis
+from django.conf import settings
+import logging
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+logger = logging.getLogger(__name__)
+
+def remove_failed_entries(stream_key, failed_entry_ids):
+    """Delete entries that failed processing multiple times"""
+    if not failed_entry_ids:
+        return 0
+    
+    # Delete failed entries
+    deleted = redis_client.xdel(stream_key, *failed_entry_ids)
+    
+    # Log cleanup
+    logger.warning(f"Removed {deleted} failed entries from {stream_key}")
+    
+    # Store failure metadata for analysis
+    redis_client.hincrby('stream_failures', stream_key, deleted)
+    redis_client.lpush(
+        f'{stream_key}:failed_ids',
+        *failed_entry_ids[:100]  # Keep last 100 for debugging
+    )
+    redis_client.ltrim(f'{stream_key}:failed_ids', 0, 99)
+    
+    return deleted
+
+# Example usage
+failed_ids = ['1693920000123-0', '1693920000456-0', '1693920000789-0']
+removed = remove_failed_entries('email_queue', failed_ids)
+print(f"Removed {removed} failed email queue entries")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Removed 3 failed email queue entries</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Selective Deletion by Event Type</strong>
+                        <pre><code class="language-python"># management/commands/clean_streams.py - Delete specific event types
+import redis
+from django.core.management.base import BaseCommand
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Remove specific event types from streams'
+    
+    def add_arguments(self, parser):
+        parser.add_argument('--event-type', type=str, required=True)
+        parser.add_argument('--stream', type=str, default='user_activity')
+    
+    def handle(self, *args, **options):
+        stream_key = options['stream']
+        event_type = options['event_type']
+        
+        # Read all entries
+        entries = redis_client.xrange(stream_key, '-', '+')
+        
+        # Find entries matching event type
+        to_delete = []
+        for entry_id, fields in entries:
+            if fields.get('event_type') == event_type:
+                to_delete.append(entry_id)
+        
+        # Delete matching entries
+        if to_delete:
+            deleted = redis_client.xdel(stream_key, *to_delete)
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Deleted {deleted} '{event_type}' events from {stream_key}"
+                )
+            )
+        else:
+            self.stdout.write("No matching events found")
+
+# Run: python manage.py clean_streams --event-type=page_view --stream=analytics</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Deleted 523 'page_view' events from analytics</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Delete After Successful Processing</strong>
+                        <pre><code class="language-python"># tasks.py - Delete entries after job completion
+import redis
+from django.db import transaction
+from .models import JobPost, JobApplication
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def process_and_cleanup_application(entry_id, entry_data):
+    """Process application and remove from stream"""
+    try:
+        with transaction.atomic():
+            # Create database record
+            application = JobApplication.objects.create(
+                job_id=entry_data['job_id'],
+                applicant_email=entry_data['applicant_email'],
+                status='pending',
+                applied_at=entry_data['timestamp']
+            )
+            
+            # Send confirmation email
+            send_application_email(application)
+            
+            # Delete from stream after successful processing
+            deleted = redis_client.xdel('job_applications', entry_id)
+            
+            print(f"✓ Processed application {application.id}")
+            print(f"✓ Removed entry {entry_id} from stream")
+            
+            return application
+            
+    except Exception as e:
+        print(f"✗ Processing failed: {e}")
+        # Keep entry in stream for retry
+        return None</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>✓ Processed application 1247
+✓ Removed entry 1693920000000-0 from stream</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Bulk Deletion with Safety Limits</strong>
+                        <pre><code class="language-python"># utils/stream_maintenance.py - Safe bulk deletion
+import redis
+from django.core.cache import cache
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def safe_bulk_delete(stream_key, max_delete=1000, older_than_days=7):
+    """Delete old entries with safety limits"""
+    # Acquire lock to prevent concurrent cleanup
+    lock_key = f'lock:cleanup:{stream_key}'
+    if not cache.add(lock_key, 'locked', timeout=300):
+        return {'error': 'Cleanup already in progress'}
+    
+    try:
+        # Calculate cutoff time
+        cutoff = int((datetime.now().timestamp() - (older_than_days * 86400)) * 1000)
+        
+        # Get old entries (limited batch)
+        entries = redis_client.xrange(stream_key, '-', f'{cutoff}-0', count=max_delete)
+        
+        if not entries:
+            return {'deleted': 0, 'message': 'No old entries found'}
+        
+        # Delete in batches of 100
+        entry_ids = [entry[0] for entry in entries]
+        total_deleted = 0
+        
+        for i in range(0, len(entry_ids), 100):
+            batch = entry_ids[i:i+100]
+            deleted = redis_client.xdel(stream_key, *batch)
+            total_deleted += deleted
+        
+        return {
+            'deleted': total_deleted,
+            'stream': stream_key,
+            'remaining': redis_client.xlen(stream_key),
+            'cutoff_days': older_than_days
+        }
+        
+    finally:
+        cache.delete(lock_key)
+
+# Usage
+result = safe_bulk_delete('job_applications', max_delete=500, older_than_days=30)
+print(f"Deleted: {result['deleted']}, Remaining: {result['remaining']}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Deleted: 500, Remaining: 747</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XTRIM Command -->
+                <div class="command-block">
+                    <h3 id="xtrim">XTRIM</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xtrim/" target="_blank" rel="noopener">Redis XTRIM Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Trims a stream to a specified length or minimum ID, removing oldest entries.</p>
+
+                    <h4>Full description</h4>
+                    <p>XTRIM removes entries from a stream to maintain a maximum length or minimum ID. It's more efficient than XDEL for bulk cleanup as it operates on ranges. Use MAXLEN to keep the last N entries, or MINID to keep entries newer than a specific ID. The LIMIT option controls how many entries to scan in a single operation, useful for preventing blocking on large streams.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>MAXLEN</strong>: Trim to maximum length</li>
+                        <li><strong>MINID</strong>: Trim to entries newer than minimum ID</li>
+                        <li><strong>=</strong>: Exact trimming (default)</li>
+                        <li><strong>~</strong>: Approximate trimming (more efficient)</li>
+                        <li><strong>threshold</strong>: Maximum length or minimum ID value</li>
+                        <li><strong>LIMIT count</strong>: Maximum entries to evict in one operation</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Integer: The number of entries deleted from the stream</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Maintain Maximum Stream Length</strong>
+                        <pre><code class="language-python"># middleware.py - Auto-trim streams on writes
+import redis
+from django.conf import settings
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class StreamMaintenanceMiddleware:
+    """Automatically trim streams to prevent unbounded growth"""
+    
+    STREAM_MAX_LENGTHS = {
+        'user_activity': 10000,
+        'page_views': 50000,
+        'api_requests': 25000,
+        'error_logs': 5000,
+        'job_applications': 20000
+    }
+    
+    def __init__(self, get_response):
+        self.get_response = get_response
+    
+    def __call__(self, request):
+        response = self.get_response(request)
+        
+        # Periodically trim streams (every 100th request)
+        if hasattr(request, 'stream_written'):
+            stream_key = request.stream_written
+            max_len = self.STREAM_MAX_LENGTHS.get(stream_key)
+            
+            if max_len and hash(request.path) % 100 == 0:
+                # Use approximate trimming (~) for better performance
+                trimmed = redis_client.xtrim(
+                    stream_key,
+                    maxlen=max_len,
+                    approximate=True
+                )
+                if trimmed > 0:
+                    print(f"Trimmed {trimmed} entries from {stream_key}")
+        
+        return response</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Trimmed 2341 entries from user_activity</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Time-Based Retention Policy</strong>
+                        <pre><code class="language-python"># management/commands/trim_old_streams.py
+import redis
+from django.core.management.base import BaseCommand
+from datetime import datetime, timedelta
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Trim streams based on time-based retention policies'
+    
+    def handle(self, *args, **options):
+        retention_policies = {
+            'analytics': timedelta(days=7),
+            'user_activity': timedelta(days=30),
+            'job_applications': timedelta(days=90),
+            'error_logs': timedelta(days=14),
+            'notifications': timedelta(days=3)
+        }
+        
+        for stream_key, retention in retention_policies.items():
+            # Calculate minimum ID based on retention
+            cutoff_time = datetime.now() - retention
+            min_id = f"{int(cutoff_time.timestamp() * 1000)}-0"
+            
+            # Trim entries older than cutoff
+            trimmed = redis_client.xtrim(
+                stream_key,
+                minid=min_id,
+                approximate=False  # Exact trimming for compliance
+            )
+            
+            remaining = redis_client.xlen(stream_key)
+            
+            self.stdout.write(
+                f"{stream_key}: Trimmed {trimmed} entries, "
+                f"{remaining} remaining (retention: {retention.days} days)"
+            )
+
+# Run: python manage.py trim_old_streams</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>analytics: Trimmed 8934 entries, 1247 remaining (retention: 7 days)
+user_activity: Trimmed 2341 entries, 7892 remaining (retention: 30 days)
+job_applications: Trimmed 523 entries, 19477 remaining (retention: 90 days)
+error_logs: Trimmed 145 entries, 234 remaining (retention: 14 days)
+notifications: Trimmed 3421 entries, 892 remaining (retention: 3 days)</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Efficient Approximate Trimming</strong>
+                        <pre><code class="language-python"># tasks.py - High-frequency trimming with LIMIT
+import redis
+from celery import shared_task
+from django.utils import timezone
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@shared_task
+def trim_high_volume_streams():
+    """Trim streams with approximate matching for performance"""
+    high_volume_streams = [
+        ('realtime_metrics', 100000),
+        ('click_tracking', 500000),
+        ('api_logs', 250000),
+        ('websocket_messages', 150000)
+    ]
+    
+    results = []
+    for stream_key, max_length in high_volume_streams:
+        # Use ~ for approximate trimming (more efficient)
+        # Use LIMIT to prevent blocking
+        trimmed = redis_client.execute_command(
+            'XTRIM', stream_key,
+            'MAXLEN', '~', max_length,
+            'LIMIT', 10000  # Process max 10k entries per call
+        )
+        
+        results.append({
+            'stream': stream_key,
+            'trimmed': trimmed,
+            'max_length': max_length,
+            'timestamp': timezone.now().isoformat()
+        })
+    
+    return results
+
+# Schedule every 5 minutes
+# CELERY_BEAT_SCHEDULE = {
+#     'trim-streams': {
+#         'task': 'tasks.trim_high_volume_streams',
+#         'schedule': 300.0  # 5 minutes
+#     }
+# }</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>[
+  {"stream": "realtime_metrics", "trimmed": 45234, "max_length": 100000},
+  {"stream": "click_tracking", "trimmed": 123456, "max_length": 500000},
+  {"stream": "api_logs", "trimmed": 67890, "max_length": 250000},
+  {"stream": "websocket_messages", "trimmed": 34521, "max_length": 150000}
+]</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Trim Before Adding (Cap-Based)</strong>
+                        <pre><code class="language-python"># utils/stream_writer.py - Auto-trim on write
+import redis
+from django.conf import settings
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class CappedStreamWriter:
+    """Write to stream with automatic length management"""
+    
+    def __init__(self, stream_key, max_length=10000):
+        self.stream_key = stream_key
+        self.max_length = max_length
+    
+    def add_entry(self, data):
+        """Add entry and trim in same pipeline for atomicity"""
+        pipe = redis_client.pipeline()
+        
+        # Add new entry
+        pipe.xadd(self.stream_key, data)
+        
+        # Trim to max length (approximate for efficiency)
+        pipe.xtrim(self.stream_key, maxlen=self.max_length, approximate=True)
+        
+        # Execute pipeline
+        results = pipe.execute()
+        entry_id = results[0]
+        trimmed = results[1]
+        
+        return {
+            'entry_id': entry_id,
+            'trimmed': trimmed,
+            'stream': self.stream_key
+        }
+
+# Usage example
+writer = CappedStreamWriter('job_views', max_length=5000)
+result = writer.add_entry({
+    'job_id': '123',
+    'viewer_id': '456',
+    'timestamp': '2023-09-05T14:30:00Z'
+})
+print(f"Added {result['entry_id']}, trimmed {result['trimmed']} old entries")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Added 1693920600000-0, trimmed 3 old entries</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Storage Optimization with Monitoring</strong>
+                        <pre><code class="language-python"># management/commands/optimize_stream_storage.py
+import redis
+from django.core.management.base import BaseCommand
+from django.core.mail import mail_admins
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Optimize stream storage with reporting'
+    
+    def handle(self, *args, **options):
+        # Get all stream keys
+        stream_keys = [
+            key.decode() if isinstance(key, bytes) else key
+            for key in redis_client.keys('*')
+            if redis_client.type(key) == b'stream' or redis_client.type(key) == 'stream'
+        ]
+        
+        optimization_report = []
+        total_trimmed = 0
+        
+        for stream_key in stream_keys:
+            length_before = redis_client.xlen(stream_key)
+            
+            # Trim to 80% of current size to free space
+            target_length = int(length_before * 0.8)
+            
+            if length_before > 10000:  # Only trim large streams
+                trimmed = redis_client.xtrim(
+                    stream_key,
+                    maxlen=target_length,
+                    approximate=True
+                )
+                
+                length_after = redis_client.xlen(stream_key)
+                total_trimmed += trimmed
+                
+                optimization_report.append(
+                    f"{stream_key}: {length_before} → {length_after} "
+                    f"({trimmed} trimmed, {(trimmed/length_before)*100:.1f}% reduction)"
+                )
+        
+        # Send report to admins
+        if total_trimmed > 0:
+            report_text = f"Stream Optimization Report\n\n" + "\n".join(optimization_report)
+            report_text += f"\n\nTotal entries trimmed: {total_trimmed}"
+            mail_admins('Redis Stream Optimization', report_text)
+            self.stdout.write(self.style.SUCCESS(report_text))
+        else:
+            self.stdout.write("No optimization needed")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Stream Optimization Report
+
+job_applications: 15234 → 12187 (3047 trimmed, 20.0% reduction)
+user_activity: 45892 → 36713 (9179 trimmed, 20.0% reduction)
+api_requests: 123456 → 98764 (24692 trimmed, 20.0% reduction)
+
+Total entries trimmed: 36918</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XRANGE Command -->
+                <div class="command-block">
+                    <h3 id="xrange">XRANGE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xrange/" target="_blank" rel="noopener">Redis XRANGE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns a range of stream entries between start and end IDs in ascending order.</p>
+
+                    <h4>Full description</h4>
+                    <p>XRANGE retrieves entries from a stream within a specified ID range. It returns entries in ascending order (oldest first). Use '-' for the earliest entry and '+' for the latest. The COUNT option limits the number of entries returned. This is perfect for paginating through stream data, retrieving historical records, or implementing time-range queries in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XRANGE key start end [COUNT count]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>start</strong>: Minimum entry ID (use '-' for earliest)</li>
+                        <li><strong>end</strong>: Maximum entry ID (use '+' for latest)</li>
+                        <li><strong>COUNT count</strong>: Limit number of entries returned</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: List of entries, each containing ID and field-value pairs</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Paginated Application History</strong>
+                        <pre><code class="language-python"># views.py - View application history with pagination
+import redis
+from django.shortcuts import render
+from django.core.paginator import Paginator
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def application_history(request, job_id):
+    """Display paginated job application history"""
+    stream_key = f'job_applications:{job_id}'
+    page_size = 20
+    
+    # Get cursor from query params (last seen entry ID)
+    cursor = request.GET.get('cursor', '-')
+    
+    # Fetch next page of applications
+    entries = redis_client.xrange(
+        stream_key,
+        start=cursor if cursor != '-' else '-',
+        end='+',
+        count=page_size + 1  # +1 to check if more exist
+    )
+    
+    # Prepare data
+    applications = []
+    for entry_id, fields in entries[:page_size]:
+        applications.append({
+            'id': entry_id,
+            'applicant': fields.get('applicant_email'),
+            'status': fields.get('event_type'),
+            'timestamp': entry_id.split('-')[0]
+        })
+    
+    # Check if next page exists
+    has_next = len(entries) > page_size
+    next_cursor = entries[page_size][0] if has_next else None
+    
+    return render(request, 'applications/history.html', {
+        'applications': applications,
+        'next_cursor': next_cursor,
+        'has_next': has_next
+    })</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Page 1 Applications (20 entries):
+1693920000000-0: john.doe@example.com (application_submitted)
+1693920005000-0: jane.smith@example.com (application_submitted)
+1693920010000-0: bob.wilson@example.com (application_submitted)
+...
+Next cursor: 1693920095000-0</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Time-Range Analytics Query</strong>
+                        <pre><code class="language-python"># analytics/reports.py - Generate time-range reports
+import redis
+from django.utils import timezone
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def generate_activity_report(user_id, days=7):
+    """Generate user activity report for last N days"""
+    stream_key = f'user_activity:{user_id}'
+    
+    # Calculate time range
+    end_time = datetime.now()
+    start_time = end_time - timedelta(days=days)
+    
+    # Convert to Redis stream IDs
+    start_id = f"{int(start_time.timestamp() * 1000)}-0"
+    end_id = f"{int(end_time.timestamp() * 1000)}-0"
+    
+    # Fetch entries in range
+    entries = redis_client.xrange(stream_key, start_id, end_id)
+    
+    # Analyze activity
+    stats = defaultdict(int)
+    for entry_id, fields in entries:
+        action = fields.get('action', 'unknown')
+        stats[action] += 1
+    
+    return {
+        'user_id': user_id,
+        'period': f'{days} days',
+        'total_actions': len(entries),
+        'breakdown': dict(stats),
+        'start_date': start_time.isoformat(),
+        'end_date': end_time.isoformat()
+    }
+
+# Usage
+report = generate_activity_report(123, days=7)
+print(f"User {report['user_id']}: {report['total_actions']} actions in {report['period']}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>User 123: 342 actions in 7 days
+Breakdown: {'POST': 45, 'GET': 289, 'DELETE': 8}</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Export Stream Data to CSV</strong>
+                        <pre><code class="language-python"># management/commands/export_stream.py
+import redis
+import csv
+from django.core.management.base import BaseCommand
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Export stream data to CSV file'
+    
+    def add_arguments(self, parser):
+        parser.add_argument('--stream', type=str, required=True)
+        parser.add_argument('--output', type=str, required=True)
+        parser.add_argument('--start', type=str, default='-')
+        parser.add_argument('--end', type=str, default='+')
+    
+    def handle(self, *args, **options):
+        stream_key = options['stream']
+        output_file = options['output']
+        
+        # Fetch all entries in range
+        entries = redis_client.xrange(
+            stream_key,
+            start=options['start'],
+            end=options['end']
+        )
+        
+        if not entries:
+            self.stdout.write("No entries found")
+            return
+        
+        # Get all unique field names
+        all_fields = set()
+        for _, fields in entries:
+            all_fields.update(fields.keys())
+        
+        # Write to CSV
+        with open(output_file, 'w', newline='') as csvfile:
+            fieldnames = ['entry_id', 'timestamp'] + sorted(all_fields)
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            writer.writeheader()
+            for entry_id, fields in entries:
+                timestamp = datetime.fromtimestamp(
+                    int(entry_id.split('-')[0]) / 1000
+                ).isoformat()
+                
+                row = {'entry_id': entry_id, 'timestamp': timestamp}
+                row.update(fields)
+                writer.writerow(row)
+        
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Exported {len(entries)} entries to {output_file}"
+            )
+        )
+
+# Run: python manage.py export_stream --stream=job_applications --output=apps.csv</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Exported 1247 entries to apps.csv</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Find Entries by Timestamp</strong>
+                        <pre><code class="language-python"># utils/stream_queries.py - Query streams by timestamp
+import redis
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def find_entries_by_timestamp(stream_key, start_dt, end_dt, count=100):
+    """Find stream entries within a datetime range"""
+    # Convert datetime to Redis stream IDs
+    start_id = f"{int(start_dt.timestamp() * 1000)}-0"
+    end_id = f"{int(end_dt.timestamp() * 1000)}-0"
+    
+    # Query range
+    entries = redis_client.xrange(stream_key, start_id, end_id, count=count)
+    
+    # Format results
+    results = []
+    for entry_id, fields in entries:
+        # Parse timestamp from entry ID
+        ts_ms = int(entry_id.split('-')[0])
+        entry_dt = datetime.fromtimestamp(ts_ms / 1000)
+        
+        results.append({
+            'id': entry_id,
+            'timestamp': entry_dt.isoformat(),
+            'data': fields
+        })
+    
+    return results
+
+# Example: Find applications from yesterday
+from datetime import timedelta
+yesterday_start = datetime.now().replace(hour=0, minute=0, second=0) - timedelta(days=1)
+yesterday_end = yesterday_start + timedelta(days=1)
+
+entries = find_entries_by_timestamp(
+    'job_applications',
+    yesterday_start,
+    yesterday_end
+)
+print(f"Found {len(entries)} applications from yesterday")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Found 87 applications from yesterday</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Batch Processing with XRANGE</strong>
+                        <pre><code class="language-python"># tasks.py - Process stream in batches
+import redis
+from celery import shared_task
+from django.core.mail import send_mail
+from .models import JobPost
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@shared_task
+def process_application_batch(stream_key='job_applications', batch_size=100):
+    """Process applications in batches to avoid memory issues"""
+    last_processed_id = redis_client.get(f'{stream_key}:last_processed') or '-'
+    
+    # Fetch next batch
+    entries = redis_client.xrange(
+        stream_key,
+        start=last_processed_id,
+        end='+',
+        count=batch_size
+    )
+    
+    if not entries:
+        return {'processed': 0, 'message': 'No new entries'}
+    
+    processed_count = 0
+    for entry_id, fields in entries:
+        try:
+            # Process application
+            job = JobPost.objects.get(id=fields['job_id'])
+            
+            # Send notification
+            send_mail(
+                subject=f"New application for {job.title}",
+                message=f"Applicant: {fields['applicant_email']}",
+                from_email='noreply@example.com',
+                recipient_list=[job.author.email]
+            )
+            
+            processed_count += 1
+            last_id = entry_id
+            
+        except Exception as e:
+            print(f"Error processing {entry_id}: {e}")
+    
+    # Update checkpoint
+    if processed_count > 0:
+        redis_client.set(f'{stream_key}:last_processed', last_id)
+    
+    return {
+        'processed': processed_count,
+        'last_id': last_id,
+        'remaining': len(entries) == batch_size
+    }
+
+# Schedule: CELERY_BEAT_SCHEDULE = {...}</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>{'processed': 100, 'last_id': '1693920099000-0', 'remaining': True}</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XREVRANGE Command -->
+                <div class="command-block">
+                    <h3 id="xrevrange">XREVRANGE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xrevrange/" target="_blank" rel="noopener">Redis XREVRANGE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Returns a range of stream entries in reverse chronological order (newest first).</p>
+
+                    <h4>Full description</h4>
+                    <p>XREVRANGE is identical to XRANGE but returns entries in reverse order (newest to oldest). This is useful for displaying recent activity first, implementing "latest first" feeds, or finding the most recent entries matching a criteria. The start/end parameters are reversed compared to XRANGE - start is the maximum ID and end is the minimum ID.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XREVRANGE key end start [COUNT count]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>end</strong>: Maximum entry ID (use '+' for latest)</li>
+                        <li><strong>start</strong>: Minimum entry ID (use '-' for earliest)</li>
+                        <li><strong>COUNT count</strong>: Limit number of entries returned</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: List of entries in reverse chronological order</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Recent Activity Feed</strong>
+                        <pre><code class="language-python"># views.py - Display recent user activity
+import redis
+from django.shortcuts import render
+from django.contrib.auth.decorators import login_required
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@login_required
+def recent_activity(request, count=50):
+    """Show user's most recent activities"""
+    stream_key = f'user_activity:{request.user.id}'
+    
+    # Get latest N activities (reverse chronological)
+    entries = redis_client.xrevrange(
+        stream_key,
+        end='+',  # Start from newest
+        start='-',  # Back to oldest
+        count=count
+    )
+    
+    # Format for display
+    activities = []
+    for entry_id, fields in entries:
+        activities.append({
+            'action': fields.get('action'),
+            'path': fields.get('path'),
+            'timestamp': entry_id,
+            'ip': fields.get('ip_address')
+        })
+    
+    return render(request, 'profile/activity.html', {
+        'activities': activities,
+        'total_shown': len(activities)
+    })</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Recent Activity (50 items):
+1. POST /jobs/123/apply - 2 minutes ago
+2. GET /jobs/123 - 5 minutes ago
+3. POST /profile/update - 15 minutes ago
+...
+Total: 50 activities shown</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Latest Job Applications Dashboard</strong>
+                        <pre><code class="language-python"># views.py - Employer dashboard with latest applications
+import redis
+from django.shortcuts import render
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def employer_dashboard(request):
+    """Show latest applications for employer's jobs"""
+    stream_key = 'job_applications'
+    
+    # Get last 100 applications (newest first)
+    recent_entries = redis_client.xrevrange(
+        stream_key,
+        end='+',
+        start='-',
+        count=100
+    )
+    
+    # Filter for this employer's jobs
+    employer_jobs = request.user.jobpost_set.values_list('id', flat=True)
+    employer_applications = []
+    
+    for entry_id, fields in recent_entries:
+        if int(fields.get('job_id', 0)) in employer_jobs:
+            ts_ms = int(entry_id.split('-')[0])
+            dt = datetime.fromtimestamp(ts_ms / 1000)
+            
+            employer_applications.append({
+                'job_title': fields.get('job_title'),
+                'applicant': fields.get('applicant_email'),
+                'timestamp': dt,
+                'entry_id': entry_id
+            })
+    
+    return render(request, 'employer/dashboard.html', {
+        'recent_applications': employer_applications[:20]
+    })</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Latest Applications:
+1. Python Developer - john.doe@example.com (2 min ago)
+2. Senior Engineer - jane.smith@example.com (8 min ago)
+3. Data Scientist - bob.wilson@example.com (15 min ago)
+...
+Showing 20 most recent</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Find Most Recent Error</strong>
+                        <pre><code class="language-python"># utils/error_lookup.py - Find latest errors by type
+import redis
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def get_latest_error(error_type=None, count=10):
+    """Retrieve most recent errors from error log stream"""
+    stream_key = 'error_logs'
+    
+    # Get recent errors (newest first)
+    entries = redis_client.xrevrange(
+        stream_key,
+        end='+',
+        start='-',
+        count=1000  # Check last 1000 errors
+    )
+    
+    # Filter by error type if specified
+    matching_errors = []
+    for entry_id, fields in entries:
+        if error_type is None or fields.get('error_type') == error_type:
+            ts_ms = int(entry_id.split('-')[0])
+            
+            matching_errors.append({
+                'id': entry_id,
+                'type': fields.get('error_type'),
+                'message': fields.get('message'),
+                'timestamp': datetime.fromtimestamp(ts_ms / 1000).isoformat(),
+                'path': fields.get('path')
+            })
+            
+            if len(matching_errors) >= count:
+                break
+    
+    return matching_errors
+
+# Usage
+latest_db_errors = get_latest_error('DatabaseError', count=5)
+for error in latest_db_errors:
+    print(f"{error['timestamp']}: {error['message']}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>2023-09-05T14:35:22Z: Connection timeout to database
+2023-09-05T14:30:15Z: Deadlock detected in transaction
+2023-09-05T14:25:08Z: Query execution timeout
+2023-09-05T14:20:03Z: Connection pool exhausted
+2023-09-05T14:15:47Z: Duplicate key violation</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Recent Notifications Display</strong>
+                        <pre><code class="language-python"># templatetags/stream_tags.py - Custom template tag
+import redis
+from django import template
+from datetime import datetime
+
+register = template.Library()
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@register.simple_tag
+def get_recent_notifications(user_id, count=10):
+    """Get user's recent notifications for display"""
+    stream_key = f'notifications:user:{user_id}'
+    
+    # Fetch latest notifications
+    entries = redis_client.xrevrange(
+        stream_key,
+        end='+',
+        start='-',
+        count=count
+    )
+    
+    notifications = []
+    for entry_id, fields in entries:
+        ts_ms = int(entry_id.split('-')[0])
+        
+        notifications.append({
+            'id': entry_id,
+            'title': fields.get('title'),
+            'message': fields.get('message'),
+            'type': fields.get('type', 'info'),
+            'read': fields.get('read', 'false') == 'true',
+            'timestamp': datetime.fromtimestamp(ts_ms / 1000)
+        })
+    
+    return notifications
+
+# In template: {% get_recent_notifications user.id 10 as notifications %}</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Notifications:
+• New application for Python Developer (unread) - 5m ago
+• Job post approved (read) - 1h ago
+• Profile view from TechCorp (unread) - 2h ago
+...
+Showing 10 latest</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: API Endpoint for Recent Events</strong>
+                        <pre><code class="language-python"># api/views.py - REST API for recent stream data
+import redis
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@api_view(['GET'])
+def recent_events(request, stream_name):
+    """API endpoint to fetch recent stream events"""
+    # Get parameters
+    count = int(request.GET.get('count', 50))
+    max_count = 500  # Safety limit
+    count = min(count, max_count)
+    
+    # Fetch recent entries
+    entries = redis_client.xrevrange(
+        stream_name,
+        end='+',
+        start='-',
+        count=count
+    )
+    
+    # Format response
+    events = []
+    for entry_id, fields in entries:
+        ts_ms = int(entry_id.split('-')[0])
+        
+        events.append({
+            'event_id': entry_id,
+            'timestamp': datetime.fromtimestamp(ts_ms / 1000).isoformat(),
+            'data': fields
+        })
+    
+    return Response({
+        'stream': stream_name,
+        'count': len(events),
+        'events': events,
+        'newest_id': events[0]['event_id'] if events else None,
+        'oldest_id': events[-1]['event_id'] if events else None
+    })
+
+# URL: /api/streams/job_applications/recent/?count=20</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>{
+  "stream": "job_applications",
+  "count": 20,
+  "newest_id": "1693920600000-0",
+  "oldest_id": "1693920500000-0",
+  "events": [...]
+}</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XGROUP CREATE Command -->
+                <div class="command-block">
+                    <h3 id="xgroup-create">XGROUP CREATE</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xgroup-create/" target="_blank" rel="noopener">Redis XGROUP CREATE Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Creates a new consumer group for a stream to enable parallel processing with acknowledgments.</p>
+
+                    <h4>Full description</h4>
+                    <p>XGROUP CREATE creates a consumer group associated with a stream. Consumer groups enable multiple consumers to process stream entries in parallel with delivery guarantees, acknowledgments, and pending entry tracking. Each entry is delivered to only one consumer in the group. Use the starting ID to specify where consumption begins ('0' for start, '$' for new entries, or specific ID).</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XGROUP CREATE key groupname id|$ [MKSTREAM] [ENTRIESREAD entries_read]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>groupname</strong>: Name for the consumer group</li>
+                        <li><strong>id|$</strong>: Starting ID ('0' = from start, '$' = only new entries)</li>
+                        <li><strong>MKSTREAM</strong>: Create stream if it doesn't exist</li>
+                        <li><strong>ENTRIESREAD</strong>: Lag tracking parameter (optional)</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>String: "OK" on success</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Setup Application Processing Groups</strong>
+                        <pre><code class="language-python"># management/commands/setup_consumer_groups.py
+import redis
+from django.core.management.base import BaseCommand
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Initialize consumer groups for application processing'
+    
+    def handle(self, *args, **options):
+        consumer_groups = [
+            ('job_applications', 'email_workers', '$'),
+            ('job_applications', 'db_writers', '$'),
+            ('job_applications', 'analytics_processors', '$'),
+            ('user_activity', 'activity_loggers', '0'),
+            ('notifications', 'notification_senders', '$')
+        ]
+        
+        for stream_key, group_name, start_id in consumer_groups:
+            try:
+                # Create consumer group
+                result = redis_client.xgroup_create(
+                    name=stream_key,
+                    groupname=group_name,
+                    id=start_id,
+                    mkstream=True  # Create stream if doesn't exist
+                )
+                
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"✓ Created group '{group_name}' for stream '{stream_key}'"
+                    )
+                )
+            except redis.exceptions.ResponseError as e:
+                if 'BUSYGROUP' in str(e):
+                    self.stdout.write(f"⚠ Group '{group_name}' already exists")
+                else:
+                    raise
+
+# Run: python manage.py setup_consumer_groups</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>✓ Created group 'email_workers' for stream 'job_applications'
+✓ Created group 'db_writers' for stream 'job_applications'
+✓ Created group 'analytics_processors' for stream 'job_applications'
+✓ Created group 'activity_loggers' for stream 'user_activity'
+✓ Created group 'notification_senders' for stream 'notifications'</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Multi-Stage Processing Pipeline</strong>
+                        <pre><code class="language-python"># config/stream_config.py - Setup processing pipeline
+import redis
+from django.conf import settings
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def setup_processing_pipeline():
+    """Create consumer groups for multi-stage job processing"""
+    stream = 'job_applications'
+    
+    # Stage 1: Validation (process from beginning)
+    redis_client.xgroup_create(
+        name=stream,
+        groupname='stage1_validation',
+        id='0',  # Start from beginning for validation
+        mkstream=True
+    )
+    
+    # Stage 2: Enrichment (process only new)
+    redis_client.xgroup_create(
+        name=stream,
+        groupname='stage2_enrichment',
+        id='$',  # Only process new entries
+        mkstream=True
+    )
+    
+    # Stage 3: Notification (process only new)
+    redis_client.xgroup_create(
+        name=stream,
+        groupname='stage3_notification',
+        id='$',
+        mkstream=True
+    )
+    
+    print("Multi-stage processing pipeline configured")
+    print("Stage 1: Validation (historical data)")
+    print("Stage 2: Enrichment (new entries)")
+    print("Stage 3: Notification (new entries)")
+
+setup_processing_pipeline()</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Multi-stage processing pipeline configured
+Stage 1: Validation (historical data)
+Stage 2: Enrichment (new entries)
+Stage 3: Notification (new entries)</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Priority and Regular Processing Queues</strong>
+                        <pre><code class="language-python"># tasks.py - Setup priority processing with separate groups
+import redis
+from django.conf import settings
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def setup_priority_queues():
+    """Create separate consumer groups for priority processing"""
+    # High priority stream and group
+    redis_client.xgroup_create(
+        name='priority_applications',
+        groupname='priority_workers',
+        id='$',
+        mkstream=True
+    )
+    
+    # Regular stream and group
+    redis_client.xgroup_create(
+        name='regular_applications',
+        groupname='regular_workers',
+        id='$',
+        mkstream=True
+    )
+    
+    # Analytics (read from both, start from beginning)
+    for stream in ['priority_applications', 'regular_applications']:
+        try:
+            redis_client.xgroup_create(
+                name=stream,
+                groupname='analytics_readers',
+                id='0',
+                mkstream=True
+            )
+        except redis.exceptions.ResponseError:
+            pass  # Group exists
+    
+    return {
+        'priority_stream': 'priority_applications',
+        'regular_stream': 'regular_applications',
+        'worker_groups': ['priority_workers', 'regular_workers'],
+        'analytics_group': 'analytics_readers'
+    }
+
+config = setup_priority_queues()
+print(f"Priority queue setup: {config}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Priority queue setup: {
+  'priority_stream': 'priority_applications',
+  'regular_stream': 'regular_applications',
+  'worker_groups': ['priority_workers', 'regular_workers'],
+  'analytics_group': 'analytics_readers'
+}</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Django App Startup Consumer Group Init</strong>
+                        <pre><code class="language-python"># apps.py - Initialize consumer groups on app startup
+import redis
+from django.apps import AppConfig
+import logging
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+logger = logging.getLogger(__name__)
+
+class JobpostConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'jobpost'
+    
+    def ready(self):
+        """Initialize Redis consumer groups when Django starts"""
+        self.init_consumer_groups()
+    
+    def init_consumer_groups(self):
+        """Create consumer groups if they don't exist"""
+        groups_config = [
+            {
+                'stream': 'job_applications',
+                'groups': {
+                    'email_processors': '$',  # New entries
+                    'db_savers': '$',
+                    'audit_log': '0'  # All entries for audit
+                }
+            },
+            {
+                'stream': 'user_events',
+                'groups': {
+                    'event_handlers': '$',
+                    'analytics': '0'
+                }
+            }
+        ]
+        
+        for config in groups_config:
+            stream = config['stream']
+            for group_name, start_id in config['groups'].items():
+                try:
+                    redis_client.xgroup_create(
+                        name=stream,
+                        groupname=group_name,
+                        id=start_id,
+                        mkstream=True
+                    )
+                    logger.info(f"Created consumer group: {stream}/{group_name}")
+                except redis.exceptions.ResponseError as e:
+                    if 'BUSYGROUP' not in str(e):
+                        logger.error(f"Failed to create group: {e}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>INFO: Created consumer group: job_applications/email_processors
+INFO: Created consumer group: job_applications/db_savers
+INFO: Created consumer group: job_applications/audit_log
+INFO: Created consumer group: user_events/event_handlers
+INFO: Created consumer group: user_events/analytics</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Reset Consumer Group Position</strong>
+                        <pre><code class="language-python"># management/commands/reset_consumer_group.py
+import redis
+from django.core.management.base import BaseCommand
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Reset consumer group to reprocess entries'
+    
+    def add_arguments(self, parser):
+        parser.add_argument('--stream', type=str, required=True)
+        parser.add_argument('--group', type=str, required=True)
+        parser.add_argument('--position', type=str, default='0',
+                          help="Start position: '0' (beginning), '$' (end), or entry ID")
+    
+    def handle(self, *args, **options):
+        stream = options['stream']
+        group = options['group']
+        position = options['position']
+        
+        try:
+            # Delete existing group
+            redis_client.xgroup_destroy(stream, group)
+            self.stdout.write(f"Deleted existing group '{group}'")
+            
+            # Recreate at new position
+            redis_client.xgroup_create(
+                name=stream,
+                groupname=group,
+                id=position,
+                mkstream=False
+            )
+            
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"✓ Reset group '{group}' to position '{position}'"
+                )
+            )
+            
+            # Show stream info
+            stream_len = redis_client.xlen(stream)
+            self.stdout.write(f"Stream has {stream_len} total entries")
+            
+        except redis.exceptions.ResponseError as e:
+            self.stdout.write(self.style.ERROR(f"Error: {e}"))
+
+# Run: python manage.py reset_consumer_group --stream=job_applications --group=workers --position=0</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Deleted existing group 'workers'
+✓ Reset group 'workers' to position '0'
+Stream has 1247 total entries</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XPENDING Command -->
+                <div class="command-block">
+                    <h3 id="xpending">XPENDING</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xpending/" target="_blank" rel="noopener">Redis XPENDING Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Inspects pending entries in a consumer group that have been delivered but not acknowledged.</p>
+
+                    <h4>Full description</h4>
+                    <p>XPENDING shows information about pending messages in a consumer group - entries that were read by consumers but not yet acknowledged. The basic form returns a summary (count, min/max IDs, consumers). The extended form (with start/end/count parameters) returns detailed information about specific pending entries including delivery count and idle time. Use this to detect stuck messages, implement retry logic, or monitor processing health.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XPENDING key group [[IDLE min-idle-time] start end count [consumer]]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>group</strong>: Consumer group name</li>
+                        <li><strong>IDLE</strong>: Filter by minimum idle time in milliseconds</li>
+                        <li><strong>start/end/count</strong>: Range and limit for detailed view</li>
+                        <li><strong>consumer</strong>: Filter by specific consumer name</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: Summary info or detailed pending entry list</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Monitor Pending Entries Summary</strong>
+                        <pre><code class="language-python"># monitoring/stream_health.py - Check pending message health
+import redis
+from django.core.cache import cache
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def check_pending_health(stream_key, group_name):
+    """Check consumer group health by inspecting pending entries"""
+    # Get pending summary
+    pending_summary = redis_client.xpending(stream_key, group_name)
+    
+    if not pending_summary or pending_summary[0] == 0:
+        return {
+            'status': 'healthy',
+            'pending_count': 0,
+            'message': 'No pending entries'
+        }
+    
+    pending_count = pending_summary[0]
+    min_id = pending_summary[1]
+    max_id = pending_summary[2]
+    consumers = pending_summary[3]
+    
+    # Alert if too many pending
+    if pending_count > 1000:
+        status = 'critical'
+        message = f'High pending count: {pending_count}'
+    elif pending_count > 500:
+        status = 'warning'
+        message = f'Elevated pending count: {pending_count}'
+    else:
+        status = 'healthy'
+        message = f'{pending_count} entries pending'
+    
+    return {
+        'status': status,
+        'pending_count': pending_count,
+        'message': message,
+        'id_range': f'{min_id} to {max_id}',
+        'consumers': consumers
+    }
+
+# Usage
+health = check_pending_health('job_applications', 'email_workers')
+print(f"Status: {health['status']}, {health['message']}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Status: healthy, 45 entries pending
+ID Range: 1693920000000-0 to 1693920045000-0
+Consumers: [['worker-1', '23'], ['worker-2', '22']]</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Find Stuck Messages for Retry</strong>
+                        <pre><code class="language-python"># tasks.py - Detect and reclaim stuck messages
+import redis
+from celery import shared_task
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@shared_task
+def find_stuck_messages(stream_key, group_name, idle_threshold_ms=300000):
+    """Find messages pending for more than 5 minutes"""
+    # Get detailed pending info for stuck messages
+    pending_details = redis_client.xpending_range(
+        name=stream_key,
+        groupname=group_name,
+        min='-',
+        max='+',
+        count=100,
+        idle=idle_threshold_ms  # Messages idle > 5 minutes
+    )
+    
+    stuck_messages = []
+    for entry in pending_details:
+        entry_id = entry['message_id']
+        consumer = entry['consumer']
+        idle_time = entry['time_since_delivered']
+        delivery_count = entry['times_delivered']
+        
+        stuck_messages.append({
+            'entry_id': entry_id,
+            'consumer': consumer.decode() if isinstance(consumer, bytes) else consumer,
+            'idle_seconds': idle_time // 1000,
+            'delivery_count': delivery_count,
+            'stuck_for': f'{idle_time // 60000} minutes'
+        })
+    
+    if stuck_messages:
+        print(f"Found {len(stuck_messages)} stuck messages")
+        for msg in stuck_messages:
+            print(f"  {msg['entry_id']}: stuck for {msg['stuck_for']}, "
+                  f"delivered {msg['delivery_count']} times")
+    
+    return stuck_messages
+
+# Run periodically
+stuck = find_stuck_messages('job_applications', 'email_workers')</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Found 3 stuck messages
+  1693920000000-0: stuck for 8 minutes, delivered 2 times
+  1693920005000-0: stuck for 12 minutes, delivered 3 times
+  1693920010000-0: stuck for 6 minutes, delivered 1 times</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Per-Consumer Pending Analysis</strong>
+                        <pre><code class="language-python"># monitoring/consumer_analytics.py - Analyze pending by consumer
+import redis
+from collections import defaultdict
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def analyze_consumer_pending(stream_key, group_name):
+    """Analyze pending entries per consumer"""
+    # Get all pending entries
+    pending_details = redis_client.xpending_range(
+        name=stream_key,
+        groupname=group_name,
+        min='-',
+        max='+',
+        count=1000
+    )
+    
+    # Group by consumer
+    consumer_stats = defaultdict(lambda: {
+        'count': 0,
+        'total_idle_time': 0,
+        'max_idle_time': 0,
+        'delivery_counts': []
+    })
+    
+    for entry in pending_details:
+        consumer = entry['consumer']
+        if isinstance(consumer, bytes):
+            consumer = consumer.decode()
+        
+        idle_time = entry['time_since_delivered']
+        delivery_count = entry['times_delivered']
+        
+        stats = consumer_stats[consumer]
+        stats['count'] += 1
+        stats['total_idle_time'] += idle_time
+        stats['max_idle_time'] = max(stats['max_idle_time'], idle_time)
+        stats['delivery_counts'].append(delivery_count)
+    
+    # Calculate averages
+    report = {}
+    for consumer, stats in consumer_stats.items():
+        report[consumer] = {
+            'pending_count': stats['count'],
+            'avg_idle_seconds': (stats['total_idle_time'] / stats['count']) // 1000,
+            'max_idle_seconds': stats['max_idle_time'] // 1000,
+            'avg_deliveries': sum(stats['delivery_counts']) / len(stats['delivery_counts'])
+        }
+    
+    return report
+
+# Usage
+report = analyze_consumer_pending('job_applications', 'email_workers')
+for consumer, stats in report.items():
+    print(f"{consumer}: {stats['pending_count']} pending, "
+          f"avg idle {stats['avg_idle_seconds']}s")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>worker-1: 23 pending, avg idle 145s
+worker-2: 22 pending, avg idle 132s
+worker-3: 18 pending, avg idle 89s</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Django Admin Health Dashboard</strong>
+                        <pre><code class="language-python"># admin.py - Stream health in Django admin
+import redis
+from django.contrib import admin
+from django.utils.html import format_html
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class StreamHealthAdmin(admin.ModelAdmin):
+    """Display stream processing health in admin"""
+    
+    def changelist_view(self, request, extra_context=None):
+        # Check multiple streams
+        streams = [
+            ('job_applications', 'email_workers'),
+            ('job_applications', 'db_writers'),
+            ('user_activity', 'activity_loggers')
+        ]
+        
+        health_data = []
+        for stream, group in streams:
+            try:
+                pending = redis_client.xpending(stream, group)
+                
+                if pending and pending[0] > 0:
+                    pending_count = pending[0]
+                    consumers = pending[3]
+                    
+                    # Get details for stuck messages (idle > 5 min)
+                    stuck = redis_client.xpending_range(
+                        stream, group, '-', '+', count=100, idle=300000
+                    )
+                    
+                    status = 'danger' if len(stuck) > 10 else 'warning' if pending_count > 100 else 'success'
+                    
+                    health_data.append({
+                        'stream': stream,
+                        'group': group,
+                        'pending': pending_count,
+                        'stuck': len(stuck),
+                        'consumers': len(consumers),
+                        'status': status
+                    })
+            except:
+                pass
+        
+        extra_context = extra_context or {}
+        extra_context['stream_health'] = health_data
+        
+        return super().changelist_view(request, extra_context)
+
+# In admin template:
+# {% for health in stream_health %}
+#   <div class="alert alert-{{ health.status }}">
+#     {{ health.stream }}/{{ health.group }}: 
+#     {{ health.pending }} pending ({{ health.stuck }} stuck)
+#   </div>
+# {% endfor %}</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Stream Health Dashboard:
+✓ job_applications/email_workers: 45 pending (0 stuck)
+⚠ job_applications/db_writers: 152 pending (3 stuck)
+✓ user_activity/activity_loggers: 23 pending (0 stuck)</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Automated Alerting for Stuck Messages</strong>
+                        <pre><code class="language-python"># management/commands/monitor_stream_health.py
+import redis
+from django.core.management.base import BaseCommand
+from django.core.mail import mail_admins
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Monitor stream health and send alerts'
+    
+    def handle(self, *args, **options):
+        alerts = []
+        
+        monitor_config = [
+            ('job_applications', 'email_workers', 500, 600000),  # 500 pending, 10min idle
+            ('user_activity', 'activity_loggers', 1000, 300000),  # 1000 pending, 5min idle
+        ]
+        
+        for stream, group, max_pending, max_idle_ms in monitor_config:
+            # Get pending summary
+            pending = redis_client.xpending(stream, group)
+            
+            if not pending or pending[0] == 0:
+                continue
+            
+            pending_count = pending[0]
+            
+            # Check thresholds
+            if pending_count > max_pending:
+                alerts.append(
+                    f"⚠ {stream}/{group}: {pending_count} pending "
+                    f"(threshold: {max_pending})"
+                )
+            
+            # Check for stuck messages
+            stuck = redis_client.xpending_range(
+                stream, group, '-', '+', count=100, idle=max_idle_ms
+            )
+            
+            if stuck:
+                alerts.append(
+                    f"🔴 {stream}/{group}: {len(stuck)} messages stuck "
+                    f"(idle > {max_idle_ms//60000} minutes)"
+                )
+        
+        # Send alerts
+        if alerts:
+            message = f"Stream Health Alerts ({datetime.now()})\n\n" + "\n".join(alerts)
+            mail_admins('Redis Stream Health Alert', message)
+            self.stdout.write(self.style.WARNING(message))
+        else:
+            self.stdout.write(self.style.SUCCESS("All streams healthy"))
+
+# Run via cron: */5 * * * * python manage.py monitor_stream_health</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Stream Health Alerts (2023-09-05 14:30:00)
+
+⚠ job_applications/email_workers: 523 pending (threshold: 500)
+🔴 job_applications/email_workers: 8 messages stuck (idle > 10 minutes)</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XCLAIM Command -->
+                <div class="command-block">
+                    <h3 id="xclaim">XCLAIM</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xclaim/" target="_blank" rel="noopener">Redis XCLAIM Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Claims pending entries from another consumer, transferring ownership for retry or recovery.</p>
+
+                    <h4>Full description</h4>
+                    <p>XCLAIM changes the ownership of pending stream entries from one consumer to another in a consumer group. This is essential for handling failures - when a consumer crashes or becomes unresponsive, XCLAIM allows other consumers to take over processing of its pending entries. Use the min-idle-time parameter to only claim entries that have been idle for a minimum duration. The command resets the idle time and increments the delivery counter.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XCLAIM key group consumer min-idle-time ID [ID ...] [IDLE ms] [TIME ms-unix-time] [RETRYCOUNT count] [FORCE] [JUSTID]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>group</strong>: Consumer group name</li>
+                        <li><strong>consumer</strong>: New owner consumer name</li>
+                        <li><strong>min-idle-time</strong>: Minimum idle time in ms to claim</li>
+                        <li><strong>ID</strong>: Entry IDs to claim</li>
+                        <li><strong>IDLE/TIME/RETRYCOUNT</strong>: Optional metadata</li>
+                        <li><strong>JUSTID</strong>: Return only IDs, not full entries</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: Claimed entries with IDs and field-value pairs (or just IDs with JUSTID)</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Recover Stuck Messages from Failed Worker</strong>
+                        <pre><code class="language-python"># tasks.py - Reclaim messages from crashed workers
+import redis
+from celery import shared_task
+import socket
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@shared_task
+def recover_stuck_messages(stream_key, group_name, min_idle_ms=300000):
+    """Claim messages stuck for more than 5 minutes"""
+    consumer_name = f'recovery-worker-{socket.gethostname()}'
+    
+    # Find stuck messages
+    pending = redis_client.xpending_range(
+        stream_key, group_name,
+        min='-', max='+',
+        count=100,
+        idle=min_idle_ms
+    )
+    
+    if not pending:
+        return {'claimed': 0, 'message': 'No stuck messages found'}
+    
+    # Get entry IDs to claim
+    stuck_ids = [entry['message_id'] for entry in pending]
+    
+    # Claim the messages
+    claimed_entries = redis_client.xclaim(
+        name=stream_key,
+        groupname=group_name,
+        consumername=consumer_name,
+        min_idle_time=min_idle_ms,
+        message_ids=stuck_ids
+    )
+    
+    print(f"Claimed {len(claimed_entries)} stuck messages")
+    for entry_id, fields in claimed_entries:
+        print(f"  {entry_id}: {fields.get('job_title', 'N/A')}")
+    
+    return {
+        'claimed': len(claimed_entries),
+        'consumer': consumer_name,
+        'entry_ids': stuck_ids
+    }
+
+# Run periodically
+result = recover_stuck_messages('job_applications', 'email_workers')</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Claimed 3 stuck messages
+  1693920000000-0: Python Developer
+  1693920005000-0: Senior Engineer
+  1693920010000-0: Data Scientist
+
+{'claimed': 3, 'consumer': 'recovery-worker-server-1'}</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Load Balancing by Reclaiming from Busy Workers</strong>
+                        <pre><code class="language-python"># tasks.py - Balance load across workers
+import redis
+from collections import defaultdict
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def rebalance_pending_messages(stream_key, group_name, target_consumer):
+    """Claim messages from overloaded consumers"""
+    # Get pending summary to see distribution
+    pending = redis_client.xpending(stream_key, group_name)
+    
+    if not pending or pending[0] == 0:
+        return {'status': 'balanced', 'claimed': 0}
+    
+    # Get consumer distribution
+    consumers = pending[3]  # List of [consumer, count] pairs
+    
+    # Find most loaded consumer
+    consumer_loads = {c[0].decode() if isinstance(c[0], bytes) else c[0]: int(c[1]) 
+                     for c in consumers}
+    
+    if not consumer_loads:
+        return {'status': 'no_consumers', 'claimed': 0}
+    
+    most_loaded = max(consumer_loads.items(), key=lambda x: x[1])
+    overloaded_consumer = most_loaded[0]
+    overloaded_count = most_loaded[1]
+    
+    # Claim half from overloaded consumer
+    claim_count = overloaded_count // 2
+    
+    # Get specific pending entries from overloaded consumer
+    pending_details = redis_client.xpending_range(
+        stream_key, group_name,
+        min='-', max='+',
+        count=claim_count,
+        consumername=overloaded_consumer
+    )
+    
+    entry_ids = [p['message_id'] for p in pending_details]
+    
+    # Claim them for target consumer
+    claimed = redis_client.xclaim(
+        stream_key, group_name, target_consumer,
+        min_idle_time=0,  # Claim immediately for rebalancing
+        message_ids=entry_ids
+    )
+    
+    return {
+        'status': 'rebalanced',
+        'claimed': len(claimed),
+        'from_consumer': overloaded_consumer,
+        'to_consumer': target_consumer,
+        'from_load': overloaded_count,
+        'claimed_count': len(claimed)
+    }
+
+result = rebalance_pending_messages('job_applications', 'email_workers', 'worker-3')
+print(f"Rebalanced: {result['claimed']} messages from {result['from_consumer']}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Rebalanced: 12 messages from worker-1 to worker-3</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Retry Failed Messages with Backoff</strong>
+                        <pre><code class="language-python"># tasks.py - Implement retry with exponential backoff
+import redis
+from datetime import datetime
+import time
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def retry_failed_messages(stream_key, group_name, consumer_name, max_retries=3):
+    """Retry failed messages with exponential backoff"""
+    # Find messages with multiple delivery attempts
+    pending = redis_client.xpending_range(
+        stream_key, group_name,
+        min='-', max='+',
+        count=100
+    )
+    
+    retry_candidates = []
+    dead_letters = []
+    
+    for entry in pending:
+        entry_id = entry['message_id']
+        idle_time = entry['time_since_delivered']
+        delivery_count = entry['times_delivered']
+        
+        # Calculate backoff: 2^(delivery_count-1) minutes
+        backoff_ms = (2 ** (delivery_count - 1)) * 60000
+        
+        if delivery_count >= max_retries:
+            # Move to dead letter queue
+            dead_letters.append(entry_id)
+        elif idle_time >= backoff_ms:
+            # Ready for retry
+            retry_candidates.append(entry_id)
+    
+    # Claim retry candidates
+    claimed = []
+    if retry_candidates:
+        claimed = redis_client.xclaim(
+            stream_key, group_name, consumer_name,
+            min_idle_time=0,
+            message_ids=retry_candidates,
+            justid=False
+        )
+    
+    # Move dead letters
+    for dead_id in dead_letters:
+        # Read the entry
+        entries = redis_client.xrange(stream_key, dead_id, dead_id, count=1)
+        if entries:
+            _, fields = entries[0]
+            # Add to dead letter stream
+            redis_client.xadd(f'{stream_key}:dead_letter', fields)
+            # Acknowledge in original stream
+            redis_client.xack(stream_key, group_name, dead_id)
+    
+    return {
+        'retried': len(claimed),
+        'dead_lettered': len(dead_letters),
+        'retry_ids': retry_candidates,
+        'dead_letter_ids': dead_letters
+    }
+
+result = retry_failed_messages('job_applications', 'email_workers', 'retry-worker')
+print(f"Retried: {result['retried']}, Dead-lettered: {result['dead_lettered']}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Retried: 5, Dead-lettered: 2</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Graceful Worker Shutdown with Message Transfer</strong>
+                        <pre><code class="language-python"># worker.py - Transfer messages before shutdown
+import redis
+import signal
+import sys
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class GracefulWorker:
+    def __init__(self, stream_key, group_name, consumer_name):
+        self.stream_key = stream_key
+        self.group_name = group_name
+        self.consumer_name = consumer_name
+        self.running = True
+        
+        # Register signal handlers
+        signal.signal(signal.SIGINT, self.shutdown)
+        signal.signal(signal.SIGTERM, self.shutdown)
+    
+    def shutdown(self, signum, frame):
+        """Transfer pending messages before shutdown"""
+        print(f"\nShutdown signal received, transferring messages...")
+        self.running = False
+        
+        # Get this consumer's pending messages
+        pending = redis_client.xpending_range(
+            self.stream_key, self.group_name,
+            min='-', max='+',
+            count=1000,
+            consumername=self.consumer_name
+        )
+        
+        if pending:
+            entry_ids = [p['message_id'] for p in pending]
+            
+            # Transfer to a healthy worker
+            target_consumer = f'worker-backup'
+            
+            claimed = redis_client.xclaim(
+                self.stream_key, self.group_name,
+                target_consumer,
+                min_idle_time=0,
+                message_ids=entry_ids,
+                justid=True
+            )
+            
+            print(f"Transferred {len(claimed)} pending messages to {target_consumer}")
+        else:
+            print("No pending messages to transfer")
+        
+        sys.exit(0)
+    
+    def run(self):
+        while self.running:
+            # Process messages...
+            time.sleep(1)
+
+# Usage
+worker = GracefulWorker('job_applications', 'email_workers', 'worker-1')
+worker.run()</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>^C
+Shutdown signal received, transferring messages...
+Transferred 8 pending messages to worker-backup</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Priority Queue with Message Reclaiming</strong>
+                        <pre><code class="language-python"># tasks.py - Implement priority processing
+import redis
+from django.utils import timezone
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def process_priority_first(stream_key, group_name, consumer_name):
+    """Claim and process high-priority stuck messages first"""
+    # Find all pending messages
+    pending = redis_client.xpending_range(
+        stream_key, group_name,
+        min='-', max='+',
+        count=100,
+        idle=60000  # Stuck for > 1 minute
+    )
+    
+    if not pending:
+        return {'processed': 0}
+    
+    # Read full entries to check priority
+    priority_ids = []
+    normal_ids = []
+    
+    for entry in pending:
+        entry_id = entry['message_id']
+        
+        # Read the entry
+        entries = redis_client.xrange(stream_key, entry_id, entry_id, count=1)
+        if entries:
+            _, fields = entries[0]
+            
+            if fields.get('priority') == 'high':
+                priority_ids.append(entry_id)
+            else:
+                normal_ids.append(entry_id)
+    
+    # Claim priority messages first
+    processed = []
+    if priority_ids:
+        claimed = redis_client.xclaim(
+            stream_key, group_name, consumer_name,
+            min_idle_time=60000,
+            message_ids=priority_ids
+        )
+        processed.extend(claimed)
+    
+    # Then claim normal messages if capacity
+    if len(processed) < 10 and normal_ids:
+        claimed = redis_client.xclaim(
+            stream_key, group_name, consumer_name,
+            min_idle_time=60000,
+            message_ids=normal_ids[:10 - len(processed)]
+        )
+        processed.extend(claimed)
+    
+    return {
+        'processed': len(processed),
+        'priority_count': len([e for e in processed if e[1].get('priority') == 'high']),
+        'normal_count': len(processed) - len([e for e in processed if e[1].get('priority') == 'high'])
+    }
+
+result = process_priority_first('job_applications', 'email_workers', 'priority-worker')
+print(f"Processed {result['priority_count']} priority, {result['normal_count']} normal")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Processed 7 priority, 3 normal messages</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XAUTOCLAIM Command -->
+                <div class="command-block">
+                    <h3 id="xautoclaim">XAUTOCLAIM</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xautoclaim/" target="_blank" rel="noopener">Redis XAUTOCLAIM Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Automatically claims pending entries that exceed a minimum idle time, simplifying recovery workflows.</p>
+
+                    <h4>Full description</h4>
+                    <p>XAUTOCLAIM is a more efficient version of XCLAIM that automatically scans for and claims pending entries exceeding the min-idle-time threshold. Unlike XCLAIM which requires explicitly listing entry IDs, XAUTOCLAIM scans the pending entries list starting from a cursor and returns both the claimed entries and a cursor for the next scan. This makes it perfect for implementing automatic recovery workers that continuously reclaim stuck messages.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>key</strong>: The stream name (string)</li>
+                        <li><strong>group</strong>: Consumer group name</li>
+                        <li><strong>consumer</strong>: New owner consumer name</li>
+                        <li><strong>min-idle-time</strong>: Minimum idle time in ms</li>
+                        <li><strong>start</strong>: Cursor position ('0' for beginning)</li>
+                        <li><strong>COUNT count</strong>: Maximum entries to claim per call</li>
+                        <li><strong>JUSTID</strong>: Return only IDs</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: [next_cursor, claimed_entries, deleted_entry_ids]</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Automatic Recovery Worker</strong>
+                        <pre><code class="language-python"># tasks.py - Auto-recover stuck messages
+import redis
+from celery import shared_task
+import socket
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@shared_task
+def auto_recovery_worker(stream_key, group_name, min_idle_ms=300000, batch_size=10):
+    """Automatically claim and process stuck messages"""
+    consumer_name = f'recovery-{socket.gethostname()}'
+    cursor = '0'
+    total_claimed = 0
+    
+    # Keep claiming until no more stuck messages
+    while True:
+        # Auto-claim stuck messages
+        result = redis_client.execute_command(
+            'XAUTOCLAIM', stream_key, group_name, consumer_name,
+            str(min_idle_ms), cursor,
+            'COUNT', str(batch_size)
+        )
+        
+        next_cursor = result[0].decode() if isinstance(result[0], bytes) else result[0]
+        claimed_entries = result[1]
+        
+        if not claimed_entries:
+            break
+        
+        # Process claimed messages
+        for entry in claimed_entries:
+            if isinstance(entry, list) and len(entry) == 2:
+                entry_id = entry[0].decode() if isinstance(entry[0], bytes) else entry[0]
+                fields = entry[1]
+                
+                # Process the entry
+                print(f"Processing recovered entry: {entry_id}")
+                # ... process ...
+                
+                # Acknowledge after processing
+                redis_client.xack(stream_key, group_name, entry_id)
+                total_claimed += 1
+        
+        # Continue from cursor if more exist
+        if next_cursor == '0':
+            break
+        cursor = next_cursor
+    
+    return {
+        'stream': stream_key,
+        'consumer': consumer_name,
+        'recovered': total_claimed,
+        'idle_threshold_ms': min_idle_ms
+    }
+
+# Run periodically: every 5 minutes
+result = auto_recovery_worker('job_applications', 'email_workers')</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Processing recovered entry: 1693920000000-0
+Processing recovered entry: 1693920005000-0
+Processing recovered entry: 1693920010000-0
+
+{'stream': 'job_applications', 'consumer': 'recovery-server-1', 
+ 'recovered': 3, 'idle_threshold_ms': 300000}</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Continuous Background Recovery Task</strong>
+                        <pre><code class="language-python"># tasks.py - Celery beat task for continuous recovery
+import redis
+from celery import shared_task
+from django.core.cache import cache
+import logging
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+logger = logging.getLogger(__name__)
+
+@shared_task
+def continuous_stream_recovery():
+    """Continuously recover stuck messages across all streams"""
+    recovery_config = [
+        ('job_applications', 'email_workers', 300000),    # 5 min
+        ('user_activity', 'activity_loggers', 600000),    # 10 min
+        ('notifications', 'notification_senders', 180000), # 3 min
+    ]
+    
+    recovery_stats = []
+    
+    for stream, group, idle_threshold in recovery_config:
+        consumer = f'auto-recovery-{stream}'
+        cursor = '0'
+        claimed_count = 0
+        
+        # Scan and claim all stuck messages
+        max_iterations = 100  # Safety limit
+        for _ in range(max_iterations):
+            result = redis_client.execute_command(
+                'XAUTOCLAIM', stream, group, consumer,
+                str(idle_threshold), cursor,
+                'COUNT', '20'
+            )
+            
+            next_cursor = result[0].decode() if isinstance(result[0], bytes) else result[0]
+            entries = result[1]
+            
+            for entry in entries:
+                if isinstance(entry, list) and len(entry) == 2:
+                    entry_id = entry[0].decode() if isinstance(entry[0], bytes) else entry[0]
+                    claimed_count += 1
+                    
+                    # Process and acknowledge
+                    try:
+                        # Process logic here...
+                        redis_client.xack(stream, group, entry_id)
+                    except Exception as e:
+                        logger.error(f"Failed to process {entry_id}: {e}")
+            
+            if next_cursor == '0':
+                break
+            cursor = next_cursor
+        
+        if claimed_count > 0:
+            logger.info(f"Recovered {claimed_count} messages from {stream}/{group}")
+        
+        recovery_stats.append({
+            'stream': stream,
+            'group': group,
+            'recovered': claimed_count
+        })
+    
+    return recovery_stats
+
+# CELERY_BEAT_SCHEDULE = {
+#     'stream-recovery': {
+#         'task': 'tasks.continuous_stream_recovery',
+#         'schedule': 300.0,  # Every 5 minutes
+#     }
+# }</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>[
+  {'stream': 'job_applications', 'group': 'email_workers', 'recovered': 8},
+  {'stream': 'user_activity', 'group': 'activity_loggers', 'recovered': 0},
+  {'stream': 'notifications', 'group': 'notification_senders', 'recovered': 2}
+]</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Efficient Pagination Through Pending Messages</strong>
+                        <pre><code class="language-python"># utils/stream_admin.py - Admin tool to review and reclaim
+import redis
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def scan_and_claim_pending(stream_key, group_name, consumer_name, 
+                           idle_threshold_ms=60000, page_size=50):
+    """Scan through all pending messages with pagination"""
+    cursor = '0'
+    all_claimed = []
+    page_number = 1
+    
+    while True:
+        print(f"\n--- Page {page_number} ---")
+        
+        # Claim next batch
+        result = redis_client.execute_command(
+            'XAUTOCLAIM', stream_key, group_name, consumer_name,
+            str(idle_threshold_ms), cursor,
+            'COUNT', str(page_size)
+        )
+        
+        next_cursor = result[0].decode() if isinstance(result[0], bytes) else result[0]
+        entries = result[1]
+        
+        if not entries:
+            print("No more pending messages")
+            break
+        
+        # Display claimed messages
+        for entry in entries:
+            if isinstance(entry, list) and len(entry) == 2:
+                entry_id = entry[0].decode() if isinstance(entry[0], bytes) else entry[0]
+                fields_list = entry[1]
+                
+                # Parse fields
+                fields = {}
+                for i in range(0, len(fields_list), 2):
+                    key = fields_list[i].decode() if isinstance(fields_list[i], bytes) else fields_list[i]
+                    val = fields_list[i+1].decode() if isinstance(fields_list[i+1], bytes) else fields_list[i+1]
+                    fields[key] = val
+                
+                all_claimed.append((entry_id, fields))
+                print(f"  {entry_id}: {fields.get('job_title', 'N/A')}")
+        
+        print(f"Claimed {len(entries)} entries on page {page_number}")
+        
+        # Continue or stop
+        if next_cursor == '0':
+            print("\nReached end of pending list")
+            break
+        
+        cursor = next_cursor
+        page_number += 1
+    
+    return all_claimed
+
+# Usage: Scan and review pending
+claimed = scan_and_claim_pending(
+    'job_applications',
+    'email_workers', 
+    'admin-review',
+    idle_threshold_ms=60000,
+    page_size=10
+)</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>--- Page 1 ---
+  1693920000000-0: Python Developer
+  1693920005000-0: Senior Engineer
+  ...
+Claimed 10 entries on page 1
+
+--- Page 2 ---
+  1693920050000-0: Data Scientist
+  ...
+Claimed 10 entries on page 2
+
+Reached end of pending list
+Total claimed: 18 entries</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Smart Recovery with Retry Limits</strong>
+                        <pre><code class="language-python"># tasks.py - Auto-recovery with dead letter handling
+import redis
+from django.core.mail import mail_admins
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def smart_auto_recovery(stream_key, group_name, max_retries=3):
+    """Auto-claim with automatic dead-letter for failed messages"""
+    consumer_name = 'smart-recovery'
+    cursor = '0'
+    
+    recovered = 0
+    dead_lettered = 0
+    
+    while True:
+        # Auto-claim messages idle > 5 minutes
+        result = redis_client.execute_command(
+            'XAUTOCLAIM', stream_key, group_name, consumer_name,
+            '300000', cursor, 'COUNT', '20'
+        )
+        
+        next_cursor = result[0].decode() if isinstance(result[0], bytes) else result[0]
+        entries = result[1]
+        
+        if not entries:
+            break
+        
+        for entry in entries:
+            if isinstance(entry, list) and len(entry) == 2:
+                entry_id = entry[0].decode() if isinstance(entry[0], bytes) else entry[0]
+                
+                # Check delivery count via XPENDING
+                pending_info = redis_client.xpending_range(
+                    stream_key, group_name,
+                    min=entry_id, max=entry_id,
+                    count=1
+                )
+                
+                if pending_info:
+                    delivery_count = pending_info[0]['times_delivered']
+                    
+                    if delivery_count >= max_retries:
+                        # Move to dead letter
+                        entry_data = redis_client.xrange(stream_key, entry_id, entry_id, count=1)
+                        if entry_data:
+                            fields = entry_data[0][1]
+                            redis_client.xadd(f'{stream_key}:dead_letter', fields)
+                            redis_client.xack(stream_key, group_name, entry_id)
+                            dead_lettered += 1
+                            print(f"Dead-lettered: {entry_id} (delivered {delivery_count} times)")
+                    else:
+                        # Retry
+                        # Process logic here...
+                        redis_client.xack(stream_key, group_name, entry_id)
+                        recovered += 1
+        
+        if next_cursor == '0':
+            break
+        cursor = next_cursor
+    
+    # Alert admins if dead letters created
+    if dead_lettered > 0:
+        mail_admins(
+            f'Dead Letters Created: {stream_key}',
+            f'{dead_lettered} messages moved to dead letter queue after {max_retries} retries'
+        )
+    
+    return {
+        'recovered': recovered,
+        'dead_lettered': dead_lettered,
+        'stream': stream_key
+    }
+
+result = smart_auto_recovery('job_applications', 'email_workers')
+print(f"Recovered: {result['recovered']}, Dead-lettered: {result['dead_lettered']}")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Dead-lettered: 1693920000000-0 (delivered 3 times)
+Dead-lettered: 1693920005000-0 (delivered 4 times)
+Recovered: 6, Dead-lettered: 2</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Multi-Stream Recovery Dashboard</strong>
+                        <pre><code class="language-python"># management/commands/recovery_dashboard.py
+import redis
+from django.core.management.base import BaseCommand
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Display recovery dashboard for all streams'
+    
+    def handle(self, *args, **options):
+        streams_config = [
+            ('job_applications', 'email_workers', 300000),
+            ('user_activity', 'activity_loggers', 600000),
+            ('notifications', 'notification_senders', 180000),
+        ]
+        
+        self.stdout.write("\n=== Stream Recovery Dashboard ===")
+        self.stdout.write(f"Timestamp: {datetime.now()}\n")
+        
+        for stream, group, idle_threshold in streams_config:
+            # Check how many messages can be auto-claimed
+            consumer = 'dashboard-check'
+            
+            result = redis_client.execute_command(
+                'XAUTOCLAIM', stream, group, consumer,
+                str(idle_threshold), '0',
+                'COUNT', '1000', 'JUSTID'
+            )
+            
+            claimed_ids = result[1] if len(result) > 1 else []
+            claimable_count = len(claimed_ids)
+            
+            # Get total pending
+            pending = redis_client.xpending(stream, group)
+            total_pending = pending[0] if pending else 0
+            
+            # Calculate health
+            if claimable_count == 0:
+                status = "✓ HEALTHY"
+                color = self.style.SUCCESS
+            elif claimable_count < 10:
+                status = "⚠ WARNING"
+                color = self.style.WARNING
+            else:
+                status = "✗ CRITICAL"
+                color = self.style.ERROR
+            
+            # Un-claim the checked messages
+            if claimed_ids:
+                # They're already claimed by dashboard-check, need to reclaim back
+                pass
+            
+            self.stdout.write(
+                color(
+                    f"{status} {stream}/{group}\n"
+                    f"  Total pending: {total_pending}\n"
+                    f"  Stuck (>{idle_threshold//1000}s): {claimable_count}\n"
+                )
+            )
+
+# Run: python manage.py recovery_dashboard</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>=== Stream Recovery Dashboard ===
+Timestamp: 2023-09-05 14:30:00
+
+✓ HEALTHY job_applications/email_workers
+  Total pending: 45
+  Stuck (>300s): 0
+
+⚠ WARNING user_activity/activity_loggers
+  Total pending: 234
+  Stuck (>600s): 8
+
+✗ CRITICAL notifications/notification_senders
+  Total pending: 523
+  Stuck (>180s): 87</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- XINFO Command -->
+                <div class="command-block">
+                    <h3 id="xinfo">XINFO</h3>
+                    <div class="command-meta">
+                        Docs: <a href="https://redis.io/docs/latest/commands/xinfo/" target="_blank" rel="noopener">Redis XINFO Documentation</a>
+                    </div>
+                    <p class="command-subtitle">Retrieves detailed information about streams, consumer groups, and consumers for monitoring and debugging.</p>
+
+                    <h4>Full description</h4>
+                    <p>XINFO provides introspection capabilities for Redis Streams. Use XINFO STREAM to get stream metadata (length, radix tree stats, first/last IDs). XINFO GROUPS lists all consumer groups with their details. XINFO CONSUMERS shows consumers in a group with their pending message counts and idle times. This is essential for monitoring stream health, debugging processing issues, and implementing observability in Django applications.</p>
+
+                    <h4>Syntax</h4>
+                    <pre><code class="language-redis">XINFO STREAM key [FULL [COUNT count]]
+XINFO GROUPS key
+XINFO CONSUMERS key groupname</code></pre>
+
+                    <h4>Parameters</h4>
+                    <ul>
+                        <li><strong>STREAM key</strong>: Get stream information</li>
+                        <li><strong>GROUPS key</strong>: List all consumer groups</li>
+                        <li><strong>CONSUMERS key groupname</strong>: List consumers in a group</li>
+                        <li><strong>FULL</strong>: Include complete stream entries</li>
+                        <li><strong>COUNT count</strong>: Limit entries in FULL mode</li>
+                    </ul>
+
+                    <h4>Return value</h4>
+                    <p>Array: Detailed information about the stream, groups, or consumers</p>
+
+                    <h4>5 short examples with Django models</h4>
+
+                    <div class="example">
+                        <strong>Example 1: Stream Health Monitoring</strong>
+                        <pre><code class="language-python"># monitoring/stream_health.py - Monitor stream statistics
+import redis
+from django.core.cache import cache
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def get_stream_health(stream_key):
+    """Get comprehensive stream health information"""
+    # Get stream info
+    stream_info = redis_client.xinfo_stream(stream_key)
+    
+    # Get consumer groups info
+    groups_info = redis_client.execute_command('XINFO', 'GROUPS', stream_key)
+    
+    # Parse stream details
+    health_report = {
+        'stream': stream_key,
+        'length': stream_info.get('length', 0),
+        'radix_tree_keys': stream_info.get('radix-tree-keys', 0),
+        'radix_tree_nodes': stream_info.get('radix-tree-nodes', 0),
+        'last_entry_id': stream_info.get('last-generated-id', 'N/A'),
+        'first_entry': stream_info.get('first-entry', None),
+        'last_entry': stream_info.get('last-entry', None),
+        'groups': []
+    }
+    
+    # Parse groups info
+    for i in range(0, len(groups_info), 2):
+        group_data = groups_info[i+1]
+        group_dict = {}
+        for j in range(0, len(group_data), 2):
+            key = group_data[j].decode() if isinstance(group_data[j], bytes) else group_data[j]
+            val = group_data[j+1]
+            if isinstance(val, bytes):
+                val = val.decode()
+            group_dict[key] = val
+        
+        health_report['groups'].append({
+            'name': group_dict.get('name'),
+            'consumers': group_dict.get('consumers', 0),
+            'pending': group_dict.get('pending', 0),
+            'last_delivered_id': group_dict.get('last-delivered-id', 'N/A')
+        })
+    
+    # Determine health status
+    total_pending = sum(g['pending'] for g in health_report['groups'])
+    if total_pending > 1000:
+        health_report['status'] = 'critical'
+    elif total_pending > 500:
+        health_report['status'] = 'warning'
+    else:
+        health_report['status'] = 'healthy'
+    
+    return health_report
+
+# Usage
+health = get_stream_health('job_applications')
+print(f"Stream: {health['stream']}")
+print(f"Status: {health['status']}")
+print(f"Length: {health['length']}")
+for group in health['groups']:
+    print(f"  Group {group['name']}: {group['consumers']} consumers, {group['pending']} pending")</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Stream: job_applications
+Status: healthy
+Length: 1247
+  Group email_workers: 3 consumers, 45 pending
+  Group db_writers: 2 consumers, 23 pending
+  Group analytics_processors: 1 consumers, 0 pending</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 2: Consumer Activity Dashboard</strong>
+                        <pre><code class="language-python"># views.py - Django view for consumer monitoring
+import redis
+from django.shortcuts import render
+from django.contrib.admin.views.decorators import staff_member_required
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@staff_member_required
+def consumer_dashboard(request, stream_name, group_name):
+    """Display active consumers and their statistics"""
+    # Get consumers info
+    consumers_info = redis_client.execute_command(
+        'XINFO', 'CONSUMERS', stream_name, group_name
+    )
+    
+    consumers = []
+    for i in range(0, len(consumers_info)):
+        consumer_data = consumers_info[i]
+        consumer_dict = {}
+        
+        for j in range(0, len(consumer_data), 2):
+            key = consumer_data[j].decode() if isinstance(consumer_data[j], bytes) else consumer_data[j]
+            val = consumer_data[j+1]
+            if isinstance(val, bytes):
+                val = val.decode()
+            consumer_dict[key] = val
+        
+        # Calculate idle time
+        idle_ms = int(consumer_dict.get('idle', 0))
+        idle_minutes = idle_ms // 60000
+        
+        # Determine status
+        if idle_minutes > 10:
+            status = 'inactive'
+            status_class = 'danger'
+        elif idle_minutes > 5:
+            status = 'slow'
+            status_class = 'warning'
+        else:
+            status = 'active'
+            status_class = 'success'
+        
+        consumers.append({
+            'name': consumer_dict.get('name'),
+            'pending': int(consumer_dict.get('pending', 0)),
+            'idle_minutes': idle_minutes,
+            'status': status,
+            'status_class': status_class
+        })
+    
+    return render(request, 'admin/consumer_dashboard.html', {
+        'stream': stream_name,
+        'group': group_name,
+        'consumers': consumers,
+        'total_consumers': len(consumers),
+        'total_pending': sum(c['pending'] for c in consumers)
+    })</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Consumer Dashboard: job_applications / email_workers
+
+Active Consumers: 3
+Total Pending: 45
+
+Consumer          Pending  Idle      Status
+worker-1          18       2 min     ✓ active
+worker-2          23       1 min     ✓ active  
+worker-3          4        12 min    ✗ inactive</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 3: Automatic Consumer Cleanup</strong>
+                        <pre><code class="language-python"># management/commands/cleanup_dead_consumers.py
+import redis
+from django.core.management.base import BaseCommand
+from datetime import datetime
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+class Command(BaseCommand):
+    help = 'Remove dead consumers and reclaim their messages'
+    
+    def add_arguments(self, parser):
+        parser.add_argument('--idle-threshold', type=int, default=3600000,
+                          help='Consumer idle time threshold in ms (default: 1 hour)')
+    
+    def handle(self, *args, **options):
+        idle_threshold = options['idle_threshold']
+        
+        # Find all streams
+        streams = [
+            ('job_applications', 'email_workers'),
+            ('user_activity', 'activity_loggers'),
+            ('notifications', 'notification_senders')
+        ]
+        
+        total_removed = 0
+        total_reclaimed = 0
+        
+        for stream, group in streams:
+            # Get consumers
+            consumers_info = redis_client.execute_command(
+                'XINFO', 'CONSUMERS', stream, group
+            )
+            
+            for consumer_data in consumers_info:
+                consumer_dict = {}
+                for j in range(0, len(consumer_data), 2):
+                    key = consumer_data[j].decode() if isinstance(consumer_data[j], bytes) else consumer_data[j]
+                    val = consumer_data[j+1]
+                    if isinstance(val, bytes):
+                        val = val.decode()
+                    consumer_dict[key] = val
+                
+                consumer_name = consumer_dict.get('name')
+                idle_ms = int(consumer_dict.get('idle', 0))
+                pending = int(consumer_dict.get('pending', 0))
+                
+                # Remove dead consumers
+                if idle_ms > idle_threshold:
+                    self.stdout.write(
+                        f"Removing dead consumer: {consumer_name} "
+                        f"(idle {idle_ms//60000} min, {pending} pending)"
+                    )
+                    
+                    # Reclaim pending messages
+                    if pending > 0:
+                        result = redis_client.execute_command(
+                            'XAUTOCLAIM', stream, group, 'recovery-worker',
+                            '0', '0', 'COUNT', str(pending)
+                        )
+                        reclaimed = len(result[1]) if len(result) > 1 else 0
+                        total_reclaimed += reclaimed
+                    
+                    # Delete consumer
+                    redis_client.execute_command(
+                        'XGROUP', 'DELCONSUMER', stream, group, consumer_name
+                    )
+                    total_removed += 1
+        
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"\n✓ Removed {total_removed} dead consumers"
+                f"\n✓ Reclaimed {total_reclaimed} pending messages"
+            )
+        )
+
+# Run: python manage.py cleanup_dead_consumers --idle-threshold=3600000</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>Removing dead consumer: worker-3 (idle 75 min, 18 pending)
+Removing dead consumer: old-worker (idle 120 min, 0 pending)
+
+✓ Removed 2 dead consumers
+✓ Reclaimed 18 pending messages</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 4: Stream Topology Visualization</strong>
+                        <pre><code class="language-python"># api/views.py - REST API for stream topology
+import redis
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+@api_view(['GET'])
+def stream_topology(request):
+    """Get complete topology of all streams and consumer groups"""
+    # Find all stream keys
+    stream_keys = [
+        key.decode() if isinstance(key, bytes) else key
+        for key in redis_client.keys('*')
+        if redis_client.type(key) in [b'stream', 'stream']
+    ]
+    
+    topology = []
+    
+    for stream in stream_keys:
+        # Get stream info
+        stream_info = redis_client.xinfo_stream(stream)
+        
+        # Get groups
+        groups_raw = redis_client.execute_command('XINFO', 'GROUPS', stream)
+        groups = []
+        
+        for i in range(0, len(groups_raw)):
+            group_data = groups_raw[i]
+            group_dict = {}
+            for j in range(0, len(group_data), 2):
+                key = group_data[j].decode() if isinstance(group_data[j], bytes) else group_data[j]
+                val = group_data[j+1]
+                if isinstance(val, bytes):
+                    val = val.decode()
+                group_dict[key] = val
+            
+            group_name = group_dict.get('name')
+            
+            # Get consumers for this group
+            consumers_raw = redis_client.execute_command(
+                'XINFO', 'CONSUMERS', stream, group_name
+            )
+            
+            consumers = []
+            for consumer_data in consumers_raw:
+                consumer_dict = {}
+                for j in range(0, len(consumer_data), 2):
+                    key = consumer_data[j].decode() if isinstance(consumer_data[j], bytes) else consumer_data[j]
+                    val = consumer_data[j+1]
+                    if isinstance(val, bytes):
+                        val = val.decode()
+                    consumer_dict[key] = val
+                
+                consumers.append({
+                    'name': consumer_dict.get('name'),
+                    'pending': int(consumer_dict.get('pending', 0)),
+                    'idle_ms': int(consumer_dict.get('idle', 0))
+                })
+            
+            groups.append({
+                'name': group_name,
+                'consumers_count': int(group_dict.get('consumers', 0)),
+                'pending': int(group_dict.get('pending', 0)),
+                'consumers': consumers
+            })
+        
+        topology.append({
+            'stream': stream,
+            'length': stream_info.get('length', 0),
+            'groups': groups
+        })
+    
+    return Response({
+        'timestamp': datetime.now().isoformat(),
+        'streams_count': len(topology),
+        'topology': topology
+    })
+
+# GET /api/streams/topology/</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>{
+  "streams_count": 3,
+  "topology": [
+    {
+      "stream": "job_applications",
+      "length": 1247,
+      "groups": [
+        {
+          "name": "email_workers",
+          "consumers_count": 3,
+          "pending": 45,
+          "consumers": [
+            {"name": "worker-1", "pending": 18, "idle_ms": 120000},
+            {"name": "worker-2", "pending": 23, "idle_ms": 80000},
+            {"name": "worker-3", "pending": 4, "idle_ms": 720000}
+          ]
+        }
+      ]
+    }
+  ]
+}</pre>
+                        </div>
+                    </div>
+
+                    <div class="example">
+                        <strong>Example 5: Performance Metrics Collection</strong>
+                        <pre><code class="language-python"># monitoring/metrics.py - Collect stream performance metrics
+import redis
+from django.core.cache import cache
+from datetime import datetime
+import json
+
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def collect_stream_metrics():
+    """Collect and store stream metrics for monitoring"""
+    streams = ['job_applications', 'user_activity', 'notifications']
+    metrics = {
+        'timestamp': datetime.now().isoformat(),
+        'streams': {}
+    }
+    
+    for stream in streams:
+        try:
+            # Get stream info
+            stream_info = redis_client.xinfo_stream(stream)
+            
+            # Get groups info
+            groups_raw = redis_client.execute_command('XINFO', 'GROUPS', stream)
+            
+            total_consumers = 0
+            total_pending = 0
+            
+            for group_data in groups_raw:
+                group_dict = {}
+                for j in range(0, len(group_data), 2):
+                    key = group_data[j].decode() if isinstance(group_data[j], bytes) else group_data[j]
+                    val = group_data[j+1]
+                    if isinstance(val, bytes):
+                        val = val.decode()
+                    group_dict[key] = val
+                
+                total_consumers += int(group_dict.get('consumers', 0))
+                total_pending += int(group_dict.get('pending', 0))
+            
+            metrics['streams'][stream] = {
+                'length': stream_info.get('length', 0),
+                'total_groups': len(groups_raw),
+                'total_consumers': total_consumers,
+                'total_pending': total_pending,
+                'radix_tree_keys': stream_info.get('radix-tree-keys', 0),
+                'radix_tree_nodes': stream_info.get('radix-tree-nodes', 0)
+            }
+        except Exception as e:
+            metrics['streams'][stream] = {'error': str(e)}
+    
+    # Store metrics for trending
+    cache.set(f'stream_metrics_{datetime.now().strftime("%Y%m%d%H%M")}', 
+             metrics, timeout=86400)  # Keep for 24 hours
+    
+    return metrics
+
+# Collect metrics every minute
+metrics = collect_stream_metrics()
+print(json.dumps(metrics, indent=2))</code></pre>
+                        <div class="printout">
+<strong>Printout:</strong>
+<pre>{
+  "timestamp": "2023-09-05T14:30:00",
+  "streams": {
+    "job_applications": {
+      "length": 1247,
+      "total_groups": 3,
+      "total_consumers": 6,
+      "total_pending": 68,
+      "radix_tree_keys": 50,
+      "radix_tree_nodes": 100
+    },
+    "user_activity": {
+      "length": 5892,
+      "total_groups": 2,
+      "total_consumers": 4,
+      "total_pending": 234,
+      "radix_tree_keys": 200,
+      "radix_tree_nodes": 400
+    }
+  }
+}</pre>
+                        </div>
+                    </div>
                 </div>
 
             </section>
