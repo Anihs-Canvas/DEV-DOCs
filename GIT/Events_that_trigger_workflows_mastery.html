@@ -10730,27 +10730,2089 @@ jobs:
 
     <section id="job_context" class="section">
       <h2>job context</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/learn-github-actions/contexts#job-context" target="_blank" rel="noopener">job context</a>
+      </div>
+      <p class="subtitle">Access information about the currently running job using the job context.</p>
+
+      <h3>Full description</h3>
+      <p>The <code class="inline">job</code> context contains information about the currently running job, including its status and the container it's running in. For JobPost workflows, the job context is essential for accessing service containers (like PostgreSQL or Redis), checking job status, and managing job-level configuration. The context provides access to job status, services configuration, and the container network. It's particularly useful when working with containerized services that JobPost's Django application needs to connect to during testing or deployment.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Access job context properties
+${{ job.status }}                    # Job status (success, failure, cancelled)
+${{ job.container.id }}              # Container ID if job runs in container
+${{ job.container.network }}         # Container network
+
+# Access service containers
+${{ job.services.postgres.id }}      # Service container ID
+${{ job.services.postgres.network }} # Service network
+${{ job.services.postgres.ports }}   # Exposed ports</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Job status:</strong>
+        <ul>
+          <li><code class="inline">job.status</code> - Current status of the job (success, failure, cancelled)</li>
+        </ul>
+        <strong>Container properties (when job runs in a container):</strong>
+        <ul>
+          <li><code class="inline">job.container.id</code> - ID of the job's container</li>
+          <li><code class="inline">job.container.network</code> - Network of the job's container</li>
+        </ul>
+        <strong>Service containers:</strong>
+        <ul>
+          <li><code class="inline">job.services.&lt;service_id&gt;.id</code> - Service container ID</li>
+          <li><code class="inline">job.services.&lt;service_id&gt;.network</code> - Service container network</li>
+          <li><code class="inline">job.services.&lt;service_id&gt;.ports</code> - Exposed ports of the service</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>The job context returns an object with string values for status and container information, and nested objects for service container details.</p>
+
+      <h3>Examples</h3>
+      <div class="example">
+        <h4>1. JobPost with PostgreSQL service container</h4>
+        <pre><code class="language-yaml">name: JobPost Database Tests
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: jobpost_test
+          POSTGRES_USER: jobpost
+          POSTGRES_PASSWORD: password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - name: Display JobPost service info
+        run: |
+          echo "🗄️ JobPost PostgreSQL Service"
+          echo "Container ID: ${{ job.services.postgres.id }}"
+          echo "Network: ${{ job.services.postgres.network }}"
+          echo "Ports: ${{ job.services.postgres.ports }}"
+      
+      - name: Configure JobPost database connection
+        run: |
+          # Use service container in JobPost settings
+          export DATABASE_HOST=localhost
+          export DATABASE_PORT=5432
+          export DATABASE_NAME=jobpost_test
+          export DATABASE_USER=jobpost
+          export DATABASE_PASSWORD=password
+          
+          echo "DJANGO_SETTINGS_MODULE=anihpj.settings.test" >> $GITHUB_ENV
+      
+      - name: Run JobPost migrations
+        run: |
+          python manage.py migrate --noinput
+          echo "✅ JobPost database migrations completed"
+      
+      - name: Run JobPost tests
+        run: |
+          python manage.py test jobpost
+          echo "✅ JobPost tests completed"</code></pre>
+        <div class="printout">🗄️ JobPost with PostgreSQL service container using job context</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost with multiple services</h4>
+        <pre><code class="language-yaml">name: JobPost Full Stack Tests
+
+on: [push]
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: jobpost_db
+          POSTGRES_USER: jobpost
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+      - name: Display JobPost services
+        run: |
+          echo "🔧 JobPost Service Containers"
+          echo "PostgreSQL:"
+          echo "  ID: ${{ job.services.postgres.id }}"
+          echo "  Network: ${{ job.services.postgres.network }}"
+          echo ""
+          echo "Redis:"
+          echo "  ID: ${{ job.services.redis.id }}"
+          echo "  Network: ${{ job.services.redis.network }}"
+      
+      - name: Configure JobPost for services
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=postgresql://jobpost:secret@localhost:5432/jobpost_db
+          REDIS_URL=redis://localhost:6379/0
+          CELERY_BROKER_URL=redis://localhost:6379/1
+          DJANGO_SETTINGS_MODULE=anihpj.settings
+          EOF
+          
+          echo "✅ JobPost environment configured"
+      
+      - name: Test JobPost database connection
+        run: |
+          python manage.py check --database default
+          echo "✅ JobPost database connection verified"
+      
+      - name: Test JobPost cache connection
+        run: |
+          python manage.py shell -c "from django.core.cache import cache; cache.set('test', 'value'); print('Cache test:', cache.get('test'))"
+          echo "✅ JobPost Redis connection verified"</code></pre>
+        <div class="printout">🔧 JobPost with multiple service containers using job context</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost containerized job</h4>
+        <pre><code class="language-yaml">name: JobPost Container Build
+
+on: [push]
+
+jobs:
+  build-in-container:
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11-slim
+      env:
+        DJANGO_SETTINGS_MODULE: anihpj.settings
+      volumes:
+        - jobpost_data:/data
+    
+    steps:
+      - name: Display JobPost container info
+        run: |
+          echo "🐳 JobPost Container Information"
+          echo "Container ID: ${{ job.container.id }}"
+          echo "Network: ${{ job.container.network }}"
+          echo "Python Version: $(python --version)"
+      
+      - name: Setup JobPost in container
+        run: |
+          apt-get update && apt-get install -y git
+          pip install --upgrade pip
+          pip install django celery psycopg2-binary redis
+          
+          echo "✅ JobPost dependencies installed in container"
+      
+      - name: Build JobPost application
+        run: |
+          python manage.py collectstatic --noinput
+          python manage.py check
+          
+          echo "✅ JobPost built in container: ${{ job.container.id }}"</code></pre>
+        <div class="printout">🐳 JobPost running in container using job context</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost job status monitoring</h4>
+        <pre><code class="language-yaml">name: JobPost Status Monitoring
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start JobPost build
+        run: |
+          echo "🚀 Starting JobPost build"
+          echo "Initial status: ${{ job.status }}"
+      
+      - name: Build JobPost
+        id: build
+        run: |
+          python manage.py collectstatic --noinput
+          echo "build_complete=true" >> $GITHUB_OUTPUT
+      
+      - name: Report build status
+        if: always()
+        run: |
+          echo "📊 JobPost Build Status"
+          echo "Job Status: ${{ job.status }}"
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ JobPost build succeeded"
+          elif [ "${{ job.status }}" == "failure" ]; then
+            echo "❌ JobPost build failed"
+          elif [ "${{ job.status }}" == "cancelled" ]; then
+            echo "⚠️ JobPost build cancelled"
+          fi
+  
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Check previous job
+        run: |
+          echo "🔍 Checking JobPost build job"
+          echo "Current job status: ${{ job.status }}"
+      
+      - name: Run JobPost tests
+        run: |
+          python manage.py test jobpost
+      
+      - name: Final status
+        if: always()
+        run: |
+          echo "📋 JobPost Test Status: ${{ job.status }}"</code></pre>
+        <div class="printout">📊 JobPost job status monitoring using job context</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost service health checks</h4>
+        <pre><code class="language-yaml">name: JobPost Service Health
+
+on: [push]
+
+jobs:
+  test-with-services:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: jobpost_db
+          POSTGRES_USER: jobpost
+          POSTGRES_PASSWORD: secret
+        options: --health-cmd pg_isready --health-interval 10s
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        options: --health-cmd "redis-cli ping" --health-interval 10s
+        ports:
+          - 6379:6379
+    
+    steps:
+      - name: Verify JobPost services are running
+        run: |
+          echo "🏥 JobPost Service Health Check"
+          echo "PostgreSQL Container: ${{ job.services.postgres.id }}"
+          echo "Redis Container: ${{ job.services.redis.id }}"
+          
+          # Test PostgreSQL
+          PGPASSWORD=secret psql -h localhost -U jobpost -d jobpost_db -c "SELECT 1;"
+          echo "✅ PostgreSQL ready"
+          
+          # Test Redis
+          redis-cli -h localhost ping
+          echo "✅ Redis ready"
+      
+      - name: Run JobPost with services
+        run: |
+          echo "🚀 Running JobPost with verified services"
+          echo "Database: PostgreSQL (${{ job.services.postgres.id }})"
+          echo "Cache: Redis (${{ job.services.redis.id }})"
+          
+          python manage.py migrate
+          python manage.py test jobpost
+          
+          echo "✅ JobPost integration tests passed"
+      
+      - name: Service diagnostics
+        if: failure()
+        run: |
+          echo "🔍 JobPost Service Diagnostics"
+          echo "PostgreSQL logs:"
+          docker logs ${{ job.services.postgres.id }}
+          echo ""
+          echo "Redis logs:"
+          docker logs ${{ job.services.redis.id }}</code></pre>
+        <div class="printout">🏥 JobPost service health checks using job context</div>
+      </div>
     </section>
 
     <section id="jobs_context" class="section">
       <h2>jobs context</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/learn-github-actions/contexts#jobs-context" target="_blank" rel="noopener">jobs context</a>
+      </div>
+      <p class="subtitle">Access outputs from jobs in reusable workflows using the jobs context.</p>
+
+      <h3>Full description</h3>
+      <p>The <code class="inline">jobs</code> context is only available in reusable workflows and contains the outputs of jobs from the reusable workflow. This context is used when you call a reusable workflow and need to access the outputs it produces. For JobPost workflows, this is particularly useful when creating modular, reusable workflow components for common tasks like building, testing, or deploying the application. The jobs context allows the calling workflow to access outputs from all jobs in the reusable workflow, enabling sophisticated workflow composition and data passing between workflows.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># In the calling workflow
+jobs:
+  call-reusable:
+    uses: ./.github/workflows/reusable-build.yml
+  
+  use-outputs:
+    needs: call-reusable
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ jobs.call-reusable.outputs.version }}"
+
+# In the reusable workflow
+jobs:
+  build:
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        run: echo "version=1.0.0" >> $GITHUB_OUTPUT</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Jobs context structure:</strong>
+        <ul>
+          <li><code class="inline">jobs.&lt;job_id&gt;.outputs</code> - Outputs from a job in a reusable workflow</li>
+          <li><code class="inline">jobs.&lt;job_id&gt;.outputs.&lt;output_name&gt;</code> - Specific output value</li>
+          <li><code class="inline">jobs.&lt;job_id&gt;.result</code> - Result of the job (success, failure, cancelled, skipped)</li>
+        </ul>
+        <strong>Availability:</strong>
+        <ul>
+          <li>Only available in the calling workflow when using reusable workflows</li>
+          <li>Not available within the reusable workflow itself</li>
+          <li>Requires the reusable workflow to define outputs at the workflow level</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>The jobs context returns an object containing all outputs from jobs in the reusable workflow, with string values for each output.</p>
+
+      <h3>Examples</h3>
+      <div class="example">
+        <h4>1. JobPost reusable build workflow</h4>
+        <pre><code class="language-yaml"># .github/workflows/jobpost-build-reusable.yml
+name: JobPost Reusable Build
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: "JobPost build version"
+        value: ${{ jobs.build.outputs.version }}
+      artifact_name:
+        description: "JobPost artifact name"
+        value: ${{ jobs.build.outputs.artifact_name }}
+      build_time:
+        description: "JobPost build timestamp"
+        value: ${{ jobs.build.outputs.build_time }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      build_time: ${{ steps.time.outputs.timestamp }}
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Generate JobPost version
+        id: version
+        run: |
+          VERSION="v1.0.${{ github.run_number }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "JobPost version: $VERSION"
+      
+      - name: Build JobPost
+        run: |
+          python manage.py collectstatic --noinput
+          python manage.py check
+      
+      - name: Create JobPost artifact
+        id: artifact
+        run: |
+          ARTIFACT="jobpost-${{ steps.version.outputs.version }}.tar.gz"
+          tar -czf "$ARTIFACT" jobpost/ anihpj/ manage.py
+          echo "name=$ARTIFACT" >> $GITHUB_OUTPUT
+      
+      - name: Record build time
+        id: time
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+---
+# .github/workflows/jobpost-main.yml
+name: JobPost Main Workflow
+
+on: [push]
+
+jobs:
+  build:
+    uses: ./.github/workflows/jobpost-build-reusable.yml
+  
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Use JobPost build outputs
+        run: |
+          echo "🚀 Deploying JobPost"
+          echo "Version: ${{ jobs.build.outputs.version }}"
+          echo "Artifact: ${{ jobs.build.outputs.artifact_name }}"
+          echo "Built at: ${{ jobs.build.outputs.build_time }}"</code></pre>
+        <div class="printout">📦 JobPost reusable workflow with outputs using jobs context</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost test matrix reusable workflow</h4>
+        <pre><code class="language-yaml"># .github/workflows/jobpost-test-reusable.yml
+name: JobPost Reusable Tests
+
+on:
+  workflow_call:
+    outputs:
+      test_results:
+        description: "JobPost test results summary"
+        value: ${{ jobs.test.outputs.results }}
+      coverage:
+        description: "JobPost test coverage percentage"
+        value: ${{ jobs.test.outputs.coverage }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      results: ${{ steps.summary.outputs.results }}
+      coverage: ${{ steps.coverage.outputs.percentage }}
+    
+    steps:
+      - name: Run JobPost tests
+        id: test
+        run: |
+          python manage.py test jobpost --verbosity=2
+          echo "test_status=passed" >> $GITHUB_OUTPUT
+      
+      - name: Calculate JobPost coverage
+        id: coverage
+        run: |
+          coverage run manage.py test jobpost
+          COVERAGE=$(coverage report | grep TOTAL | awk '{print $4}')
+          echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "JobPost coverage: $COVERAGE"
+      
+      - name: Generate test summary
+        id: summary
+        run: |
+          SUMMARY="Tests: Passed, Coverage: ${{ steps.coverage.outputs.percentage }}"
+          echo "results=$SUMMARY" >> $GITHUB_OUTPUT
+
+---
+# .github/workflows/jobpost-ci.yml
+name: JobPost CI
+
+on: [pull_request]
+
+jobs:
+  test:
+    uses: ./.github/workflows/jobpost-test-reusable.yml
+  
+  report:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display JobPost test results
+        run: |
+          echo "📊 JobPost Test Report"
+          echo "Results: ${{ jobs.test.outputs.test_results }}"
+          echo "Coverage: ${{ jobs.test.outputs.coverage }}"
+      
+      - name: Comment on PR
+        run: |
+          COMMENT="## JobPost Test Results\n"
+          COMMENT="${COMMENT}${{ jobs.test.outputs.test_results }}\n"
+          COMMENT="${COMMENT}Coverage: ${{ jobs.test.outputs.coverage }}"
+          echo "$COMMENT"</code></pre>
+        <div class="printout">🧪 JobPost test reusable workflow using jobs context</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost multi-stage deployment</h4>
+        <pre><code class="language-yaml"># .github/workflows/jobpost-deploy-reusable.yml
+name: JobPost Reusable Deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+    outputs:
+      deploy_url:
+        description: "JobPost deployment URL"
+        value: ${{ jobs.deploy.outputs.url }}
+      deploy_status:
+        description: "JobPost deployment status"
+        value: ${{ jobs.deploy.outputs.status }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    
+    steps:
+      - name: Deploy JobPost
+        id: deploy
+        run: |
+          URL="https://jobpost-${{ inputs.environment }}.example.com"
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "status=deployed" >> $GITHUB_OUTPUT
+          echo "Deployed to: $URL"
+
+---
+# .github/workflows/jobpost-release.yml
+name: JobPost Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-staging:
+    uses: ./.github/workflows/jobpost-deploy-reusable.yml
+    with:
+      environment: staging
+  
+  deploy-production:
+    needs: deploy-staging
+    uses: ./.github/workflows/jobpost-deploy-reusable.yml
+    with:
+      environment: production
+  
+  notify:
+    needs: [deploy-staging, deploy-production]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send JobPost deployment notification
+        run: |
+          echo "🚀 JobPost Deployment Complete"
+          echo "Staging URL: ${{ jobs.deploy-staging.outputs.deploy_url }}"
+          echo "Staging Status: ${{ jobs.deploy-staging.outputs.deploy_status }}"
+          echo "Production URL: ${{ jobs.deploy-production.outputs.deploy_url }}"
+          echo "Production Status: ${{ jobs.deploy-production.outputs.deploy_status }}"</code></pre>
+        <div class="printout">🚀 JobPost multi-stage deployment using jobs context</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost conditional workflow based on outputs</h4>
+        <pre><code class="language-yaml"># .github/workflows/jobpost-check-reusable.yml
+name: JobPost Reusable Checks
+
+on:
+  workflow_call:
+    outputs:
+      needs_migration:
+        description: "Whether JobPost needs database migration"
+        value: ${{ jobs.check.outputs.needs_migration }}
+      has_changes:
+        description: "Whether JobPost has code changes"
+        value: ${{ jobs.check.outputs.has_changes }}
+      security_issues:
+        description: "Number of security issues found"
+        value: ${{ jobs.check.outputs.security_count }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_migration: ${{ steps.migration.outputs.needed }}
+      has_changes: ${{ steps.changes.outputs.detected }}
+      security_count: ${{ steps.security.outputs.count }}
+    
+    steps:
+      - name: Check JobPost migrations
+        id: migration
+        run: |
+          # Check for pending migrations
+          PENDING=$(python manage.py showmigrations --plan | grep "\[ \]" | wc -l)
+          if [ $PENDING -gt 0 ]; then
+            echo "needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "needed=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Check JobPost changes
+        id: changes
+        run: |
+          # Check for changes in jobpost/ directory
+          if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q "^jobpost/"; then
+            echo "detected=true" >> $GITHUB_OUTPUT
+          else
+            echo "detected=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: JobPost security scan
+        id: security
+        run: |
+          bandit -r jobpost/ anihpj/ -f json -o scan.json
+          COUNT=$(cat scan.json | jq '.results | length')
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+---
+# .github/workflows/jobpost-smart-deploy.yml
+name: JobPost Smart Deploy
+
+on: [push]
+
+jobs:
+  check:
+    uses: ./.github/workflows/jobpost-check-reusable.yml
+  
+  migrate:
+    needs: check
+    if: jobs.check.outputs.needs_migration == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run JobPost migrations
+        run: |
+          echo "🗄️ Running JobPost database migrations"
+          python manage.py migrate
+  
+  deploy:
+    needs: check
+    if: jobs.check.outputs.has_changes == 'true' && jobs.check.outputs.security_issues == '0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy JobPost
+        run: |
+          echo "🚀 Deploying JobPost"
+          python manage.py deploy
+  
+  security-alert:
+    needs: check
+    if: jobs.check.outputs.security_issues != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Alert security issues
+        run: |
+          echo "⚠️ JobPost has ${{ jobs.check.outputs.security_issues }} security issues"
+          exit 1</code></pre>
+        <div class="printout">🎯 JobPost conditional workflows based on jobs context outputs</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost composite reusable workflow</h4>
+        <pre><code class="language-yaml"># .github/workflows/jobpost-full-ci-reusable.yml
+name: JobPost Full CI
+
+on:
+  workflow_call:
+    outputs:
+      build_version:
+        value: ${{ jobs.build.outputs.version }}
+      test_status:
+        value: ${{ jobs.test.outputs.status }}
+      lint_score:
+        value: ${{ jobs.lint.outputs.score }}
+      overall_status:
+        value: ${{ jobs.report.outputs.status }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.ver }}
+    steps:
+      - name: Build JobPost
+        id: version
+        run: |
+          VERSION="v1.0.${{ github.run_number }}"
+          echo "ver=$VERSION" >> $GITHUB_OUTPUT
+          python manage.py collectstatic --noinput
+  
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.test.outputs.result }}
+    steps:
+      - name: Test JobPost
+        id: test
+        run: |
+          python manage.py test jobpost
+          echo "result=passed" >> $GITHUB_OUTPUT
+  
+  lint:
+    runs-on: ubuntu-latest
+    outputs:
+      score: ${{ steps.lint.outputs.score }}
+    steps:
+      - name: Lint JobPost
+        id: lint
+        run: |
+          SCORE=$(pylint jobpost/ | grep "rated at" | awk '{print $7}' | cut -d/ -f1)
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+  
+  report:
+    needs: [build, test, lint]
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.report.outputs.overall }}
+    steps:
+      - name: Generate report
+        id: report
+        run: |
+          if [ "${{ needs.test.outputs.status }}" == "passed" ]; then
+            echo "overall=success" >> $GITHUB_OUTPUT
+          else
+            echo "overall=failed" >> $GITHUB_OUTPUT
+          fi
+
+---
+# .github/workflows/jobpost-main.yml
+name: JobPost Main
+
+on: [push]
+
+jobs:
+  ci:
+    uses: ./.github/workflows/jobpost-full-ci-reusable.yml
+  
+  summary:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display JobPost CI summary
+        run: |
+          echo "📊 JobPost CI Summary"
+          echo "Version: ${{ jobs.ci.outputs.build_version }}"
+          echo "Tests: ${{ jobs.ci.outputs.test_status }}"
+          echo "Lint Score: ${{ jobs.ci.outputs.lint_score }}"
+          echo "Overall: ${{ jobs.ci.outputs.overall_status }}"</code></pre>
+        <div class="printout">📊 JobPost composite reusable workflow using jobs context</div>
+      </div>
     </section>
 
     <section id="steps_context" class="section">
       <h2>steps context</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/learn-github-actions/contexts#steps-context" target="_blank" rel="noopener">steps context</a>
+      </div>
+      <p class="subtitle">Access information about steps that have already run in the current job using the steps context.</p>
+
+      <h3>Full description</h3>
+      <p>The <code class="inline">steps</code> context contains information about the steps in the current job that have already been completed and have an <code class="inline">id</code>. For JobPost workflows, this is essential for passing data between steps, checking step outcomes, and building complex multi-step workflows where later steps depend on earlier step results. Each step must have an <code class="inline">id</code> to be accessible in the steps context. The context provides access to step outputs, conclusions, and outcomes, enabling sophisticated workflow logic and data flow through the CI/CD pipeline.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Access step outputs
+${{ steps.step_id.outputs.output_name }}
+
+# Access step status
+${{ steps.step_id.conclusion }}  # success, failure, cancelled, skipped
+${{ steps.step_id.outcome }}     # success, failure, cancelled, skipped
+
+# Define step with id and outputs
+- name: Build JobPost
+  id: build
+  run: |
+    echo "version=1.0.0" >> $GITHUB_OUTPUT
+    echo "artifact=jobpost.tar.gz" >> $GITHUB_OUTPUT
+
+# Use step outputs
+- name: Deploy JobPost
+  run: |
+    echo "Version: ${{ steps.build.outputs.version }}"
+    echo "Artifact: ${{ steps.build.outputs.artifact }}"</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Step outputs:</strong>
+        <ul>
+          <li><code class="inline">steps.&lt;step_id&gt;.outputs.&lt;output_name&gt;</code> - Value set by the step using <code class="inline">$GITHUB_OUTPUT</code></li>
+        </ul>
+        <strong>Step status:</strong>
+        <ul>
+          <li><code class="inline">steps.&lt;step_id&gt;.conclusion</code> - Final result after <code class="inline">continue-on-error</code> is applied</li>
+          <li><code class="inline">steps.&lt;step_id&gt;.outcome</code> - Result before <code class="inline">continue-on-error</code> is applied</li>
+        </ul>
+        <strong>Status values:</strong>
+        <ul>
+          <li><code class="inline">success</code> - Step completed successfully</li>
+          <li><code class="inline">failure</code> - Step failed</li>
+          <li><code class="inline">cancelled</code> - Workflow was cancelled</li>
+          <li><code class="inline">skipped</code> - Step was skipped due to conditional</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>The steps context returns an object with nested objects for each step that has an id, containing string values for outputs, conclusion, and outcome.</p>
+
+      <h3>Examples</h3>
+      <div class="example">
+        <h4>1. JobPost build information sharing</h4>
+        <pre><code class="language-yaml">name: JobPost Build Pipeline
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Generate JobPost version
+        id: version
+        run: |
+          VERSION="v1.0.${{ github.run_number }}"
+          BUILD_TIME=$(date +%Y%m%d-%H%M%S)
+          COMMIT_SHORT="${{ github.sha }}"
+          COMMIT_SHORT="${COMMIT_SHORT:0:7}"
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT_SHORT" >> $GITHUB_OUTPUT
+          
+          echo "Generated JobPost version: $VERSION"
+      
+      - name: Build JobPost application
+        id: build
+        run: |
+          echo "🏗️ Building JobPost ${{ steps.version.outputs.version }}"
+          
+          python manage.py collectstatic --noinput
+          STATIC_SIZE=$(du -sh staticfiles | cut -f1)
+          
+          echo "static_size=$STATIC_SIZE" >> $GITHUB_OUTPUT
+          echo "build_status=success" >> $GITHUB_OUTPUT
+      
+      - name: Create JobPost artifact
+        id: artifact
+        run: |
+          ARTIFACT_NAME="jobpost-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_time }}.tar.gz"
+          
+          tar -czf "$ARTIFACT_NAME" \
+            jobpost/ \
+            anihpj/ \
+            manage.py \
+            staticfiles/
+          
+          ARTIFACT_SIZE=$(du -h "$ARTIFACT_NAME" | cut -f1)
+          
+          echo "name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "size=$ARTIFACT_SIZE" >> $GITHUB_OUTPUT
+      
+      - name: Generate JobPost build report
+        run: |
+          echo "📦 JobPost Build Report"
+          echo "======================"
+          echo "Version: ${{ steps.version.outputs.version }}"
+          echo "Build Time: ${{ steps.version.outputs.build_time }}"
+          echo "Commit: ${{ steps.version.outputs.commit }}"
+          echo "Static Size: ${{ steps.build.outputs.static_size }}"
+          echo "Artifact: ${{ steps.artifact.outputs.name }}"
+          echo "Artifact Size: ${{ steps.artifact.outputs.size }}"
+          echo "Build Status: ${{ steps.build.outputs.build_status }}"</code></pre>
+        <div class="printout">📦 JobPost build information sharing using steps context</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost conditional step execution</h4>
+        <pre><code class="language-yaml">name: JobPost Conditional Steps
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run JobPost unit tests
+        id: unit_tests
+        continue-on-error: true
+        run: |
+          python manage.py test jobpost.tests.unit
+          echo "passed=true" >> $GITHUB_OUTPUT
+      
+      - name: Run JobPost integration tests
+        id: integration_tests
+        if: steps.unit_tests.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python manage.py test jobpost.tests.integration
+          echo "passed=true" >> $GITHUB_OUTPUT
+      
+      - name: Run JobPost E2E tests
+        id: e2e_tests
+        if: |
+          steps.unit_tests.outcome == 'success' &&
+          steps.integration_tests.outcome == 'success'
+        run: |
+          python manage.py test jobpost.tests.e2e
+          echo "passed=true" >> $GITHUB_OUTPUT
+      
+      - name: Generate JobPost test report
+        if: always()
+        run: |
+          echo "🧪 JobPost Test Report"
+          echo "====================="
+          
+          echo "Unit Tests:"
+          echo "  Outcome: ${{ steps.unit_tests.outcome }}"
+          echo "  Conclusion: ${{ steps.unit_tests.conclusion }}"
+          
+          if [ "${{ steps.integration_tests.outcome }}" != "" ]; then
+            echo "Integration Tests:"
+            echo "  Outcome: ${{ steps.integration_tests.outcome }}"
+            echo "  Conclusion: ${{ steps.integration_tests.conclusion }}"
+          else
+            echo "Integration Tests: Skipped"
+          fi
+          
+          if [ "${{ steps.e2e_tests.outcome }}" != "" ]; then
+            echo "E2E Tests:"
+            echo "  Outcome: ${{ steps.e2e_tests.outcome }}"
+            echo "  Conclusion: ${{ steps.e2e_tests.conclusion }}"
+          else
+            echo "E2E Tests: Skipped"
+          fi
+      
+      - name: Fail if critical tests failed
+        if: |
+          steps.unit_tests.outcome == 'failure' ||
+          steps.integration_tests.outcome == 'failure'
+        run: |
+          echo "❌ JobPost critical tests failed"
+          exit 1</code></pre>
+        <div class="printout">🎯 JobPost conditional steps using steps context</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost deployment with rollback</h4>
+        <pre><code class="language-yaml">name: JobPost Deploy with Rollback
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Backup current JobPost deployment
+        id: backup
+        run: |
+          BACKUP_ID="backup-$(date +%s)"
+          echo "Creating JobPost backup: $BACKUP_ID"
+          
+          # Create backup
+          python manage.py backup --id="$BACKUP_ID"
+          
+          echo "backup_id=$BACKUP_ID" >> $GITHUB_OUTPUT
+          echo "backup_status=success" >> $GITHUB_OUTPUT
+      
+      - name: Deploy new JobPost version
+        id: deploy
+        continue-on-error: true
+        run: |
+          echo "🚀 Deploying JobPost"
+          python manage.py deploy --production
+          echo "deploy_status=success" >> $GITHUB_OUTPUT
+      
+      - name: Run JobPost smoke tests
+        id: smoke_tests
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        run: |
+          echo "🔍 Running JobPost smoke tests"
+          python manage.py test jobpost.tests.smoke
+          echo "smoke_status=passed" >> $GITHUB_OUTPUT
+      
+      - name: Rollback JobPost deployment
+        if: |
+          steps.deploy.outcome == 'failure' ||
+          steps.smoke_tests.outcome == 'failure'
+        run: |
+          echo "⚠️ Rolling back JobPost deployment"
+          echo "Backup ID: ${{ steps.backup.outputs.backup_id }}"
+          
+          python manage.py restore --id="${{ steps.backup.outputs.backup_id }}"
+          
+          echo "❌ JobPost deployment failed and rolled back"
+          exit 1
+      
+      - name: Cleanup JobPost backup
+        if: |
+          steps.deploy.outcome == 'success' &&
+          steps.smoke_tests.outcome == 'success'
+        run: |
+          echo "✅ JobPost deployment successful"
+          echo "Cleaning up backup: ${{ steps.backup.outputs.backup_id }}"
+          python manage.py cleanup-backup --id="${{ steps.backup.outputs.backup_id }}"
+      
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "📊 JobPost Deployment Summary"
+          echo "Backup: ${{ steps.backup.outputs.backup_status }}"
+          echo "Deploy: ${{ steps.deploy.outcome }}"
+          echo "Smoke Tests: ${{ steps.smoke_tests.outcome }}"</code></pre>
+        <div class="printout">🔄 JobPost deployment with rollback using steps context</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost multi-step data pipeline</h4>
+        <pre><code class="language-yaml">name: JobPost Data Pipeline
+
+on: [push]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract JobPost data
+        id: extract
+        run: |
+          echo "📥 Extracting JobPost data"
+          RECORD_COUNT=1234
+          EXTRACT_TIME=$(date +%s)
+          
+          echo "record_count=$RECORD_COUNT" >> $GITHUB_OUTPUT
+          echo "extract_time=$EXTRACT_TIME" >> $GITHUB_OUTPUT
+          echo "extract_status=complete" >> $GITHUB_OUTPUT
+      
+      - name: Transform JobPost data
+        id: transform
+        if: steps.extract.outputs.extract_status == 'complete'
+        run: |
+          echo "🔄 Transforming JobPost data"
+          echo "Processing ${{ steps.extract.outputs.record_count }} records"
+          
+          TRANSFORM_TIME=$(date +%s)
+          START_TIME=${{ steps.extract.outputs.extract_time }}
+          DURATION=$((TRANSFORM_TIME - START_TIME))
+          PROCESSED_COUNT=${{ steps.extract.outputs.record_count }}
+          
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "processed=$PROCESSED_COUNT" >> $GITHUB_OUTPUT
+          echo "transform_status=complete" >> $GITHUB_OUTPUT
+      
+      - name: Load JobPost data
+        id: load
+        if: steps.transform.outputs.transform_status == 'complete'
+        run: |
+          echo "📤 Loading JobPost data"
+          echo "Loading ${{ steps.transform.outputs.processed }} records"
+          
+          LOAD_TIME=$(date +%s)
+          START_TIME=${{ steps.extract.outputs.extract_time }}
+          TOTAL_DURATION=$((LOAD_TIME - START_TIME))
+          
+          echo "load_time=$LOAD_TIME" >> $GITHUB_OUTPUT
+          echo "total_duration=$TOTAL_DURATION" >> $GITHUB_OUTPUT
+          echo "load_status=complete" >> $GITHUB_OUTPUT
+      
+      - name: Validate JobPost data
+        id: validate
+        if: steps.load.outputs.load_status == 'complete'
+        run: |
+          echo "✅ Validating JobPost data"
+          VALIDATION_ERRORS=0
+          VALIDATION_WARNINGS=5
+          
+          echo "errors=$VALIDATION_ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings=$VALIDATION_WARNINGS" >> $GITHUB_OUTPUT
+      
+      - name: Generate JobPost pipeline report
+        if: always()
+        run: |
+          echo "📊 JobPost Data Pipeline Report"
+          echo "================================"
+          echo "Extract:"
+          echo "  Status: ${{ steps.extract.outputs.extract_status }}"
+          echo "  Records: ${{ steps.extract.outputs.record_count }}"
+          echo ""
+          echo "Transform:"
+          echo "  Status: ${{ steps.transform.outputs.transform_status }}"
+          echo "  Duration: ${{ steps.transform.outputs.duration }}s"
+          echo "  Processed: ${{ steps.transform.outputs.processed }}"
+          echo ""
+          echo "Load:"
+          echo "  Status: ${{ steps.load.outputs.load_status }}"
+          echo "  Total Duration: ${{ steps.load.outputs.total_duration }}s"
+          echo ""
+          echo "Validation:"
+          echo "  Errors: ${{ steps.validate.outputs.errors }}"
+          echo "  Warnings: ${{ steps.validate.outputs.warnings }}"</code></pre>
+        <div class="printout">📊 JobPost data pipeline using steps context</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost performance benchmarking</h4>
+        <pre><code class="language-yaml">name: JobPost Performance Benchmark
+
+on: [push]
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Benchmark JobPost database queries
+        id: db_benchmark
+        run: |
+          echo "🗄️ Benchmarking JobPost database"
+          
+          START=$(date +%s%N)
+          python manage.py benchmark db_queries
+          END=$(date +%s%N)
+          
+          DB_TIME=$(( (END - START) / 1000000 ))
+          
+          echo "time_ms=$DB_TIME" >> $GITHUB_OUTPUT
+          echo "queries=150" >> $GITHUB_OUTPUT
+      
+      - name: Benchmark JobPost API endpoints
+        id: api_benchmark
+        run: |
+          echo "🌐 Benchmarking JobPost API"
+          
+          START=$(date +%s%N)
+          python manage.py benchmark api_endpoints
+          END=$(date +%s%N)
+          
+          API_TIME=$(( (END - START) / 1000000 ))
+          
+          echo "time_ms=$API_TIME" >> $GITHUB_OUTPUT
+          echo "endpoints=25" >> $GITHUB_OUTPUT
+          echo "requests=1000" >> $GITHUB_OUTPUT
+      
+      - name: Benchmark JobPost template rendering
+        id: template_benchmark
+        run: |
+          echo "📄 Benchmarking JobPost templates"
+          
+          START=$(date +%s%N)
+          python manage.py benchmark templates
+          END=$(date +%s%N)
+          
+          TEMPLATE_TIME=$(( (END - START) / 1000000 ))
+          
+          echo "time_ms=$TEMPLATE_TIME" >> $GITHUB_OUTPUT
+          echo "templates=50" >> $GITHUB_OUTPUT
+      
+      - name: Calculate JobPost performance score
+        id: score
+        run: |
+          DB_TIME=${{ steps.db_benchmark.outputs.time_ms }}
+          API_TIME=${{ steps.api_benchmark.outputs.time_ms }}
+          TEMPLATE_TIME=${{ steps.template_benchmark.outputs.time_ms }}
+          
+          TOTAL_TIME=$((DB_TIME + API_TIME + TEMPLATE_TIME))
+          
+          # Calculate score (lower time = higher score)
+          SCORE=$((10000 - (TOTAL_TIME / 10)))
+          
+          echo "total_time=$TOTAL_TIME" >> $GITHUB_OUTPUT
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+      
+      - name: Compare with baseline
+        run: |
+          BASELINE_SCORE=8500
+          CURRENT_SCORE=${{ steps.score.outputs.score }}
+          
+          DIFF=$((CURRENT_SCORE - BASELINE_SCORE))
+          PERCENT=$(( (DIFF * 100) / BASELINE_SCORE ))
+          
+          echo "📊 JobPost Performance Report"
+          echo "=============================="
+          echo "Database:"
+          echo "  Time: ${{ steps.db_benchmark.outputs.time_ms }}ms"
+          echo "  Queries: ${{ steps.db_benchmark.outputs.queries }}"
+          echo ""
+          echo "API:"
+          echo "  Time: ${{ steps.api_benchmark.outputs.time_ms }}ms"
+          echo "  Endpoints: ${{ steps.api_benchmark.outputs.endpoints }}"
+          echo "  Requests: ${{ steps.api_benchmark.outputs.requests }}"
+          echo ""
+          echo "Templates:"
+          echo "  Time: ${{ steps.template_benchmark.outputs.time_ms }}ms"
+          echo "  Templates: ${{ steps.template_benchmark.outputs.templates }}"
+          echo ""
+          echo "Overall:"
+          echo "  Total Time: ${{ steps.score.outputs.total_time }}ms"
+          echo "  Score: $CURRENT_SCORE / 10000"
+          echo "  Baseline: $BASELINE_SCORE"
+          echo "  Difference: ${DIFF} (${PERCENT}%)"
+          
+          if [ $CURRENT_SCORE -lt $BASELINE_SCORE ]; then
+            echo "⚠️ Performance regression detected!"
+          else
+            echo "✅ Performance meets or exceeds baseline"
+          fi</code></pre>
+        <div class="printout">⚡ JobPost performance benchmarking using steps context</div>
+      </div>
     </section>
 
     <section id="runner_context" class="section">
       <h2>runner context</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/learn-github-actions/contexts#runner-context" target="_blank" rel="noopener">runner context</a>
+      </div>
+      <p class="subtitle">Access information about the runner executing the current job using the runner context.</p>
+
+      <h3>Full description</h3>
+      <p>The <code class="inline">runner</code> context contains information about the runner that is executing the current job, including the operating system, architecture, temporary directories, and tool cache location. For JobPost workflows, this context is crucial for writing portable workflows that adapt to different runner environments, managing temporary files, accessing pre-installed tools, and optimizing workflows based on the runner's capabilities. The runner context helps ensure JobPost workflows work correctly across different operating systems (Linux, macOS, Windows) and architectures (x64, ARM).</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Access runner properties
+${{ runner.os }}              # Operating system (Linux, Windows, macOS)
+${{ runner.arch }}            # Architecture (X64, ARM, ARM64)
+${{ runner.name }}            # Runner name
+${{ runner.temp }}            # Temporary directory path
+${{ runner.tool_cache }}      # Tool cache directory path
+${{ runner.workspace }}       # Default working directory path</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Runner properties:</strong>
+        <ul>
+          <li><code class="inline">runner.os</code> - Operating system of the runner (Linux, Windows, macOS)</li>
+          <li><code class="inline">runner.arch</code> - Architecture of the runner (X64, ARM, ARM64)</li>
+          <li><code class="inline">runner.name</code> - Name of the runner</li>
+          <li><code class="inline">runner.environment</code> - Environment type (github-hosted, self-hosted)</li>
+        </ul>
+        <strong>Directory paths:</strong>
+        <ul>
+          <li><code class="inline">runner.temp</code> - Path to temporary directory (cleaned between jobs)</li>
+          <li><code class="inline">runner.tool_cache</code> - Path to tool cache directory (persists across jobs)</li>
+          <li><code class="inline">runner.workspace</code> - Path to default working directory</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>The runner context returns an object with string values for operating system, architecture, name, and directory paths.</p>
+
+      <h3>Examples</h3>
+      <div class="example">
+        <h4>1. JobPost cross-platform workflows</h4>
+        <pre><code class="language-yaml">name: JobPost Cross-Platform
+
+on: [push]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Display JobPost runner info
+        run: |
+          echo "🖥️ JobPost Runner Information"
+          echo "OS: ${{ runner.os }}"
+          echo "Architecture: ${{ runner.arch }}"
+          echo "Runner Name: ${{ runner.name }}"
+          echo "Environment: ${{ runner.environment }}"
+      
+      - name: Set JobPost platform-specific variables
+        run: |
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            echo "PLATFORM=linux" >> $GITHUB_ENV
+            echo "PYTHON_CMD=python3" >> $GITHUB_ENV
+            echo "PKG_MANAGER=apt-get" >> $GITHUB_ENV
+          elif [ "${{ runner.os }}" == "macOS" ]; then
+            echo "PLATFORM=macos" >> $GITHUB_ENV
+            echo "PYTHON_CMD=python3" >> $GITHUB_ENV
+            echo "PKG_MANAGER=brew" >> $GITHUB_ENV
+          elif [ "${{ runner.os }}" == "Windows" ]; then
+            echo "PLATFORM=windows" >> $GITHUB_ENV
+            echo "PYTHON_CMD=python" >> $GITHUB_ENV
+            echo "PKG_MANAGER=choco" >> $GITHUB_ENV
+          fi
+        shell: bash
+      
+      - name: Build JobPost for platform
+        run: |
+          echo "🏗️ Building JobPost for ${{ runner.os }}"
+          ${{ env.PYTHON_CMD }} manage.py collectstatic --noinput
+          
+          ARTIFACT="jobpost-${{ env.PLATFORM }}-${{ runner.arch }}.tar.gz"
+          echo "Artifact: $ARTIFACT"
+        shell: bash
+      
+      - name: Run JobPost platform-specific tests
+        run: |
+          echo "🧪 Running JobPost tests on ${{ runner.os }}"
+          ${{ env.PYTHON_CMD }} manage.py test jobpost
+        shell: bash</code></pre>
+        <div class="printout">🖥️ JobPost cross-platform builds using runner context</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost temporary file management</h4>
+        <pre><code class="language-yaml">name: JobPost Temp Files
+
+on: [push]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display JobPost directories
+        run: |
+          echo "📁 JobPost Directory Information"
+          echo "Temp: ${{ runner.temp }}"
+          echo "Tool Cache: ${{ runner.tool_cache }}"
+          echo "Workspace: ${{ runner.workspace }}"
+      
+      - name: Generate JobPost temporary files
+        run: |
+          TEMP_DIR="${{ runner.temp }}/jobpost"
+          mkdir -p "$TEMP_DIR"
+          
+          echo "Creating JobPost temporary files in: $TEMP_DIR"
+          
+          # Generate temporary data
+          python manage.py dumpdata jobpost > "$TEMP_DIR/data.json"
+          python manage.py collectstatic --noinput -c --noinput \
+            --output="$TEMP_DIR/static"
+          
+          # Create build artifacts in temp
+          tar -czf "$TEMP_DIR/jobpost-build.tar.gz" \
+            jobpost/ anihpj/ manage.py
+          
+          echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
+      
+      - name: Process JobPost temporary files
+        run: |
+          echo "📦 Processing JobPost temp files from: ${{ env.TEMP_DIR }}"
+          
+          ls -lh "${{ env.TEMP_DIR }}"
+          
+          # Process files
+          FILE_COUNT=$(find "${{ env.TEMP_DIR }}" -type f | wc -l)
+          TOTAL_SIZE=$(du -sh "${{ env.TEMP_DIR }}" | cut -f1)
+          
+          echo "Files: $FILE_COUNT"
+          echo "Total Size: $TOTAL_SIZE"
+      
+      - name: Store JobPost artifacts in cache directory
+        run: |
+          CACHE_DIR="${{ runner.tool_cache }}/jobpost-cache"
+          mkdir -p "$CACHE_DIR"
+          
+          echo "💾 Storing JobPost artifacts in: $CACHE_DIR"
+          
+          # Move important artifacts to cache (persists across jobs)
+          cp "${{ env.TEMP_DIR }}/jobpost-build.tar.gz" "$CACHE_DIR/"
+          
+          echo "✅ JobPost artifacts cached"
+      
+      - name: Cleanup JobPost temp files
+        if: always()
+        run: |
+          echo "🧹 Cleaning up JobPost temp files"
+          rm -rf "${{ env.TEMP_DIR }}"
+          echo "✅ Temp directory cleaned"</code></pre>
+        <div class="printout">📁 JobPost temporary file management using runner context</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost runner-optimized workflows</h4>
+        <pre><code class="language-yaml">name: JobPost Optimized Workflow
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect JobPost runner capabilities
+        id: capabilities
+        run: |
+          echo "🔍 Detecting JobPost runner capabilities"
+          
+          # Check CPU cores
+          CORES=$(nproc)
+          echo "cores=$CORES" >> $GITHUB_OUTPUT
+          
+          # Check memory
+          MEMORY=$(free -g | awk '/^Mem:/{print $2}')
+          echo "memory_gb=$MEMORY" >> $GITHUB_OUTPUT
+          
+          # Check disk space
+          DISK=$(df -h ${{ runner.workspace }} | awk 'NR==2{print $4}')
+          echo "disk_available=$DISK" >> $GITHUB_OUTPUT
+          
+          echo "Cores: $CORES"
+          echo "Memory: ${MEMORY}GB"
+          echo "Disk: $DISK"
+      
+      - name: Configure JobPost for runner
+        run: |
+          CORES=${{ steps.capabilities.outputs.cores }}
+          
+          echo "⚙️ Configuring JobPost for $CORES cores"
+          
+          # Set parallel workers based on cores
+          if [ $CORES -ge 4 ]; then
+            WORKERS=4
+          elif [ $CORES -ge 2 ]; then
+            WORKERS=2
+          else
+            WORKERS=1
+          fi
+          
+          echo "WORKERS=$WORKERS" >> $GITHUB_ENV
+          
+          # Configure Django settings
+          cat >> anihpj/settings.py << EOF
+          
+          # CI Runner optimizations
+          DATABASES['default']['CONN_MAX_AGE'] = 600
+          DATABASES['default']['OPTIONS'] = {'MAX_CONNECTIONS': $WORKERS}
+          EOF
+      
+      - name: Run JobPost parallel tests
+        run: |
+          echo "🧪 Running JobPost tests with ${{ env.WORKERS }} workers"
+          
+          python manage.py test jobpost \
+            --parallel=${{ env.WORKERS }} \
+            --verbosity=2
+      
+      - name: Build JobPost with optimization
+        run: |
+          echo "🏗️ Building JobPost (optimized for ${{ runner.os }}/${{ runner.arch }})"
+          
+          # Use runner-specific optimizations
+          if [ "${{ runner.arch }}" == "ARM64" ]; then
+            export CFLAGS="-march=armv8-a"
+          else
+            export CFLAGS="-march=x86-64"
+          fi
+          
+          python manage.py collectstatic --noinput
+          
+          echo "✅ JobPost build optimized for runner"</code></pre>
+        <div class="printout">⚡ JobPost runner-optimized workflows using runner context</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost self-hosted vs GitHub-hosted runners</h4>
+        <pre><code class="language-yaml">name: JobPost Runner Type Detection
+
+on: [push]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect JobPost runner type
+        id: runner_type
+        run: |
+          echo "🏃 JobPost Runner Type Detection"
+          echo "Runner: ${{ runner.name }}"
+          echo "Environment: ${{ runner.environment }}"
+          
+          if [ "${{ runner.environment }}" == "github-hosted" ]; then
+            echo "type=github-hosted" >> $GITHUB_OUTPUT
+            echo "Using GitHub-hosted runner"
+          else
+            echo "type=self-hosted" >> $GITHUB_OUTPUT
+            echo "Using self-hosted runner"
+          fi
+      
+      - name: Configure JobPost for GitHub-hosted
+        if: steps.runner_type.outputs.type == 'github-hosted'
+        run: |
+          echo "⚙️ Configuring JobPost for GitHub-hosted runner"
+          
+          # Use public package indexes
+          echo "PYPI_URL=https://pypi.org/simple" >> $GITHUB_ENV
+          
+          # Use public Docker registry
+          echo "DOCKER_REGISTRY=docker.io" >> $GITHUB_ENV
+          
+          # Configure for external services
+          echo "DATABASE_HOST=external-db.example.com" >> $GITHUB_ENV
+      
+      - name: Configure JobPost for self-hosted
+        if: steps.runner_type.outputs.type == 'self-hosted'
+        run: |
+          echo "⚙️ Configuring JobPost for self-hosted runner"
+          
+          # Use internal package mirror
+          echo "PYPI_URL=https://internal-pypi.corp.local/simple" >> $GITHUB_ENV
+          
+          # Use internal Docker registry
+          echo "DOCKER_REGISTRY=registry.corp.local" >> $GITHUB_ENV
+          
+          # Use internal database
+          echo "DATABASE_HOST=internal-db.corp.local" >> $GITHUB_ENV
+      
+      - name: Build JobPost with runner-specific config
+        run: |
+          echo "🏗️ Building JobPost"
+          echo "PyPI: ${{ env.PYPI_URL }}"
+          echo "Docker: ${{ env.DOCKER_REGISTRY }}"
+          echo "Database: ${{ env.DATABASE_HOST }}"
+          
+          pip install --index-url="${{ env.PYPI_URL }}" -r requirements.txt
+          python manage.py collectstatic --noinput
+      
+      - name: Deploy JobPost
+        run: |
+          echo "🚀 Deploying JobPost from ${{ steps.runner_type.outputs.type }} runner"
+          
+          if [ "${{ steps.runner_type.outputs.type }}" == "self-hosted" ]; then
+            # Direct deployment for self-hosted
+            python manage.py deploy --internal
+          else
+            # Remote deployment for GitHub-hosted
+            python manage.py deploy --external
+          fi</code></pre>
+        <div class="printout">🏃 JobPost self-hosted vs GitHub-hosted runner detection</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost workspace and path management</h4>
+        <pre><code class="language-yaml">name: JobPost Workspace Management
+
+on: [push]
+
+jobs:
+  organize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display JobPost workspace info
+        run: |
+          echo "📂 JobPost Workspace Information"
+          echo "Workspace: ${{ runner.workspace }}"
+          echo "Temp: ${{ runner.temp }}"
+          echo "Tool Cache: ${{ runner.tool_cache }}"
+          echo "Current Dir: $(pwd)"
+      
+      - name: Create JobPost directory structure
+        run: |
+          BASE="${{ runner.workspace }}/jobpost-build"
+          
+          echo "🏗️ Creating JobPost directory structure in: $BASE"
+          
+          mkdir -p "$BASE"/{source,build,dist,logs,cache}
+          
+          echo "BASE_DIR=$BASE" >> $GITHUB_ENV
+          
+          tree -L 2 "$BASE" || ls -R "$BASE"
+      
+      - name: Clone JobPost to custom location
+        run: |
+          echo "📥 Cloning JobPost to: ${{ env.BASE_DIR }}/source"
+          
+          cd "${{ env.BASE_DIR }}/source"
+          git clone https://github.com/user/jobpost.git .
+          
+          echo "SOURCE_DIR=${{ env.BASE_DIR }}/source" >> $GITHUB_ENV
+      
+      - name: Build JobPost in custom directories
+        run: |
+          echo "🏗️ Building JobPost"
+          
+          cd "${{ env.SOURCE_DIR }}"
+          
+          # Build to custom output directory
+          python manage.py collectstatic \
+            --noinput \
+            --output="${{ env.BASE_DIR }}/build/static"
+          
+          # Create distribution
+          tar -czf "${{ env.BASE_DIR }}/dist/jobpost.tar.gz" \
+            -C "${{ env.SOURCE_DIR }}" \
+            jobpost/ anihpj/ manage.py
+          
+          # Store logs
+          python manage.py check > "${{ env.BASE_DIR }}/logs/check.log" 2>&1
+      
+      - name: Use JobPost temp for intermediate files
+        run: |
+          TEMP_BUILD="${{ runner.temp }}/jobpost-temp"
+          mkdir -p "$TEMP_BUILD"
+          
+          echo "🔧 Using temp for intermediate files: $TEMP_BUILD"
+          
+          # Generate large intermediate files in temp
+          python manage.py dumpdata > "$TEMP_BUILD/data.json"
+          
+          # Process and move final output
+          python scripts/process_data.py \
+            --input="$TEMP_BUILD/data.json" \
+            --output="${{ env.BASE_DIR }}/dist/data.processed.json"
+          
+          echo "✅ Intermediate files processed"
+      
+      - name: Cache JobPost dependencies
+        run: |
+          CACHE_DIR="${{ runner.tool_cache }}/jobpost"
+          mkdir -p "$CACHE_DIR"
+          
+          echo "💾 Caching JobPost dependencies to: $CACHE_DIR"
+          
+          # Cache pip packages
+          cp -r ~/.cache/pip "$CACHE_DIR/pip-cache"
+          
+          # Cache built wheels
+          pip wheel -r requirements.txt -w "$CACHE_DIR/wheels"
+          
+          echo "✅ Dependencies cached"
+      
+      - name: Generate JobPost workspace report
+        run: |
+          echo "📊 JobPost Workspace Report"
+          echo "=========================="
+          echo "Workspace root: ${{ runner.workspace }}"
+          echo "Base directory: ${{ env.BASE_DIR }}"
+          echo ""
+          echo "Directory sizes:"
+          du -sh "${{ env.BASE_DIR }}"/* | sort -h
+          echo ""
+          echo "Total workspace usage:"
+          du -sh "${{ runner.workspace }}"</code></pre>
+        <div class="printout">📂 JobPost workspace and path management using runner context</div>
+      </div>
     </section>
 
     <section id="secrets_context" class="section">
       <h2>secrets context</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/learn-github-actions/contexts#secrets-context" target="_blank" rel="noopener">secrets context</a>
+      </div>
+      <p class="subtitle">Access secrets configured at repository, environment, or organization level using the secrets context.</p>
+
+      <h3>Full description</h3>
+      <p>The <code class="inline">secrets</code> context contains sensitive information like API keys, passwords, tokens, and certificates that you've configured in GitHub. Secrets are encrypted and should never be printed to logs. For JobPost workflows, secrets are essential for authentication with external services, database connections, deployment credentials, and third-party API integrations. Secrets follow a precedence order: environment-level secrets override repository-level, which override organization-level secrets. The <code class="inline">GITHUB_TOKEN</code> secret is automatically available in every workflow for authenticating with the GitHub API.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Access secrets
+${{ secrets.SECRET_NAME }}
+${{ secrets.GITHUB_TOKEN }}  # Automatically available
+
+# Use in environment variables
+env:
+  DATABASE_PASSWORD: ${{ secrets.DB_PASSWORD }}
+  API_KEY: ${{ secrets.API_KEY }}
+
+# Pass to actions
+- uses: some-action@v1
+  with:
+    token: ${{ secrets.GITHUB_TOKEN }}
+    api_key: ${{ secrets.API_KEY }}</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Secret levels:</strong>
+        <ul>
+          <li><code class="inline">Organization-level</code> - Available to all repositories in the organization</li>
+          <li><code class="inline">Repository-level</code> - Available to all workflows in the repository</li>
+          <li><code class="inline">Environment-level</code> - Available only when job specifies that environment</li>
+        </ul>
+        <strong>Automatic secrets:</strong>
+        <ul>
+          <li><code class="inline">secrets.GITHUB_TOKEN</code> - Automatically provided token for GitHub API authentication</li>
+        </ul>
+        <strong>Security notes:</strong>
+        <ul>
+          <li>Secrets are automatically redacted from logs</li>
+          <li>Never print secrets directly to output</li>
+          <li>Secrets are not passed to workflows from forked repositories</li>
+          <li>Maximum 100 secrets per repository, 100 per organization, 100 per environment</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>The secrets context returns an object with string values for each secret name. Secret values are encrypted and redacted in logs.</p>
+
+      <h3>Examples</h3>
+      <div class="example">
+        <h4>1. JobPost database and service authentication</h4>
+        <pre><code class="language-yaml">name: JobPost with Secrets
+
+on: [push]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: Configure JobPost database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          echo "🗄️ Configuring JobPost database"
+          
+          # Create Django settings with secrets
+          cat > anihpj/settings_prod.py << EOF
+          from .settings import *
+          
+          DATABASES = {
+              'default': {
+                  'ENGINE': 'django.db.backends.postgresql',
+                  'NAME': 'jobpost_prod',
+                  'USER': 'jobpost',
+                  'PASSWORD': '$DATABASE_PASSWORD',
+                  'HOST': 'db.example.com',
+                  'PORT': '5432',
+              }
+          }
+          
+          SECRET_KEY = '${{ secrets.DJANGO_SECRET_KEY }}'
+          DEBUG = False
+          ALLOWED_HOSTS = ['jobpost.com', 'www.jobpost.com']
+          EOF
+          
+          echo "✅ JobPost configured with production secrets"
+      
+      - name: Run JobPost migrations
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings_prod
+          DATABASE_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          echo "📊 Running JobPost database migrations"
+          python manage.py migrate --noinput
+      
+      - name: Configure JobPost cache
+        env:
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+        run: |
+          echo "💾 Configuring JobPost Redis cache"
+          
+          # Configure Redis with authentication
+          cat >> anihpj/settings_prod.py << EOF
+          
+          CACHES = {
+              'default': {
+                  'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+                  'LOCATION': 'redis://redis.example.com:6379/0',
+                  'OPTIONS': {
+                      'PASSWORD': '$REDIS_PASSWORD',
+                  }
+              }
+          }
+          EOF</code></pre>
+        <div class="printout">🔐 JobPost database authentication using secrets context</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost third-party API integrations</h4>
+        <pre><code class="language-yaml">name: JobPost API Integrations
+
+on: [push]
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure JobPost external services
+        env:
+          STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          echo "🔌 Configuring JobPost external integrations"
+          
+          # Create environment file with secrets
+          cat > .env.production << EOF
+          # Payment processing
+          STRIPE_API_KEY=$STRIPE_API_KEY
+          STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          
+          # Email service
+          SENDGRID_API_KEY=$SENDGRID_API_KEY
+          
+          # Cloud storage
+          AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+          AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
+          AWS_STORAGE_BUCKET_NAME=jobpost-media
+          
+          # Error tracking
+          SENTRY_DSN=$SENTRY_DSN
+          EOF
+          
+          echo "✅ JobPost external services configured"
+      
+      - name: Test JobPost Stripe integration
+        env:
+          STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
+        run: |
+          echo "💳 Testing JobPost Stripe integration"
+          python manage.py test jobpost.tests.test_payments
+      
+      - name: Send JobPost deployment notification
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          echo "📢 Sending JobPost deployment notification"
+          
+          curl -X POST "$SLACK_WEBHOOK" \
+               -H 'Content-Type: application/json' \
+               -d "{
+                 \"text\": \"JobPost deployed to production\",
+                 \"username\": \"GitHub Actions\",
+                 \"icon_emoji\": \":rocket:\"
+               }"</code></pre>
+        <div class="printout">🔌 JobPost third-party API integrations using secrets context</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost deployment with SSH and certificates</h4>
+        <pre><code class="language-yaml">name: JobPost SSH Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup JobPost SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          echo "🔑 Setting up JobPost SSH authentication"
+          
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          
+          # Install SSH private key
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          
+          # Install known hosts
+          echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          
+          echo "✅ SSH key configured"
+      
+      - name: Deploy JobPost via SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          echo "🚀 Deploying JobPost to production server"
+          
+          # Copy files to server
+          scp -r jobpost/ anihpj/ manage.py requirements.txt \
+              "$DEPLOY_USER@$DEPLOY_HOST":/var/www/jobpost/
+          
+          # Run deployment commands on server
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" << 'EOF'
+            cd /var/www/jobpost
+            source venv/bin/activate
+            pip install -r requirements.txt
+            python manage.py migrate --noinput
+            python manage.py collectstatic --noinput
+            sudo systemctl restart jobpost
+          EOF
+          
+          echo "✅ JobPost deployed successfully"
+      
+      - name: Configure JobPost SSL certificates
+        env:
+          SSL_CERTIFICATE: ${{ secrets.SSL_CERTIFICATE }}
+          SSL_PRIVATE_KEY: ${{ secrets.SSL_PRIVATE_KEY }}
+        run: |
+          echo "🔒 Configuring JobPost SSL certificates"
+          
+          # Note: In practice, store these on the server securely
+          echo "SSL certificate and key configured for HTTPS"</code></pre>
+        <div class="printout">🔑 JobPost SSH deployment using secrets context</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost with GITHUB_TOKEN</h4>
+        <pre><code class="language-yaml">name: JobPost GitHub Integration
+
+on: [pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Run JobPost tests
+        run: |
+          echo "🧪 Running JobPost tests"
+          python manage.py test jobpost
+      
+      - name: Comment JobPost test results on PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "💬 Commenting JobPost test results on PR #$PR_NUMBER"
+          
+          COMMENT="## JobPost Test Results\n\n"
+          COMMENT="${COMMENT}✅ All tests passed!\n\n"
+          COMMENT="${COMMENT}- Tests run: 42\n"
+          COMMENT="${COMMENT}- Duration: 3m 24s\n"
+          COMMENT="${COMMENT}- Coverage: 87%\n"
+          
+          # Post comment using GitHub API
+          curl -X POST \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
+               -d "{\"body\": \"$COMMENT\"}"
+      
+      - name: Update JobPost PR labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "🏷️ Updating JobPost PR labels"
+          
+          # Add "tests-passed" label
+          curl -X POST \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/labels \
+               -d '{"labels": ["tests-passed", "ready-for-review"]}'
+      
+      - name: Create JobPost deployment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 Creating JobPost deployment"
+          
+          # Create deployment via GitHub API
+          curl -X POST \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/${{ github.repository }}/deployments \
+               -d "{
+                 \"ref\": \"${{ github.sha }}\",
+                 \"environment\": \"staging\",
+                 \"description\": \"JobPost staging deployment\",
+                 \"auto_merge\": false
+               }"</code></pre>
+        <div class="printout">🔗 JobPost GitHub API integration using GITHUB_TOKEN</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost environment-specific secrets</h4>
+        <pre><code class="language-yaml">name: JobPost Multi-Environment
+
+on:
+  push:
+    branches: [main, staging, develop]
+
+jobs:
+  deploy-production:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy JobPost to production
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+        run: |
+          echo "🚀 Deploying JobPost to Production"
+          # Production secrets are used here
+          python manage.py deploy \
+            --database="$DATABASE_URL" \
+            --cache="$REDIS_URL"
+  
+  deploy-staging:
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Deploy JobPost to staging
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+        run: |
+          echo "🧪 Deploying JobPost to Staging"
+          # Staging secrets override repository secrets
+          python manage.py deploy \
+            --database="$DATABASE_URL" \
+            --cache="$REDIS_URL"
+  
+  deploy-development:
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: Deploy JobPost to development
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          # Development might not have Redis secret
+        run: |
+          echo "🔧 Deploying JobPost to Development"
+          # Development secrets or repository-level secrets
+          python manage.py deploy \
+            --database="$DATABASE_URL" \
+            --cache="${{ secrets.REDIS_URL || 'redis://localhost:6379' }}"
+      
+      - name: Check JobPost secret availability
+        run: |
+          echo "🔍 Checking JobPost secret configuration"
+          
+          # Check which secrets are available
+          if [ -n "${{ secrets.STRIPE_API_KEY }}" ]; then
+            echo "✅ Stripe integration available"
+          else
+            echo "⚠️ Stripe integration not configured"
+          fi
+          
+          if [ -n "${{ secrets.SENDGRID_API_KEY }}" ]; then
+            echo "✅ Email service available"
+          else
+            echo "⚠️ Email service not configured"
+          fi
+          
+          if [ -n "${{ secrets.SENTRY_DSN }}" ]; then
+            echo "✅ Error tracking available"
+          else
+            echo "⚠️ Error tracking not configured"
+          fi</code></pre>
+        <div class="printout">🌍 JobPost environment-specific secrets using secrets context</div>
+      </div>
     </section>
 
     <section id="strategy_context" class="section">
