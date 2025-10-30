@@ -16657,17 +16657,1570 @@ EOF
     <!-- Dependency caching Section -->
     <section id="cache_action_usage" class="section">
       <h2>cache action usage</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows" target="_blank" rel="noopener">Caching dependencies</a>
+      </div>
+      <p class="subtitle">Use the cache action to store and restore dependencies between workflow runs.</p>
+
+      <h3>Full description</h3>
+      <p>The <code class="inline">actions/cache</code> action allows you to cache dependencies and build outputs to improve workflow execution time. By caching dependencies, you can avoid downloading and installing the same packages on every workflow run. For the JobPost Django application, caching is essential for storing pip packages, node_modules, Python virtual environments, database fixtures, and compiled assets. The cache action significantly reduces workflow run time, especially for jobs that install many dependencies, making CI/CD pipelines faster and more efficient.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Basic cache usage
+- name: Cache dependencies
+  uses: actions/cache@v4
+  with:
+    path: ~/.cache/pip
+    key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+    restore-keys: |
+      ${{ runner.os }}-pip-
+
+# Multiple paths
+- uses: actions/cache@v4
+  with:
+    path: |
+      ~/.cache/pip
+      ~/.cache/npm
+    key: ${{ runner.os }}-deps-${{ hashFiles('**/requirements.txt', '**/package-lock.json') }}</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Cache action parameters:</strong>
+        <ul>
+          <li><code class="inline">path</code> - Directory or file paths to cache (can be multiple paths)</li>
+          <li><code class="inline">key</code> - Unique identifier for the cache entry (must be unique per variation)</li>
+          <li><code class="inline">restore-keys</code> - Ordered list of fallback keys to restore if exact key not found</li>
+          <li><code class="inline">upload-chunk-size</code> - Chunk size for uploading cache (optional, default 32MB)</li>
+          <li><code class="inline">enableCrossOsArchive</code> - Allow cache restore across different OS (optional)</li>
+          <li><code class="inline">fail-on-cache-miss</code> - Fail workflow if cache is not found (optional)</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>The cache action outputs a <code class="inline">cache-hit</code> boolean indicating whether an exact cache match was found. This output can be used with conditional steps to skip installation when cache is restored. The action automatically handles cache restoration at the beginning of the job and cache saving at the end of the job (if cache was not hit).</p>
+
+      <div class="example">
+        <h4>1. JobPost Python dependencies caching</h4>
+        <pre><code class="language-yaml">name: Test JobPost with Pip Cache
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache pip packages
+        id: cache-pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install JobPost dependencies
+        if: steps.cache-pip.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost dependencies (cache miss)"
+          pip install -r requirements.txt
+      
+      - name: Use cached dependencies
+        if: steps.cache-pip.outputs.cache-hit == 'true'
+        run: |
+          echo "✅ Using cached JobPost dependencies"
+          pip list
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "🧪 Running JobPost tests"
+          python manage.py test jobpost
+      
+      - name: Cache statistics
+        run: |
+          echo "📊 JobPost Cache Statistics"
+          echo "Cache hit: ${{ steps.cache-pip.outputs.cache-hit }}"
+          echo "Cache key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}"
+          echo "Pip cache size: $(du -sh ~/.cache/pip | cut -f1)"</code></pre>
+        <div class="printout">⚡ JobPost testing with pip cache for faster dependency installation</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost virtual environment caching</h4>
+        <pre><code class="language-yaml">name: JobPost with Venv Cache
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache virtual environment
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: env/
+          key: ${{ runner.os }}-venv-${{ hashFiles('**/requirements.txt') }}-${{ hashFiles('**/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-venv-
+      
+      - name: Create JobPost virtual environment
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          echo "🔨 Creating JobPost virtual environment"
+          python -m venv env
+          source env/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          echo "✅ Virtual environment created and cached"
+      
+      - name: Use cached virtual environment
+        if: steps.cache-venv.outputs.cache-hit == 'true'
+        run: |
+          echo "✅ Using cached JobPost virtual environment"
+          source env/bin/activate
+          python --version
+          pip list
+      
+      - name: Run JobPost migrations
+        run: |
+          source env/bin/activate
+          export DJANGO_SETTINGS_MODULE=anihpj.settings.test
+          python manage.py migrate
+      
+      - name: Run JobPost tests
+        run: |
+          source env/bin/activate
+          export DJANGO_SETTINGS_MODULE=anihpj.settings.test
+          
+          # Run tests with coverage
+          coverage run --source='jobpost,anihpj' manage.py test
+          coverage report
+      
+      - name: Cache summary
+        run: |
+          echo "📊 JobPost Virtual Environment Cache"
+          echo "Cache hit: ${{ steps.cache-venv.outputs.cache-hit }}"
+          echo "Venv size: $(du -sh env/ | cut -f1)"
+          echo "Python packages: $(source env/bin/activate && pip list | wc -l)"</code></pre>
+        <div class="printout">🔨 JobPost with complete virtual environment caching for maximum speed</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost multi-path caching (Python + Node.js)</h4>
+        <pre><code class="language-yaml">name: JobPost Full Stack Cache
+
+on: [push, pull_request]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: Cache JobPost dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.npm
+            node_modules
+            jobpost/static/dist
+          key: ${{ runner.os }}-jobpost-${{ hashFiles('**/requirements.txt', '**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-jobpost-
+      
+      - name: Install Python dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost Python dependencies"
+          pip install -r requirements.txt
+      
+      - name: Install Node.js dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost Node.js dependencies"
+          npm ci
+      
+      - name: Build JobPost frontend assets
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          echo "🏗️ Building JobPost frontend assets"
+          npm run build
+          echo "✅ Assets built and cached"
+      
+      - name: Use cached assets
+        if: steps.cache-deps.outputs.cache-hit == 'true'
+        run: |
+          echo "✅ Using cached JobPost dependencies and assets"
+          ls -lh jobpost/static/dist/
+      
+      - name: Run Django migrations
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py migrate
+      
+      - name: Collect static files
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py collectstatic --noinput
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          # Backend tests
+          python manage.py test jobpost
+          
+          # Frontend tests
+          npm test
+      
+      - name: Cache summary
+        run: |
+          echo "📊 JobPost Full Stack Cache Report"
+          echo "===================================="
+          echo "Cache hit: ${{ steps.cache-deps.outputs.cache-hit }}"
+          echo ""
+          echo "Python packages:"
+          echo "  Location: ~/.cache/pip"
+          echo "  Size: $(du -sh ~/.cache/pip | cut -f1)"
+          echo ""
+          echo "Node.js packages:"
+          echo "  Location: node_modules"
+          echo "  Size: $(du -sh node_modules | cut -f1)"
+          echo "  Packages: $(ls node_modules | wc -l)"
+          echo ""
+          echo "Built assets:"
+          echo "  Location: jobpost/static/dist"
+          echo "  Size: $(du -sh jobpost/static/dist | cut -f1)"
+          echo "  Files: $(find jobpost/static/dist -type f | wc -l)"</code></pre>
+        <div class="printout">🎨 JobPost full stack caching for Python and Node.js dependencies</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost database fixtures caching</h4>
+        <pre><code class="language-yaml">name: JobPost Test with Fixtures Cache
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: jobpost_test
+          POSTGRES_USER: jobpost
+          POSTGRES_PASSWORD: password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install JobPost dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install psycopg2-binary
+      
+      - name: Generate fixtures cache key
+        id: fixtures-key
+        run: |
+          # Create hash of fixture files
+          FIXTURES_HASH=$(find fixtures/ -type f -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
+          echo "hash=$FIXTURES_HASH" >> $GITHUB_OUTPUT
+          echo "📋 Fixtures hash: $FIXTURES_HASH"
+      
+      - name: Cache JobPost test fixtures
+        id: cache-fixtures
+        uses: actions/cache@v4
+        with:
+          path: |
+            fixtures/
+            test_database_dump.json
+          key: ${{ runner.os }}-fixtures-${{ steps.fixtures-key.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-fixtures-
+      
+      - name: Run JobPost migrations
+        env:
+          DATABASE_URL: postgresql://jobpost:password@localhost:5432/jobpost_test
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "🔄 Running JobPost migrations"
+          python manage.py migrate
+      
+      - name: Load JobPost fixtures
+        if: steps.cache-fixtures.outputs.cache-hit != 'true'
+        env:
+          DATABASE_URL: postgresql://jobpost:password@localhost:5432/jobpost_test
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "📦 Loading JobPost test fixtures"
+          
+          # Load fixtures
+          python manage.py loaddata \
+            fixtures/categories.json \
+            fixtures/users.json \
+            fixtures/jobs.json \
+            fixtures/applications.json
+          
+          # Create database dump for cache
+          python manage.py dumpdata \
+            --natural-foreign \
+            --natural-primary \
+            -e contenttypes \
+            -e auth.Permission \
+            > test_database_dump.json
+          
+          echo "✅ Fixtures loaded and cached"
+      
+      - name: Restore JobPost fixtures from cache
+        if: steps.cache-fixtures.outputs.cache-hit == 'true'
+        env:
+          DATABASE_URL: postgresql://jobpost:password@localhost:5432/jobpost_test
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "✅ Restoring JobPost fixtures from cache"
+          python manage.py loaddata test_database_dump.json
+      
+      - name: Run JobPost tests
+        env:
+          DATABASE_URL: postgresql://jobpost:password@localhost:5432/jobpost_test
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "🧪 Running JobPost tests with fixtures"
+          
+          # Run tests
+          python manage.py test jobpost
+          
+          # Verify fixture data
+          python manage.py shell << EOF
+from jobpost.models import Job, Category, Application
+print(f"✅ Categories: {Category.objects.count()}")
+print(f"✅ Jobs: {Job.objects.count()}")
+print(f"✅ Applications: {Application.objects.count()}")
+EOF
+      
+      - name: Fixtures cache report
+        run: |
+          echo "📊 JobPost Fixtures Cache Report"
+          echo "================================="
+          echo "Cache hit: ${{ steps.cache-fixtures.outputs.cache-hit }}"
+          echo "Fixtures hash: ${{ steps.fixtures-key.outputs.hash }}"
+          echo "Dump size: $(du -sh test_database_dump.json | cut -f1 || echo 'N/A')"
+          echo "Fixture files: $(find fixtures/ -type f -name '*.json' | wc -l)"</code></pre>
+        <div class="printout">📦 JobPost test fixtures caching for faster test database setup</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost Docker layer caching</h4>
+        <pre><code class="language-yaml">name: JobPost Docker Build with Cache
+
+on:
+  push:
+    branches: [main, develop]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build JobPost Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: jobpost:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          build-args: |
+            PYTHON_VERSION=3.11
+            DJANGO_SETTINGS_MODULE=anihpj.settings.production
+      
+      - name: Test JobPost Docker image
+        run: |
+          echo "🧪 Testing JobPost Docker image"
+          
+          # Run container
+          docker run -d \
+            --name jobpost-test \
+            -e DJANGO_SETTINGS_MODULE=anihpj.settings.test \
+            -e DATABASE_URL=sqlite:///db.sqlite3 \
+            jobpost:latest
+          
+          # Wait for startup
+          sleep 5
+          
+          # Test health endpoint
+          docker exec jobpost-test python manage.py check
+          
+          # Run tests
+          docker exec jobpost-test python manage.py test jobpost
+          
+          # Cleanup
+          docker stop jobpost-test
+          docker rm jobpost-test
+          
+          echo "✅ Docker image tests passed"
+      
+      - name: Push JobPost image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "📤 Pushing JobPost Docker image"
+          docker tag jobpost:latest ${{ secrets.DOCKER_USERNAME }}/jobpost:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/jobpost:latest
+      
+      - name: Move Docker cache
+        run: |
+          # Move cache to avoid growing cache size
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+      
+      - name: Docker cache report
+        run: |
+          echo "📊 JobPost Docker Cache Report"
+          echo "==============================="
+          echo "Cache location: /tmp/.buildx-cache"
+          echo "Cache size: $(du -sh /tmp/.buildx-cache | cut -f1)"
+          echo "Image size: $(docker images jobpost:latest --format '{{.Size}}')"
+          echo "Layers: $(docker history jobpost:latest | wc -l)"</code></pre>
+        <div class="printout">🐳 JobPost Docker build with layer caching for faster image builds</div>
+      </div>
     </section>
 
     <section id="cache_key_matching" class="section">
       <h2>Cache key matching</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#matching-a-cache-key" target="_blank" rel="noopener">Cache key matching</a>
+      </div>
+      <p class="subtitle">Understand how GitHub Actions matches cache keys using exact matches and restore keys.</p>
+
+      <h3>Full description</h3>
+      <p>Cache key matching determines which cached data is restored during workflow execution. GitHub Actions first attempts to find an exact match for the cache key. If no exact match is found, it searches through restore-keys in order, looking for the most recent cache with a matching prefix. For the JobPost Django application, proper cache key strategies ensure that caches are reused when dependencies haven't changed, but new caches are created when requirements.txt is updated. Understanding key matching helps optimize cache hit rates, reduce cache storage usage, and ensure workflows use the most appropriate cached data.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Exact key match
+key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+# Restore keys (fallback chain)
+restore-keys: |
+  ${{ runner.os }}-pip-
+  ${{ runner.os }}-
+
+# Complex key with multiple files
+key: ${{ runner.os }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt', 'setup.py') }}
+
+# Time-based key
+key: ${{ runner.os }}-cache-${{ github.run_id }}-${{ github.run_attempt }}</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Cache key matching rules:</strong>
+        <ul>
+          <li><strong>Exact match</strong> - Cache restored only if key matches exactly</li>
+          <li><strong>Prefix match</strong> - Falls back to most recent cache with matching restore-key prefix</li>
+          <li><strong>Order matters</strong> - Restore-keys checked in order from top to bottom</li>
+          <li><strong>Hash functions</strong> - <code class="inline">hashFiles()</code> creates SHA-256 hash of file contents</li>
+          <li><strong>Partial restores</strong> - Restore-keys allow partial cache hits when exact match fails</li>
+          <li><strong>Cache scope</strong> - Caches are scoped to branch and can't be restored across forks</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>The cache action sets <code class="inline">cache-hit</code> output to <code class="inline">true</code> for exact key matches, and <code class="inline">false</code> for restore-key matches or cache misses. When a restore-key match occurs, a new cache is saved with the exact key at the end of the job, replacing partial matches with complete ones.</p>
+
+      <div class="example">
+        <h4>1. JobPost requirements-based cache key</h4>
+        <pre><code class="language-yaml">name: JobPost Smart Cache Key
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Display cache key strategy
+        run: |
+          echo "📋 JobPost Cache Key Strategy"
+          echo "=============================="
+          echo "Primary key pattern:"
+          echo "  Format: OS-pip-HASH(requirements.txt)"
+          echo "  Example: Linux-pip-abc123def456..."
+          echo ""
+          echo "Restore keys (in order):"
+          echo "  1. Linux-pip- (any pip cache for Linux)"
+          echo "  2. Linux- (any Linux cache)"
+          echo ""
+          echo "Key components:"
+          echo "  OS: ${{ runner.os }}"
+          echo "  Files: requirements.txt"
+          echo "  Hash: ${{ hashFiles('**/requirements.txt') }}"
+      
+      - name: Cache JobPost dependencies
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            ${{ runner.os }}-
+      
+      - name: Analyze cache result
+        run: |
+          echo "🔍 Cache Match Analysis"
+          echo "======================="
+          
+          if [[ "${{ steps.cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "✅ EXACT MATCH FOUND"
+            echo "The cache key matched exactly, indicating:"
+            echo "  • requirements.txt has not changed"
+            echo "  • No need to reinstall dependencies"
+            echo "  • Maximum time savings"
+          else
+            echo "⚠️  EXACT MATCH NOT FOUND"
+            echo "Falling back to restore-keys:"
+            echo "  • Checking for '${{ runner.os }}-pip-' prefix"
+            echo "  • Will restore most recent pip cache"
+            echo "  • New cache will be created after installation"
+          fi
+          
+          echo ""
+          echo "Cache key used: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}"
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost dependencies"
+          pip install -r requirements.txt
+          echo "✅ Dependencies installed, cache will be saved"
+      
+      - name: Verify cached dependencies
+        run: |
+          echo "📋 JobPost Installed Packages"
+          pip list | grep -E "(Django|celery|redis|psycopg2)"
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost</code></pre>
+        <div class="printout">🔑 JobPost cache with requirements.txt-based key for intelligent caching</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost multi-file cache key</h4>
+        <pre><code class="language-yaml">name: JobPost Multi-File Cache Key
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Generate multi-file hash
+        id: hash
+        run: |
+          echo "🔐 Generating JobPost multi-file hash"
+          
+          # Calculate individual hashes
+          REQ_HASH=$(sha256sum requirements.txt | cut -d' ' -f1 | cut -c1-8)
+          DEV_HASH=$(sha256sum requirements-dev.txt | cut -d' ' -f1 | cut -c1-8)
+          SETUP_HASH=$(sha256sum setup.py | cut -d' ' -f1 | cut -c1-8)
+          
+          echo "requirements.txt hash: $REQ_HASH"
+          echo "requirements-dev.txt hash: $DEV_HASH"
+          echo "setup.py hash: $SETUP_HASH"
+          
+          # Combined hash
+          COMBINED=$(echo "$REQ_HASH$DEV_HASH$SETUP_HASH" | sha256sum | cut -d' ' -f1 | cut -c1-16)
+          echo "combined=$COMBINED" >> $GITHUB_OUTPUT
+          
+          echo "Combined hash: $COMBINED"
+      
+      - name: Cache JobPost dependencies
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            env/
+          key: ${{ runner.os }}-jobpost-${{ hashFiles('requirements.txt', 'requirements-dev.txt', 'setup.py') }}
+          restore-keys: |
+            ${{ runner.os }}-jobpost-${{ hashFiles('requirements.txt') }}
+            ${{ runner.os }}-jobpost-
+            ${{ runner.os }}-
+      
+      - name: Cache matching analysis
+        run: |
+          echo "📊 JobPost Multi-File Cache Analysis"
+          echo "====================================="
+          echo "Exact key: ${{ runner.os }}-jobpost-${{ hashFiles('requirements.txt', 'requirements-dev.txt', 'setup.py') }}"
+          echo ""
+          echo "Restore key hierarchy:"
+          echo "  1. Same OS + production deps (requirements.txt)"
+          echo "  2. Same OS + any jobpost cache"
+          echo "  3. Same OS + any cache"
+          echo ""
+          echo "Cache hit: ${{ steps.cache.outputs.cache-hit }}"
+          echo ""
+          
+          if [[ "${{ steps.cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "✅ All dependency files unchanged"
+          else
+            echo "⚠️  At least one dependency file changed:"
+            echo "  • requirements.txt"
+            echo "  • requirements-dev.txt"
+            echo "  • setup.py"
+            echo "New cache will be created with updated dependencies"
+          fi
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost dependencies"
+          python -m venv env
+          source env/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install -e .
+      
+      - name: Run JobPost tests
+        run: |
+          source env/bin/activate
+          export DJANGO_SETTINGS_MODULE=anihpj.settings.test
+          
+          # Run tests with dev dependencies
+          pytest jobpost/tests/ \
+            --cov=jobpost \
+            --cov-report=html \
+            -v</code></pre>
+        <div class="printout">🗂️ JobPost cache with multi-file key for comprehensive dependency tracking</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost version-specific cache key</h4>
+        <pre><code class="language-yaml">name: JobPost Version-Specific Cache
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.10', '3.11', '3.12']
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Generate version-specific cache key
+        id: cache-key
+        run: |
+          echo "🔑 Generating JobPost version-specific cache key"
+          
+          PYTHON_VERSION="${{ matrix.python-version }}"
+          OS="${{ runner.os }}"
+          ARCH="${{ runner.arch }}"
+          DEPS_HASH="${{ hashFiles('**/requirements.txt') }}"
+          
+          echo "python=$PYTHON_VERSION" >> $GITHUB_OUTPUT
+          echo "os=$OS" >> $GITHUB_OUTPUT
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          
+          echo "Cache key components:"
+          echo "  OS: $OS"
+          echo "  Architecture: $ARCH"
+          echo "  Python: $PYTHON_VERSION"
+          echo "  Dependencies hash: ${DEPS_HASH:0:8}..."
+        shell: bash
+      
+      - name: Cache JobPost dependencies
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python-version }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python-version }}-pip-
+            ${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python-version }}-
+            ${{ runner.os }}-${{ runner.arch }}-
+        
+      - name: Cache key breakdown
+        run: |
+          echo "📋 JobPost Cache Key Strategy"
+          echo "=============================="
+          echo ""
+          echo "Full key: ${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python-version }}-pip-${{ hashFiles('**/requirements.txt') }}"
+          echo ""
+          echo "Restore keys (most specific to least specific):"
+          echo "  1. Same OS + arch + Python version + pip packages"
+          echo "  2. Same OS + arch + Python version (any packages)"
+          echo "  3. Same OS + arch (any Python version)"
+          echo ""
+          echo "This ensures:"
+          echo "  ✓ Caches are Python version specific"
+          echo "  ✓ Platform-specific packages cached correctly"
+          echo "  ✓ Architecture differences handled (x64 vs ARM)"
+        shell: bash
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost for Python ${{ matrix.python-version }}"
+          pip install -r requirements.txt
+        shell: bash
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost
+        shell: bash
+      
+      - name: Matrix cache summary
+        run: |
+          echo "📊 Cache Summary for Matrix Job"
+          echo "================================"
+          echo "OS: ${{ runner.os }}"
+          echo "Architecture: ${{ runner.arch }}"
+          echo "Python: ${{ matrix.python-version }}"
+          echo "Cache hit: ${{ steps.cache.outputs.cache-hit }}"
+        shell: bash</code></pre>
+        <div class="printout">🎯 JobPost version-specific cache keys for matrix builds</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost time-based cache key rotation</h4>
+        <pre><code class="language-yaml">name: JobPost Time-Based Cache Rotation
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Generate time-based cache key
+        id: date
+        run: |
+          # Get current week number for weekly rotation
+          WEEK=$(date +%U)
+          YEAR=$(date +%Y)
+          
+          echo "week=$WEEK" >> $GITHUB_OUTPUT
+          echo "year=$YEAR" >> $GITHUB_OUTPUT
+          
+          echo "📅 JobPost Cache Rotation Schedule"
+          echo "==================================="
+          echo "Year: $YEAR"
+          echo "Week: $WEEK"
+          echo "Cache will rotate weekly to prevent stale dependencies"
+      
+      - name: Cache JobPost dependencies with rotation
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ steps.date.outputs.year }}-week${{ steps.date.outputs.week }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ steps.date.outputs.year }}-week${{ steps.date.outputs.week }}-
+            ${{ runner.os }}-pip-${{ steps.date.outputs.year }}-
+            ${{ runner.os }}-pip-
+      
+      - name: Explain rotation strategy
+        run: |
+          echo "🔄 JobPost Cache Rotation Strategy"
+          echo "==================================="
+          echo ""
+          echo "Key components:"
+          echo "  • Year: ${{ steps.date.outputs.year }}"
+          echo "  • Week: ${{ steps.date.outputs.week }}"
+          echo "  • Requirements hash: ${{ hashFiles('**/requirements.txt') }}"
+          echo ""
+          echo "Rotation benefits:"
+          echo "  ✓ Weekly cache refresh ensures up-to-date dependencies"
+          echo "  ✓ Security updates included automatically"
+          echo "  ✓ Prevents indefinite cache reuse of outdated packages"
+          echo "  ✓ Old caches automatically evicted after 7 days"
+          echo ""
+          echo "Current cache key:"
+          echo "  ${{ runner.os }}-pip-${{ steps.date.outputs.year }}-week${{ steps.date.outputs.week }}-${{ hashFiles('**/requirements.txt') }}"
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing fresh JobPost dependencies"
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          
+          echo ""
+          echo "✅ Dependencies installed with latest updates"
+      
+      - name: Verify dependency versions
+        run: |
+          echo "📋 JobPost Dependency Versions"
+          echo "==============================="
+          pip list | grep -E "(Django|celery|redis|psycopg2|gunicorn)" || true
+          
+          echo ""
+          echo "🔐 Security check:"
+          pip list --outdated | head -10 || echo "No outdated packages (first 10)"
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost
+      
+      - name: Cache rotation summary
+        run: |
+          echo "📊 JobPost Cache Rotation Report"
+          echo "================================="
+          echo "Cache hit: ${{ steps.cache.outputs.cache-hit }}"
+          echo "Rotation period: Weekly"
+          echo "Current week: ${{ steps.date.outputs.week }}"
+          echo "Next rotation: Week ${{ steps.date.outputs.week + 1 }}"</code></pre>
+        <div class="printout">🔄 JobPost time-based cache rotation for automatic dependency updates</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost branch-aware cache key strategy</h4>
+        <pre><code class="language-yaml">name: JobPost Branch-Aware Cache
+
+on:
+  push:
+    branches: [main, develop, 'feature/**']
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Determine branch strategy
+        id: branch
+        run: |
+          # Get branch name
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BRANCH="${{ github.head_ref }}"
+            BASE="${{ github.base_ref }}"
+          else
+            BRANCH="${{ github.ref_name }}"
+            BASE="main"
+          fi
+          
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "base=$BASE" >> $GITHUB_OUTPUT
+          
+          # Determine branch type
+          if [[ "$BRANCH" == "main" ]]; then
+            BRANCH_TYPE="main"
+          elif [[ "$BRANCH" == "develop" ]]; then
+            BRANCH_TYPE="develop"
+          elif [[ "$BRANCH" == feature/* ]]; then
+            BRANCH_TYPE="feature"
+          else
+            BRANCH_TYPE="other"
+          fi
+          
+          echo "type=$BRANCH_TYPE" >> $GITHUB_OUTPUT
+          
+          echo "🌿 JobPost Branch Strategy"
+          echo "=========================="
+          echo "Current branch: $BRANCH"
+          echo "Base branch: $BASE"
+          echo "Branch type: $BRANCH_TYPE"
+      
+      - name: Cache JobPost dependencies
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-${{ steps.branch.outputs.type }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ steps.branch.outputs.type }}-pip-
+            ${{ runner.os }}-${{ steps.branch.outputs.base }}-pip-
+            ${{ runner.os }}-main-pip-
+            ${{ runner.os }}-pip-
+      
+      - name: Explain branch-aware caching
+        run: |
+          echo "📋 JobPost Branch-Aware Cache Strategy"
+          echo "======================================="
+          echo ""
+          echo "Current context:"
+          echo "  Branch: ${{ steps.branch.outputs.branch }}"
+          echo "  Type: ${{ steps.branch.outputs.type }}"
+          echo "  Base: ${{ steps.branch.outputs.base }}"
+          echo ""
+          echo "Cache key: ${{ runner.os }}-${{ steps.branch.outputs.type }}-pip-${{ hashFiles('**/requirements.txt') }}"
+          echo ""
+          echo "Restore key hierarchy:"
+          echo "  1. Same branch type + same dependencies"
+          echo "  2. Same branch type + any dependencies"
+          echo "  3. Base branch dependencies"
+          echo "  4. Main branch dependencies (most stable)"
+          echo "  5. Any pip cache (fallback)"
+          echo ""
+          echo "Benefits:"
+          echo "  ✓ Feature branches inherit from main"
+          echo "  ✓ Develop has separate cache from main"
+          echo "  ✓ Pull requests use base branch cache"
+          echo "  ✓ Prevents cache pollution across workflows"
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost dependencies for ${{ steps.branch.outputs.branch }}"
+          pip install -r requirements.txt
+      
+      - name: Run branch-specific JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "🧪 Running JobPost tests for ${{ steps.branch.outputs.type }} branch"
+          
+          if [[ "${{ steps.branch.outputs.type }}" == "main" ]]; then
+            # Full test suite for main
+            python manage.py test jobpost --parallel
+          elif [[ "${{ steps.branch.outputs.type }}" == "develop" ]]; then
+            # Full tests with coverage for develop
+            coverage run manage.py test jobpost
+            coverage report
+          else
+            # Fast tests for feature branches
+            python manage.py test jobpost --failfast
+          fi
+      
+      - name: Branch cache report
+        run: |
+          echo "📊 JobPost Branch Cache Report"
+          echo "==============================="
+          echo "Branch: ${{ steps.branch.outputs.branch }}"
+          echo "Type: ${{ steps.branch.outputs.type }}"
+          echo "Cache hit: ${{ steps.cache.outputs.cache-hit }}"
+          echo "Cache key: ${{ runner.os }}-${{ steps.branch.outputs.type }}-pip-${{ hashFiles('**/requirements.txt') }}"</code></pre>
+        <div class="printout">🌿 JobPost branch-aware cache strategy for optimal cache reuse</div>
+      </div>
     </section>
 
     <section id="setup_actions" class="section">
       <h2>setup-* actions for specific package managers</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#using-the-cache-action" target="_blank" rel="noopener">Setup actions with built-in caching</a>
+      </div>
+      <p class="subtitle">Use setup actions with built-in caching support for popular package managers.</p>
+
+      <h3>Full description</h3>
+      <p>Many official setup actions include built-in caching support for their respective package managers, making dependency caching simpler and more reliable. These actions automatically handle cache key generation, path configuration, and cache restoration without requiring manual cache action configuration. For the JobPost Django application, using setup actions with caching enabled simplifies workflows by automatically caching pip packages (Python), npm packages (Node.js), and other dependencies. The setup actions handle cache management intelligently, using lock files to generate cache keys and storing dependencies in platform-appropriate locations.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Python with pip caching
+- uses: actions/setup-python@v5
+  with:
+    python-version: '3.11'
+    cache: 'pip'
+    cache-dependency-path: '**/requirements*.txt'
+
+# Node.js with npm caching
+- uses: actions/setup-node@v4
+  with:
+    node-version: '18'
+    cache: 'npm'
+
+# Multiple cache dependency paths
+- uses: actions/setup-python@v5
+  with:
+    python-version: '3.11'
+    cache: 'pip'
+    cache-dependency-path: |
+      requirements.txt
+      requirements-dev.txt</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Setup action caching features:</strong>
+        <ul>
+          <li><code class="inline">cache</code> - Package manager to cache (pip, pipenv, poetry, npm, yarn, pnpm)</li>
+          <li><code class="inline">cache-dependency-path</code> - Path pattern for dependency files (optional)</li>
+          <li><strong>Automatic key generation</strong> - Uses lock files or requirements automatically</li>
+          <li><strong>Platform-aware</strong> - Stores cache in OS-appropriate locations</li>
+          <li><strong>Zero configuration</strong> - Works out of the box with sensible defaults</li>
+          <li><strong>Restore keys</strong> - Automatically configured for optimal cache reuse</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>Setup actions with caching automatically restore cached dependencies before proceeding with the rest of the job. The cache is saved at the end of the job if it wasn't restored or if dependencies changed. Unlike manual cache action usage, setup actions don't expose cache-hit output, but provide faster and simpler workflows with less configuration.</p>
+
+      <div class="example">
+        <h4>1. JobPost with setup-python built-in pip caching</h4>
+        <pre><code class="language-yaml">name: JobPost with Setup-Python Cache
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python with pip caching
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+      
+      - name: Display cache information
+        run: |
+          echo "🎯 JobPost Setup-Python Cache"
+          echo "=============================="
+          echo "Python version: 3.11"
+          echo "Cache enabled: pip"
+          echo "Dependency file: requirements.txt"
+          echo ""
+          echo "Benefits:"
+          echo "  ✓ Automatic cache key from requirements.txt hash"
+          echo "  ✓ Automatic cache path (~/.cache/pip)"
+          echo "  ✓ Automatic restore keys for partial matches"
+          echo "  ✓ Zero manual configuration required"
+      
+      - name: Install JobPost dependencies
+        run: |
+          echo "📦 Installing JobPost dependencies"
+          pip install -r requirements.txt
+          echo "✅ Dependencies installed"
+      
+      - name: Verify cached dependencies
+        run: |
+          echo "📋 JobPost Installed Packages"
+          pip list | grep -E "(Django|celery|redis|psycopg2|gunicorn)"
+          
+          echo ""
+          echo "📊 Cache Statistics"
+          echo "Pip cache location: ~/.cache/pip"
+          echo "Cache size: $(du -sh ~/.cache/pip 2>/dev/null | cut -f1 || echo 'N/A')"
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost
+      
+      - name: Cache summary
+        run: |
+          echo "✅ JobPost workflow completed with automated pip caching"
+          echo "No manual cache action configuration needed!"</code></pre>
+        <div class="printout">🐍 JobPost with setup-python's built-in pip caching for zero-config dependency management</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost full stack with setup-python and setup-node caching</h4>
+        <pre><code class="language-yaml">name: JobPost Full Stack with Setup Caching
+
+on: [push, pull_request]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python with pip caching
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      
+      - name: Setup Node.js with npm caching
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'package-lock.json'
+      
+      - name: Display dual cache setup
+        run: |
+          echo "🎨 JobPost Full Stack Caching"
+          echo "=============================="
+          echo ""
+          echo "Python Setup:"
+          echo "  Version: 3.11"
+          echo "  Cache: pip"
+          echo "  Files: requirements.txt, requirements-dev.txt"
+          echo "  Location: ~/.cache/pip"
+          echo ""
+          echo "Node.js Setup:"
+          echo "  Version: 18"
+          echo "  Cache: npm"
+          echo "  Files: package-lock.json"
+          echo "  Location: ~/.npm"
+          echo ""
+          echo "Both caches are automatically managed by setup actions!"
+      
+      - name: Install JobPost Python dependencies
+        run: |
+          echo "📦 Installing Python dependencies"
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      
+      - name: Install JobPost Node.js dependencies
+        run: |
+          echo "📦 Installing Node.js dependencies"
+          npm ci
+      
+      - name: Build JobPost frontend
+        run: |
+          echo "🏗️ Building JobPost frontend assets"
+          npm run build
+      
+      - name: Run Django migrations
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py migrate
+      
+      - name: Collect static files
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py collectstatic --noinput
+      
+      - name: Run JobPost backend tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "🧪 Running JobPost backend tests"
+          pytest jobpost/tests/ --cov=jobpost
+      
+      - name: Run JobPost frontend tests
+        run: |
+          echo "🧪 Running JobPost frontend tests"
+          npm test
+      
+      - name: Full stack cache summary
+        run: |
+          echo "📊 JobPost Full Stack Cache Report"
+          echo "===================================="
+          echo ""
+          echo "Python dependencies:"
+          echo "  Packages: $(pip list | wc -l)"
+          echo "  Cache size: $(du -sh ~/.cache/pip 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo ""
+          echo "Node.js dependencies:"
+          echo "  Packages: $(ls node_modules 2>/dev/null | wc -l || echo '0')"
+          echo "  Cache size: $(du -sh ~/.npm 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo ""
+          echo "✅ Both caches automatically managed by setup actions"</code></pre>
+        <div class="printout">🎨 JobPost full stack with automatic Python and Node.js caching</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost with Poetry caching</h4>
+        <pre><code class="language-yaml">name: JobPost with Poetry Cache
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python with Poetry caching
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
+      
+      - name: Install Poetry
+        run: |
+          echo "📦 Installing Poetry"
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      
+      - name: Display Poetry cache info
+        run: |
+          echo "📋 JobPost Poetry Cache Configuration"
+          echo "======================================"
+          echo "Python version: 3.11"
+          echo "Package manager: Poetry"
+          echo "Lock file: poetry.lock"
+          echo ""
+          echo "Poetry automatically caches:"
+          echo "  ✓ Virtual environment"
+          echo "  ✓ Downloaded packages"
+          echo "  ✓ Built wheels"
+          echo ""
+          poetry --version
+          poetry config --list | grep cache
+      
+      - name: Install JobPost dependencies with Poetry
+        run: |
+          echo "📦 Installing JobPost dependencies via Poetry"
+          poetry install --no-interaction --no-ansi
+      
+      - name: Display installed packages
+        run: |
+          echo "📋 JobPost Poetry Packages"
+          poetry show --tree
+      
+      - name: Run JobPost tests with Poetry
+        run: |
+          echo "🧪 Running JobPost tests"
+          poetry run python manage.py test jobpost
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+      
+      - name: Run JobPost linting
+        run: |
+          echo "🔍 Running JobPost code quality checks"
+          poetry run black --check jobpost/
+          poetry run flake8 jobpost/
+          poetry run mypy jobpost/
+      
+      - name: Poetry cache summary
+        run: |
+          echo "📊 JobPost Poetry Cache Summary"
+          echo "================================"
+          echo "Cache location: $(poetry config cache-dir)"
+          echo "Cache size: $(du -sh $(poetry config cache-dir) | cut -f1)"
+          echo "Virtual env: $(poetry env info --path)"
+          echo "✅ All managed automatically by setup-python action"</code></pre>
+        <div class="printout">📦 JobPost with Poetry dependency management and automatic caching</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost matrix with multiple package manager caches</h4>
+        <pre><code class="language-yaml">name: JobPost Matrix with Setup Caches
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.10', '3.11', '3.12']
+        package-manager: ['pip', 'pipenv']
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python with package manager cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: ${{ matrix.package-manager }}
+      
+      - name: Display matrix cache configuration
+        run: |
+          echo "🎯 JobPost Matrix Cache Configuration"
+          echo "======================================"
+          echo "OS: ${{ matrix.os }}"
+          echo "Python: ${{ matrix.python-version }}"
+          echo "Package Manager: ${{ matrix.package-manager }}"
+          echo ""
+          echo "Cache key includes:"
+          echo "  • Operating system"
+          echo "  • Python version"
+          echo "  • Package manager type"
+          echo "  • Lock file hash"
+        shell: bash
+      
+      - name: Install pipenv if needed
+        if: matrix.package-manager == 'pipenv'
+        run: |
+          pip install pipenv
+        shell: bash
+      
+      - name: Install JobPost dependencies
+        run: |
+          if [[ "${{ matrix.package-manager }}" == "pip" ]]; then
+            echo "📦 Installing with pip"
+            pip install -r requirements.txt
+          elif [[ "${{ matrix.package-manager }}" == "pipenv" ]]; then
+            echo "📦 Installing with pipenv"
+            pipenv install --dev
+          fi
+        shell: bash
+      
+      - name: Run JobPost tests
+        run: |
+          if [[ "${{ matrix.package-manager }}" == "pip" ]]; then
+            python manage.py test jobpost
+          elif [[ "${{ matrix.package-manager }}" == "pipenv" ]]; then
+            pipenv run python manage.py test jobpost
+          fi
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        shell: bash
+      
+      - name: Matrix cache report
+        run: |
+          echo "📊 JobPost Matrix Cache Report"
+          echo "==============================="
+          echo "Configuration:"
+          echo "  OS: ${{ runner.os }}"
+          echo "  Python: ${{ matrix.python-version }}"
+          echo "  Package Manager: ${{ matrix.package-manager }}"
+          echo ""
+          echo "✅ Cache automatically managed per matrix combination"
+          echo "Each combination gets its own isolated cache"
+        shell: bash</code></pre>
+        <div class="printout">🎯 JobPost matrix testing with automatic package manager-specific caching</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost with yarn and pnpm caching</h4>
+        <pre><code class="language-yaml">name: JobPost Alternative Package Managers
+
+on: [push, pull_request]
+
+jobs:
+  test-yarn:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js with Yarn caching
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+      
+      - name: Install JobPost dependencies with Yarn
+        run: |
+          echo "📦 Installing JobPost dependencies with Yarn"
+          yarn install --frozen-lockfile
+      
+      - name: Build JobPost with Yarn
+        run: |
+          echo "🏗️ Building JobPost assets"
+          yarn build
+      
+      - name: Test JobPost with Yarn
+        run: |
+          echo "🧪 Running JobPost tests"
+          yarn test
+      
+      - name: Yarn cache summary
+        run: |
+          echo "📊 JobPost Yarn Cache"
+          echo "===================="
+          echo "Cache location: $(yarn cache dir)"
+          echo "Cache size: $(du -sh $(yarn cache dir) | cut -f1)"
+          echo "Packages: $(ls node_modules | wc -l)"
+  
+  test-pnpm:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+      
+      - name: Setup Node.js with pnpm caching
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'pnpm'
+      
+      - name: Install JobPost dependencies with pnpm
+        run: |
+          echo "📦 Installing JobPost dependencies with pnpm"
+          pnpm install --frozen-lockfile
+      
+      - name: Build JobPost with pnpm
+        run: |
+          echo "🏗️ Building JobPost assets"
+          pnpm build
+      
+      - name: Test JobPost with pnpm
+        run: |
+          echo "🧪 Running JobPost tests"
+          pnpm test
+      
+      - name: pnpm cache summary
+        run: |
+          echo "📊 JobPost pnpm Cache"
+          echo "====================="
+          echo "Cache location: $(pnpm store path)"
+          echo "Packages: $(ls node_modules | wc -l)"
+          echo ""
+          echo "pnpm benefits:"
+          echo "  ✓ Faster installations"
+          echo "  ✓ Efficient disk space usage"
+          echo "  ✓ Content-addressable storage"
+  
+  test-comparison:
+    needs: [test-yarn, test-pnpm]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Package manager comparison
+        run: |
+          echo "📊 JobPost Package Manager Comparison"
+          echo "======================================"
+          echo ""
+          echo "All package managers supported:"
+          echo "  ✓ npm (default, cache: 'npm')"
+          echo "  ✓ yarn (cache: 'yarn')"
+          echo "  ✓ pnpm (cache: 'pnpm')"
+          echo ""
+          echo "Setup actions automatically handle:"
+          echo "  • Cache key generation from lock files"
+          echo "  • Platform-specific cache locations"
+          echo "  • Restore key fallbacks"
+          echo "  • Cache compression and upload"
+          echo ""
+          echo "✅ Choose the package manager that fits your workflow"
+          echo "✅ Caching works automatically for all of them"</code></pre>
+        <div class="printout">⚡ JobPost with yarn and pnpm automatic caching support</div>
+      </div>
     </section>
 
     <section id="restrictions_accessing_cache" class="section">
