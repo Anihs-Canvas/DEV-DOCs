@@ -18225,12 +18225,1193 @@ jobs:
 
     <section id="restrictions_accessing_cache" class="section">
       <h2>Restrictions for accessing a cache</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache" target="_blank" rel="noopener">Cache access restrictions</a>
+      </div>
+      <p class="subtitle">Understand cache access restrictions and scope limitations in GitHub Actions.</p>
+
+      <h3>Full description</h3>
+      <p>GitHub Actions caches have specific access restrictions based on branch relationships, workflow triggers, and repository boundaries. Workflows can access caches created in the current branch, default branch (main/master), or base branches of pull requests. Caches cannot be shared across forks or between different repositories. For the JobPost Django application, understanding cache restrictions is crucial for optimizing cache usage across feature branches, pull requests, and deployment workflows. Proper cache strategies account for these restrictions to maximize cache hit rates while maintaining security boundaries.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Cache access hierarchy
+# 1. Current branch cache (highest priority)
+# 2. Default branch cache (fallback)
+# 3. Base branch cache for PRs (fallback)
+
+# Caches are scoped to:
+# - Repository (not shared across forks)
+# - Branch (with fallback rules)
+# - Workflow (can be shared across workflows)</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Cache access restrictions:</strong>
+        <ul>
+          <li><strong>Branch scope</strong> - Caches can be accessed from current branch and default branch</li>
+          <li><strong>Pull request access</strong> - PRs can access base branch and default branch caches</li>
+          <li><strong>Fork restriction</strong> - Caches cannot be accessed across forks</li>
+          <li><strong>Repository scope</strong> - Caches are scoped to a single repository</li>
+          <li><strong>Workflow sharing</strong> - Caches can be shared between different workflows in the same repo</li>
+          <li><strong>Write access</strong> - Only workflows with write permissions can create/update caches</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>When cache access is restricted, the cache action falls back to restore-keys or results in a cache miss. The workflow logs indicate whether a cache was found and which branch it came from. Understanding these restrictions helps design cache strategies that work across branch workflows and pull requests.</p>
+
+      <div class="example">
+        <h4>1. JobPost branch hierarchy caching</h4>
+        <pre><code class="language-yaml">name: JobPost Branch Hierarchy Cache
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Determine branch context
+        id: branch
+        run: |
+          echo "📋 JobPost Branch Context"
+          echo "========================="
+          
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "Event: Pull Request"
+            echo "Head branch: ${{ github.head_ref }}"
+            echo "Base branch: ${{ github.base_ref }}"
+            echo "Default branch: ${{ github.event.repository.default_branch }}"
+            echo ""
+            echo "Cache access hierarchy:"
+            echo "  1. Current PR branch (${{ github.head_ref }})"
+            echo "  2. Base branch (${{ github.base_ref }})"
+            echo "  3. Default branch (${{ github.event.repository.default_branch }})"
+          else
+            echo "Event: Push"
+            echo "Current branch: ${{ github.ref_name }}"
+            echo "Default branch: ${{ github.event.repository.default_branch }}"
+            echo ""
+            echo "Cache access hierarchy:"
+            echo "  1. Current branch (${{ github.ref_name }})"
+            echo "  2. Default branch (${{ github.event.repository.default_branch }})"
+          fi
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache JobPost dependencies with branch awareness
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ github.ref_name }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ github.ref_name }}-
+            ${{ runner.os }}-pip-${{ github.event.repository.default_branch }}-
+            ${{ runner.os }}-pip-
+      
+      - name: Explain cache access
+        run: |
+          echo "🔐 JobPost Cache Access Explanation"
+          echo "===================================="
+          echo ""
+          echo "Feature branches can access:"
+          echo "  ✓ Their own caches"
+          echo "  ✓ Default branch (main) caches"
+          echo "  ✗ Other feature branch caches"
+          echo ""
+          echo "Pull requests can access:"
+          echo "  ✓ PR branch caches"
+          echo "  ✓ Base branch caches"
+          echo "  ✓ Default branch caches"
+          echo "  ✗ Other PR branch caches"
+          echo ""
+          echo "This prevents cache pollution while enabling reuse"
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost</code></pre>
+        <div class="printout">🌿 JobPost caching with branch hierarchy access rules</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost pull request cache inheritance</h4>
+        <pre><code class="language-yaml">name: JobPost PR Cache Strategy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, develop]
+
+jobs:
+  test-pr:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost PR
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      
+      - name: Display PR cache context
+        run: |
+          echo "📋 JobPost Pull Request Cache Context"
+          echo "======================================"
+          echo "PR Number: #${{ github.event.pull_request.number }}"
+          echo "PR Title: ${{ github.event.pull_request.title }}"
+          echo "Head Branch: ${{ github.head_ref }}"
+          echo "Base Branch: ${{ github.base_ref }}"
+          echo "Head SHA: ${{ github.event.pull_request.head.sha }}"
+          echo ""
+          echo "Cache inheritance strategy:"
+          echo "  1. Try PR head branch cache first"
+          echo "  2. Fall back to base branch cache"
+          echo "  3. Fall back to default branch cache"
+          echo "  4. No cache if none found"
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache JobPost with PR-aware keys
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pr${{ github.event.pull_request.number }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pr${{ github.event.pull_request.number }}-
+            ${{ runner.os }}-${{ github.base_ref }}-
+            ${{ runner.os }}-main-
+            ${{ runner.os }}-
+      
+      - name: Analyze cache inheritance
+        run: |
+          echo "🔍 JobPost PR Cache Inheritance Analysis"
+          echo "========================================="
+          
+          if [[ "${{ steps.cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "✅ CACHE HIT"
+            echo "Using cached dependencies"
+          else
+            echo "⚠️  CACHE MISS"
+            echo "This PR will create a new cache entry"
+          fi
+          
+          echo ""
+          echo "PR can access caches from:"
+          echo "  ✓ This PR's previous runs"
+          echo "  ✓ Base branch (${{ github.base_ref }})"
+          echo "  ✓ Default branch (main)"
+          echo ""
+          echo "PR cannot access caches from:"
+          echo "  ✗ Other PRs"
+          echo "  ✗ Other feature branches"
+          echo "  ✗ Forked repositories"
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost dependencies for PR #${{ github.event.pull_request.number }}"
+          pip install -r requirements.txt
+      
+      - name: Run JobPost PR tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          echo "🧪 Running JobPost tests for PR #${{ github.event.pull_request.number }}"
+          python manage.py test jobpost --parallel
+      
+      - name: PR cache summary
+        run: |
+          echo "📊 JobPost PR Cache Summary"
+          echo "============================"
+          echo "PR: #${{ github.event.pull_request.number }}"
+          echo "Cache hit: ${{ steps.cache.outputs.cache-hit }}"
+          echo "Key: ${{ runner.os }}-pr${{ github.event.pull_request.number }}-${{ hashFiles('**/requirements.txt') }}"</code></pre>
+        <div class="printout">🔀 JobPost pull request caching with proper inheritance from base branch</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost fork restriction demonstration</h4>
+        <pre><code class="language-yaml">name: JobPost Fork Cache Restrictions
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+jobs:
+  test-fork:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      
+      - name: Detect fork status
+        id: fork
+        run: |
+          echo "🔍 JobPost Fork Detection"
+          echo "========================="
+          
+          IS_FORK="${{ github.event.pull_request.head.repo.fork }}"
+          
+          echo "is_fork=$IS_FORK" >> $GITHUB_OUTPUT
+          echo "Is fork: $IS_FORK"
+          echo "Head repo: ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "Base repo: ${{ github.event.pull_request.base.repo.full_name }}"
+          
+          if [[ "$IS_FORK" == "true" ]]; then
+            echo ""
+            echo "⚠️  Fork detected - Cache restrictions apply:"
+            echo "  ✗ Cannot access base repository's caches"
+            echo "  ✓ Can create caches in fork"
+            echo "  ✗ Cannot restore caches from upstream"
+          fi
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache JobPost (fork-aware)
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-fork-${{ github.event.pull_request.head.repo.full_name }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-fork-${{ github.event.pull_request.head.repo.full_name }}-
+      
+      - name: Explain fork cache behavior
+        run: |
+          echo "🔐 JobPost Fork Cache Behavior"
+          echo "==============================="
+          echo ""
+          echo "Security considerations:"
+          echo "  • Forks cannot read upstream repository caches"
+          echo "  • This prevents cache poisoning attacks"
+          echo "  • Each fork maintains its own cache space"
+          echo ""
+          echo "Performance impact:"
+          echo "  • First-time contributors have cold cache"
+          echo "  • Subsequent runs benefit from fork's cache"
+          echo "  • Can be mitigated with setup-python cache option"
+          echo ""
+          
+          if [[ "${{ steps.fork.outputs.is_fork }}" == "true" ]]; then
+            echo "⚠️  This PR is from a fork"
+            echo "Cache will be built from scratch first time"
+          else
+            echo "✅ This PR is from the same repository"
+            echo "Can access existing caches"
+          fi
+      
+      - name: Install JobPost dependencies
+        run: |
+          echo "📦 Installing JobPost dependencies"
+          
+          if [[ "${{ steps.fork.outputs.is_fork }}" == "true" ]]; then
+            echo "Installing for fork (first run may be slower)"
+          fi
+          
+          pip install -r requirements.txt
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost</code></pre>
+        <div class="printout">🔒 JobPost cache restrictions for fork security and isolation</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost workflow cache sharing</h4>
+        <pre><code class="language-yaml">name: JobPost Workflow Cache Sharing
+
+on: [push, pull_request]
+
+jobs:
+  setup-cache:
+    name: Setup JobPost Cache
+    runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Generate shared cache key
+        id: cache-key
+        run: |
+          KEY="${{ runner.os }}-jobpost-${{ hashFiles('**/requirements.txt') }}"
+          echo "key=$KEY" >> $GITHUB_OUTPUT
+          echo "📋 Generated cache key: $KEY"
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache JobPost dependencies
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            ${{ runner.os }}-jobpost-
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost dependencies (shared cache)"
+          pip install -r requirements.txt
+      
+      - name: Cache sharing info
+        run: |
+          echo "🔄 JobPost Cache Sharing"
+          echo "========================"
+          echo "This cache can be accessed by:"
+          echo "  ✓ Other jobs in this workflow"
+          echo "  ✓ Other workflows in this repository"
+          echo "  ✓ Future runs on this branch"
+          echo "  ✓ Pull requests to this branch"
+  
+  test-backend:
+    name: Test JobPost Backend
+    needs: setup-cache
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Restore shared cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ needs.setup-cache.outputs.cache-key }}
+          restore-keys: |
+            ${{ runner.os }}-jobpost-
+      
+      - name: Verify shared cache
+        run: |
+          echo "✅ Using cache from setup-cache job"
+          echo "Cache key: ${{ needs.setup-cache.outputs.cache-key }}"
+          pip list | grep Django
+      
+      - name: Run JobPost backend tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost
+  
+  lint-backend:
+    name: Lint JobPost Backend
+    needs: setup-cache
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Restore shared cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ needs.setup-cache.outputs.cache-key }}
+          restore-keys: |
+            ${{ runner.os }}-jobpost-
+      
+      - name: Verify shared cache
+        run: |
+          echo "✅ Using same cache as other jobs"
+          pip list | grep -E "(black|flake8|mypy)"
+      
+      - name: Run JobPost linting
+        run: |
+          black --check jobpost/
+          flake8 jobpost/
+  
+  summary:
+    name: Cache Sharing Summary
+    needs: [setup-cache, test-backend, lint-backend]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Workflow cache sharing summary
+        run: |
+          echo "📊 JobPost Workflow Cache Sharing Summary"
+          echo "=========================================="
+          echo ""
+          echo "Cache key: ${{ needs.setup-cache.outputs.cache-key }}"
+          echo ""
+          echo "Jobs that shared this cache:"
+          echo "  1. setup-cache (created/restored cache)"
+          echo "  2. test-backend (restored cache)"
+          echo "  3. lint-backend (restored cache)"
+          echo ""
+          echo "Benefits:"
+          echo "  ✓ Single cache creation per workflow run"
+          echo "  ✓ Multiple jobs reuse the same cache"
+          echo "  ✓ Faster overall workflow execution"
+          echo "  ✓ Reduced cache storage usage"</code></pre>
+        <div class="printout">🔄 JobPost cache sharing across multiple workflow jobs</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost default branch fallback strategy</h4>
+        <pre><code class="language-yaml">name: JobPost Default Branch Fallback
+
+on:
+  push:
+    branches: ['**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Analyze branch relationship
+        id: branch
+        run: |
+          CURRENT_BRANCH="${{ github.ref_name }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          
+          echo "current=$CURRENT_BRANCH" >> $GITHUB_OUTPUT
+          echo "default=$DEFAULT_BRANCH" >> $GITHUB_OUTPUT
+          
+          echo "📋 JobPost Branch Analysis"
+          echo "=========================="
+          echo "Current branch: $CURRENT_BRANCH"
+          echo "Default branch: $DEFAULT_BRANCH"
+          echo ""
+          
+          if [[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+            echo "Status: Running on default branch"
+            echo "Cache: Will be accessible to all branches"
+          else
+            echo "Status: Running on feature/topic branch"
+            echo "Cache: Can fall back to default branch"
+          fi
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache with default branch fallback
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-${{ steps.branch.outputs.current }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ steps.branch.outputs.current }}-pip-
+            ${{ runner.os }}-${{ steps.branch.outputs.default }}-pip-
+            ${{ runner.os }}-pip-
+      
+      - name: Explain fallback strategy
+        run: |
+          echo "🎯 JobPost Default Branch Fallback Strategy"
+          echo "============================================"
+          echo ""
+          echo "Cache key hierarchy:"
+          echo "  1. Current branch exact match"
+          echo "  2. Current branch prefix match"
+          echo "  3. Default branch (${{ steps.branch.outputs.default }}) match"
+          echo "  4. Any branch match (last resort)"
+          echo ""
+          echo "Why this matters:"
+          echo "  • New branches start with default branch cache"
+          echo "  • Reduces cold cache scenarios"
+          echo "  • Faster first-time builds on feature branches"
+          echo "  • Default branch cache is stable and well-tested"
+          echo ""
+          
+          if [[ "${{ steps.branch.outputs.current }}" != "${{ steps.branch.outputs.default }}" ]]; then
+            echo "✅ This branch can fall back to '${{ steps.branch.outputs.default }}' cache"
+          else
+            echo "✅ This is the default branch - cache benefits all others"
+          fi
+      
+      - name: Install JobPost dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing JobPost dependencies"
+          pip install -r requirements.txt
+      
+      - name: Run JobPost tests
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py test jobpost
+      
+      - name: Fallback cache summary
+        run: |
+          echo "📊 JobPost Cache Fallback Summary"
+          echo "=================================="
+          echo "Current branch: ${{ steps.branch.outputs.current }}"
+          echo "Default branch: ${{ steps.branch.outputs.default }}"
+          echo "Cache hit: ${{ steps.cache.outputs.cache-hit }}"
+          echo ""
+          
+          if [[ "${{ steps.cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "✅ Cache restored successfully"
+          else
+            echo "⚠️  No cache found, created new cache"
+            echo "This cache will help future runs on this branch"
+            
+            if [[ "${{ steps.branch.outputs.current }}" == "${{ steps.branch.outputs.default }}" ]]; then
+              echo "As default branch, this cache will help all branches"
+            fi
+          fi</code></pre>
+        <div class="printout">🎯 JobPost default branch fallback strategy for optimal cache reuse</div>
+      </div>
     </section>
 
     <section id="usage_limits_eviction" class="section">
       <h2>Usage limits and eviction policy</h2>
-      <p class="subtitle">Content will be added here.</p>
+      <div class="meta">
+        Docs: <a href="https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#usage-limits-and-eviction-policy" target="_blank" rel="noopener">Cache usage limits</a>
+      </div>
+      <p class="subtitle">Understand cache storage limits, eviction policies, and management strategies in GitHub Actions.</p>
+
+      <h3>Full description</h3>
+      <p>GitHub Actions provides 10GB of cache storage per repository, with automatic eviction of caches that haven't been accessed for 7 days. When the cache storage limit is reached, GitHub evicts the least recently used caches. Individual cache entries are limited to 10GB in size. For the JobPost Django application, understanding these limits is essential for designing efficient caching strategies that balance performance with storage constraints. Proper cache management includes monitoring cache usage, implementing cache rotation strategies, and prioritizing high-value caches like Python dependencies and database fixtures.</p>
+
+      <h3>Syntax</h3>
+      <pre><code class="language-yaml"># Cache limits:
+# - Total repository storage: 10GB
+# - Individual cache size: 10GB max
+# - Eviction: 7 days without access
+# - Policy: Least Recently Used (LRU)
+
+# Best practices:
+# - Monitor cache usage regularly
+# - Use specific cache keys to avoid bloat
+# - Implement cache rotation for large files
+# - Prioritize frequently-used caches</code></pre>
+
+      <h3>Parameters description</h3>
+      <div class="callout">
+        <strong>Cache limits and policies:</strong>
+        <ul>
+          <li><strong>Repository limit</strong> - Maximum 10GB total cache storage per repository</li>
+          <li><strong>Individual cache limit</strong> - Each cache entry can be up to 10GB</li>
+          <li><strong>Eviction policy</strong> - Caches unused for 7 days are automatically evicted</li>
+          <li><strong>LRU eviction</strong> - When storage is full, least recently used caches are removed first</li>
+          <li><strong>Access tracking</strong> - Any cache read or write resets the 7-day timer</li>
+          <li><strong>No manual deletion</strong> - Caches are automatically managed (can delete via REST API)</li>
+        </ul>
+      </div>
+
+      <h3>Return value</h3>
+      <p>When cache limits are reached, older caches are silently evicted to make room for new ones. The cache action logs indicate when caches are saved or restored but not when they're evicted. Monitoring cache usage helps identify when optimization is needed to stay within limits.</p>
+
+      <div class="example">
+        <h4>1. JobPost cache size monitoring</h4>
+        <pre><code class="language-yaml">name: JobPost Cache Size Monitoring
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday
+  workflow_dispatch:
+
+jobs:
+  monitor-cache:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Get repository cache information
+        id: cache-info
+        run: |
+          echo "📊 JobPost Cache Storage Analysis"
+          echo "==================================="
+          echo ""
+          echo "Repository cache limits:"
+          echo "  • Total storage: 10GB per repository"
+          echo "  • Individual cache: 10GB maximum"
+          echo "  • Eviction period: 7 days without access"
+          echo "  • Eviction policy: Least Recently Used (LRU)"
+          echo ""
+          
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/actions/caches \
+            > cache-list.json
+          
+          TOTAL_SIZE=$(jq '[.actions_caches[].size_in_bytes] | add // 0' cache-list.json)
+          CACHE_COUNT=$(jq '.actions_caches | length' cache-list.json)
+          TOTAL_GB=$(echo "scale=2; $TOTAL_SIZE / 1024 / 1024 / 1024" | bc)
+          LIMIT_GB="10.00"
+          USAGE_PERCENT=$(echo "scale=2; ($TOTAL_GB / $LIMIT_GB) * 100" | bc)
+          
+          echo "total_size=$TOTAL_SIZE" >> $GITHUB_OUTPUT
+          echo "total_gb=$TOTAL_GB" >> $GITHUB_OUTPUT
+          echo "cache_count=$CACHE_COUNT" >> $GITHUB_OUTPUT
+          echo "usage_percent=$USAGE_PERCENT" >> $GITHUB_OUTPUT
+          
+          echo "Current cache usage:"
+          echo "  • Total caches: $CACHE_COUNT"
+          echo "  • Total size: ${TOTAL_GB}GB / ${LIMIT_GB}GB"
+          echo "  • Usage: ${USAGE_PERCENT}%"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      
+      - name: List largest JobPost caches
+        run: |
+          echo "🔍 Largest JobPost Caches"
+          echo "========================="
+          echo ""
+          
+          jq -r '.actions_caches | sort_by(.size_in_bytes) | reverse | .[] | 
+            "Key: \(.key)\nSize: \(.size_in_bytes / 1024 / 1024 | floor)MB\nBranch: \(.ref)\nLast accessed: \(.last_accessed_at)\n"' \
+            cache-list.json | head -50
+      
+      - name: Cache cleanup recommendations
+        run: |
+          USAGE=${{ steps.cache-info.outputs.usage_percent }}
+          
+          echo "💡 JobPost Cache Optimization Recommendations"
+          echo "=============================================="
+          echo ""
+          
+          if (( $(echo "$USAGE > 80" | bc -l) )); then
+            echo "⚠️  WARNING: Cache usage above 80%"
+            echo ""
+            echo "Recommended actions:"
+            echo "  1. Review and remove outdated cache keys"
+            echo "  2. Use more specific cache keys to avoid duplication"
+            echo "  3. Consider cache rotation strategies"
+            echo "  4. Prioritize critical caches (Python deps, fixtures)"
+            echo "  5. Delete caches for stale branches"
+          elif (( $(echo "$USAGE > 60" | bc -l) )); then
+            echo "ℹ️  INFO: Cache usage moderate (60-80%)"
+            echo ""
+            echo "Monitor regularly and consider:"
+            echo "  1. Review cache key specificity"
+            echo "  2. Verify all caches are necessary"
+            echo "  3. Plan for future growth"
+          else
+            echo "✅ Cache usage healthy (below 60%)"
+            echo ""
+            echo "Current strategy is working well"
+            echo "Continue monitoring usage trends"
+          fi
+      
+      - name: Generate cache report
+        run: |
+          cat > cache-report.md << 'EOF'
+          # JobPost Cache Storage Report
+          
+          ## Summary
+          - **Total Caches**: ${{ steps.cache-info.outputs.cache_count }}
+          - **Storage Used**: ${{ steps.cache-info.outputs.total_gb }}GB / 10GB
+          - **Usage Percentage**: ${{ steps.cache-info.outputs.usage_percent }}%
+          - **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Cache Limits
+          - Repository limit: 10GB total
+          - Individual cache limit: 10GB
+          - Eviction period: 7 days without access
+          - Eviction policy: LRU (Least Recently Used)
+          
+          ## Top Caches by Size
+          $(jq -r '.actions_caches | sort_by(.size_in_bytes) | reverse | .[0:5] | .[] | 
+            "- **\(.key)**: \(.size_in_bytes / 1024 / 1024 | floor)MB (Branch: \(.ref))"' cache-list.json)
+          EOF
+          
+          cat cache-report.md
+          echo ""
+          echo "✅ Cache report generated"</code></pre>
+        <div class="printout">📊 JobPost cache storage monitoring and optimization recommendations</div>
+      </div>
+
+      <div class="example">
+        <h4>2. JobPost cache rotation strategy</h4>
+        <pre><code class="language-yaml">name: JobPost Cache Rotation
+
+on:
+  push:
+    branches: [main, develop]
+
+jobs:
+  build-with-rotation:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Calculate rotation key
+        id: rotation
+        run: |
+          # Rotate cache weekly to prevent indefinite growth
+          WEEK_NUMBER=$(date +%U)
+          ROTATION_KEY="week-$WEEK_NUMBER"
+          
+          echo "rotation=$ROTATION_KEY" >> $GITHUB_OUTPUT
+          
+          echo "📅 JobPost Cache Rotation Strategy"
+          echo "==================================="
+          echo "Week number: $WEEK_NUMBER"
+          echo "Rotation key: $ROTATION_KEY"
+          echo ""
+          echo "Benefits:"
+          echo "  • Automatically creates new cache weekly"
+          echo "  • Old caches evicted after 7 days"
+          echo "  • Prevents cache bloat"
+          echo "  • Ensures fresh dependencies periodically"
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache JobPost with rotation
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            env/
+          key: ${{ runner.os }}-jobpost-${{ steps.rotation.outputs.rotation }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-jobpost-${{ steps.rotation.outputs.rotation }}-
+            ${{ runner.os }}-jobpost-
+      
+      - name: Explain rotation benefits
+        run: |
+          echo "🔄 Cache Rotation Benefits for JobPost"
+          echo "======================================="
+          echo ""
+          echo "Without rotation:"
+          echo "  ✗ Caches can accumulate indefinitely"
+          echo "  ✗ May hit 10GB repository limit"
+          echo "  ✗ Older caches waste storage"
+          echo ""
+          echo "With weekly rotation:"
+          echo "  ✓ Cache refreshed every week"
+          echo "  ✓ Old caches auto-evicted after 7 days"
+          echo "  ✓ Maximum 2 weeks of caches exist"
+          echo "  ✓ Storage usage remains bounded"
+          echo ""
+          echo "For JobPost application:"
+          echo "  • Python deps cache: ~300MB"
+          echo "  • With rotation: max 600MB (2 weeks)"
+          echo "  • Without rotation: could grow unbounded"
+      
+      - name: Setup JobPost environment
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          python -m venv env
+          source env/bin/activate
+          pip install -r requirements.txt
+      
+      - name: Run JobPost tests
+        run: |
+          source env/bin/activate
+          python manage.py test jobpost</code></pre>
+        <div class="printout">🔄 JobPost weekly cache rotation to prevent storage bloat</div>
+      </div>
+
+      <div class="example">
+        <h4>3. JobPost cache size optimization</h4>
+        <pre><code class="language-yaml">name: JobPost Cache Size Optimization
+
+on: [push, pull_request]
+
+jobs:
+  optimized-caching:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache optimization analysis
+        run: |
+          echo "🔍 JobPost Cache Size Optimization"
+          echo "==================================="
+          echo ""
+          echo "Strategy: Cache only what's needed"
+          echo ""
+          echo "❌ DON'T cache (wastes space):"
+          echo "  • Source code (use git checkout)"
+          echo "  • Build artifacts (regenerate each time)"
+          echo "  • Logs and temp files"
+          echo "  • .pyc files (auto-generated)"
+          echo "  • __pycache__ directories"
+          echo ""
+          echo "✅ DO cache (high value):"
+          echo "  • pip download cache (~300MB for JobPost)"
+          echo "  • Virtual environment packages"
+          echo "  • Pre-commit hooks"
+          echo "  • Database fixtures (~50MB)"
+          echo "  • Node modules for frontend"
+      
+      - name: Cache pip packages only (optimized)
+        id: cache-pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-optimized-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-optimized-
+      
+      - name: Measure cache effectiveness
+        run: |
+          echo "📏 Cache Effectiveness Metrics"
+          echo "=============================="
+          
+          PIP_CACHE_SIZE=$(du -sh ~/.cache/pip 2>/dev/null | cut -f1 || echo "0")
+          
+          echo "Pip cache size: $PIP_CACHE_SIZE"
+          echo ""
+          echo "Expected sizes for JobPost:"
+          echo "  • pip cache alone: ~300MB"
+          echo "  • pip cache + venv: ~800MB"
+          echo "  • pip cache + venv + node_modules: ~1.5GB"
+          echo ""
+          echo "Our strategy: Cache pip only"
+          echo "  ✓ Saves 70% storage vs full venv"
+          echo "  ✓ Still 80% time savings"
+          echo "  ✓ More cache hits due to smaller size"
+      
+      - name: Install JobPost dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Cache efficiency summary
+        run: |
+          echo "📊 JobPost Cache Efficiency Summary"
+          echo "===================================="
+          echo ""
+          echo "Cache storage (this workflow):"
+          echo "  • Pip cache: ~300MB"
+          echo "  • Estimated 10GB limit usage: 3%"
+          echo ""
+          echo "Time savings:"
+          echo "  • Without cache: ~2-3 minutes"
+          echo "  • With cache: ~30 seconds"
+          echo "  • Time saved: 80-85%"
+          echo ""
+          echo "Cost-benefit ratio: Excellent ✅"</code></pre>
+        <div class="printout">⚡ JobPost cache size optimization for maximum efficiency</div>
+      </div>
+
+      <div class="example">
+        <h4>4. JobPost multi-cache prioritization</h4>
+        <pre><code class="language-yaml">name: JobPost Multi-Cache Prioritization
+
+on: [push, pull_request]
+
+jobs:
+  prioritized-caching:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout JobPost
+        uses: actions/checkout@v4
+      
+      - name: Cache prioritization strategy
+        run: |
+          echo "🎯 JobPost Cache Prioritization Strategy"
+          echo "========================================="
+          echo ""
+          echo "Priority 1 (High): Frequently accessed, stable"
+          echo "  • Python pip cache (~300MB)"
+          echo "  • Access: Every workflow run"
+          echo "  • Change frequency: Low (dependencies stable)"
+          echo ""
+          echo "Priority 2 (Medium): Moderate access, moderate change"
+          echo "  • Database fixtures (~50MB)"
+          echo "  • Access: Test workflows only"
+          echo "  • Change frequency: Medium (updated monthly)"
+          echo ""
+          echo "Priority 3 (Low): Infrequent access, high change"
+          echo "  • Built assets (~100MB)"
+          echo "  • Access: Deployment workflows"
+          echo "  • Change frequency: High (every commit)"
+          echo ""
+          echo "Strategy: Use specific keys for each priority"
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache Priority 1 - Python dependencies
+        id: cache-python
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          # Very stable key - only changes when requirements change
+          key: jobpost-priority1-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            jobpost-priority1-pip-
+      
+      - name: Install JobPost dependencies
+        if: steps.cache-python.outputs.cache-hit != 'true'
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Cache Priority 2 - Database fixtures
+        id: cache-fixtures
+        uses: actions/cache@v4
+        with:
+          path: jobpost/fixtures/
+          # Semi-stable key - changes monthly
+          key: jobpost-priority2-fixtures-${{ hashFiles('jobpost/fixtures/**/*.json') }}
+          restore-keys: |
+            jobpost-priority2-fixtures-
+      
+      - name: Load fixtures if needed
+        if: steps.cache-fixtures.outputs.cache-hit != 'true'
+        env:
+          DJANGO_SETTINGS_MODULE: anihpj.settings.test
+        run: |
+          python manage.py migrate
+          python manage.py loaddata jobpost/fixtures/initial_data.json
+          python manage.py loaddata jobpost/fixtures/test_data.json
+      
+      - name: Cache Priority 3 - Built assets
+        id: cache-assets
+        uses: actions/cache@v4
+        with:
+          path: jobpost/static/dist/
+          # Volatile key - changes every commit
+          key: jobpost-priority3-assets-${{ github.sha }}
+          restore-keys: |
+            jobpost-priority3-assets-
+      
+      - name: Build assets if needed
+        if: steps.cache-assets.outputs.cache-hit != 'true'
+        run: |
+          npm run build
+      
+      - name: Prioritization effectiveness
+        run: |
+          echo "📊 JobPost Cache Prioritization Results"
+          echo "========================================"
+          echo ""
+          echo "Priority 1 (Python deps):"
+          echo "  Cache hit: ${{ steps.cache-python.outputs.cache-hit }}"
+          echo "  Expected hit rate: >95%"
+          echo "  Storage impact: Low (stable)"
+          echo ""
+          echo "Priority 2 (Fixtures):"
+          echo "  Cache hit: ${{ steps.cache-fixtures.outputs.cache-hit }}"
+          echo "  Expected hit rate: ~80%"
+          echo "  Storage impact: Medium"
+          echo ""
+          echo "Priority 3 (Assets):"
+          echo "  Cache hit: ${{ steps.cache-assets.outputs.cache-hit }}"
+          echo "  Expected hit rate: ~50%"
+          echo "  Storage impact: High (volatile)"
+          echo ""
+          echo "Total storage: ~450MB"
+          echo "10GB limit usage: 4.5%"
+          echo "Strategy: Effective ✅"</code></pre>
+        <div class="printout">🎯 JobPost multi-cache prioritization for optimal storage usage</div>
+      </div>
+
+      <div class="example">
+        <h4>5. JobPost cache cleanup automation</h4>
+        <pre><code class="language-yaml">name: JobPost Cache Cleanup
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly on Monday at 2 AM
+  workflow_dispatch:
+
+jobs:
+  cleanup-stale-caches:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Cleanup strategy explanation
+        run: |
+          echo "🧹 JobPost Cache Cleanup Strategy"
+          echo "=================================="
+          echo ""
+          echo "Automatic eviction (GitHub managed):"
+          echo "  • Caches not accessed for 7 days"
+          echo "  • LRU eviction when storage full"
+          echo "  • No manual intervention needed"
+          echo ""
+          echo "Manual cleanup targets:"
+          echo "  1. Caches from deleted branches"
+          echo "  2. Caches from old PRs"
+          echo "  3. Caches with outdated keys"
+          echo "  4. Test/experimental caches"
+      
+      - name: List all JobPost caches
+        id: list-caches
+        run: |
+          echo "📋 Listing all JobPost caches..."
+          
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/actions/caches \
+            --paginate \
+            > all-caches.json
+          
+          TOTAL=$(jq '.actions_caches | length' all-caches.json)
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "Found $TOTAL caches"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      
+      - name: Identify stale branch caches
+        id: stale
+        run: |
+          echo "🔍 Identifying stale branch caches..."
+          
+          # Get all branches
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            repos/${{ github.repository }}/branches \
+            --paginate \
+            | jq -r '.[].name' > active-branches.txt
+          
+          # Find caches for non-existent branches
+          jq -r '.actions_caches[] | select(.ref | startswith("refs/heads/")) | 
+            .ref + "|" + .key + "|" + .id' all-caches.json | while IFS='|' read ref key id; do
+            
+            branch=$(echo "$ref" | sed 's|refs/heads/||')
+            
+            if ! grep -q "^${branch}$" active-branches.txt; then
+              echo "Stale cache found:"
+              echo "  Branch: $branch (deleted)"
+              echo "  Key: $key"
+              echo "  ID: $id"
+              echo "$id" >> stale-cache-ids.txt
+            fi
+          done
+          
+          if [ -f stale-cache-ids.txt ]; then
+            STALE_COUNT=$(wc -l < stale-cache-ids.txt)
+            echo "stale_count=$STALE_COUNT" >> $GITHUB_OUTPUT
+            echo "Found $STALE_COUNT stale caches"
+          else
+            echo "stale_count=0" >> $GITHUB_OUTPUT
+            echo "No stale caches found"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      
+      - name: Delete stale caches
+        if: steps.stale.outputs.stale_count > 0
+        run: |
+          echo "🗑️  Deleting stale caches..."
+          
+          while read cache_id; do
+            echo "Deleting cache ID: $cache_id"
+            
+            gh api \
+              --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              /repos/${{ github.repository }}/actions/caches/$cache_id
+            
+            echo "✅ Deleted cache $cache_id"
+          done < stale-cache-ids.txt
+          
+          echo ""
+          echo "Deleted ${{ steps.stale.outputs.stale_count }} stale caches"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      
+      - name: Cleanup summary
+        run: |
+          echo "📊 JobPost Cache Cleanup Summary"
+          echo "================================="
+          echo ""
+          echo "Total caches reviewed: ${{ steps.list-caches.outputs.total }}"
+          echo "Stale caches deleted: ${{ steps.stale.outputs.stale_count }}"
+          echo ""
+          echo "Cleanup criteria:"
+          echo "  ✓ Caches from deleted branches"
+          echo "  ✓ Manual deletion via API"
+          echo ""
+          echo "Automatic cleanup:"
+          echo "  ✓ 7-day unused caches (GitHub managed)"
+          echo "  ✓ LRU eviction when full (GitHub managed)"
+          echo ""
+          echo "Next cleanup: Next Monday at 2 AM UTC"
+      
+      - name: Storage impact analysis
+        run: |
+          echo "💾 Storage Impact Analysis"
+          echo "=========================="
+          echo ""
+          
+          DELETED=${{ steps.stale.outputs.stale_count }}
+          
+          if [ "$DELETED" -gt 0 ]; then
+            # Estimate average cache size
+            AVG_SIZE="300"  # MB
+            FREED=$((DELETED * AVG_SIZE))
+            
+            echo "Estimated storage freed:"
+            echo "  • Caches deleted: $DELETED"
+            echo "  • Average size: ${AVG_SIZE}MB"
+            echo "  • Total freed: ~${FREED}MB"
+            echo ""
+            echo "✅ Cleanup successful"
+          else
+            echo "No storage freed (no stale caches)"
+            echo "✅ Cache hygiene is good"
+          fi</code></pre>
+        <div class="printout">🧹 JobPost automated cache cleanup for storage management</div>
+      </div>
     </section>
 
     <section id="next_steps" class="section">
