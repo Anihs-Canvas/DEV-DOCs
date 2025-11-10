@@ -10169,50 +10169,80 @@ clusterrolebinding.rbac.authorization.k8s.io "anihpj-jobpost-test-debug" deleted
                 <p class="api-subtitle">FlowSchema defines the schema of a group of flows.</p>
                 
                 <h4>Full Description</h4>
-                <p>FlowSchema defines the schema of a group of flows. Note that a flow is made up of a set of inbound API requests with similar attributes and is identified by a pair of strings: the name of the FlowSchema and a "flow distinguisher". FlowSchema enables fine-grained control over API priority and fairness, allowing you to categorize and prioritize requests based on the subject making the request and the resources being accessed.</p>
+                <p>FlowSchema defines the schema of a group of flows, enabling fine-grained control over API priority and fairness in Kubernetes. A flow is made up of a set of inbound API requests with similar attributes and is identified by a pair of strings: the name of the FlowSchema and a "flow distinguisher". This resource is essential for managing API request priorities in your anihpj Django application, ensuring that critical operations from your jobpost app components receive appropriate priority.</p>
+                
+                <p>In production Django environments, FlowSchemas allow you to categorize and prioritize requests based on the subject making the request (ServiceAccounts, Users, Groups) and the resources being accessed. For example, you can give high priority to Skills model updates while assigning lower priority to bulk JobPost queries. This ensures your User authentication services maintain responsiveness even under heavy load from Author content creation or Location geocoding operations.</p>
                 
                 <h4>Syntax</h4>
-                <pre><code class="language-yaml">apiVersion: flowcontrol.apiserver.k8s.io/v1
-kind: FlowSchema
-metadata:
-  name: flowschema-name
-spec:
-  distinguisherMethod:
-    type: ByUser
-  matchingPrecedence: 1000
-  priorityLevelConfiguration:
-    name: priority-level-name
-  rules:
-  - subjects:
-    - kind: ServiceAccount
-      serviceAccount:
-        name: service-account-name
-        namespace: namespace-name
-    resourceRules:
-    - apiGroups: [""]
-      resources: ["pods"]
-      verbs: ["get", "list"]</code></pre>
+                <pre><code class="language-bash"># Create a FlowSchema from YAML file
+kubectl create -f flowschema.yaml
+# Apply a FlowSchema configuration
+kubectl apply -f flowschema.yaml
+# List all FlowSchemas
+kubectl get flowschemas
+# Get detailed information about a specific FlowSchema
+kubectl describe flowschema {name}
+# Get FlowSchema in YAML format
+kubectl get flowschema {name} -o yaml
+# Get FlowSchema in JSON format
+kubectl get flowschema {name} -o json
+# Delete a specific FlowSchema
+kubectl delete flowschema {name}</code></pre>
 
                 <h4>YAML Structure</h4>
                 <pre><code class="language-yaml">apiVersion: flowcontrol.apiserver.k8s.io/v1
 kind: FlowSchema
-metadata: ObjectMeta
-spec: FlowSchemaSpec
-status: FlowSchemaStatus</code></pre>
+metadata:
+  name: anihpj-flow
+  labels:
+    app: anihpj
+    component: api-priority
+spec:
+  distinguisherMethod:
+    type: ByUser
+  matchingPrecedence: 500
+  priorityLevelConfiguration:
+    name: workload-high
+  rules:
+  - subjects:
+    - kind: ServiceAccount
+      serviceAccount:
+        name: anihpj-skills-sa
+        namespace: default
+    resourceRules:
+    - apiGroups: [""]
+      resources: ["pods", "configmaps"]
+      verbs: ["get", "list", "watch"]
+status:
+  conditions:
+  - type: Ready
+    status: "True"
+    lastTransitionTime: "2025-11-10T10:00:00Z"
+    reason: FlowSchemaInEffect
+    message: This FlowSchema is in effect</code></pre>
 
                 <h4>Parameters Description</h4>
-                <p><strong>metadata (ObjectMeta)</strong>: metadata is the standard object's metadata.</p>
-                
-                <p><strong>spec (FlowSchemaSpec)</strong>: spec is the specification of the desired behavior of a FlowSchema.</p>
-                
-                <p><strong>status (FlowSchemaStatus)</strong>: status is the current status of a FlowSchema.</p>
+                <ul>
+                    <li><strong>apiVersion</strong>: string - API version, always "flowcontrol.apiserver.k8s.io/v1" for FlowSchema</li>
+                    <li><strong>kind</strong>: string - Resource type, always "FlowSchema"</li>
+                    <li><strong>metadata</strong>: ObjectMeta - Standard object metadata including name, labels, and annotations for organizing FlowSchemas in your anihpj application</li>
+                    <li><strong>spec</strong>: FlowSchemaSpec - Specification of the desired behavior of the FlowSchema
+                        <ul>
+                            <li><strong>distinguisherMethod</strong>: FlowDistinguisherMethod - Defines how to compute the flow distinguisher for requests matching this schema</li>
+                            <li><strong>matchingPrecedence</strong>: integer - Used to choose among FlowSchemas that match a request. Lower values have higher priority. Range: 1-10000</li>
+                            <li><strong>priorityLevelConfiguration</strong>: PriorityLevelConfigurationReference - References the PriorityLevelConfiguration that applies to this FlowSchema</li>
+                            <li><strong>rules</strong>: []PolicyRulesWithSubjects - Describes which requests will match this FlowSchema based on subjects and resources</li>
+                        </ul>
+                    </li>
+                    <li><strong>status</strong>: FlowSchemaStatus - Current status of the FlowSchema, including conditions indicating whether it's in effect</li>
+                </ul>
 
                 <h4>Return Value</h4>
                 <ul>
-                    <li><strong>FlowSchema</strong>: Returns FlowSchema object with metadata, spec, and status</li>
-                    <li><strong>200</strong>: OK</li>
-                    <li><strong>201</strong>: Created</li>
-                    <li><strong>401</strong>: Unauthorized</li>
+                    <li><strong>200 (FlowSchema)</strong>: OK - Request successful, FlowSchema returned</li>
+                    <li><strong>201 (FlowSchema)</strong>: Created - FlowSchema successfully created</li>
+                    <li><strong>202 (FlowSchema)</strong>: Accepted - Request accepted for processing</li>
+                    <li><strong>401</strong>: Unauthorized - Authentication required</li>
                 </ul>
 
                 <h4>5 Practical Django Examples</h4>
@@ -10381,9 +10411,21 @@ EOF</code></pre>
             <!-- FlowSchemaSpec Section -->
             <div class="api-block" id="flowschemaspec">
                 <h4>FlowSchemaSpec</h4>
-                <p>FlowSchemaSpec describes how the FlowSchema's specification looks like.</p>
+                
+                <h4>Full Description</h4>
+                <p>FlowSchemaSpec describes how the FlowSchema's specification looks like, defining the matching rules and priority configuration for API request flows. In your anihpj Django application, this specification determines how requests from different services (Skills, User, Author, Location, JobPost) are categorized and prioritized.</p>
+                
+                <p>The spec includes the distinguisher method (how to group similar requests), matching precedence (priority order), priority level configuration reference, and matching rules based on subjects and resources. This allows fine-grained control over which requests from your jobpost app components receive higher or lower priority in the cluster.</p>
 
-                <h4>Parameters</h4>
+                <h4>Syntax</h4>
+                <pre><code class="language-bash"># View FlowSchemaSpec in a FlowSchema
+kubectl get flowschema {name} -o jsonpath='{.spec}'
+# View FlowSchemaSpec in YAML format
+kubectl get flowschema {name} -o yaml | grep -A 20 "spec:"
+# Describe FlowSchema to see spec details
+kubectl describe flowschema {name}</code></pre>
+
+                <h4>Parameters Description</h4>
                 <ul>
                     <li><strong>distinguisherMethod (FlowDistinguisherMethod)</strong>: defines how to compute the flow distinguisher for requests that match this schema
                         <ul>
@@ -10404,14 +10446,186 @@ EOF</code></pre>
                         </ul>
                     </li>
                 </ul>
+
+                <h4>Return Value</h4>
+                <ul>
+                    <li><strong>FlowSchemaSpec object</strong>: Returns the specification portion of a FlowSchema</li>
+                </ul>
+
+                <h4>5 Practical Django Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: FlowSchemaSpec for Skills Service</h5>
+                    <p><em>This example shows a FlowSchemaSpec prioritizing Skills model requests.</em></p>
+                    <pre><code class="language-yaml">spec:
+  distinguisherMethod:
+    type: ByUser
+  matchingPrecedence: 500
+  priorityLevelConfiguration:
+    name: workload-high
+  rules:
+  - subjects:
+    - kind: ServiceAccount
+      serviceAccount:
+        name: anihpj-skills-sa
+        namespace: default
+    resourceRules:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "list"]</code></pre>
+                    <pre><code class="language-bash"># View the spec
+kubectl get flowschema skills-flow -o jsonpath='{.spec}' | jq</code></pre>
+                    
+                    <div class="kubectl-output">{"distinguisherMethod":{"type":"ByUser"},"matchingPrecedence":500,"priorityLevelConfiguration":{"name":"workload-high"},"rules":[{"resourceRules":[{"apiGroups":[""],"resources":["configmaps"],"verbs":["get","list"]}],"subjects":[{"kind":"ServiceAccount","serviceAccount":{"name":"anihpj-skills-sa","namespace":"default"}}]}]}</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: FlowSchemaSpec for User Authentication</h5>
+                    <p><em>This example demonstrates a FlowSchemaSpec for User model authentication flows.</em></p>
+                    <pre><code class="language-yaml">spec:
+  distinguisherMethod:
+    type: ByNamespace
+  matchingPrecedence: 300
+  priorityLevelConfiguration:
+    name: workload-high
+  rules:
+  - subjects:
+    - kind: ServiceAccount
+      serviceAccount:
+        name: anihpj-user-sa
+        namespace: default
+    resourceRules:
+    - apiGroups: [""]
+      resources: ["secrets"]
+      verbs: ["get"]</code></pre>
+                    <pre><code class="language-bash"># Describe to see spec details
+kubectl describe flowschema user-auth-flow</code></pre>
+                    
+                    <div class="kubectl-output">Name:         user-auth-flow
+API Version:  flowcontrol.apiserver.k8s.io/v1
+Kind:         FlowSchema
+Spec:
+  Distinguisher Method:
+    Type:  ByNamespace
+  Matching Precedence:  300
+  Priority Level Configuration:
+    Name:  workload-high
+  Rules:
+    Resource Rules:
+      API Groups:
+        
+      Resources:
+        secrets
+      Verbs:
+        get</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: FlowSchemaSpec for Author Publishing</h5>
+                    <p><em>This example illustrates a FlowSchemaSpec for Author content publishing operations.</em></p>
+                    <pre><code class="language-yaml">spec:
+  distinguisherMethod:
+    type: ByUser
+  matchingPrecedence: 400
+  priorityLevelConfiguration:
+    name: workload-medium
+  rules:
+  - subjects:
+    - kind: Group
+      group:
+        name: system:serviceaccounts:anihpj
+    resourceRules:
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["update", "patch"]</code></pre>
+                    <pre><code class="language-bash"># Get spec in YAML format
+kubectl get flowschema author-publish-flow -o yaml | grep -A 15 "spec:"</code></pre>
+                    
+                    <div class="kubectl-output">spec:
+  distinguisherMethod:
+    type: ByUser
+  matchingPrecedence: 400
+  priorityLevelConfiguration:
+    name: workload-medium
+  rules:
+  - resourceRules:
+    - apiGroups:
+      - apps
+      resources:
+      - deployments
+      verbs:
+      - update
+      - patch</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: FlowSchemaSpec for Location Geocoding</h5>
+                    <p><em>This example shows a FlowSchemaSpec for Location model geocoding services.</em></p>
+                    <pre><code class="language-yaml">spec:
+  distinguisherMethod:
+    type: ByUser
+  matchingPrecedence: 700
+  priorityLevelConfiguration:
+    name: workload-low
+  rules:
+  - subjects:
+    - kind: ServiceAccount
+      serviceAccount:
+        name: anihpj-location-sa
+        namespace: default
+    resourceRules:
+    - apiGroups: [""]
+      resources: ["pods"]
+      verbs: ["list", "watch"]</code></pre>
+                    <pre><code class="language-bash"># Extract just the matchingPrecedence
+kubectl get flowschema location-geocode-flow -o jsonpath='{.spec.matchingPrecedence}'</code></pre>
+                    
+                    <div class="kubectl-output">700</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: FlowSchemaSpec for JobPost Queries</h5>
+                    <p><em>This example demonstrates a FlowSchemaSpec for JobPost model bulk query operations.</em></p>
+                    <pre><code class="language-yaml">spec:
+  distinguisherMethod:
+    type: ByNamespace
+  matchingPrecedence: 900
+  priorityLevelConfiguration:
+    name: exempt
+  rules:
+  - subjects:
+    - kind: ServiceAccount
+      serviceAccount:
+        name: anihpj-jobpost-sa
+        namespace: default
+    nonResourceRules:
+    - verbs: ["get"]
+      nonResourceURLs: ["/healthz", "/livez"]</code></pre>
+                    <pre><code class="language-bash"># View priorityLevelConfiguration name
+kubectl get flowschema jobpost-queries-flow -o jsonpath='{.spec.priorityLevelConfiguration.name}'</code></pre>
+                    
+                    <div class="kubectl-output">exempt</div>
+                </div>
             </div>
 
             <!-- FlowSchemaStatus Section -->
             <div class="api-block" id="flowschemastatus">
                 <h4>FlowSchemaStatus</h4>
-                <p>FlowSchemaStatus represents the current state of a FlowSchema.</p>
+                
+                <h4>Full Description</h4>
+                <p>FlowSchemaStatus represents the current state of a FlowSchema, providing runtime information about whether the flow schema is active and being enforced by the API server. In your anihpj Django application, monitoring the status helps ensure your priority configurations for Skills, User, Author, Location, and JobPost services are properly applied.</p>
+                
+                <p>The status includes a conditions array that tracks the FlowSchema's operational state. The primary condition type is "Dangling" which indicates whether the referenced PriorityLevelConfiguration exists. A healthy FlowSchema will show conditions confirming it's in effect and properly configured for your jobpost app's API priority management.</p>
 
-                <h4>Parameters</h4>
+                <h4>Syntax</h4>
+                <pre><code class="language-bash"># View FlowSchemaStatus
+kubectl get flowschema {name} -o jsonpath='{.status}'
+# View status conditions
+kubectl get flowschema {name} -o jsonpath='{.status.conditions[*]}'
+# Check if FlowSchema is active
+kubectl describe flowschema {name} | grep -A 5 "Status:"</code></pre>
+
+                <h4>Parameters Description</h4>
                 <ul>
                     <li><strong>conditions ([]FlowSchemaCondition)</strong>: list of the current states of FlowSchema
                         <ul>
@@ -10423,6 +10637,68 @@ EOF</code></pre>
                         </ul>
                     </li>
                 </ul>
+
+                <h4>Return Value</h4>
+                <ul>
+                    <li><strong>FlowSchemaStatus object</strong>: Returns the status portion of a FlowSchema with current conditions</li>
+                </ul>
+
+                <h4>5 Practical Django Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Check Skills Service FlowSchema Status</h5>
+                    <p><em>This example shows how to verify the status of a Skills service FlowSchema.</em></p>
+                    <pre><code class="language-bash"># Get FlowSchema status
+kubectl get flowschema skills-flow -o jsonpath='{.status}' | jq</code></pre>
+                    
+                    <div class="kubectl-output">{"conditions":[{"lastTransitionTime":"2025-11-10T10:00:00Z","message":"This FlowSchema is in effect","reason":"FlowSchemaInEffect","status":"True","type":"Ready"}]}</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Monitor User Authentication FlowSchema Conditions</h5>
+                    <p><em>This example demonstrates checking the conditions array for User model FlowSchema.</em></p>
+                    <pre><code class="language-bash"># View all status conditions
+kubectl get flowschema user-auth-flow -o jsonpath='{.status.conditions[*]}' | jq</code></pre>
+                    
+                    <div class="kubectl-output">{"lastTransitionTime":"2025-11-10T09:30:00Z","message":"This FlowSchema references the PriorityLevelConfiguration object named 'workload-high' and it exists","reason":"NotDangling","status":"False","type":"Dangling"}</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Verify Author Publishing FlowSchema Is Active</h5>
+                    <p><em>This example illustrates how to confirm an Author service FlowSchema is properly configured.</em></p>
+                    <pre><code class="language-bash"># Describe to see full status
+kubectl describe flowschema author-publish-flow | grep -A 10 "Status:"</code></pre>
+                    
+                    <div class="kubectl-output">Status:
+  Conditions:
+    Last Transition Time:  2025-11-10T08:45:00Z
+    Message:               This FlowSchema is in effect
+    Reason:                FlowSchemaInEffect
+    Status:                True
+    Type:                  Ready
+    Last Transition Time:  2025-11-10T08:45:00Z
+    Message:               This FlowSchema references the PriorityLevelConfiguration object named 'workload-medium' and it exists
+    Reason:                NotDangling
+    Status:                False</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Check Location Geocoding FlowSchema Transition Time</h5>
+                    <p><em>This example shows how to extract the last transition time from FlowSchema status.</em></p>
+                    <pre><code class="language-bash"># Get last transition time
+kubectl get flowschema location-geocode-flow -o jsonpath='{.status.conditions[0].lastTransitionTime}'</code></pre>
+                    
+                    <div class="kubectl-output">2025-11-10T07:20:00Z</div>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Verify JobPost Queries FlowSchema Health</h5>
+                    <p><em>This example demonstrates checking if a JobPost FlowSchema's referenced PriorityLevel exists.</em></p>
+                    <pre><code class="language-bash"># Check for Dangling condition
+kubectl get flowschema jobpost-queries-flow -o jsonpath='{.status.conditions[?(@.type=="Dangling")].status}'</code></pre>
+                    
+                    <div class="kubectl-output">False</div>
+                </div>
             </div>
 
             <!-- FlowSchemaList Section -->
@@ -10437,14 +10713,17 @@ metadata: ListMeta
 items: []FlowSchema</code></pre>
 
                 <h4>Parameters Description</h4>
-                <p><strong>metadata (ListMeta)</strong>: metadata is the standard list metadata.</p>
-                <p><strong>items ([]FlowSchema), required</strong>: items is a list of FlowSchemas.</p>
+                <ul>
+                    <li><strong>apiVersion</strong>: string - API version, always "flowcontrol.apiserver.k8s.io/v1" for FlowSchemaList</li>
+                    <li><strong>kind</strong>: string - Resource type, always "FlowSchemaList"</li>
+                    <li><strong>metadata (ListMeta)</strong>: Standard list metadata including resourceVersion and continue token for pagination</li>
+                    <li><strong>items ([]FlowSchema), required</strong>: List of FlowSchema objects in the collection</li>
+                </ul>
 
                 <h4>Return Value</h4>
                 <ul>
-                    <li><strong>FlowSchemaList</strong>: Returns a list of FlowSchema objects</li>
-                    <li><strong>200</strong>: OK</li>
-                    <li><strong>401</strong>: Unauthorized</li>
+                    <li><strong>200 (FlowSchemaList)</strong>: OK - Request successful, FlowSchemaList returned</li>
+                    <li><strong>401</strong>: Unauthorized - Authentication required</li>
                 </ul>
 
                 <h4>5 Practical Django Examples</h4>
@@ -10544,27 +10823,27 @@ ADDED      jobpost-realtime-flow   workload-high     100                  ByUser
                     </div>
                 </div>
 
-                <!-- Due to length constraints, I'll include just the first operation as a complete example -->
                 <!-- get operation -->
                 <div id="flowschema-get">
                     <h4>get - read the specified FlowSchema</h4>
+                    <p>Read details of a specific FlowSchema by name.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">GET /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas/{name}</code></pre>
 
-                    <h6>Parameters</h6>
+                    <h5>Parameters</h5>
                     <ul>
                         <li><strong>name</strong> (in path): string, required - name of the FlowSchema</li>
-                        <li><strong>pretty</strong> (in query): string - pretty</li>
+                        <li><strong>pretty</strong> (in query): string - pretty print output</li>
                     </ul>
 
-                    <h6>Return Value</h6>
+                    <h5>Return Value</h5>
                     <ul>
                         <li><strong>200 (FlowSchema)</strong>: OK</li>
                         <li><strong>401</strong>: Unauthorized</li>
                     </ul>
 
-                    <h6>Practical Django Examples</h6>
+                    <h5>5 Practical Django Examples</h5>
 
                     <div class="example">
                         <h5>Example 1: Get Skills FlowSchema</h5>
@@ -10708,6 +10987,7 @@ kubectl get flowschema jobpost-batch-flow -o jsonpath='{.status.conditions[0]}'<
                 <!-- get status operation -->
                 <div id="flowschema-get-status">
                     <h4>get status - read status of the specified FlowSchema</h4>
+                    <p>Read the status subresource of a specific FlowSchema.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">GET /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas/{name}/status</code></pre>
@@ -10793,6 +11073,7 @@ kubectl get flowschema jobpost-batch-flow -o jsonpath='{.status.conditions[?(@.t
                 <!-- list operation -->
                 <div id="flowschema-list">
                     <h4>list - list FlowSchemas</h4>
+                    <p>List FlowSchemas in the cluster with optional filtering and pagination.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">GET /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas</code></pre>
@@ -11083,6 +11364,7 @@ EOF</code></pre>
                 <!-- update operation -->
                 <div id="flowschema-update">
                     <h4>update - replace the specified FlowSchema</h4>
+                    <p>Replace the entire FlowSchema configuration with a new specification.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">PUT /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas/{name}</code></pre>
@@ -11217,6 +11499,7 @@ kubectl replace -f jobpost-flow.yaml</code></pre>
                 <!-- update status operation -->
                 <div id="flowschema-update-status">
                     <h4>update status - replace status of the specified FlowSchema</h4>
+                    <p>Replace the status subresource of the specified FlowSchema.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">PUT /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas/{name}/status</code></pre>
@@ -11334,6 +11617,7 @@ EOF</code></pre>
                 <!-- patch operation -->
                 <div id="flowschema-patch">
                     <h4>patch - partially update the specified FlowSchema</h4>
+                    <p>Partially update the specified FlowSchema using strategic merge patch.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">PATCH /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas/{name}</code></pre>
@@ -11446,6 +11730,7 @@ kubectl patch flowschema jobpost-batch-flow --type='json' -p='[
                 <!-- patch status operation -->
                 <div id="flowschema-patch-status">
                     <h4>patch status - partially update status of the specified FlowSchema</h4>
+                    <p>Partially update the status subresource of the specified FlowSchema.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">PATCH /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas/{name}/status</code></pre>
@@ -11569,6 +11854,7 @@ kubectl patch flowschema jobpost-batch-flow --subresource=status --type='merge' 
                 <!-- delete operation -->
                 <div id="flowschema-delete">
                     <h4>delete - delete a FlowSchema</h4>
+                    <p>Delete a specific FlowSchema by name.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">DELETE /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas/{name}</code></pre>
@@ -11642,6 +11928,7 @@ kubectl delete flowschema jobpost-notification-flow --wait=true</code></pre>
                 <!-- deletecollection operation -->
                 <div id="flowschema-deletecollection">
                     <h4>deletecollection - delete collection of FlowSchema</h4>
+                    <p>Delete multiple FlowSchemas matching the specified criteria.</p>
                     
                     <h5>HTTP Request</h5>
                     <pre><code class="language-http">DELETE /apis/flowcontrol.apiserver.k8s.io/v1/flowschemas</code></pre>
