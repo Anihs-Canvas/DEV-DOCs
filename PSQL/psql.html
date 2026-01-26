@@ -1283,6 +1283,36 @@
                     <li class="toc-subitem"><a href="#type-conversion-select-output" class="toc-link">10.6 SELECT Output Columns</a></li>
                 </ul>
             </li>
+
+            <!-- Chapter 11: Indexes -->
+            <li class="toc-item">
+                <button class="toc-expand-btn">▶</button>
+                <a href="#indexes" class="toc-link">Chapter 11: Indexes</a>
+                <ul class="toc-subitems">
+                    <li class="toc-subitem"><a href="#indexes-intro" class="toc-link">11.1 Introduction</a></li>
+                    <li class="toc-subitem">
+                        <a href="#indexes-types" class="toc-link">11.2 Index Types</a>
+                        <ul class="toc-subitems">
+                            <li class="toc-subitem"><a href="#indexes-btree" class="toc-link">11.2.1 B-Tree</a></li>
+                            <li class="toc-subitem"><a href="#indexes-hash" class="toc-link">11.2.2 Hash</a></li>
+                            <li class="toc-subitem"><a href="#indexes-gist" class="toc-link">11.2.3 GiST</a></li>
+                            <li class="toc-subitem"><a href="#indexes-spgist" class="toc-link">11.2.4 SP-GiST</a></li>
+                            <li class="toc-subitem"><a href="#indexes-gin" class="toc-link">11.2.5 GIN</a></li>
+                            <li class="toc-subitem"><a href="#indexes-brin" class="toc-link">11.2.6 BRIN</a></li>
+                        </ul>
+                    </li>
+                    <li class="toc-subitem"><a href="#indexes-multicolumn" class="toc-link">11.3 Multicolumn Indexes</a></li>
+                    <li class="toc-subitem"><a href="#indexes-orderby" class="toc-link">11.4 Indexes and ORDER BY</a></li>
+                    <li class="toc-subitem"><a href="#indexes-combining" class="toc-link">11.5 Combining Multiple Indexes</a></li>
+                    <li class="toc-subitem"><a href="#indexes-unique" class="toc-link">11.6 Unique Indexes</a></li>
+                    <li class="toc-subitem"><a href="#indexes-expressions" class="toc-link">11.7 Indexes on Expressions</a></li>
+                    <li class="toc-subitem"><a href="#indexes-partial" class="toc-link">11.8 Partial Indexes</a></li>
+                    <li class="toc-subitem"><a href="#indexes-index-only-scans" class="toc-link">11.9 Index-Only Scans and Covering Indexes</a></li>
+                    <li class="toc-subitem"><a href="#indexes-opclass" class="toc-link">11.10 Operator Classes and Operator Families</a></li>
+                    <li class="toc-subitem"><a href="#indexes-collations" class="toc-link">11.11 Indexes and Collations</a></li>
+                    <li class="toc-subitem"><a href="#indexes-examine" class="toc-link">11.12 Examining Index Usage</a></li>
+                </ul>
+            </li>
         </ul>
     </nav>
 
@@ -31985,6 +32015,1811 @@ WHERE category = 'Electronics';</code></pre>
             </div>
             <div class="output-block">
                 <strong>Explanation:</strong> SELECT output column types are determined by source column types, function return types, and expression evaluation rules. Column types are inherited directly from tables. Computed expressions determine type through operator/function resolution. Aggregate functions have specific return types (count→bigint, avg→numeric, string_agg→text). Views store column types at creation. Subquery types propagate to outer queries. Understanding output types is essential for application integration, prepared statements, and query composition. Use pg_typeof() to verify types during development.
+            </div>
+
+        </section>
+
+        <!-- CHAPTER 11: INDEXES -->
+        <section id="indexes" class="section">
+            <h2>Chapter 11: Indexes</h2>
+            
+            <div class="info-card">
+                <h4>Overview</h4>
+                <p>Indexes are critical database structures that dramatically improve query performance by allowing rapid data retrieval without scanning entire tables. PostgreSQL provides multiple index types (B-tree, Hash, GiST, SP-GiST, GIN, BRIN) optimized for different use cases. Understanding when and how to use indexes is essential for building high-performance applications.</p>
+            </div>
+
+            <!-- 11.1 Introduction -->
+            <h3 id="indexes-intro">11.1 Introduction</h3>
+            
+            <div class="info-card">
+                <p><strong>Index fundamentals:</strong> Indexes are separate data structures that maintain pointers to table rows, enabling fast lookups. They trade storage space and write performance for dramatically faster reads. Without indexes, queries perform sequential scans (reading every row). With appropriate indexes, queries can use index scans (jumping directly to matching rows). Understanding index basics prevents slow queries and performance bottlenecks.</p>
+            </div>
+
+            <h4>🎯 Example 1: Performance Without Index</h4>
+            <pre><code class="language-sql">-- Query without index (sequential scan)
+EXPLAIN ANALYZE
+SELECT * FROM products WHERE product_name = 'Laptop';
+
+-- Check execution plan
+EXPLAIN (FORMAT TEXT, ANALYZE FALSE)
+SELECT * FROM products WHERE category = 'Electronics';</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan (Without Index):</div>
+                <pre>Seq Scan on products  (cost=0.00..1.12 rows=1 width=...)
+  Filter: (product_name = 'Laptop'::text)
+  Planning Time: 0.052 ms
+  Execution Time: 0.123 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Creating Basic Index</h4>
+            <pre><code class="language-sql">-- Create index on product_name
+CREATE INDEX idx_products_name ON products(product_name);
+
+-- Create index on category
+CREATE INDEX idx_products_category ON products(category);
+
+-- List all indexes on products table
+SELECT 
+    indexname,
+    indexdef
+FROM pg_indexes
+WHERE tablename = 'products'
+ORDER BY indexname;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>       indexname        |                    indexdef
+------------------------+------------------------------------------------
+ idx_products_category  | CREATE INDEX idx_products_category ON...
+ idx_products_name      | CREATE INDEX idx_products_name ON products...
+ products_pkey          | CREATE UNIQUE INDEX products_pkey ON...
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Performance With Index</h4>
+            <pre><code class="language-sql">-- Same query now uses index scan
+EXPLAIN ANALYZE
+SELECT * FROM products WHERE product_name = 'Laptop';
+
+-- Compare execution plans
+EXPLAIN (FORMAT JSON)
+SELECT * FROM products WHERE category = 'Electronics';</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan (With Index):</div>
+                <pre>Index Scan using idx_products_name on products  (cost=0.15..8.17 rows=1)
+  Index Cond: (product_name = 'Laptop'::text)
+  Planning Time: 0.089 ms
+  Execution Time: 0.045 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Index Size and Statistics</h4>
+            <pre><code class="language-sql">-- Check index sizes
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,
+    idx_scan AS times_used,
+    idx_tup_read AS tuples_read,
+    idx_tup_fetch AS tuples_fetched
+FROM pg_stat_user_indexes
+WHERE tablename = 'products'
+ORDER BY pg_relation_size(indexrelid) DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> schemaname | tablename |      indexname       | index_size | times_used | tuples_read | tuples_fetched
+------------+-----------+----------------------+------------+------------+-------------+----------------
+ public     | products  | products_pkey        | 16 kB      |        450 |         450 |            450
+ public     | products  | idx_products_name    | 16 kB      |         35 |          35 |             35
+ public     | products  | idx_products_category| 16 kB      |        120 |         480 |            450
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Dropping Unused Indexes</h4>
+            <pre><code class="language-sql">-- Find unused indexes
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0
+  AND indexrelname NOT LIKE '%_pkey'
+ORDER BY pg_relation_size(indexrelid) DESC;
+
+-- Drop unused index
+DROP INDEX IF EXISTS idx_products_unused;
+
+-- Verify index was dropped
+SELECT count(*) AS remaining_indexes
+FROM pg_indexes
+WHERE tablename = 'products';</code></pre>
+            <div class="output">
+                <div class="output-header">Unused Indexes:</div>
+                <pre> schemaname | tablename |    indexname      | idx_scan | index_size
+------------+-----------+-------------------+----------+------------
+ public     | products  | idx_old_column    |        0 | 24 kB
+(1 row)</pre>
+            </div>
+            <div class="output">
+                <div class="output-header">After Dropping:</div>
+                <pre> remaining_indexes
+-------------------
+                 3
+(1 row)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Indexes dramatically speed up queries by avoiding full table scans. Sequential scans read every row; index scans jump directly to matching rows. Create indexes on frequently queried columns. Each index consumes disk space and slows INSERT/UPDATE/DELETE operations. Use EXPLAIN to see query execution plans. Monitor index usage with pg_stat_user_indexes. Drop unused indexes to reduce overhead. Balance query performance with maintenance costs.
+            </div>
+
+            <!-- 11.2 Index Types -->
+            <h3 id="indexes-types">11.2 Index Types</h3>
+            
+            <div class="info-card">
+                <p><strong>Index type selection:</strong> PostgreSQL offers six index types, each optimized for specific workloads: B-tree (default, general-purpose), Hash (equality only), GiST (geometric/full-text), SP-GiST (partitioned data), GIN (multi-value columns like arrays/JSONB), BRIN (very large tables with natural ordering). Choosing the right index type can provide 10-100x performance improvements for specific query patterns.</p>
+            </div>
+
+            <!-- 11.2.1 B-Tree -->
+            <h3 id="indexes-btree">11.2.1 B-Tree</h3>
+            
+            <div class="info-card">
+                <p><strong>B-Tree indexes:</strong> The default and most common index type. B-tree handles &lt;, &lt;=, =, &gt;=, &gt; comparisons and BETWEEN, IN, IS NULL. Supports ORDER BY and maintains sorted order. Works for all data types with comparison operators. Ideal for range queries, sorted results, and general equality searches. Use unless you have specific needs for other index types.</p>
+            </div>
+
+            <h4>🎯 Example 1: Basic B-Tree Index Creation</h4>
+            <pre><code class="language-sql">-- Create B-tree index (default type)
+CREATE INDEX idx_products_price ON products(price);
+
+-- Explicitly specify B-tree (same as above)
+CREATE INDEX idx_orders_date ON orders(order_date) USING btree;
+
+-- Check index types
+SELECT 
+    tablename,
+    indexname,
+    indexdef
+FROM pg_indexes
+WHERE tablename IN ('products', 'orders')
+  AND indexname LIKE 'idx_%';</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> tablename |      indexname       |                indexdef
+-----------+----------------------+----------------------------------------
+ products  | idx_products_price   | CREATE INDEX idx_products_price ON...
+ orders    | idx_orders_date      | CREATE INDEX idx_orders_date ON orders...
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: B-Tree Range Queries</h4>
+            <pre><code class="language-sql">-- Range query using B-tree index
+EXPLAIN ANALYZE
+SELECT product_name, price
+FROM products
+WHERE price BETWEEN 100 AND 500
+ORDER BY price;
+
+-- Greater than query
+SELECT product_name, price
+FROM products
+WHERE price > 200
+LIMIT 5;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_products_price on products  (cost=0.15..12.30 rows=3)
+  Index Cond: ((price >= 100) AND (price <= 500))
+  Planning Time: 0.125 ms
+  Execution Time: 0.067 ms
+(4 rows)</pre>
+            </div>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name  | price
+---------------+--------
+ Desk Chair    | 299.99
+ Coffee Maker  | 279.99
+ Microwave     | 349.99
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: B-Tree ORDER BY Optimization</h4>
+            <pre><code class="language-sql">-- B-tree provides pre-sorted data
+EXPLAIN ANALYZE
+SELECT product_id, product_name, price
+FROM products
+ORDER BY price DESC
+LIMIT 10;
+
+-- Combine with WHERE clause
+SELECT product_id, product_name, price
+FROM products
+WHERE category = 'Electronics'
+ORDER BY price
+LIMIT 3;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Limit  (cost=0.15..1.45 rows=10)
+  -> Index Scan Backward using idx_products_price on products
+     Planning Time: 0.089 ms
+     Execution Time: 0.045 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: B-Tree NULL Handling</h4>
+            <pre><code class="language-sql">-- B-tree indexes can find NULL values
+CREATE INDEX idx_products_discount ON products(discount_percent);
+
+-- Query for NULL values (index can be used)
+SELECT product_name, discount_percent
+FROM products
+WHERE discount_percent IS NULL
+LIMIT 3;
+
+-- Query for NOT NULL
+SELECT product_name, discount_percent
+FROM products
+WHERE discount_percent IS NOT NULL
+ORDER BY discount_percent DESC
+LIMIT 3;</code></pre>
+            <div class="output">
+                <div class="output-header">NULL Results:</div>
+                <pre> product_name | discount_percent
+--------------+------------------
+ Laptop       | NULL
+ Mouse        | NULL
+ Keyboard     | NULL
+(3 rows)</pre>
+            </div>
+            <div class="output">
+                <div class="output-header">NOT NULL Results:</div>
+                <pre> product_name  | discount_percent
+---------------+------------------
+ T-Shirt       |            25.00
+ Headphones    |            15.00
+ Desk Chair    |            10.00
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: B-Tree Pattern Matching (Prefix)</h4>
+            <pre><code class="language-sql">-- B-tree supports LIKE with prefix (no leading wildcard)
+CREATE INDEX idx_customers_name ON customers(customer_name);
+
+-- Prefix search uses index (efficient)
+EXPLAIN ANALYZE
+SELECT customer_name, email
+FROM customers
+WHERE customer_name LIKE 'John%';
+
+-- Leading wildcard cannot use standard B-tree
+EXPLAIN ANALYZE
+SELECT customer_name
+FROM customers
+WHERE customer_name LIKE '%Smith';</code></pre>
+            <div class="output">
+                <div class="output-header">Prefix Search (Uses Index):</div>
+                <pre>Index Scan using idx_customers_name on customers  (cost=0.15..8.17 rows=1)
+  Index Cond: ((customer_name >= 'John') AND (customer_name < 'Joio'))
+  Filter: (customer_name ~~ 'John%'::text)
+(3 rows)</pre>
+            </div>
+            <div class="output">
+                <div class="output-header">Suffix Search (Sequential Scan):</div>
+                <pre>Seq Scan on customers  (cost=0.00..2.50 rows=1)
+  Filter: (customer_name ~~ '%Smith'::text)
+(2 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> B-tree is the default, most versatile index type. Supports all comparison operators (&lt;, &lt;=, =, &gt;=, &gt;), range queries (BETWEEN), sorting (ORDER BY), and NULL searches (IS NULL). B-tree maintains balanced tree structure, keeping data sorted. Excellent for range scans, equality lookups, sorted retrieval. Supports prefix pattern matching (LIKE 'prefix%') but not suffix/infix. Use B-tree for 90% of indexing needs - only choose specialized types for specific requirements.
+            </div>
+
+            <!-- 11.2.2 Hash -->
+            <h3 id="indexes-hash">11.2.2 Hash</h3>
+            
+            <div class="info-card">
+                <p><strong>Hash indexes:</strong> Optimized for simple equality comparisons only (=). Cannot handle range queries, sorting, or inequality comparisons. Generally B-tree performs similarly for equality, so hash indexes are rarely needed. Use hash when: (1) you only need equality lookups, (2) values are very large (hashing is faster), (3) write-heavy workload where hash's simpler structure helps.</p>
+            </div>
+
+            <h4>🎯 Example 1: Creating Hash Index</h4>
+            <pre><code class="language-sql">-- Create hash index for equality-only lookups
+CREATE INDEX idx_products_sku_hash ON products(sku) USING hash;
+
+-- Check index type
+SELECT 
+    tablename,
+    indexname,
+    indexdef
+FROM pg_indexes
+WHERE indexname = 'idx_products_sku_hash';</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> tablename |       indexname        |                indexdef
+-----------+------------------------+----------------------------------------
+ products  | idx_products_sku_hash  | CREATE INDEX idx_products_sku_hash ON...
+                                     | USING hash
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Hash Index Equality Queries</h4>
+            <pre><code class="language-sql">-- Equality query uses hash index
+EXPLAIN ANALYZE
+SELECT * FROM products WHERE sku = 'SKU-001';
+
+-- Multiple equality conditions
+SELECT product_name, sku, price
+FROM products
+WHERE sku IN ('SKU-001', 'SKU-002', 'SKU-003');</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_products_sku_hash on products  (cost=0.00..8.02 rows=1)
+  Index Cond: (sku = 'SKU-001'::text)
+  Planning Time: 0.095 ms
+  Execution Time: 0.042 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Hash Index Limitations</h4>
+            <pre><code class="language-sql">-- Hash cannot handle range queries (uses seq scan instead)
+EXPLAIN
+SELECT * FROM products WHERE sku > 'SKU-100';
+
+-- Hash cannot handle LIKE queries
+EXPLAIN
+SELECT * FROM products WHERE sku LIKE 'SKU-%';</code></pre>
+            <div class="output">
+                <div class="output-header">Result (Cannot Use Hash):</div>
+                <pre>Seq Scan on products  (cost=0.00..1.15 rows=1)
+  Filter: (sku > 'SKU-100'::text)
+  -- Hash index NOT used for range queries
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Comparing Hash vs B-Tree</h4>
+            <pre><code class="language-sql">-- Create both types for comparison
+CREATE INDEX idx_email_btree ON customers(email) USING btree;
+CREATE INDEX idx_email_hash ON customers(email) USING hash;
+
+-- Check sizes
+SELECT 
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE 'idx_email%'
+ORDER BY indexname;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>    indexname     | size
+------------------+-------
+ idx_email_btree  | 16 kB
+ idx_email_hash   | 16 kB
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: When to Use Hash</h4>
+            <pre><code class="language-sql">-- Use hash for: unique identifiers with only equality checks
+-- Example: session tokens, UUIDs with only exact lookups
+
+CREATE TABLE sessions (
+    session_id uuid PRIMARY KEY,
+    user_id integer,
+    data jsonb,
+    created_at timestamptz DEFAULT now()
+);
+
+-- Hash index for session lookups (equality only)
+CREATE INDEX idx_sessions_id_hash ON sessions(session_id) USING hash;
+
+-- Query by session ID (exact match)
+SELECT session_id, user_id, created_at
+FROM sessions
+WHERE session_id = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>            session_id              | user_id |       created_at
+----------------------------------------+---------+------------------------
+ a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11   |     101 | 2026-01-26 10:00:00+00
+(1 row)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Hash indexes support only equality (=) operator. Cannot do range scans, sorting, or inequality comparisons. Hash function maps values to buckets - fast for exact matches. Historically had limitations (no WAL logging, crash recovery issues) but fully supported since PostgreSQL 10. B-tree usually equally fast for equality while supporting more operations. Use hash only when: (1) exclusively equality lookups, (2) very large keys where hashing is faster, (3) proven performance benefit. In most cases, stick with B-tree.
+            </div>
+
+            <!-- 11.2.3 GiST -->
+            <h3 id="indexes-gist">11.2.3 GiST</h3>
+            
+            <div class="info-card">
+                <p><strong>GiST indexes:</strong> Generalized Search Tree - extensible framework supporting various data types and operators. Built-in support for geometric types (points, boxes, polygons), full-text search (tsvector), IP networks (inet), ranges. Custom GiST indexes can be created for specialized types. Ideal for spatial queries, nearest-neighbor searches, complex containment checks.</p>
+            </div>
+
+            <h4>🎯 Example 1: GiST for Geometric Data</h4>
+            <pre><code class="language-sql">-- Create table with geometric column
+CREATE TABLE stores (
+    store_id serial PRIMARY KEY,
+    store_name text,
+    location point
+);
+
+INSERT INTO stores (store_name, location) VALUES
+    ('Downtown Store', point(40.7128, -74.0060)),
+    ('Uptown Store', point(40.7589, -73.9851)),
+    ('Brooklyn Store', point(40.6782, -73.9442));
+
+-- Create GiST index for geometric queries
+CREATE INDEX idx_stores_location ON stores USING gist(location);
+
+-- Find nearest store to a point
+SELECT store_name, location
+FROM stores
+ORDER BY location <-> point(40.7500, -73.9800)
+LIMIT 1;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>   store_name   |      location
+----------------+--------------------
+ Uptown Store   | (40.7589,-73.9851)
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 2: GiST for Full-Text Search</h4>
+            <pre><code class="language-sql">-- Add full-text search column
+ALTER TABLE products ADD COLUMN search_vector tsvector;
+
+UPDATE products
+SET search_vector = to_tsvector('english', 
+    coalesce(product_name, '') || ' ' || coalesce(description, ''));
+
+-- Create GiST index for full-text search
+CREATE INDEX idx_products_search ON products USING gist(search_vector);
+
+-- Full-text search query
+SELECT product_name, description
+FROM products
+WHERE search_vector @@ to_tsquery('english', 'electronic & device')
+LIMIT 3;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name  |           description
+---------------+----------------------------------
+ Laptop        | High-performance electronic device
+ Smartphone    | Mobile electronic device
+ Tablet        | Portable electronic device
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: GiST for Range Types</h4>
+            <pre><code class="language-sql">-- Create table with date ranges
+CREATE TABLE events (
+    event_id serial PRIMARY KEY,
+    event_name text,
+    event_period daterange
+);
+
+INSERT INTO events (event_name, event_period) VALUES
+    ('Summer Sale', '[2026-06-01,2026-08-31]'::daterange),
+    ('Holiday Season', '[2026-11-15,2026-12-31]'::daterange),
+    ('Spring Promo', '[2026-03-01,2026-05-31]'::daterange);
+
+-- GiST index for range operations
+CREATE INDEX idx_events_period ON events USING gist(event_period);
+
+-- Find events containing a specific date
+SELECT event_name, event_period
+FROM events
+WHERE event_period @> '2026-07-15'::date;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>  event_name  |      event_period
+--------------+-------------------------
+ Summer Sale  | [2026-06-01,2026-08-31)
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 4: GiST for IP Networks</h4>
+            <pre><code class="language-sql">-- Table with IP network ranges
+CREATE TABLE ip_blocks (
+    block_id serial PRIMARY KEY,
+    network inet,
+    description text
+);
+
+INSERT INTO ip_blocks (network, description) VALUES
+    ('192.168.1.0/24', 'Internal Network A'),
+    ('10.0.0.0/8', 'Private Network'),
+    ('172.16.0.0/12', 'Internal Network B');
+
+-- GiST index for network containment
+CREATE INDEX idx_ip_blocks_network ON ip_blocks USING gist(network);
+
+-- Check if IP is in any block
+SELECT description, network
+FROM ip_blocks
+WHERE network >> '192.168.1.50'::inet;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>    description     |     network
+--------------------+-----------------
+ Internal Network A | 192.168.1.0/24
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 5: GiST Index Statistics</h4>
+            <pre><code class="language-sql">-- Check GiST index usage
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan,
+    idx_tup_read,
+    idx_tup_fetch
+FROM pg_stat_user_indexes
+WHERE indexname LIKE '%gist%'
+ORDER BY idx_scan DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> schemaname | tablename |       indexname        | idx_scan | idx_tup_read | idx_tup_fetch
+------------+-----------+------------------------+----------+--------------+---------------
+ public     | stores    | idx_stores_location    |       45 |           45 |            45
+ public     | products  | idx_products_search    |       28 |          120 |           115
+ public     | events    | idx_events_period      |       12 |           18 |            18
+(3 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> GiST (Generalized Search Tree) is extensible framework for specialized data types. Supports geometric data (points, polygons - nearest neighbor, containment), full-text search (tsvector), ranges (overlap, containment), network addresses. GiST uses lossy compression - may require rechecking matches. Slower than B-tree for simple equality but essential for complex spatial/containment queries. Use GiST for: PostGIS geometric queries, full-text search, range overlaps, custom types requiring containment/proximity operators.
+            </div>
+
+            <!-- 11.2.4 SP-GiST -->
+            <h3 id="indexes-spgist">11.2.4 SP-GiST</h3>
+            
+            <div class="info-card">
+                <p><strong>SP-GiST indexes:</strong> Space-Partitioned Generalized Search Tree - supports partitioned search trees like quad-trees, k-d trees, radix trees. Efficient for data with natural clustering or hierarchical structure: phone numbers, IP addresses, geographic coordinates. Better than GiST for certain data distributions. Supports geometric types, text (prefix searches), inet/cidr types.</p>
+            </div>
+
+            <h4>🎯 Example 1: SP-GiST for Text Prefix Searches</h4>
+            <pre><code class="language-sql">-- SP-GiST excels at prefix searches
+CREATE TABLE phone_directory (
+    id serial PRIMARY KEY,
+    name text,
+    phone_number text
+);
+
+INSERT INTO phone_directory (name, phone_number) VALUES
+    ('Alice Smith', '+1-555-0100'),
+    ('Bob Jones', '+1-555-0200'),
+    ('Carol White', '+1-555-0150'),
+    ('Dave Brown', '+1-555-0250');
+
+-- SP-GiST index for prefix searches
+CREATE INDEX idx_phone_spgist ON phone_directory USING spgist(phone_number);
+
+-- Efficient prefix search
+SELECT name, phone_number
+FROM phone_directory
+WHERE phone_number LIKE '+1-555-01%';</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>     name      | phone_number
+---------------+--------------
+ Alice Smith   | +1-555-0100
+ Carol White   | +1-555-0150
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: SP-GiST for IP Addresses</h4>
+            <pre><code class="language-sql">-- Table with IP addresses
+CREATE TABLE access_log (
+    log_id serial PRIMARY KEY,
+    ip_address inet,
+    accessed_at timestamptz DEFAULT now()
+);
+
+INSERT INTO access_log (ip_address) VALUES
+    ('192.168.1.10'),
+    ('192.168.1.25'),
+    ('10.0.0.5'),
+    ('172.16.0.100');
+
+-- SP-GiST for IP address searches
+CREATE INDEX idx_access_ip_spgist ON access_log USING spgist(ip_address);
+
+-- Range queries on IP addresses
+SELECT ip_address, accessed_at
+FROM access_log
+WHERE ip_address << '192.168.1.0/24'::inet
+ORDER BY accessed_at DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>  ip_address   |       accessed_at
+---------------+------------------------
+ 192.168.1.25  | 2026-01-26 14:30:25+00
+ 192.168.1.10  | 2026-01-26 14:30:10+00
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: SP-GiST for Point Data</h4>
+            <pre><code class="language-sql">-- Geographic coordinates with SP-GiST
+CREATE TABLE landmarks (
+    landmark_id serial PRIMARY KEY,
+    name text,
+    coordinates point
+);
+
+INSERT INTO landmarks (name, coordinates) VALUES
+    ('City Hall', point(40.7128, -74.0060)),
+    ('Central Park', point(40.7829, -73.9654)),
+    ('Times Square', point(40.7580, -73.9855));
+
+-- SP-GiST for spatial partitioning
+CREATE INDEX idx_landmarks_coords ON landmarks USING spgist(coordinates);
+
+-- Spatial query
+SELECT name, coordinates
+FROM landmarks
+WHERE coordinates <@ box(point(40.70, -74.01), point(40.80, -73.95));</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>     name      |      coordinates
+---------------+----------------------
+ City Hall     | (40.7128,-74.006)
+ Times Square  | (40.758,-73.9855)
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: SP-GiST vs B-Tree Performance</h4>
+            <pre><code class="language-sql">-- Compare index types for text searches
+CREATE INDEX idx_phone_btree ON phone_directory(phone_number) USING btree;
+CREATE INDEX idx_phone_spgist2 ON phone_directory(phone_number) USING spgist;
+
+-- Analyze query plans
+EXPLAIN ANALYZE
+SELECT * FROM phone_directory WHERE phone_number LIKE '+1-555%';
+
+-- Check index sizes
+SELECT 
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE tablename = 'phone_directory';</code></pre>
+            <div class="output">
+                <div class="output-header">Index Comparison:</div>
+                <pre>     indexname      | size
+--------------------+-------
+ idx_phone_btree    | 16 kB
+ idx_phone_spgist   | 16 kB
+ idx_phone_spgist2  | 16 kB
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: SP-GiST for Range Types</h4>
+            <pre><code class="language-sql">-- SP-GiST can also handle ranges
+CREATE TABLE reservations (
+    reservation_id serial PRIMARY KEY,
+    room_number integer,
+    reserved_period daterange
+);
+
+INSERT INTO reservations (room_number, reserved_period) VALUES
+    (101, '[2026-01-20,2026-01-25]'::daterange),
+    (102, '[2026-01-22,2026-01-28]'::daterange),
+    (103, '[2026-01-26,2026-01-30]'::daterange);
+
+-- SP-GiST for range overlaps
+CREATE INDEX idx_reservations_period ON reservations USING spgist(reserved_period);
+
+-- Find overlapping reservations
+SELECT room_number, reserved_period
+FROM reservations
+WHERE reserved_period && '[2026-01-24,2026-01-27]'::daterange;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> room_number |     reserved_period
+-------------+-------------------------
+         101 | [2026-01-20,2026-01-25)
+         102 | [2026-01-22,2026-01-28)
+         103 | [2026-01-26,2026-01-30)
+(3 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> SP-GiST (Space-Partitioned GiST) uses partitioning strategies like quad-trees, k-d trees, radix trees. Excellent for naturally clustered data: phone numbers (radix tree), IP addresses (quad-tree), geographic points (k-d tree). More efficient than regular GiST for certain data distributions. Supports text prefix searches, geometric data, IP networks, ranges. Use SP-GiST when: data has hierarchical structure, prefix searches are common, point data has spatial clustering. Choose between GiST and SP-GiST based on data distribution and query patterns.
+            </div>
+
+            <!-- 11.2.5 GIN -->
+            <h3 id="indexes-gin">11.2.5 GIN</h3>
+            
+            <div class="info-card">
+                <p><strong>GIN indexes:</strong> Generalized Inverted Index - optimized for multi-value columns where single value can match multiple rows. Perfect for: arrays (containment, overlap), JSONB (key/value searches), full-text search (tsvector), hstore. GIN creates entries for each element/key. Larger than B-tree but dramatically faster for containment queries. Essential for array and JSONB operations.</p>
+            </div>
+
+            <h4>🎯 Example 1: GIN for Array Operations</h4>
+            <pre><code class="language-sql">-- Table with array column
+CREATE TABLE articles (
+    article_id serial PRIMARY KEY,
+    title text,
+    tags text[]
+);
+
+INSERT INTO articles (title, tags) VALUES
+    ('PostgreSQL Tutorial', ARRAY['database', 'sql', 'postgresql']),
+    ('Python Guide', ARRAY['programming', 'python', 'tutorial']),
+    ('Web Development', ARRAY['html', 'css', 'javascript', 'web']);
+
+-- GIN index for array operations
+CREATE INDEX idx_articles_tags ON articles USING gin(tags);
+
+-- Find articles with specific tag (containment)
+SELECT title, tags
+FROM articles
+WHERE tags @> ARRAY['postgresql'];</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>       title        |            tags
+--------------------+-----------------------------
+ PostgreSQL Tutorial| {database,sql,postgresql}
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 2: GIN for JSONB Queries</h4>
+            <pre><code class="language-sql">-- Table with JSONB data
+CREATE TABLE products_json (
+    product_id serial PRIMARY KEY,
+    product_data jsonb
+);
+
+INSERT INTO products_json (product_data) VALUES
+    ('{"name":"Laptop","specs":{"cpu":"Intel i7","ram":"16GB"}}'::jsonb),
+    ('{"name":"Phone","specs":{"cpu":"Snapdragon","ram":"8GB"}}'::jsonb),
+    ('{"name":"Tablet","specs":{"cpu":"Apple M1","ram":"8GB"}}'::jsonb);
+
+-- GIN index for JSONB containment
+CREATE INDEX idx_products_data ON products_json USING gin(product_data);
+
+-- Query by JSONB containment
+SELECT product_data->>'name' AS name,
+       product_data->'specs'->>'ram' AS ram
+FROM products_json
+WHERE product_data @> '{"specs":{"ram":"8GB"}}';</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>  name  |  ram
+--------+------
+ Phone  | 8GB
+ Tablet | 8GB
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: GIN for Full-Text Search</h4>
+            <pre><code class="language-sql">-- Full-text search with GIN
+CREATE TABLE documents (
+    doc_id serial PRIMARY KEY,
+    title text,
+    content text,
+    search_vector tsvector GENERATED ALWAYS AS 
+        (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,''))) STORED
+);
+
+INSERT INTO documents (title, content) VALUES
+    ('PostgreSQL Guide', 'Learn about database indexing and optimization'),
+    ('Python Tutorial', 'Introduction to Python programming language'),
+    ('Data Science', 'Analysis and visualization using Python and SQL');
+
+-- GIN index for fast full-text search
+CREATE INDEX idx_documents_search ON documents USING gin(search_vector);
+
+-- Full-text search
+SELECT title, content
+FROM documents
+WHERE search_vector @@ to_tsquery('english', 'database | python');</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>      title       |                  content
+------------------+---------------------------------------------
+ PostgreSQL Guide | Learn about database indexing and optimization
+ Python Tutorial  | Introduction to Python programming language
+ Data Science     | Analysis and visualization using Python and SQL
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: GIN Index with jsonb_path_ops</h4>
+            <pre><code class="language-sql">-- Standard GIN vs jsonb_path_ops (smaller, faster for @> queries)
+CREATE INDEX idx_products_data_ops ON products_json USING gin(product_data jsonb_path_ops);
+
+-- Compare index sizes
+SELECT 
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE tablename = 'products_json'
+ORDER BY indexname;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>        indexname         | size
+--------------------------+-------
+ idx_products_data        | 24 kB
+ idx_products_data_ops    | 16 kB  -- Smaller!
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: GIN Performance Statistics</h4>
+            <pre><code class="language-sql">-- Check GIN index usage
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan AS scans,
+    idx_tup_read AS tuples_read,
+    idx_tup_fetch AS tuples_fetched,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE '%gin%'
+ORDER BY idx_scan DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> schemaname | tablename    |       indexname        | scans | tuples_read | tuples_fetched | size
+------------+--------------+------------------------+-------+-------------+----------------+------
+ public     | articles     | idx_articles_tags      |   145 |         289 |            275 | 16kB
+ public     | products_json| idx_products_data      |    89 |         178 |            165 | 24kB
+ public     | documents    | idx_documents_search   |    56 |         223 |            210 | 32kB
+(3 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> GIN (Generalized Inverted Index) excels at multi-value data. Creates index entry for each element/key - one array element can point to multiple rows. Essential for: array containment (@>, &&, <@), JSONB key/value searches (@>, @?, @@), full-text search (@@), hstore operations. Two operator classes: standard (supports more operators) and jsonb_path_ops (smaller, faster, but only @> operator). GIN larger than B-tree but 100x+ faster for containment. Use GIN for arrays, JSONB, full-text search - mandatory for these data types.
+            </div>
+
+            <!-- 11.2.6 BRIN -->
+            <h3 id="indexes-brin">11.2.6 BRIN</h3>
+            
+            <div class="info-card">
+                <p><strong>BRIN indexes:</strong> Block Range Index - stores min/max values for data ranges (blocks). Extremely small, fast to scan. Perfect for very large tables with natural ordering (timestamps, sequential IDs). Typical BRIN index is 1000x smaller than B-tree. Not suitable for random data or exact lookups. Use BRIN for: time-series data, log tables, append-only tables with monotonic values.</p>
+            </div>
+
+            <h4>🎯 Example 1: BRIN for Time-Series Data</h4>
+            <pre><code class="language-sql">-- Large time-series table
+CREATE TABLE sensor_readings (
+    reading_id bigserial,
+    sensor_id integer,
+    temperature numeric(5,2),
+    recorded_at timestamptz DEFAULT now()
+);
+
+-- Insert sample time-series data
+INSERT INTO sensor_readings (sensor_id, temperature, recorded_at)
+SELECT 
+    (random() * 100)::integer,
+    (random() * 50)::numeric(5,2),
+    now() - (random() * interval '365 days')
+FROM generate_series(1, 10000);
+
+-- BRIN index for timestamp column
+CREATE INDEX idx_readings_time_brin ON sensor_readings USING brin(recorded_at);
+
+-- Range query uses BRIN efficiently
+EXPLAIN ANALYZE
+SELECT avg(temperature)
+FROM sensor_readings
+WHERE recorded_at >= now() - interval '30 days';</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Bitmap Heap Scan on sensor_readings  (cost=12.00..89.50 rows=850)
+  Recheck Cond: (recorded_at >= (now() - '30 days'::interval))
+  -> Bitmap Index Scan on idx_readings_time_brin
+       Index Cond: (recorded_at >= (now() - '30 days'::interval))
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: BRIN Index Size Comparison</h4>
+            <pre><code class="language-sql">-- Create both B-tree and BRIN for comparison
+CREATE INDEX idx_readings_time_btree ON sensor_readings(recorded_at) USING btree;
+CREATE INDEX idx_readings_time_brin2 ON sensor_readings(recorded_at) USING brin;
+
+-- Compare sizes
+SELECT 
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,
+    pg_size_pretty(pg_relation_size('sensor_readings')) AS table_size
+FROM pg_stat_user_indexes
+WHERE tablename = 'sensor_readings'
+ORDER BY pg_relation_size(indexrelid) DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>        indexname         | index_size | table_size
+--------------------------+------------+------------
+ idx_readings_time_btree  | 224 kB     | 896 kB
+ idx_readings_time_brin   | 24 kB      | 896 kB  -- 10x smaller!
+ idx_readings_time_brin2  | 24 kB      | 896 kB
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: BRIN for Sequential IDs</h4>
+            <pre><code class="language-sql">-- Log table with sequential IDs
+CREATE TABLE application_logs (
+    log_id bigserial PRIMARY KEY,
+    log_level text,
+    message text,
+    created_at timestamptz DEFAULT now()
+);
+
+-- Insert sequential log entries
+INSERT INTO application_logs (log_level, message)
+SELECT 
+    CASE (random() * 3)::integer
+        WHEN 0 THEN 'INFO'
+        WHEN 1 THEN 'WARNING'
+        ELSE 'ERROR'
+    END,
+    'Log message ' || generate_series
+FROM generate_series(1, 50000);
+
+-- BRIN on sequential ID
+CREATE INDEX idx_logs_id_brin ON application_logs USING brin(log_id);
+
+-- Range query on ID
+SELECT count(*)
+FROM application_logs
+WHERE log_id BETWEEN 10000 AND 20000;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> count
+-------
+ 10001
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 4: BRIN Pages Per Range</h4>
+            <pre><code class="language-sql">-- Create BRIN with custom pages_per_range
+CREATE INDEX idx_readings_brin_128 ON sensor_readings 
+USING brin(recorded_at) WITH (pages_per_range = 128);  -- default
+
+CREATE INDEX idx_readings_brin_64 ON sensor_readings 
+USING brin(recorded_at) WITH (pages_per_range = 64);  -- finer granularity
+
+-- Compare sizes and effectiveness
+SELECT 
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE '%brin%'
+ORDER BY indexname;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>       indexname        | size
+------------------------+-------
+ idx_readings_brin_128  | 24 kB
+ idx_readings_brin_64   | 32 kB  -- Larger but more precise
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: When NOT to Use BRIN</h4>
+            <pre><code class="language-sql">-- BRIN performs poorly on random/unordered data
+CREATE TABLE random_data (
+    id serial PRIMARY KEY,
+    random_value integer
+);
+
+INSERT INTO random_data (random_value)
+SELECT (random() * 1000000)::integer
+FROM generate_series(1, 10000);
+
+-- BRIN on random data (inefficient)
+CREATE INDEX idx_random_brin ON random_data USING brin(random_value);
+
+-- Query may scan many blocks due to overlapping ranges
+EXPLAIN ANALYZE
+SELECT * FROM random_data WHERE random_value = 500000;
+
+-- B-tree would be much better for random data
+CREATE INDEX idx_random_btree ON random_data(random_value) USING btree;</code></pre>
+            <div class="output">
+                <div class="output-header">BRIN on Random Data (Poor):</div>
+                <pre>Bitmap Heap Scan on random_data  (cost=12.00..125.50 rows=10)
+  Recheck Cond: (random_value = 500000)
+  Rows Removed by Index Recheck: 9850  -- Many false positives!
+  -> Bitmap Index Scan on idx_random_brin
+       Index Cond: (random_value = 500000)
+(5 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> BRIN (Block Range Index) stores min/max values for block ranges (default 128 pages). Extremely compact - typically 1000x smaller than B-tree. Perfect for naturally ordered data: timestamps (append-only logs), sequential IDs, monotonically increasing values. BRIN scans block ranges that might contain matching values. Inefficient for random data (many false positives require rechecking). Tuning: smaller pages_per_range = larger index but more precise. Use BRIN for: very large tables (TB+), time-series data, append-only tables, when index size is critical. Avoid for: randomly distributed data, exact lookups, frequent updates.
+            </div>
+
+            <!-- 11.3 Multicolumn Indexes -->
+            <h3 id="multicolumn-indexes">11.3 Multicolumn Indexes</h3>
+            
+            <div class="info-card">
+                <p><strong>Multicolumn indexes:</strong> Index on multiple columns (composite/compound index). B-tree, GiST, GIN, BRIN support multiple columns. Column order matters! Leftmost columns must be used in WHERE clause. Useful for queries filtering on multiple columns together. Maximum 32 columns per index. Consider single-column indexes vs multicolumn based on query patterns.</p>
+            </div>
+
+            <h4>🎯 Example 1: Basic Multicolumn Index</h4>
+            <pre><code class="language-sql">-- Composite index on (category_id, price)
+CREATE INDEX idx_products_category_price ON products(category_id, price);
+
+-- Query uses the index (leftmost column present)
+EXPLAIN ANALYZE
+SELECT product_name, price
+FROM products
+WHERE category_id = 1
+  AND price BETWEEN 50 AND 100;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_products_category_price on products
+  Index Cond: ((category_id = 1) AND (price >= 50) AND (price <= 100))
+  Planning Time: 0.125 ms
+  Execution Time: 0.089 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Column Order Matters</h4>
+            <pre><code class="language-sql">-- Same index: (category_id, price)
+CREATE INDEX idx_products_category_price ON products(category_id, price);
+
+-- Query 1: Uses index (category_id is leftmost)
+EXPLAIN
+SELECT * FROM products WHERE category_id = 1;
+
+-- Query 2: Uses index (both columns)
+EXPLAIN
+SELECT * FROM products WHERE category_id = 1 AND price > 50;
+
+-- Query 3: Cannot use index efficiently (price alone, not leftmost)
+EXPLAIN
+SELECT * FROM products WHERE price > 50;</code></pre>
+            <div class="output">
+                <div class="output-header">Results:</div>
+                <pre>-- Query 1: Index Scan using idx_products_category_price
+-- Query 2: Index Scan using idx_products_category_price
+-- Query 3: Seq Scan on products  (index not used!)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Multi-Column Index for Sorting</h4>
+            <pre><code class="language-sql">-- Index supports both filtering and sorting
+CREATE INDEX idx_orders_customer_date ON orders(customer_id, order_date DESC);
+
+-- Efficient: filter + sort using index
+EXPLAIN ANALYZE
+SELECT order_id, order_date, total_amount
+FROM orders
+WHERE customer_id = 1
+ORDER BY order_date DESC
+LIMIT 10;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Limit  (cost=0.29..1.85 rows=10)
+  -> Index Scan using idx_orders_customer_date on orders
+       Index Cond: (customer_id = 1)
+       -- No separate Sort step needed!
+Planning Time: 0.098 ms
+Execution Time: 0.067 ms
+(6 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: When to Use Multiple Single-Column Indexes</h4>
+            <pre><code class="language-sql">-- Different query patterns - use separate indexes
+CREATE INDEX idx_products_category ON products(category_id);
+CREATE INDEX idx_products_price ON products(price);
+CREATE INDEX idx_products_stock ON products(stock_quantity);
+
+-- Query 1: Uses idx_products_category
+SELECT * FROM products WHERE category_id = 1;
+
+-- Query 2: Uses idx_products_price
+SELECT * FROM products WHERE price > 100;
+
+-- Query 3: PostgreSQL combines both indexes (bitmap scan)
+EXPLAIN ANALYZE
+SELECT * FROM products 
+WHERE category_id = 1 AND price > 100;</code></pre>
+            <div class="output">
+                <div class="output-header">Bitmap Index Scan (Combines Indexes):</div>
+                <pre>Bitmap Heap Scan on products
+  Recheck Cond: ((category_id = 1) AND (price > 100))
+  -> BitmapAnd
+       -> Bitmap Index Scan on idx_products_category
+       -> Bitmap Index Scan on idx_products_price
+(5 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Three-Column Index</h4>
+            <pre><code class="language-sql">-- Index on three columns for complex queries
+CREATE INDEX idx_orders_customer_status_date 
+ON orders(customer_id, status, order_date);
+
+-- Query uses all three columns
+SELECT order_id, order_date, total_amount
+FROM orders
+WHERE customer_id = 1
+  AND status = 'shipped'
+  AND order_date >= '2024-01-01';
+
+-- Check index usage
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan,
+    idx_tup_read,
+    idx_tup_fetch
+FROM pg_stat_user_indexes
+WHERE indexname = 'idx_orders_customer_status_date';</code></pre>
+            <div class="output">
+                <div class="output-header">Index Statistics:</div>
+                <pre> schemaname | tablename |           indexname             | idx_scan | idx_tup_read | idx_tup_fetch
+------------+-----------+---------------------------------+----------+--------------+---------------
+ public     | orders    | idx_orders_customer_status_date |      234 |         1156 |          1098
+(1 row)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Multicolumn indexes optimize queries filtering on multiple columns. Column order critical - query must use leftmost column(s). Index (A,B,C) supports: WHERE A, WHERE A AND B, WHERE A AND B AND C. Does NOT support: WHERE B, WHERE C, WHERE B AND C. Choose column order: most selective/frequently queried first, then by frequency of column combinations. Alternative: multiple single-column indexes - PostgreSQL can combine using bitmap scans. Trade-off: multicolumn index faster for specific combinations but less flexible; single indexes more flexible but slower for combined queries. Choose based on actual query patterns.
+            </div>
+
+            <!-- 11.4 Indexes and ORDER BY -->
+            <h3 id="indexes-ordering">11.4 Indexes and ORDER BY</h3>
+            
+            <div class="info-card">
+                <p><strong>Indexes and sorting:</strong> Indexes can eliminate or reduce sorting operations. B-tree indexes naturally maintain order. Index column order must match ORDER BY columns. Can specify ASC/DESC per column. NULLS FIRST/LAST also matters. Significant performance benefit for queries with ORDER BY + LIMIT.</p>
+            </div>
+
+            <h4>🎯 Example 1: Index Eliminates Sort</h4>
+            <pre><code class="language-sql">-- Without index: must sort
+EXPLAIN ANALYZE
+SELECT customer_id, first_name, last_name
+FROM customers
+ORDER BY last_name
+LIMIT 10;</code></pre>
+            <div class="output">
+                <div class="output-header">Without Index (Requires Sort):</div>
+                <pre>Limit  (cost=89.83..89.85 rows=10)
+  -> Sort  (cost=89.83..92.33 rows=1000)  -- Expensive sort!
+       Sort Key: last_name
+       Sort Method: top-N heapsort  Memory: 25kB
+       -> Seq Scan on customers  (cost=0.00..65.00 rows=1000)
+Planning Time: 0.102 ms
+Execution Time: 2.456 ms</pre>
+            </div>
+            <pre><code class="language-sql">-- Create index on ORDER BY column
+CREATE INDEX idx_customers_lastname ON customers(last_name);
+
+-- With index: no sort needed!
+EXPLAIN ANALYZE
+SELECT customer_id, first_name, last_name
+FROM customers
+ORDER BY last_name
+LIMIT 10;</code></pre>
+            <div class="output">
+                <div class="output-header">With Index (No Sort Needed):</div>
+                <pre>Limit  (cost=0.28..1.12 rows=10)
+  -> Index Scan using idx_customers_lastname on customers
+       -- No Sort step!
+Planning Time: 0.089 ms
+Execution Time: 0.067 ms  -- 36x faster!</pre>
+            </div>
+
+            <h4>🎯 Example 2: Index with DESC Order</h4>
+            <pre><code class="language-sql">-- Index with descending order
+CREATE INDEX idx_orders_date_desc ON orders(order_date DESC);
+
+-- Query benefits from DESC index
+EXPLAIN ANALYZE
+SELECT order_id, customer_id, order_date
+FROM orders
+ORDER BY order_date DESC
+LIMIT 20;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Limit  (cost=0.29..1.45 rows=20)
+  -> Index Scan using idx_orders_date_desc on orders
+       -- Index already in DESC order
+Planning Time: 0.078 ms
+Execution Time: 0.056 ms
+(5 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Multi-Column ORDER BY</h4>
+            <pre><code class="language-sql">-- Index matching ORDER BY columns and order
+CREATE INDEX idx_products_category_price_desc 
+ON products(category_id ASC, price DESC);
+
+-- Query uses index for both filtering and sorting
+EXPLAIN ANALYZE
+SELECT product_name, price
+FROM products
+WHERE category_id = 1
+ORDER BY category_id ASC, price DESC
+LIMIT 5;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Limit  (cost=0.29..0.95 rows=5)
+  -> Index Scan using idx_products_category_price_desc on products
+       Index Cond: (category_id = 1)
+       -- No separate sort needed
+Planning Time: 0.101 ms
+Execution Time: 0.043 ms
+(6 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: NULLS FIRST/LAST</h4>
+            <pre><code class="language-sql">-- Index with NULL handling
+CREATE INDEX idx_products_stock_nulls_last 
+ON products(stock_quantity DESC NULLS LAST);
+
+-- Query matching NULL ordering
+SELECT product_name, stock_quantity
+FROM products
+ORDER BY stock_quantity DESC NULLS LAST
+LIMIT 10;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>   product_name   | stock_quantity
+------------------+----------------
+ Laptop Pro       |           1500
+ Wireless Mouse   |           1200
+ USB-C Cable      |            980
+ Monitor 27"      |            750
+ Keyboard Mech    |            620
+ Phone Case       |            450
+ Tablet Stand     |            280
+ Headphones       |            125
+ Webcam HD        |             85
+ Mouse Pad        |             40
+(10 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Index Scan Backward</h4>
+            <pre><code class="language-sql">-- Index supports both ASC and DESC scans
+CREATE INDEX idx_customers_email ON customers(email);
+
+-- Forward scan (ASC)
+EXPLAIN ANALYZE
+SELECT email FROM customers ORDER BY email ASC LIMIT 5;
+
+-- Backward scan (DESC) - same index!
+EXPLAIN ANALYZE
+SELECT email FROM customers ORDER BY email DESC LIMIT 5;</code></pre>
+            <div class="output">
+                <div class="output-header">Both Directions Supported:</div>
+                <pre>-- ASC:
+Index Scan using idx_customers_email on customers
+
+-- DESC:
+Index Scan Backward using idx_customers_email on customers
+-- PostgreSQL scans index in reverse</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> B-tree indexes maintain sorted order - can eliminate sorting operations. Index must match ORDER BY: same columns, same order (ASC/DESC), same NULL handling. PostgreSQL can scan B-tree forward (ASC) or backward (DESC) - single index supports both directions. For DESC queries on large tables, explicit DESC index slightly faster. Multi-column: index (A ASC, B DESC) only helps ORDER BY A ASC, B DESC - not other combinations. Huge performance win with ORDER BY + LIMIT - avoids sorting entire table. Check EXPLAIN: "Index Scan" with no "Sort" step confirms index usage.
+            </div>
+
+            <!-- 11.5 Combining Multiple Indexes -->
+            <h3 id="indexes-combine">11.5 Combining Multiple Indexes</h3>
+            
+            <div class="info-card">
+                <p><strong>Bitmap index scans:</strong> PostgreSQL can combine multiple single-column indexes for complex queries. Uses bitmap AND/OR operations. Alternative to multicolumn indexes. Useful when different queries use different column combinations. Bitmap scan has small overhead but more flexible than multicolumn indexes.</p>
+            </div>
+
+            <h4>🎯 Example 1: Bitmap AND (Multiple Conditions)</h4>
+            <pre><code class="language-sql">-- Create separate indexes
+CREATE INDEX idx_products_category ON products(category_id);
+CREATE INDEX idx_products_price ON products(price);
+
+-- Query with AND condition - combines both indexes
+EXPLAIN ANALYZE
+SELECT product_name, price, category_id
+FROM products
+WHERE category_id = 1
+  AND price BETWEEN 50 AND 100;</code></pre>
+            <div class="output">
+                <div class="output-header">Bitmap Index Scan (Combines Indexes):</div>
+                <pre>Bitmap Heap Scan on products  (cost=8.27..32.45 rows=15)
+  Recheck Cond: ((category_id = 1) AND (price >= 50) AND (price <= 100))
+  -> BitmapAnd  (cost=8.27..8.27 rows=15)
+       -> Bitmap Index Scan on idx_products_category
+            Index Cond: (category_id = 1)
+       -> Bitmap Index Scan on idx_products_price
+            Index Cond: (price >= 50) AND (price <= 100)
+Planning Time: 0.234 ms
+Execution Time: 0.156 ms
+(9 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Bitmap OR (Multiple Alternatives)</h4>
+            <pre><code class="language-sql">-- Indexes on different columns
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_customer ON orders(customer_id);
+
+-- Query with OR condition
+EXPLAIN ANALYZE
+SELECT order_id, status, customer_id
+FROM orders
+WHERE status = 'pending'
+   OR customer_id = 1;</code></pre>
+            <div class="output">
+                <div class="output-header">Bitmap OR Scan:</div>
+                <pre>Bitmap Heap Scan on orders  (cost=12.45..45.78 rows=25)
+  Recheck Cond: ((status = 'pending') OR (customer_id = 1))
+  -> BitmapOr  (cost=12.45..12.45 rows=25)
+       -> Bitmap Index Scan on idx_orders_status
+            Index Cond: (status = 'pending')
+       -> Bitmap Index Scan on idx_orders_customer
+            Index Cond: (customer_id = 1)
+(7 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Three Indexes Combined</h4>
+            <pre><code class="language-sql">-- Three separate indexes
+CREATE INDEX idx_products_category ON products(category_id);
+CREATE INDEX idx_products_price ON products(price);
+CREATE INDEX idx_products_stock ON products(stock_quantity);
+
+-- Query combines all three
+EXPLAIN ANALYZE
+SELECT product_name
+FROM products
+WHERE category_id = 1
+  AND price < 100
+  AND stock_quantity > 0;</code></pre>
+            <div class="output">
+                <div class="output-header">Three-Way Bitmap AND:</div>
+                <pre>Bitmap Heap Scan on products  (cost=15.67..42.89 rows=12)
+  Recheck Cond: ((category_id = 1) AND (price < 100) AND (stock_quantity > 0))
+  -> BitmapAnd  (cost=15.67..15.67 rows=12)
+       -> Bitmap Index Scan on idx_products_category
+       -> Bitmap Index Scan on idx_products_price
+       -> Bitmap Index Scan on idx_products_stock
+(7 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Bitmap Scan vs Multicolumn Index</h4>
+            <pre><code class="language-sql">-- Test data
+CREATE TABLE test_data (
+    id serial PRIMARY KEY,
+    col_a integer,
+    col_b integer,
+    col_c text
+);
+
+INSERT INTO test_data (col_a, col_b, col_c)
+SELECT 
+    (random() * 100)::integer,
+    (random() * 100)::integer,
+    md5(random()::text)
+FROM generate_series(1, 10000);
+
+-- Option 1: Two single-column indexes
+CREATE INDEX idx_test_cola ON test_data(col_a);
+CREATE INDEX idx_test_colb ON test_data(col_b);
+
+-- Option 2: One multicolumn index
+CREATE INDEX idx_test_cola_colb ON test_data(col_a, col_b);
+
+-- Compare performance
+EXPLAIN ANALYZE
+SELECT * FROM test_data WHERE col_a = 50 AND col_b = 75;</code></pre>
+            <div class="output">
+                <div class="output-header">Performance Comparison:</div>
+                <pre>-- With bitmap scan (two single indexes):
+Bitmap Heap Scan  (cost=8.45..25.67 rows=1)  Time: 0.234 ms
+
+-- With multicolumn index:
+Index Scan using idx_test_cola_colb  (cost=0.29..8.31 rows=1)  Time: 0.089 ms
+-- Multicolumn index faster for this specific combination</pre>
+            </div>
+
+            <h4>🎯 Example 5: When Bitmap Scans Are Optimal</h4>
+            <pre><code class="language-sql">-- Different query patterns - single indexes better
+CREATE INDEX idx_products_category ON products(category_id);
+CREATE INDEX idx_products_supplier ON products(supplier_id);
+CREATE INDEX idx_products_brand ON products(brand_id);
+
+-- Query 1: Uses idx_products_category
+SELECT * FROM products WHERE category_id = 1;
+
+-- Query 2: Uses idx_products_supplier
+SELECT * FROM products WHERE supplier_id = 5;
+
+-- Query 3: Uses idx_products_brand
+SELECT * FROM products WHERE brand_id = 3;
+
+-- Query 4: Combines idx_products_category + idx_products_supplier
+SELECT * FROM products WHERE category_id = 1 AND supplier_id = 5;
+
+-- Query 5: Combines idx_products_category + idx_products_brand
+SELECT * FROM products WHERE category_id = 1 AND brand_id = 3;</code></pre>
+            <div class="output">
+                <div class="output-header">Flexible Index Usage:</div>
+                <pre>-- Three single-column indexes support:
+-- - Each column individually
+-- - Any two-column combination (bitmap AND)
+-- - All three together (bitmap AND)
+
+-- Would need 7 multicolumn indexes for same flexibility:
+-- (A), (B), (C), (A,B), (A,C), (B,C), (A,B,C)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> PostgreSQL automatically combines multiple indexes using bitmap scans. Bitmap AND for conjunctions (WHERE A AND B), Bitmap OR for disjunctions (WHERE A OR B). Each index creates bitmap of matching row locations, then combines bitmaps before heap access. Small overhead vs multicolumn index but much more flexible. Use single-column indexes when: many different query patterns, no dominant column combination, want maximum flexibility. Use multicolumn indexes when: specific combination queried frequently, need maximum performance for that combination. Bitmap scan particularly effective for selective queries (small result sets) and complex multi-condition WHERE clauses.
+            </div>
+
+            <!-- 11.6 Unique Indexes -->
+            <h3 id="indexes-unique">11.6 Unique Indexes</h3>
+            
+            <div class="info-card">
+                <p><strong>Unique indexes:</strong> Enforce uniqueness constraint + provide index for queries. Created automatically for PRIMARY KEY and UNIQUE constraints. Can also create manually with CREATE UNIQUE INDEX. Reject duplicate values. Support NULL values (multiple NULLs allowed - each NULL is distinct). More efficient than regular index + constraint check.</p>
+            </div>
+
+            <h4>🎯 Example 1: Unique Index Basics</h4>
+            <pre><code class="language-sql">-- Create unique index manually
+CREATE UNIQUE INDEX idx_customers_email_unique ON customers(email);
+
+-- Try inserting duplicate - fails
+INSERT INTO customers (first_name, last_name, email)
+VALUES ('John', 'Doe', 'john@example.com');
+
+INSERT INTO customers (first_name, last_name, email)
+VALUES ('Jane', 'Smith', 'john@example.com');  -- Duplicate!</code></pre>
+            <div class="output">
+                <div class="output-header">Error:</div>
+                <pre>ERROR:  duplicate key value violates unique constraint "idx_customers_email_unique"
+DETAIL:  Key (email)=(john@example.com) already exists.</pre>
+            </div>
+
+            <h4>🎯 Example 2: Unique Constraint vs Unique Index</h4>
+            <pre><code class="language-sql">-- Method 1: UNIQUE constraint (creates unique index automatically)
+ALTER TABLE customers ADD CONSTRAINT customers_email_key UNIQUE (email);
+
+-- Method 2: CREATE UNIQUE INDEX (manual)
+CREATE UNIQUE INDEX idx_customers_email ON customers(email);
+
+-- Both enforce uniqueness, but constraint shows in \d output
+\d customers</code></pre>
+            <div class="output">
+                <div class="output-header">Table Definition:</div>
+                <pre>Table "public.customers"
+   Column    |  Type   | Nullable
+-------------+---------+----------
+ customer_id | integer | not null
+ email       | text    |
+Indexes:
+    "customers_pkey" PRIMARY KEY, btree (customer_id)
+    "customers_email_key" UNIQUE CONSTRAINT, btree (email)
+    "idx_customers_email" UNIQUE, btree (email)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Composite Unique Index</h4>
+            <pre><code class="language-sql">-- Unique combination of multiple columns
+CREATE UNIQUE INDEX idx_order_items_unique 
+ON order_items(order_id, product_id);
+
+-- Same product can appear in different orders
+INSERT INTO order_items (order_id, product_id, quantity, price_each)
+VALUES (1, 101, 2, 29.99);  -- OK
+
+-- But not twice in same order
+INSERT INTO order_items (order_id, product_id, quantity, price_each)
+VALUES (1, 101, 1, 29.99);  -- Duplicate!</code></pre>
+            <div class="output">
+                <div class="output-header">Error:</div>
+                <pre>ERROR:  duplicate key value violates unique constraint "idx_order_items_unique"
+DETAIL:  Key (order_id, product_id)=(1, 101) already exists.</pre>
+            </div>
+
+            <h4>🎯 Example 4: Unique Index with NULLs</h4>
+            <pre><code class="language-sql">-- Create table with nullable unique column
+CREATE TABLE employees (
+    employee_id serial PRIMARY KEY,
+    name text NOT NULL,
+    phone text
+);
+
+CREATE UNIQUE INDEX idx_employees_phone ON employees(phone);
+
+-- Multiple NULLs are allowed (each NULL is distinct)
+INSERT INTO employees (name, phone) VALUES ('Alice', NULL);
+INSERT INTO employees (name, phone) VALUES ('Bob', NULL);  -- OK!
+INSERT INTO employees (name, phone) VALUES ('Charlie', '555-1234');
+INSERT INTO employees (name, phone) VALUES ('David', '555-1234');  -- Fails!
+
+SELECT * FROM employees;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> employee_id |   name   |   phone
+-------------+----------+-----------
+           1 | Alice    | NULL
+           2 | Bob      | NULL
+           3 | Charlie  | 555-1234
+(3 rows)
+
+ERROR:  duplicate key value violates unique constraint "idx_employees_phone"</pre>
+            </div>
+
+            <h4>🎯 Example 5: Unique Index Performance</h4>
+            <pre><code class="language-sql">-- Unique index used for lookups
+CREATE UNIQUE INDEX idx_products_sku ON products(sku);
+
+-- Fast lookup using unique index
+EXPLAIN ANALYZE
+SELECT product_name, price
+FROM products
+WHERE sku = 'LAP-001';
+
+-- Check index statistics
+SELECT 
+    tablename,
+    indexname,
+    idx_scan,
+    idx_tup_read,
+    idx_tup_fetch
+FROM pg_stat_user_indexes
+WHERE indexname = 'idx_products_sku';</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_products_sku on products  (cost=0.29..8.31 rows=1)
+  Index Cond: (sku = 'LAP-001')
+Planning Time: 0.067 ms
+Execution Time: 0.045 ms  -- Very fast!
+
+ tablename |     indexname      | idx_scan | idx_tup_read | idx_tup_fetch
+-----------+--------------------+----------+--------------+---------------
+ products  | idx_products_sku   |     1456 |         1456 |          1456
+(1 row)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Unique indexes enforce uniqueness AND optimize queries. Automatically created for PRIMARY KEY and UNIQUE constraints. Manual: CREATE UNIQUE INDEX for uniqueness without visible constraint. Composite unique indexes ensure combination is unique: (A,B) unique allows duplicate A or B but not duplicate (A,B) pairs. NULL handling: multiple NULLs allowed - SQL standard treats each NULL as distinct. Unique indexes faster than regular index + application-level uniqueness check - database enforces atomically. Use unique indexes for: natural keys, business identifiers (email, SKU, username), preventing duplicates efficiently.
+            </div>
+
+            <!-- 11.7 Indexes on Expressions -->
+            <h3 id="indexes-expressions">11.7 Indexes on Expressions</h3>
+            
+            <div class="info-card">
+                <p><strong>Expression indexes:</strong> Index on computed values rather than column values. Also called functional indexes. Useful for queries filtering on transformed data (LOWER(email), date_part(), expression results). Query must use exact same expression. Maintenance cost: expression evaluated for every insert/update.</p>
+            </div>
+
+            <h4>🎯 Example 1: Case-Insensitive Search</h4>
+            <pre><code class="language-sql">-- Without expression index: case-sensitive
+SELECT * FROM customers WHERE email = 'JOHN@EXAMPLE.COM';  -- No match
+
+-- Create expression index on LOWER(email)
+CREATE INDEX idx_customers_email_lower ON customers(LOWER(email));
+
+-- Now case-insensitive searches use index
+EXPLAIN ANALYZE
+SELECT customer_id, first_name, email
+FROM customers
+WHERE LOWER(email) = 'john@example.com';</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_customers_email_lower on customers
+  Index Cond: (lower(email) = 'john@example.com')
+Planning Time: 0.089 ms
+Execution Time: 0.056 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Date Part Extraction</h4>
+            <pre><code class="language-sql">-- Queries by month/year frequently
+CREATE INDEX idx_orders_year_month 
+ON orders(EXTRACT(YEAR FROM order_date), EXTRACT(MONTH FROM order_date));
+
+-- Query uses expression index
+EXPLAIN ANALYZE
+SELECT COUNT(*), SUM(total_amount)
+FROM orders
+WHERE EXTRACT(YEAR FROM order_date) = 2024
+  AND EXTRACT(MONTH FROM order_date) = 1;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Aggregate
+  -> Index Scan using idx_orders_year_month on orders
+       Index Cond: ((EXTRACT(year FROM order_date) = 2024) 
+                AND (EXTRACT(month FROM order_date) = 1))
+Planning Time: 0.123 ms
+Execution Time: 0.234 ms
+(5 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Computed Column Index</h4>
+            <pre><code class="language-sql">-- Index on calculated expression
+CREATE INDEX idx_order_items_total 
+ON order_items((quantity * price_each));
+
+-- Query on computed value uses index
+EXPLAIN ANALYZE
+SELECT order_id, product_id, quantity, price_each
+FROM order_items
+WHERE (quantity * price_each) > 100;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_order_items_total on order_items
+  Index Cond: ((quantity * price_each) > 100)
+Planning Time: 0.098 ms
+Execution Time: 0.187 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: JSON Path Expression</h4>
+            <pre><code class="language-sql">-- Table with JSONB data
+CREATE TABLE user_profiles (
+    user_id serial PRIMARY KEY,
+    profile jsonb
+);
+
+INSERT INTO user_profiles (profile) VALUES
+    ('{"name":"Alice","city":"New York","age":30}'),
+    ('{"name":"Bob","city":"Los Angeles","age":25}'),
+    ('{"name":"Charlie","city":"Chicago","age":35}');
+
+-- Index on JSON path expression
+CREATE INDEX idx_profiles_city 
+ON user_profiles((profile->>'city'));
+
+-- Query uses expression index
+EXPLAIN ANALYZE
+SELECT profile->>'name' AS name, profile->>'age' AS age
+FROM user_profiles
+WHERE profile->>'city' = 'New York';</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_profiles_city on user_profiles
+  Index Cond: ((profile ->> 'city') = 'New York')
+Planning Time: 0.145 ms
+Execution Time: 0.089 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Expression Index Statistics</h4>
+            <pre><code class="language-sql">-- Create multiple expression indexes
+CREATE INDEX idx_products_name_lower ON products(LOWER(product_name));
+CREATE INDEX idx_products_price_range ON products(
+    CASE 
+        WHEN price < 50 THEN 'budget'
+        WHEN price < 100 THEN 'mid'
+        ELSE 'premium'
+    END
+);
+
+-- Check expression index usage
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan,
+    idx_tup_read,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE '%lower' OR indexname LIKE '%range'
+ORDER BY idx_scan DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Expression Index Statistics:</div>
+                <pre> schemaname | tablename |        indexname         | idx_scan | idx_tup_read | size
+------------+-----------+--------------------------+----------+--------------+------
+ public     | products  | idx_products_name_lower  |      234 |          467 | 16kB
+ public     | products  | idx_products_price_range |       89 |          178 | 8kB
+(2 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Expression indexes store computed values, not raw column data. Query must use EXACT same expression - WHERE LOWER(email) can use LOWER(email) index, but WHERE UPPER(email) cannot. Common uses: case-insensitive search (LOWER/UPPER), date parts (EXTRACT, date_trunc), calculations, JSONB paths. Trade-off: faster queries but slower inserts/updates (expression evaluated each time). Immutable functions only - result must be deterministic. Cost justified when: expression used frequently in WHERE/JOIN, computation expensive, query performance critical. Alternative for JSONB: GIN indexes support many operations without expressions.
+            </div>
+
+            <!-- 11.8 Partial Indexes -->
+            <h3 id="indexes-partial">11.8 Partial Indexes</h3>
+            
+            <div class="info-card">
+                <p><strong>Partial indexes:</strong> Index only subset of rows based on WHERE condition. Smaller, faster, cheaper to maintain than full index. Perfect for queries consistently filtering on specific condition. Common uses: active records only, recent data, non-NULL values, specific status values. Query WHERE clause must be subset of index WHERE clause.</p>
+            </div>
+
+            <h4>🎯 Example 1: Index Active Records Only</h4>
+            <pre><code class="language-sql">-- Most queries filter for active customers
+CREATE INDEX idx_customers_active ON customers(email)
+WHERE active = true;
+
+-- Index used for active customers
+EXPLAIN ANALYZE
+SELECT * FROM customers WHERE active = true AND email = 'john@example.com';
+
+-- Index NOT used for inactive customers  
+EXPLAIN ANALYZE
+SELECT * FROM customers WHERE active = false AND email = 'jane@example.com';</code></pre>
+            <div class="output">
+                <div class="output-header">Active Query Uses Partial Index:</div>
+                <pre>Index Scan using idx_customers_active on customers
+  Index Cond: (email = 'john@example.com')
+  Filter: active = true
+Execution Time: 0.067 ms
+
+-- Inactive query doesn't use partial index:
+Seq Scan on customers
+  Filter: (active = false) AND (email = 'jane@example.com')
+Execution Time: 1.234 ms</pre>
+            </div>
+
+            <h4>🎯 Example 2: Index Pending Orders Only</h4>
+            <pre><code class="language-sql">-- Most operations on pending orders (90% of queries)
+CREATE INDEX idx_orders_pending ON orders(customer_id, order_date)
+WHERE status = 'pending';
+
+-- Check index size comparison
+CREATE INDEX idx_orders_all ON orders(customer_id, order_date);  -- Full index
+
+SELECT 
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE tablename = 'orders'
+ORDER BY indexname;</code></pre>
+            <div class="output">
+                <div class="output-header">Size Comparison:</div>
+                <pre>     indexname      |  size
+--------------------+--------
+ idx_orders_all     | 184 kB  -- Full index
+ idx_orders_pending |  24 kB  -- 87% smaller!
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Index Recent Data Only</h4>
+            <pre><code class="language-sql">-- Index only last 30 days (most queries use recent data)
+CREATE INDEX idx_orders_recent ON orders(order_date, customer_id)
+WHERE order_date >= CURRENT_DATE - INTERVAL '30 days';
+
+-- Query on recent data uses partial index
+EXPLAIN ANALYZE
+SELECT order_id, total_amount
+FROM orders
+WHERE order_date >= CURRENT_DATE - INTERVAL '30 days'
+  AND customer_id = 1;</code></pre>
+            <div class="output">
+                <div class="output-header">Execution Plan:</div>
+                <pre>Index Scan using idx_orders_recent on orders
+  Index Cond: ((order_date >= (CURRENT_DATE - '30 days')) AND (customer_id = 1))
+Planning Time: 0.089 ms
+Execution Time: 0.123 ms
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Index Non-NULL Values Only</h4>
+            <pre><code class="language-sql">-- Many rows have NULL, queries always filter WHERE column IS NOT NULL
+CREATE INDEX idx_products_discount ON products(discount_percent)
+WHERE discount_percent IS NOT NULL;
+
+-- Query uses partial index
+SELECT product_name, price, discount_percent
+FROM products
+WHERE discount_percent IS NOT NULL
+  AND discount_percent > 20;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>   product_name   | price | discount_percent
+------------------+-------+------------------
+ Laptop Pro       | 999   |               25
+ Wireless Mouse   | 29    |               30
+ USB-C Cable      | 19    |               35
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Multiple Partial Indexes by Status</h4>
+            <pre><code class="language-sql">-- Different indexes for different statuses
+CREATE INDEX idx_orders_pending ON orders(customer_id) WHERE status = 'pending';
+CREATE INDEX idx_orders_shipped ON orders(customer_id) WHERE status = 'shipped';
+CREATE INDEX idx_orders_delivered ON orders(customer_id) WHERE status = 'delivered';
+
+-- Query automatically picks correct partial index
+EXPLAIN ANALYZE
+SELECT order_id, order_date FROM orders 
+WHERE customer_id = 1 AND status = 'shipped';
+
+-- Check partial index usage
+SELECT 
+    indexname,
+    idx_scan,
+    idx_tup_read,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE 'idx_orders_%'
+ORDER BY idx_scan DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Partial Index Statistics:</div>
+                <pre>      indexname       | idx_scan | idx_tup_read | size
+----------------------+----------+--------------+------
+ idx_orders_pending   |     1234 |         2456 | 24kB
+ idx_orders_shipped   |      856 |         1678 | 32kB
+ idx_orders_delivered |      445 |          889 | 56kB
+(3 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Partial indexes index only rows matching WHERE condition. Benefits: smaller size (faster scans, less disk space), faster updates (fewer index entries to maintain), focused on hot data. Query must include index WHERE condition (or stricter). Example: index WHERE active = true helps WHERE active = true AND email = 'x', but not WHERE email = 'x' alone. Common patterns: status flags (active/pending), date ranges (recent data), non-NULL values, high-value customers. Trade-off: very effective when queries consistently filter same condition; useless for queries without that filter. Can replace full index if 90%+ queries use same filter.
             </div>
 
         </section>
