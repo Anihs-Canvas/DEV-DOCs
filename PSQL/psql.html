@@ -1269,6 +1269,20 @@
                     </li>
                 </ul>
             </li>
+
+            <!-- Chapter 10: Type Conversion -->
+            <li class="toc-item">
+                <button class="toc-expand-btn">▶</button>
+                <a href="#type-conversion" class="toc-link">Chapter 10: Type Conversion</a>
+                <ul class="toc-subitems">
+                    <li class="toc-subitem"><a href="#type-conversion-overview" class="toc-link">10.1 Overview</a></li>
+                    <li class="toc-subitem"><a href="#type-conversion-operators" class="toc-link">10.2 Operators</a></li>
+                    <li class="toc-subitem"><a href="#type-conversion-functions" class="toc-link">10.3 Functions</a></li>
+                    <li class="toc-subitem"><a href="#type-conversion-storage" class="toc-link">10.4 Value Storage</a></li>
+                    <li class="toc-subitem"><a href="#type-conversion-union-case" class="toc-link">10.5 UNION, CASE, and Related Constructs</a></li>
+                    <li class="toc-subitem"><a href="#type-conversion-select-output" class="toc-link">10.6 SELECT Output Columns</a></li>
+                </ul>
+            </li>
         </ul>
     </nav>
 
@@ -31126,6 +31140,855 @@ LIMIT 1;</code></pre>
             </div>
 
         </section>
+
+        <!-- CHAPTER 10: TYPE CONVERSION -->
+        <section id="type-conversion" class="section">
+            <h2>Chapter 10: Type Conversion</h2>
+            
+            <div class="info-card">
+                <h4>Overview</h4>
+                <p>Type conversion (also called type casting or coercion) is the process of converting a value from one data type to another. PostgreSQL has a rich, extensible type system with sophisticated conversion rules that balance flexibility with type safety. Understanding type conversion is essential for writing correct SQL queries and avoiding unexpected behavior.</p>
+            </div>
+
+            <!-- 10.1 Overview -->
+            <h3 id="type-conversion-overview">10.1 Overview</h3>
+            
+            <div class="info-card">
+                <p><strong>Type conversion fundamentals:</strong> PostgreSQL performs type conversions automatically (implicit) or explicitly through CAST/:: operators. The type conversion system uses a precedence hierarchy and specific rules for operators, functions, and value storage. Understanding conversion rules prevents type mismatch errors, unexpected results, and helps write portable SQL code.</p>
+            </div>
+
+            <h4>🎯 Example 1: Implicit vs Explicit Conversion</h4>
+            <pre><code class="language-sql">-- Implicit conversion (automatic)
+SELECT 
+    5 + 2.5 AS implicit_numeric,           -- int + numeric = numeric
+    'Hello' || ' ' || 'World' AS implicit_text,  -- text concatenation
+    now() - interval '1 day' AS implicit_timestamp;
+
+-- Explicit conversion using CAST
+SELECT 
+    CAST(5 AS numeric) AS cast_numeric,
+    CAST('123' AS integer) AS cast_integer,
+    CAST(now() AS date) AS cast_date;</code></pre>
+            <div class="output">
+                <div class="output-header">Result (Implicit):</div>
+                <pre> implicit_numeric | implicit_text |    implicit_timestamp
+------------------+---------------+------------------------
+              7.5 | Hello World   | 2026-01-25 14:30:00+00
+(1 row)</pre>
+            </div>
+            <div class="output">
+                <div class="output-header">Result (Explicit):</div>
+                <pre> cast_numeric | cast_integer | cast_date
+--------------+--------------+------------
+            5 |          123 | 2026-01-26
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Type Conversion with :: Operator</h4>
+            <pre><code class="language-sql">-- PostgreSQL-specific :: operator (shorthand for CAST)
+SELECT 
+    '42'::integer AS text_to_int,
+    123::text AS int_to_text,
+    '2026-01-26'::date AS text_to_date,
+    3.14159::numeric(5,2) AS float_to_numeric,
+    'true'::boolean AS text_to_bool;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> text_to_int | int_to_text | text_to_date | float_to_numeric | text_to_bool
+-------------+-------------+--------------+------------------+--------------
+          42 | 123         | 2026-01-26   |             3.14 | t
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Type Precedence in Operations</h4>
+            <pre><code class="language-sql">-- PostgreSQL chooses result type based on type precedence
+SELECT 
+    pg_typeof(1) AS int_type,
+    pg_typeof(1.0) AS numeric_type,
+    pg_typeof(1 + 1) AS int_plus_int,
+    pg_typeof(1 + 1.0) AS int_plus_numeric,
+    pg_typeof('text' || 123) AS text_concat;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> int_type | numeric_type | int_plus_int | int_plus_numeric | text_concat
+----------+--------------+--------------+------------------+-------------
+ integer  | numeric      | integer      | numeric          | text
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Conversion Functions</h4>
+            <pre><code class="language-sql">-- Specialized conversion functions
+SELECT 
+    to_char(now(), 'YYYY-MM-DD HH24:MI:SS') AS timestamp_to_text,
+    to_date('2026-01-26', 'YYYY-MM-DD') AS text_to_date,
+    to_number('1,234.56', '9,999.99') AS text_to_number,
+    to_timestamp('2026-01-26 14:30:00', 'YYYY-MM-DD HH24:MI:SS') AS text_to_timestamp;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>  timestamp_to_text  | text_to_date |  text_to_number  |    text_to_timestamp
+---------------------+--------------+------------------+------------------------
+ 2026-01-26 14:30:00 | 2026-01-26   |          1234.56 | 2026-01-26 14:30:00+00
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Safe Conversion with Error Handling</h4>
+            <pre><code class="language-sql">-- Using TRY_CAST equivalent pattern
+SELECT 
+    CASE 
+        WHEN value ~ '^[0-9]+$' THEN value::integer 
+        ELSE NULL 
+    END AS safe_int_conversion
+FROM (VALUES ('123'), ('abc'), ('456'), ('xyz')) AS t(value);
+
+-- Or using exception handling in function
+CREATE OR REPLACE FUNCTION safe_cast_int(text) RETURNS integer AS $$
+BEGIN
+    RETURN $1::integer;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT 
+    value,
+    safe_cast_int(value) AS converted
+FROM (VALUES ('123'), ('not a number'), ('789')) AS t(value);</code></pre>
+            <div class="output">
+                <div class="output-header">Result (Pattern Matching):</div>
+                <pre> safe_int_conversion
+---------------------
+                 123
+                NULL
+                 456
+                NULL
+(4 rows)</pre>
+            </div>
+            <div class="output">
+                <div class="output-header">Result (Function):</div>
+                <pre>     value      | converted
+----------------+-----------
+ 123            |       123
+ not a number   |      NULL
+ 789            |       789
+(3 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Type conversion transforms values between data types. Implicit conversions happen automatically based on context and type precedence. Explicit conversions use CAST() or :: operator. pg_typeof() reveals actual type. Conversion functions (to_char, to_date, to_number) provide formatted conversions. Safe conversion patterns prevent errors. Use explicit casts for clarity and to control conversion behavior.
+            </div>
+
+            <!-- 10.2 Operators -->
+            <h3 id="type-conversion-operators">10.2 Operators</h3>
+            
+            <div class="info-card">
+                <p><strong>Operator type resolution:</strong> When PostgreSQL encounters an operator with operands, it searches for the best matching operator definition. The system checks for exact matches first, then considers implicit conversions. If multiple candidates exist, it uses type precedence rules. Understanding operator resolution prevents ambiguous operator errors and ensures correct operation selection.</p>
+            </div>
+
+            <h4>🎯 Example 1: Operator Type Resolution</h4>
+            <pre><code class="language-sql">-- Demonstrate operator resolution with different types
+SELECT 
+    -- Integer division
+    5 / 2 AS int_division,
+    -- Numeric division
+    5.0 / 2 AS numeric_division,
+    -- Mixed type arithmetic
+    5 + 2.5 AS mixed_addition,
+    -- String concatenation
+    'Product: ' || 'Laptop' AS string_concat;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> int_division | numeric_division | mixed_addition | string_concat
+--------------+------------------+----------------+-----------------
+            2 |              2.5 |            7.5 | Product: Laptop
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Comparison Operator Type Conversion</h4>
+            <pre><code class="language-sql">-- Comparison operators with type conversion
+SELECT 
+    product_id,
+    product_name,
+    price,
+    -- Compare numeric with text (text converted to numeric)
+    CASE WHEN price::text > '500' THEN 'Expensive' ELSE 'Affordable' END AS price_category,
+    -- Compare with implicit conversion
+    price > 100 AS over_hundred
+FROM products
+WHERE product_id <= 3;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_id | product_name | price  | price_category | over_hundred
+------------+--------------+--------+----------------+--------------
+          1 | Laptop       | 999.99 | Expensive      | t
+          2 | Smartphone   | 699.99 | Expensive      | t
+          3 | Headphones   | 79.99  | Affordable     | f
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Mathematical Operators with Type Precedence</h4>
+            <pre><code class="language-sql">-- Type precedence in mathematical operations
+SELECT 
+    -- Integer operations
+    10 / 3 AS int_result,
+    pg_typeof(10 / 3) AS int_type,
+    -- Mixed integer and numeric
+    10 / 3.0 AS numeric_result,
+    pg_typeof(10 / 3.0) AS numeric_type,
+    -- Modulo operator
+    10 % 3 AS modulo_result,
+    -- Power operator
+    2 ^ 10 AS power_result;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> int_result | int_type | numeric_result | numeric_type | modulo_result | power_result
+------------+----------+----------------+--------------+---------------+--------------
+          3 | integer  | 3.333...       | numeric      |             1 |         1024
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Logical Operators with Type Coercion</h4>
+            <pre><code class="language-sql">-- Boolean operators with implicit conversion
+SELECT 
+    product_name,
+    stock,
+    -- Implicit conversion to boolean
+    CASE 
+        WHEN stock > 0 THEN 'In Stock'
+        ELSE 'Out of Stock'
+    END AS availability,
+    -- Boolean operators
+    (stock > 0 AND price < 100) AS affordable_and_available,
+    (category = 'Electronics' OR category = 'Appliances') AS tech_products
+FROM products
+WHERE product_id <= 5;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name | stock |  availability  | affordable_and_available | tech_products
+--------------+-------+----------------+--------------------------+---------------
+ Laptop       |    50 | In Stock       | f                        | t
+ Smartphone   |    75 | In Stock       | f                        | t
+ Headphones   |   100 | In Stock       | t                        | t
+ Desk Chair   |    30 | In Stock       | f                        | f
+ T-Shirt      |   200 | In Stock       | t                        | f
+(5 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Array and Range Operators</h4>
+            <pre><code class="language-sql">-- Operators with arrays and ranges
+SELECT 
+    -- Array containment
+    ARRAY[1,2,3] @> ARRAY[2] AS array_contains,
+    -- Array overlap
+    ARRAY[1,2,3] && ARRAY[3,4,5] AS array_overlap,
+    -- Range containment
+    int4range(1, 10) @> 5 AS range_contains,
+    -- Range overlap
+    int4range(1, 5) && int4range(3, 8) AS range_overlap,
+    -- JSONB containment
+    '{"name":"John","age":30}'::jsonb @> '{"age":30}'::jsonb AS jsonb_contains;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> array_contains | array_overlap | range_contains | range_overlap | jsonb_contains
+----------------+---------------+----------------+---------------+----------------
+ t              | t             | t              | t             | t
+(1 row)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Operator resolution selects appropriate operator based on operand types. Integer division (/) truncates, numeric division preserves decimals. PostgreSQL automatically converts types to match operator signatures. Type precedence determines result type in mixed operations. Comparison operators may trigger implicit conversions. Special operators exist for arrays (@>, &&), ranges, and JSONB. Understanding operator type rules prevents unexpected results.
+            </div>
+
+            <!-- 10.3 Functions -->
+            <h3 id="type-conversion-functions">10.3 Functions</h3>
+            
+            <div class="info-card">
+                <p><strong>Function type resolution:</strong> PostgreSQL selects the best-matching function from potentially overloaded functions with the same name. The resolution considers exact type matches, domain matches, implicit conversions, and type categories. Function overloading allows the same function name with different parameter types. Proper type resolution ensures the intended function variant is called.</p>
+            </div>
+
+            <h4>🎯 Example 1: Function Overloading</h4>
+            <pre><code class="language-sql">-- Same function name with different argument types
+SELECT 
+    -- abs() with integer
+    abs(-42) AS abs_integer,
+    pg_typeof(abs(-42)) AS abs_int_type,
+    -- abs() with numeric
+    abs(-42.5) AS abs_numeric,
+    pg_typeof(abs(-42.5)) AS abs_numeric_type,
+    -- length() with text
+    length('Hello') AS length_text,
+    -- length() with bytea
+    length('Hello'::bytea) AS length_bytea;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> abs_integer | abs_int_type | abs_numeric | abs_numeric_type | length_text | length_bytea
+-------------+--------------+-------------+------------------+-------------+--------------
+          42 | integer      |        42.5 | numeric          |           5 |            5
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Implicit Type Conversion in Function Calls</h4>
+            <pre><code class="language-sql">-- Functions with implicit type conversion
+SELECT 
+    product_name,
+    price,
+    -- round() converts to numeric if needed
+    round(price) AS rounded_price,
+    -- substring with integer positions
+    substring(product_name FROM 1 FOR 5) AS short_name,
+    -- concat with multiple types
+    concat('Price: $', price, ' for ', product_name) AS description
+FROM products
+WHERE product_id <= 3;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name | price  | rounded_price | short_name |              description
+--------------+--------+---------------+------------+---------------------------------------
+ Laptop       | 999.99 |          1000 | Lapto      | Price: $999.99 for Laptop
+ Smartphone   | 699.99 |           700 | Smart      | Price: $699.99 for Smartphone
+ Headphones   | 79.99  |            80 | Headp      | Price: $79.99 for Headphones
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Type-Specific Functions</h4>
+            <pre><code class="language-sql">-- Functions specific to certain types
+SELECT 
+    -- Date/time functions
+    extract(year FROM current_date) AS current_year,
+    date_part('month', current_date) AS current_month,
+    -- Array functions
+    array_length(ARRAY[1,2,3,4,5], 1) AS array_len,
+    array_append(ARRAY[1,2,3], 4) AS appended_array,
+    -- JSON functions
+    json_extract_path_text('{"name":"John","age":30}'::json, 'name') AS json_name,
+    -- String functions with text
+    upper('hello world') AS uppercase;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> current_year | current_month | array_len | appended_array | json_name | uppercase
+--------------+---------------+-----------+----------------+-----------+-------------
+         2026 |             1 |         5 | {1,2,3,4}      | John      | HELLO WORLD
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Aggregate Functions with Type Conversion</h4>
+            <pre><code class="language-sql">-- Aggregate functions handle various types
+SELECT 
+    category,
+    -- sum() works with numeric types
+    sum(price) AS total_price,
+    -- avg() returns numeric for integer input
+    avg(stock) AS avg_stock,
+    pg_typeof(avg(stock)) AS avg_type,
+    -- string_agg() concatenates text
+    string_agg(product_name, ', ' ORDER BY product_name) AS products,
+    -- count() returns bigint
+    count(*) AS product_count,
+    pg_typeof(count(*)) AS count_type
+FROM products
+WHERE category IN ('Electronics', 'Furniture')
+GROUP BY category;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>  category   | total_price | avg_stock |  avg_type  |           products            | product_count | count_type
+-------------+-------------+-----------+------------+-------------------------------+---------------+------------
+ Electronics |     1779.97 |  75.00    | numeric    | Headphones, Laptop, Smartphone|             3 | bigint
+ Furniture   |      199.99 |  30.00    | numeric    | Desk Chair                    |             1 | bigint
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Polymorphic Functions</h4>
+            <pre><code class="language-sql">-- Polymorphic functions work with multiple types
+SELECT 
+    -- greatest() with integers
+    greatest(1, 5, 3, 9, 2) AS greatest_int,
+    pg_typeof(greatest(1, 5, 3)) AS greatest_int_type,
+    -- greatest() with text
+    greatest('apple', 'banana', 'cherry') AS greatest_text,
+    -- least() with numerics
+    least(10.5, 3.2, 7.8) AS least_numeric,
+    -- coalesce() with mixed types (converts to common type)
+    coalesce(NULL, 42, NULL, 100) AS coalesce_int,
+    -- nullif() comparison
+    nullif('same', 'same') AS nullif_equal,
+    nullif('different', 'other') AS nullif_not_equal;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> greatest_int | greatest_int_type | greatest_text | least_numeric | coalesce_int | nullif_equal | nullif_not_equal
+--------------+-------------------+---------------+---------------+--------------+--------------+------------------
+            9 | integer           | cherry        |           3.2 |           42 | NULL         | different
+(1 row)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Function resolution matches function signatures to argument types. Overloaded functions have same name but different parameter types. PostgreSQL chooses best match through exact match → domain match → implicit conversion. Type categories (numeric, string, datetime) aid resolution. Polymorphic functions (greatest, least, coalesce) work with multiple types. Aggregate functions have specific return types (avg returns numeric, count returns bigint). Understanding function resolution prevents ambiguous function call errors.
+            </div>
+
+            <!-- 10.4 Value Storage -->
+            <h3 id="type-conversion-storage">10.4 Value Storage</h3>
+            
+            <div class="info-card">
+                <p><strong>Value storage conversion:</strong> When storing values in table columns, PostgreSQL converts values to match the target column's data type. This involves assignment casting, which may be more restrictive than implicit conversions in expressions. Storage conversion ensures type safety, prevents data loss, and maintains column type integrity. Understanding storage rules prevents INSERT/UPDATE errors.</p>
+            </div>
+
+            <h4>🎯 Example 1: Automatic Type Conversion on INSERT</h4>
+            <pre><code class="language-sql">-- Create table with specific column types
+CREATE TEMP TABLE type_storage_demo (
+    id serial PRIMARY KEY,
+    int_col integer,
+    numeric_col numeric(10,2),
+    text_col text,
+    date_col date,
+    bool_col boolean
+);
+
+-- Insert with automatic type conversion
+INSERT INTO type_storage_demo (int_col, numeric_col, text_col, date_col, bool_col)
+VALUES 
+    -- Text to numeric conversion
+    ('42', '123.456', 123, '2026-01-26', 'true'),
+    -- Integer to numeric conversion
+    (100, 99, 'Text here', '2026-12-31', 1);
+
+SELECT * FROM type_storage_demo;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> id | int_col | numeric_col | text_col   | date_col   | bool_col
+----+---------+-------------+------------+------------+----------
+  1 |      42 |      123.46 | 123        | 2026-01-26 | t
+  2 |     100 |       99.00 | Text here  | 2026-12-31 | t
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Type Conversion with Precision Loss</h4>
+            <pre><code class="language-sql">-- Demonstrate precision changes during storage
+CREATE TEMP TABLE precision_demo (
+    numeric_5_2 numeric(5,2),    -- 5 digits total, 2 after decimal
+    varchar_10 varchar(10),       -- max 10 characters
+    int_col integer               -- 32-bit integer
+);
+
+INSERT INTO precision_demo VALUES 
+    (123.456, 'This is a very long string', 3.7);
+
+SELECT 
+    numeric_5_2,
+    -- Rounded to 2 decimal places
+    varchar_10,
+    -- Truncated to 10 characters
+    int_col
+    -- Rounded to integer
+FROM precision_demo;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> numeric_5_2 | varchar_10 | int_col
+-------------+------------+---------
+      123.46 | This is a  |       4
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Domain and Constraint Enforcement</h4>
+            <pre><code class="language-sql">-- Create domain with constraints
+CREATE DOMAIN positive_price AS numeric(10,2)
+    CHECK (VALUE > 0);
+
+CREATE TEMP TABLE products_typed (
+    product_id serial PRIMARY KEY,
+    product_name varchar(100) NOT NULL,
+    price positive_price,
+    discount_percent numeric(5,2) CHECK (discount_percent BETWEEN 0 AND 100)
+);
+
+-- Valid inserts
+INSERT INTO products_typed (product_name, price, discount_percent)
+VALUES 
+    ('Laptop', 999.99, 10.5),
+    ('Mouse', '25.50', '15');  -- Automatic conversion
+
+-- This would fail: negative price
+-- INSERT INTO products_typed (product_name, price) VALUES ('Item', -10);
+
+SELECT * FROM products_typed;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_id | product_name | price  | discount_percent
+------------+--------------+--------+------------------
+          1 | Laptop       | 999.99 |            10.50
+          2 | Mouse        |  25.50 |            15.00
+(2 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Array and Composite Type Storage</h4>
+            <pre><code class="language-sql">-- Storage with complex types
+CREATE TYPE address_type AS (
+    street text,
+    city text,
+    zip_code varchar(10)
+);
+
+CREATE TEMP TABLE customers_typed (
+    customer_id serial PRIMARY KEY,
+    customer_name text,
+    phone_numbers text[],        -- Array of text
+    address address_type,         -- Composite type
+    tags text[]
+);
+
+INSERT INTO customers_typed (customer_name, phone_numbers, address, tags)
+VALUES (
+    'John Doe',
+    ARRAY['555-0001', '555-0002'],
+    ROW('123 Main St', 'New York', '10001')::address_type,
+    '{vip,preferred}'::text[]
+);
+
+SELECT 
+    customer_name,
+    phone_numbers,
+    (address).street AS street,
+    (address).city AS city,
+    tags
+FROM customers_typed;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> customer_name |    phone_numbers    |    street    |   city   |      tags
+---------------+---------------------+--------------+----------+-----------------
+ John Doe      | {555-0001,555-0002} | 123 Main St  | New York | {vip,preferred}
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 5: JSON and JSONB Storage Conversion</h4>
+            <pre><code class="language-sql">-- JSON/JSONB storage with automatic parsing
+CREATE TEMP TABLE json_storage (
+    id serial PRIMARY KEY,
+    data_json json,
+    data_jsonb jsonb
+);
+
+-- Insert with automatic text to JSON conversion
+INSERT INTO json_storage (data_json, data_jsonb)
+VALUES 
+    ('{"name":"Alice","age":30}', '{"name":"Alice","age":30}'),
+    ('{"name":"Bob","age":25}', '{"name":"Bob","age":25}');
+
+SELECT 
+    data_json->>'name' AS json_name,
+    data_jsonb->>'name' AS jsonb_name,
+    data_jsonb->'age' AS jsonb_age,
+    pg_typeof(data_json) AS json_type,
+    pg_typeof(data_jsonb) AS jsonb_type
+FROM json_storage;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> json_name | jsonb_name | jsonb_age | json_type | jsonb_type
+-----------+------------+-----------+-----------+------------
+ Alice     | Alice      | 30        | json      | jsonb
+ Bob       | Bob        | 25        | json      | jsonb
+(2 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> Value storage conversion occurs during INSERT and UPDATE operations. PostgreSQL automatically converts input values to match column types. Assignment casts are more restrictive than implicit casts - some conversions allowed in expressions may fail in storage. Precision may be lost (numeric rounding, string truncation). Domains add custom constraints. CHECK constraints enforce business rules. Arrays and composite types require compatible structure. JSON/JSONB parse text into structured format. Always verify data fits target column constraints.
+            </div>
+
+            <!-- 10.5 UNION, CASE, and Related Constructs -->
+            <h3 id="type-conversion-union-case">10.5 UNION, CASE, and Related Constructs</h3>
+            
+            <div class="info-card">
+                <p><strong>Type resolution in constructs:</strong> UNION, CASE, COALESCE, and array constructors must produce a single result type from multiple input types. PostgreSQL determines the common type using type category precedence and preferred types within categories. Understanding these rules prevents type mismatch errors and ensures predictable results in complex expressions.</p>
+            </div>
+
+            <h4>🎯 Example 1: UNION Type Resolution</h4>
+            <pre><code class="language-sql">-- UNION combines queries with compatible types
+-- Query 1: product prices (numeric)
+SELECT product_name AS item, price AS value, 'product' AS type
+FROM products WHERE product_id <= 3
+
+UNION ALL
+
+-- Query 2: order totals (numeric)
+SELECT 
+    'Order #' || order_id AS item,
+    total_amount AS value,
+    'order' AS type
+FROM orders WHERE order_id <= 2
+
+ORDER BY type, value DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>      item      | value  |  type
+----------------+--------+---------
+ Order #2       | 719.98 | order
+ Order #1       | 1049.98| order
+ Laptop         | 999.99 | product
+ Smartphone     | 699.99 | product
+ Headphones     |  79.99 | product
+(5 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 2: CASE Expression Type Resolution</h4>
+            <pre><code class="language-sql">-- CASE must return same type for all branches
+SELECT 
+    product_name,
+    price,
+    stock,
+    -- All branches return text
+    CASE 
+        WHEN stock = 0 THEN 'Out of Stock'
+        WHEN stock < 25 THEN 'Low Stock'
+        WHEN stock < 100 THEN 'In Stock'
+        ELSE 'Well Stocked'
+    END AS stock_status,
+    -- Numeric result with type conversion
+    CASE 
+        WHEN category = 'Electronics' THEN price * 0.9  -- 10% discount
+        WHEN category = 'Clothing' THEN price * 0.85    -- 15% discount
+        ELSE price
+    END AS discounted_price,
+    pg_typeof(CASE WHEN stock > 0 THEN price ELSE 0 END) AS case_type
+FROM products
+WHERE product_id <= 4;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name | price  | stock | stock_status | discounted_price | case_type
+--------------+--------+-------+--------------+------------------+-----------
+ Laptop       | 999.99 |    50 | In Stock     |           899.99 | numeric
+ Smartphone   | 699.99 |    75 | In Stock     |           629.99 | numeric
+ Headphones   |  79.99 |   100 | Well Stocked |            71.99 | numeric
+ Desk Chair   | 199.99 |    30 | In Stock     |           199.99 | numeric
+(4 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 3: COALESCE and NULLIF Type Resolution</h4>
+            <pre><code class="language-sql">-- COALESCE returns first non-NULL value with common type
+SELECT 
+    product_name,
+    -- COALESCE with numeric types
+    COALESCE(NULL, price, 0) AS coalesce_price,
+    pg_typeof(COALESCE(NULL, price, 0)) AS coalesce_type,
+    -- NULLIF returns NULL if values equal
+    NULLIF(stock, 0) AS non_zero_stock,
+    -- GREATEST with implicit conversion
+    GREATEST(price, 100) AS price_or_hundred,
+    -- LEAST with text
+    LEAST(product_name, 'M') AS alphabetical_limit
+FROM products
+WHERE product_id <= 3;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name | coalesce_price | coalesce_type | non_zero_stock | price_or_hundred | alphabetical_limit
+--------------+----------------+---------------+----------------+------------------+--------------------
+ Laptop       |         999.99 | numeric       |             50 |           999.99 | Laptop
+ Smartphone   |         699.99 | numeric       |             75 |           699.99 | M
+ Headphones   |          79.99 | numeric       |            100 |           100.00 | Headphones
+(3 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 4: Array Constructor Type Resolution</h4>
+            <pre><code class="language-sql">-- Array constructors determine common element type
+SELECT 
+    -- Integer array
+    ARRAY[1, 2, 3, 4, 5] AS int_array,
+    pg_typeof(ARRAY[1, 2, 3]) AS int_array_type,
+    -- Mixed numeric types -> numeric array
+    ARRAY[1, 2.5, 3] AS numeric_array,
+    pg_typeof(ARRAY[1, 2.5, 3]) AS numeric_array_type,
+    -- Text array
+    ARRAY['apple', 'banana', 'cherry'] AS text_array,
+    -- Array with explicit casting
+    ARRAY[1::numeric, 2::numeric, 3::numeric] AS explicit_numeric_array;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> int_array | int_array_type | numeric_array | numeric_array_type |      text_array       | explicit_numeric_array
+-----------+----------------+---------------+--------------------+-----------------------+------------------------
+ {1,2,3,4,5}| integer[]     | {1,2.5,3}     | numeric[]          | {apple,banana,cherry} | {1,2,3}
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Complex UNION with Type Conversion</h4>
+            <pre><code class="language-sql">-- UNION with different numeric types
+WITH electronics AS (
+    SELECT 
+        product_name,
+        price::integer AS whole_price,  -- Cast to integer
+        'Electronics' AS source
+    FROM products
+    WHERE category = 'Electronics'
+    LIMIT 2
+),
+furniture AS (
+    SELECT 
+        product_name,
+        price::integer AS whole_price,
+        'Furniture' AS source
+    FROM products
+    WHERE category = 'Furniture'
+    LIMIT 1
+)
+SELECT * FROM electronics
+UNION ALL
+SELECT * FROM furniture
+ORDER BY whole_price DESC;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name | whole_price |    source
+--------------+-------------+-------------
+ Laptop       |         999 | Electronics
+ Smartphone   |         699 | Electronics
+ Desk Chair   |         199 | Furniture
+(3 rows)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> UNION requires corresponding columns to have compatible types - PostgreSQL finds common type using type precedence. CASE expressions must return same type across all branches - use explicit casts if needed. COALESCE returns first non-NULL value, determining result type from all arguments. NULLIF compares values and returns NULL on match. Array constructors infer element type from all elements, preferring more general types. GREATEST/LEAST work with comparable types. Understanding type resolution in constructs prevents "UNION types cannot be matched" and similar errors.
+            </div>
+
+            <!-- 10.6 SELECT Output Columns -->
+            <h3 id="type-conversion-select-output">10.6 SELECT Output Columns</h3>
+            
+            <div class="info-card">
+                <p><strong>Output column type determination:</strong> PostgreSQL determines output column types based on the expressions in the SELECT list. Column types propagate from source tables, are determined by function return types, or result from expression evaluation. Understanding output types is crucial for views, prepared statements, client applications, and query composition.</p>
+            </div>
+
+            <h4>🎯 Example 1: Output Column Type Inheritance</h4>
+            <pre><code class="language-sql">-- SELECT inherits types from source columns
+SELECT 
+    product_id,
+    pg_typeof(product_id) AS id_type,
+    product_name,
+    pg_typeof(product_name) AS name_type,
+    price,
+    pg_typeof(price) AS price_type,
+    created_at,
+    pg_typeof(created_at) AS date_type
+FROM products
+LIMIT 1;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_id | id_type | product_name | name_type | price  | price_type |       created_at       |     date_type
+------------+---------+--------------+-----------+--------+------------+------------------------+--------------------
+          1 | integer | Laptop       | text      | 999.99 | numeric    | 2026-01-15 10:00:00+00 | timestamp with...
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 2: Computed Column Types</h4>
+            <pre><code class="language-sql">-- Output types determined by expressions
+SELECT 
+    product_name,
+    price,
+    -- Arithmetic expression type
+    price * 1.1 AS price_with_tax,
+    pg_typeof(price * 1.1) AS tax_type,
+    -- String concatenation
+    'Product: ' || product_name AS description,
+    pg_typeof('Product: ' || product_name) AS concat_type,
+    -- Conditional expression
+    CASE WHEN stock > 50 THEN 'High' ELSE 'Low' END AS stock_level,
+    pg_typeof(CASE WHEN stock > 50 THEN 'High' ELSE 'Low' END) AS case_type
+FROM products
+WHERE product_id = 1;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> product_name | price  | price_with_tax | tax_type |    description    | concat_type | stock_level | case_type
+--------------+--------+----------------+----------+-------------------+-------------+-------------+-----------
+ Laptop       | 999.99 |        1099.99 | numeric  | Product: Laptop   | text        | Low         | text
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 3: Function Return Types</h4>
+            <pre><code class="language-sql">-- Output types from function return types
+SELECT 
+    -- String functions
+    upper(product_name) AS upper_name,
+    pg_typeof(upper(product_name)) AS upper_type,
+    -- Aggregate functions
+    count(*) AS total_count,
+    pg_typeof(count(*)) AS count_type,
+    sum(price) AS total_price,
+    pg_typeof(sum(price)) AS sum_type,
+    avg(price) AS average_price,
+    pg_typeof(avg(price)) AS avg_type
+FROM products;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre> upper_name | upper_type | total_count | count_type | total_price | sum_type | average_price | avg_type
+------------+------------+-------------+------------+-------------+----------+---------------+----------
+ LAPTOP     | text       |          10 | bigint     |     2599.89 | numeric  |       259.99  | numeric
+(1 row)</pre>
+            </div>
+
+            <h4>🎯 Example 4: View Column Types</h4>
+            <pre><code class="language-sql">-- Create view with determined column types
+CREATE OR REPLACE VIEW product_summary AS
+SELECT 
+    product_id,
+    product_name,
+    category,
+    price,
+    stock,
+    price * stock AS inventory_value,
+    CASE 
+        WHEN stock = 0 THEN 'Out of Stock'
+        WHEN stock < 50 THEN 'Low Stock'
+        ELSE 'In Stock'
+    END AS availability_status,
+    now() AS report_time
+FROM products;
+
+-- Check view column types
+SELECT 
+    column_name,
+    data_type,
+    udt_name
+FROM information_schema.columns
+WHERE table_name = 'product_summary'
+ORDER BY ordinal_position;</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>    column_name     |       data_type        |      udt_name
+--------------------+------------------------+--------------------
+ product_id         | integer                | int4
+ product_name       | text                   | text
+ category           | text                   | text
+ price              | numeric                | numeric
+ stock              | integer                | int4
+ inventory_value    | numeric                | numeric
+ availability_status| text                   | text
+ report_time        | timestamp with tz      | timestamptz
+(8 rows)</pre>
+            </div>
+
+            <h4>🎯 Example 5: Subquery Output Types</h4>
+            <pre><code class="language-sql">-- Subquery column types affect outer query
+WITH product_stats AS (
+    SELECT 
+        category,
+        count(*) AS product_count,
+        avg(price) AS avg_price,
+        max(stock) AS max_stock,
+        string_agg(product_name, ', ' ORDER BY product_name) AS products
+    FROM products
+    GROUP BY category
+)
+SELECT 
+    category,
+    product_count,
+    pg_typeof(product_count) AS count_type,
+    round(avg_price, 2) AS rounded_avg,
+    pg_typeof(round(avg_price, 2)) AS round_type,
+    max_stock,
+    pg_typeof(max_stock) AS stock_type,
+    left(products, 30) AS product_sample,
+    pg_typeof(products) AS agg_type
+FROM product_stats
+WHERE category = 'Electronics';</code></pre>
+            <div class="output">
+                <div class="output-header">Result:</div>
+                <pre>  category   | product_count | count_type | rounded_avg | round_type | max_stock | stock_type |      product_sample       | agg_type
+-------------+---------------+------------+-------------+------------+-----------+------------+---------------------------+----------
+ Electronics |             3 | bigint     |      593.32 | numeric    |       100 | integer    | Headphones, Laptop, Smart | text
+(1 row)</pre>
+            </div>
+            <div class="output-block">
+                <strong>Explanation:</strong> SELECT output column types are determined by source column types, function return types, and expression evaluation rules. Column types are inherited directly from tables. Computed expressions determine type through operator/function resolution. Aggregate functions have specific return types (count→bigint, avg→numeric, string_agg→text). Views store column types at creation. Subquery types propagate to outer queries. Understanding output types is essential for application integration, prepared statements, and query composition. Use pg_typeof() to verify types during development.
+            </div>
+
+        </section>
+
     </main>
 
     <footer>
