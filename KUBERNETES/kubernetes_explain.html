@@ -48799,6 +48799,276 @@ kubectl cordon worker-1</code></pre>
                     </div>
                 </div>
 
+                <div class="cks-security-section">
+                    <h4>🛡️ CKS Security Perspective — Production Security Hardening Checklist</h4>
+                    <span class="cks-domain-tag">CLUSTER SETUP 15%</span>
+                    <span class="cks-domain-tag">CLUSTER HARDENING 15%</span>
+                    <span class="cks-domain-tag">SYSTEM HARDENING 10%</span>
+
+                    <p>Production clusters require defense-in-depth: multiple security layers working together. This checklist covers the critical hardening steps tested on CKS.</p>
+
+                    <table class="compare-table">
+                        <thead><tr><th>Security Layer</th><th>Control</th><th>CKS Priority</th></tr></thead>
+                        <tbody>
+                            <tr><td>API Server</td><td>Disable anonymous auth, enable audit logging</td><td>🔴 Critical</td></tr>
+                            <tr><td>etcd</td><td>Encrypt secrets at rest, TLS client certs</td><td>🔴 Critical</td></tr>
+                            <tr><td>Kubelet</td><td>Disable anonymous auth, set authorization mode to Webhook</td><td>🔴 Critical</td></tr>
+                            <tr><td>Network</td><td>Default-deny NetworkPolicy, encrypt pod-to-pod traffic</td><td>🔴 Critical</td></tr>
+                            <tr><td>RBAC</td><td>No cluster-admin for users, namespace-scoped roles</td><td>🟡 High</td></tr>
+                            <tr><td>Admission</td><td>PSA enforce restricted, OPA/Gatekeeper policies</td><td>🟡 High</td></tr>
+                            <tr><td>Images</td><td>Signed images, vulnerability scanning, no latest tag</td><td>🟡 High</td></tr>
+                            <tr><td>Runtime</td><td>Falco/seccomp/AppArmor, immutable containers</td><td>🟡 High</td></tr>
+                        </tbody>
+                    </table>
+
+                    <pre><code class="language-bash"># CKS Production Hardening Quick Reference
+
+# 1. Kubelet hardening — /var/lib/kubelet/config.yaml
+authentication:
+  anonymous:
+    enabled: false          # MUST disable
+  webhook:
+    enabled: true
+authorization:
+  mode: Webhook             # Not AlwaysAllow!
+readOnlyPort: 0             # Disable read-only port (10255)
+protectKernelDefaults: true
+
+# 2. Verify kubelet security
+curl -sk https://&lt;node-ip&gt;:10250/pods
+# Should return 401 Unauthorized (not pod list!)
+
+# 3. API server hardening flags
+--anonymous-auth=false
+--enable-admission-plugins=NodeRestriction,PodSecurity
+--insecure-port=0           # Deprecated but verify it's 0
+--profiling=false
+--audit-log-path=/var/log/audit.log
+--audit-policy-file=/etc/kubernetes/audit-policy.yaml
+--encryption-provider-config=/etc/kubernetes/enc.yaml
+
+# 4. CIS Benchmark scan
+kube-bench run --targets=master,node
+# Fix all FAIL items
+
+# 5. Verify no privileged containers in production
+kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {range .spec.containers[*]}{.securityContext.privileged}{" "}{end}{"\n"}{end}' | grep true</code></pre>
+                </div>
+
+                <div class="cks-exam-questions">
+                    <h4>Chapter 29 — CKS Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-1</span>
+                        <div class="eq-question">The kubelet on node <code>worker-1</code> is configured insecurely. Fix it to disable anonymous authentication and enable webhook authorization.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># SSH to the worker node
+ssh worker-1
+
+# Edit kubelet config
+sudo vi /var/lib/kubelet/config.yaml</code></pre>
+                                <pre><code class="language-yaml"># Ensure these settings in config.yaml
+authentication:
+  anonymous:
+    enabled: false
+  webhook:
+    enabled: true
+    cacheTTL: 2m0s
+  x509:
+    clientCAFile: /etc/kubernetes/pki/ca.crt
+authorization:
+  mode: Webhook
+  webhook:
+    cacheAuthorizedTTL: 5m0s
+    cacheUnauthorizedTTL: 30s
+readOnlyPort: 0
+protectKernelDefaults: true</code></pre>
+                                <pre><code class="language-bash"># Restart kubelet
+sudo systemctl restart kubelet
+sudo systemctl status kubelet
+
+# Verify: anonymous access should be denied
+curl -sk https://localhost:10250/pods
+# Expected: 401 Unauthorized</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Kubelet hardening is a CKS staple. Anonymous auth allows anyone to query the kubelet API. Webhook authorization delegates to the API server. <code>readOnlyPort: 0</code> disables the unauthenticated metrics port (10255). Always restart kubelet after config changes and verify with <code>curl</code>.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-2</span>
+                        <div class="eq-question">Run a CIS benchmark scan using <code>kube-bench</code> and fix the critical findings.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Run kube-bench on a master node
+kube-bench run --targets=master
+
+# Common critical findings and fixes:
+
+# FIX 1: API server profiling enabled
+# Add to /etc/kubernetes/manifests/kube-apiserver.yaml:
+--profiling=false
+
+# FIX 2: etcd data directory permissions
+chmod 700 /var/lib/etcd
+chown etcd:etcd /var/lib/etcd
+
+# FIX 3: Kubelet config file permissions
+chmod 600 /var/lib/kubelet/config.yaml
+chmod 600 /etc/kubernetes/kubelet.conf
+
+# FIX 4: PKI file permissions
+chmod 600 /etc/kubernetes/pki/*.key
+chmod 644 /etc/kubernetes/pki/*.crt
+
+# Run kube-bench on worker nodes
+kube-bench run --targets=node
+
+# Re-run to verify fixes
+kube-bench run --targets=master 2>&1 | grep -E "FAIL|WARN"</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p><code>kube-bench</code> checks CIS Kubernetes Benchmark compliance. On CKS, know the <code>--targets</code> flag (master, node, etcd, policies). Common fixes: file permissions on PKI keys, disabling profiling, securing etcd. Focus on FAIL items first — WARN items are recommendations.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-3</span>
+                        <div class="eq-question">Ensure all namespaces in the cluster enforce the PSA <code>restricted</code> profile.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Check current PSA labels on all namespaces
+kubectl get ns --show-labels | grep -E "pod-security"
+
+# Apply restricted enforcement to specific namespace
+kubectl label namespace production \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/enforce-version=latest \
+  pod-security.kubernetes.io/warn=restricted \
+  pod-security.kubernetes.io/audit=restricted
+
+# Apply to ALL user namespaces (skip system ones)
+for ns in $(kubectl get ns -o name | grep -v "kube-"); do
+  kubectl label $ns \
+    pod-security.kubernetes.io/enforce=restricted \
+    pod-security.kubernetes.io/warn=restricted \
+    --overwrite
+done
+
+# Verify: try creating a privileged pod (should be rejected)
+kubectl run test --image=nginx -n production \
+  --overrides='{"spec":{"containers":[{"name":"test","image":"nginx","securityContext":{"privileged":true}}]}}'
+# Expected: Error — violates PodSecurity "restricted"</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Pod Security Admission (PSA) replaced PodSecurityPolicy. On CKS, apply <code>enforce=restricted</code> to reject non-compliant pods. Use <code>warn</code> and <code>audit</code> modes for visibility before enforcement. The <code>restricted</code> profile requires: non-root, no privilege escalation, drop ALL capabilities, seccomp profile set.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-4</span>
+                        <div class="eq-question">Verify the API server is configured with encryption at rest for secrets and fix if not.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Check if encryption-provider-config is set
+cat /etc/kubernetes/manifests/kube-apiserver.yaml | \
+  grep encryption-provider
+
+# If missing, create encryption config
+cat &lt;&lt;EOF > /etc/kubernetes/enc/enc.yaml
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+- resources:
+  - secrets
+  providers:
+  - aescbc:
+      keys:
+      - name: key1
+        secret: $(head -c 32 /dev/urandom | base64)
+  - identity: {}
+EOF
+
+# Add to kube-apiserver.yaml
+# --encryption-provider-config=/etc/kubernetes/enc/enc.yaml
+# Mount the config directory
+
+# Verify: check secret is encrypted in etcd
+ETCDCTL_API=3 etcdctl get /registry/secrets/default/my-secret \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key | hexdump -C
+# Should show "k8s:enc:aescbc" prefix, not plain text</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Secrets are stored Base64-encoded in etcd by default — NOT encrypted. On CKS, you must configure <code>EncryptionConfiguration</code> with <code>aescbc</code> (or <code>aesgcm</code>/<code>secretbox</code>). The <code>identity: {}</code> provider is the fallback for reading existing unencrypted secrets. After enabling, re-create secrets to encrypt them. Verify with <code>etcdctl get</code>.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-5</span>
+                        <div class="eq-question">Audit the cluster for security misconfigurations: find all pods running as root, with host networking, or with privileged containers.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Find privileged containers
+kubectl get pods -A -o json | jq -r '
+  .items[] |
+  select(.spec.containers[].securityContext.privileged == true) |
+  "\(.metadata.namespace)/\(.metadata.name)"'
+
+# Find pods running as root (UID 0)
+kubectl get pods -A -o json | jq -r '
+  .items[] |
+  select(
+    .spec.securityContext.runAsUser == 0 or
+    .spec.containers[].securityContext.runAsUser == 0 or
+    (.spec.securityContext.runAsNonRoot != true and
+     .spec.containers[].securityContext.runAsNonRoot != true)
+  ) | "\(.metadata.namespace)/\(.metadata.name)"'
+
+# Find pods with host networking/PID/IPC
+kubectl get pods -A -o json | jq -r '
+  .items[] |
+  select(
+    .spec.hostNetwork == true or
+    .spec.hostPID == true or
+    .spec.hostIPC == true
+  ) | "\(.metadata.namespace)/\(.metadata.name): hostNet=\(.spec.hostNetwork) hostPID=\(.spec.hostPID)"'
+
+# Find pods with hostPath volumes
+kubectl get pods -A -o json | jq -r '
+  .items[] |
+  select(.spec.volumes[]?.hostPath != null) |
+  "\(.metadata.namespace)/\(.metadata.name): \(.spec.volumes[].hostPath.path)"'</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Security auditing is a key CKS skill. Use <code>jq</code> to filter pod specs for dangerous configurations. Priority: privileged containers > hostPID/hostNetwork > running as root > hostPath mounts. In production, only system DaemonSets (kube-proxy, CNI) should have elevated privileges — everything else is a finding to remediate.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
             </div> <!-- End Chapter 29 content -->
 
             <!-- ═══════════════════════════════════════════════════════════════════════════════ -->
@@ -49777,6 +50047,281 @@ kubectl get nodes</code></pre>
                             <div class="eq-explanation">
                                 <div class="eq-exp-label">Explanation</div>
                                 <p>Each cloud provider has a CLI command that configures kubeconfig automatically. The commands download the cluster's CA cert, API server endpoint, and configure authentication (typically using the cloud CLI as an exec-based credential plugin). On the CKAD, the exam provides pre-configured kubeconfig — but understanding this setup is essential for real-world cluster management.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
+                <div class="cks-security-section">
+                    <h4>🛡️ CKS Security Perspective — Cloud IAM & Workload Identity Security</h4>
+                    <span class="cks-domain-tag">CLUSTER HARDENING 15%</span>
+                    <span class="cks-domain-tag">MINIMIZE MICROSERVICE VULNS 20%</span>
+
+                    <p>Managed Kubernetes services (EKS, GKE, AKS) add cloud IAM as an additional security layer. Misconfigurations here are the #1 source of cloud K8s breaches.</p>
+
+                    <table class="compare-table">
+                        <thead><tr><th>Cloud</th><th>Workload Identity</th><th>Metadata Attack</th><th>Mitigation</th></tr></thead>
+                        <tbody>
+                            <tr><td>AWS EKS</td><td>IRSA (IAM Roles for SA)</td><td>169.254.169.254 (IMDSv1)</td><td>IMDSv2 + NetworkPolicy</td></tr>
+                            <tr><td>GCP GKE</td><td>Workload Identity Federation</td><td>metadata.google.internal</td><td>GKE metadata concealment</td></tr>
+                            <tr><td>Azure AKS</td><td>Workload Identity (Azure AD)</td><td>169.254.169.254 (IMDS)</td><td>NetworkPolicy block</td></tr>
+                        </tbody>
+                    </table>
+
+                    <pre><code class="language-yaml"># Block cloud metadata service via NetworkPolicy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: block-metadata
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32    # Block AWS/Azure metadata
+        - 169.254.170.2/32      # Block ECS credentials</code></pre>
+                    <pre><code class="language-yaml"># AWS IRSA — Proper workload identity (not node-level IAM)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s3-reader
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/s3-reader
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s3-app
+spec:
+  serviceAccountName: s3-reader  # Uses IRSA, not node role
+  automountServiceAccountToken: true
+  containers:
+  - name: app
+    image: myapp:1.0</code></pre>
+                </div>
+
+                <div class="cks-exam-questions">
+                    <h4>Chapter 30 — CKS Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-1</span>
+                        <div class="eq-question">Create a NetworkPolicy that blocks all pods in namespace <code>production</code> from accessing the cloud metadata service (169.254.169.254).</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml">apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-metadata-access
+  namespace: production
+spec:
+  podSelector: {}       # Apply to ALL pods
+  policyTypes:
+  - Egress
+  egress:
+  # Allow all traffic EXCEPT metadata service
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53</code></pre>
+                                <pre><code class="language-bash"># Verify: pod should not reach metadata
+kubectl exec -n production test-pod -- \
+  wget --timeout=3 -qO- http://169.254.169.254/latest/meta-data/
+# Expected: timeout/connection refused
+
+# Verify: normal egress still works
+kubectl exec -n production test-pod -- \
+  wget --timeout=3 -qO- http://example.com
+# Expected: success</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>The cloud metadata service exposes instance credentials, tokens, and configuration. Attackers with SSRF or code execution can steal cloud IAM credentials. On CKS, blocking 169.254.169.254 via NetworkPolicy is a critical control. Remember to allow DNS (port 53) or pods won't resolve any hostnames.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-2</span>
+                        <div class="eq-question">How do you prevent pods from using the node's cloud IAM role?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># AWS: Use IRSA instead of node-level IAM
+# 1. Create IAM role with trust policy for specific SA
+# 2. Annotate the ServiceAccount
+kubectl annotate sa my-app \
+  eks.amazonaws.com/role-arn=arn:aws:iam::ACCOUNT:role/my-app-role
+
+# 3. Disable automount on default SA
+kubectl patch sa default -n production -p '
+  {"automountServiceAccountToken": false}'
+
+# 4. AWS: Enforce IMDSv2 (blocks simple metadata curls)
+aws ec2 modify-instance-metadata-options \
+  --instance-id i-123 \
+  --http-tokens required \
+  --http-endpoint enabled
+
+# 5. Block metadata service entirely via NetworkPolicy
+# (See CKS-1 above)
+
+# Audit: find pods without explicit service accounts
+kubectl get pods -A -o json | jq -r '
+  .items[] |
+  select(.spec.serviceAccountName == "default" or
+         .spec.serviceAccountName == null) |
+  "\(.metadata.namespace)/\(.metadata.name)"'</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Node-level IAM roles give every pod on the node the same cloud permissions — a massive blast radius. On CKS, enforce pod-level identity (IRSA/Workload Identity). Disable <code>automountServiceAccountToken</code> on the default SA. Audit for pods using the default SA — they should use dedicated SAs with minimal cloud permissions.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-3</span>
+                        <div class="eq-question">How do you secure the Kubernetes Dashboard in a managed cluster?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Option 1: DON'T deploy the Dashboard in production
+# It's a high-risk attack surface
+
+# If you must use it:
+
+# 1. Never expose via LoadBalancer/NodePort
+# Use kubectl proxy or port-forward only
+kubectl port-forward -n kubernetes-dashboard \
+  svc/kubernetes-dashboard 8443:443
+
+# 2. Create a read-only ClusterRole for Dashboard
+kubectl create clusterrole dashboard-viewer \
+  --verb=get,list,watch \
+  --resource=pods,services,deployments,namespaces
+
+kubectl create clusterrolebinding dashboard-viewer-binding \
+  --clusterrole=dashboard-viewer \
+  --serviceaccount=kubernetes-dashboard:dashboard-sa
+
+# 3. Never grant cluster-admin to Dashboard SA
+# This was the Tesla cryptojacking attack vector
+
+# 4. Enable token-based authentication only
+# Remove skip-login flag if present</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>The Kubernetes Dashboard with cluster-admin access caused the famous Tesla breach. On CKS, best practice is to not deploy it. If required: use RBAC with minimal read-only permissions, never expose externally, require token authentication, and remove any <code>--skip-login</code> flags.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-4</span>
+                        <div class="eq-question">How do you disable automounting of ServiceAccount tokens and use projected volumes instead?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># Disable automount at SA level
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: my-app
+  namespace: production
+automountServiceAccountToken: false
+
+---
+# Pod with projected token (time-bound, audience-bound)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-app
+spec:
+  serviceAccountName: my-app
+  automountServiceAccountToken: false  # Double-disable
+  containers:
+  - name: app
+    image: myapp:1.0
+    volumeMounts:
+    - name: token
+      mountPath: /var/run/secrets/tokens
+      readOnly: true
+  volumes:
+  - name: token
+    projected:
+      sources:
+      - serviceAccountToken:
+          path: token
+          expirationSeconds: 3600       # 1 hour
+          audience: my-api-server       # Bound audience</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Default SA tokens are non-expiring and can be used from anywhere. On CKS, use projected ServiceAccount tokens with <code>expirationSeconds</code> and <code>audience</code>. Disable <code>automountServiceAccountToken</code> at both the SA and pod level. Projected tokens rotate automatically and are audience-bound, limiting the impact of token theft.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-5</span>
+                        <div class="eq-question">Find all service accounts in the cluster with <code>cluster-admin</code> privileges.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Find all ClusterRoleBindings to cluster-admin
+kubectl get clusterrolebindings -o json | jq -r '
+  .items[] |
+  select(.roleRef.name == "cluster-admin") |
+  {
+    binding: .metadata.name,
+    subjects: [.subjects[] |
+      "\(.kind): \(.namespace // "cluster")/\(.name)"]
+  }'
+
+# Find service accounts specifically
+kubectl get clusterrolebindings -o json | jq -r '
+  .items[] |
+  select(.roleRef.name == "cluster-admin") |
+  .subjects[]? |
+  select(.kind == "ServiceAccount") |
+  "\(.namespace)/\(.name)"'
+
+# Check if any namespace-level RoleBindings
+# escalate to cluster-admin
+kubectl get rolebindings -A -o json | jq -r '
+  .items[] |
+  select(.roleRef.name == "cluster-admin") |
+  "\(.metadata.namespace): \(.subjects[].name)"'
+
+# Remediation: replace with minimal role
+kubectl delete clusterrolebinding risky-binding
+kubectl create clusterrolebinding safe-binding \
+  --clusterrole=view \
+  --serviceaccount=default:my-sa</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Service accounts with <code>cluster-admin</code> are dangerous — a compromised pod gains full cluster control. On CKS, audit all ClusterRoleBindings to <code>cluster-admin</code>. Only <code>system:masters</code> group should have cluster-admin. Replace SA bindings with minimal, namespace-scoped roles following least-privilege.</p>
                             </div>
                         </details>
                     </div>
@@ -51328,6 +51873,300 @@ kubectl rollout status deployment/web
                     </div>
                 </div>
 
+                <div class="cks-security-section">
+                    <h4>🛡️ CKS Security Perspective — Supply Chain Security & Image Signing</h4>
+                    <span class="cks-domain-tag">SUPPLY CHAIN SECURITY 20%</span>
+                    <span class="cks-domain-tag">MINIMIZE MICROSERVICE VULNS 20%</span>
+
+                    <p>Supply chain attacks exploit the pipeline between code commit and deployment. CKS tests your ability to verify image integrity, scan for vulnerabilities, and enforce trusted images.</p>
+
+                    <table class="compare-table">
+                        <thead><tr><th>Tool</th><th>Purpose</th><th>CKS Relevance</th></tr></thead>
+                        <tbody>
+                            <tr><td>Trivy</td><td>Image vulnerability scanner</td><td>🔴 Core exam tool</td></tr>
+                            <tr><td>cosign (Sigstore)</td><td>Image signing & verification</td><td>🟡 Know the concept</td></tr>
+                            <tr><td>Syft</td><td>SBOM generation</td><td>🟡 Know the concept</td></tr>
+                            <tr><td>OPA Gatekeeper</td><td>Enforce image policies</td><td>🔴 Core exam tool</td></tr>
+                            <tr><td>ImagePolicyWebhook</td><td>Admission controller for images</td><td>🔴 Core exam tool</td></tr>
+                        </tbody>
+                    </table>
+
+                    <pre><code class="language-bash"># Trivy image scanning (CKS core skill)
+trivy image nginx:1.25           # Scan for vulnerabilities
+trivy image --severity HIGH,CRITICAL nginx:1.25   # Filter severity
+trivy image --ignore-unfixed nginx:1.25           # Skip unfixed CVEs
+
+# Scan for misconfigurations in K8s manifests
+trivy config deployment.yaml
+trivy config --severity HIGH ./manifests/
+
+# Image signing with cosign
+cosign sign --key cosign.key myregistry/myapp@sha256:abc123
+cosign verify --key cosign.pub myregistry/myapp@sha256:abc123
+
+# Generate SBOM
+syft myregistry/myapp:1.0 -o spdx-json > sbom.json
+trivy sbom sbom.json    # Scan SBOM for known vulnerabilities</code></pre>
+                    <pre><code class="language-yaml"># OPA Gatekeeper — Allow only trusted registries
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sallowedrepos
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sAllowedRepos
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            repos:
+              type: array
+              items:
+                type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8sallowedrepos
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        satisfied := [good | repo = input.parameters.repos[_]; good = startswith(container.image, repo)]
+        not any(satisfied)
+        msg := sprintf("container <%v> has an invalid image repo <%v>, allowed repos are %v", [container.name, container.image, input.parameters.repos])
+      }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sAllowedRepos
+metadata:
+  name: prod-repo-is-internal
+spec:
+  match:
+    kinds: [{apiGroups: [""], kinds: ["Pod"]}]
+    namespaces: ["production"]
+  parameters:
+    repos: ["myregistry.azurecr.io/", "gcr.io/my-project/"]</code></pre>
+                </div>
+
+                <div class="cks-exam-questions">
+                    <h4>Chapter 31 — CKS Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-1</span>
+                        <div class="eq-question">Use Trivy to scan the image <code>nginx:1.25</code> and identify all HIGH and CRITICAL vulnerabilities. Then create a policy to block images with CRITICAL CVEs.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Scan for HIGH and CRITICAL vulnerabilities
+trivy image --severity HIGH,CRITICAL nginx:1.25
+
+# Output shows CVE-ID, package, severity, fixed version
+# Example output:
+# CVE-2023-44487  libnghttp2  CRITICAL  Fixed: 1.57.0-1
+# CVE-2023-38545  curl        HIGH      Fixed: 8.4.0-2
+
+# Scan and exit with error if CRITICAL found
+trivy image --severity CRITICAL --exit-code 1 nginx:1.25
+echo $?  # Non-zero = CRITICAL CVEs found
+
+# Use in CI/CD pipeline
+trivy image --severity CRITICAL --exit-code 1 \
+  --format json --output results.json myapp:latest
+
+# Scan a running container's image
+trivy image --input &lt;(docker save nginx:1.25)</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Trivy scans container images for OS and language-specific vulnerabilities. On CKS, know <code>--severity</code> to filter, <code>--exit-code 1</code> to fail CI pipelines, and <code>--ignore-unfixed</code> to skip CVEs without patches. Trivy also scans filesystem (<code>trivy fs</code>), K8s manifests (<code>trivy config</code>), and SBOMs (<code>trivy sbom</code>).</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-2</span>
+                        <div class="eq-question">Configure an ImagePolicyWebhook admission controller to deny images not from a trusted registry.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># /etc/kubernetes/admission/admission-config.yaml
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: ImagePolicyWebhook
+  configuration:
+    imagePolicy:
+      kubeConfigFile: /etc/kubernetes/admission/webhook-kubeconfig.yaml
+      allowTTL: 50
+      denyTTL: 50
+      retryBackoff: 500
+      defaultAllow: false    # DENY if webhook unavailable</code></pre>
+                                <pre><code class="language-yaml"># /etc/kubernetes/admission/webhook-kubeconfig.yaml
+apiVersion: v1
+kind: Config
+clusters:
+- name: image-checker
+  cluster:
+    server: https://image-policy-webhook.security:8443/check
+    certificate-authority: /etc/kubernetes/admission/ca.crt
+users:
+- name: api-server
+  user:
+    client-certificate: /etc/kubernetes/admission/client.crt
+    client-key: /etc/kubernetes/admission/client.key
+contexts:
+- context:
+    cluster: image-checker
+    user: api-server
+  name: default
+current-context: default</code></pre>
+                                <pre><code class="language-bash"># Enable in kube-apiserver.yaml
+--enable-admission-plugins=...,ImagePolicyWebhook
+--admission-control-config-file=/etc/kubernetes/admission/admission-config.yaml</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>ImagePolicyWebhook is a built-in admission controller that calls an external webhook to approve/deny image pulls. On CKS, know: <code>defaultAllow: false</code> is critical — it denies images if the webhook is unreachable (fail-closed). The webhook kubeconfig uses the same format as regular kubeconfig. Mount all cert files into the kube-apiserver pod.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-3</span>
+                        <div class="eq-question">Create a Dockerfile that follows security best practices for production.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-dockerfile"># Multi-stage build — minimize attack surface
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server .
+
+# Production image — distroless (no shell, no package manager)
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /app/server /server
+
+# Run as non-root user (UID 65534)
+USER 65534:65534
+
+EXPOSE 8080
+ENTRYPOINT ["/server"]</code></pre>
+                                <pre><code class="language-bash"># Security checks:
+# 1. No root user
+# 2. Distroless base (minimal attack surface)
+# 3. Multi-stage (no build tools in production)
+# 4. Static binary (no runtime dependencies)
+# 5. Specific base image version (not :latest)
+
+# Scan the Dockerfile
+trivy config Dockerfile
+
+# Scan the built image
+docker build -t myapp:1.0 .
+trivy image myapp:1.0</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>CKS tests Dockerfile security: use multi-stage builds to exclude build tools, use distroless/scratch base images (no shell = no shell exploits), run as non-root with <code>USER</code> directive, pin specific image versions. Distroless images have 50-90% fewer CVEs than full OS images.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-4</span>
+                        <div class="eq-question">How do you enforce that only images with specific digests (not tags) are allowed in the cluster?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># OPA Gatekeeper — Require image digests
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredigest
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequireDigest
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8srequiredigest
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not contains(container.image, "@sha256:")
+        msg := sprintf("container <%v> uses tag instead of digest: <%v>", [container.name, container.image])
+      }
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.initContainers[_]
+        not contains(container.image, "@sha256:")
+        msg := sprintf("init container <%v> uses tag instead of digest: <%v>", [container.name, container.image])
+      }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequireDigest
+metadata:
+  name: require-digest-all
+spec:
+  match:
+    kinds: [{apiGroups: [""], kinds: ["Pod"]}]
+    namespaces: ["production"]</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Tags are mutable — <code>nginx:1.25</code> can point to different images over time. Digests (<code>@sha256:</code>) are immutable content hashes. On CKS, enforcing digests prevents supply chain attacks where an attacker pushes a malicious image with the same tag. The Rego policy checks both <code>containers</code> and <code>initContainers</code>.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-5</span>
+                        <div class="eq-question">A pod is running an image with a known CRITICAL vulnerability (CVE-2023-44487). How do you find and fix it?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Step 1: Find pods using the vulnerable image
+kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.spec.containers[*].image}{"\n"}{end}' | grep nginx
+
+# Step 2: Scan the image
+trivy image --severity CRITICAL nginx:1.24
+# Shows CVE-2023-44487 in libnghttp2
+
+# Step 3: Find a patched version
+trivy image --severity CRITICAL nginx:1.25
+# Check if the CVE is fixed
+
+# Step 4: Update the deployment
+kubectl set image deployment/web-app \
+  nginx=nginx:1.25@sha256:&lt;digest&gt; -n production
+
+# Step 5: Verify rollout
+kubectl rollout status deployment/web-app -n production
+
+# Step 6: Verify fix
+kubectl get pods -n production -o jsonpath='{.items[*].status.containerStatuses[*].imageID}'
+# Confirm new digest
+
+# Step 7: Add CI gate to prevent future deployments
+# with CRITICAL CVEs
+trivy image --severity CRITICAL --exit-code 1 nginx:1.25</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>CKS incident response for vulnerable images: identify affected pods, scan with Trivy, find a patched version, update using digest, verify rollout, and add CI prevention. Always use <code>@sha256:digest</code> when updating to ensure exact image. The <code>--exit-code 1</code> flag fails the pipeline if CRITICAL CVEs remain.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
             </div> <!-- End Chapter 31 content -->
 
             <!-- Part 10 Completion Banner -->
@@ -52711,6 +53550,316 @@ volumes:
                     </div>
                 </div>
 
+                <div class="cks-security-section">
+                    <h4>🛡️ CKS Security Perspective — Sidecar & Multi-Container Security Risks</h4>
+                    <span class="cks-domain-tag">MINIMIZE MICROSERVICE VULNS 20%</span>
+                    <span class="cks-domain-tag">SYSTEM HARDENING 10%</span>
+
+                    <p>Multi-container pods share network namespace, volumes, and IPC. This creates unique security risks — one compromised container can access data from all others in the pod.</p>
+
+                    <table class="compare-table">
+                        <thead><tr><th>Shared Resource</th><th>Risk</th><th>Mitigation</th></tr></thead>
+                        <tbody>
+                            <tr><td>Network namespace</td><td>Container can sniff localhost traffic</td><td>Use TLS for inter-container communication</td></tr>
+                            <tr><td>Shared volumes</td><td>Sidecar reads application secrets</td><td>Mount volumes read-only, use subPath</td></tr>
+                            <tr><td>Process namespace</td><td>Container sees other container's processes</td><td>Don't enable shareProcessNamespace unless needed</td></tr>
+                            <tr><td>IPC namespace</td><td>Shared memory attack vectors</td><td>Don't enable hostIPC</td></tr>
+                        </tbody>
+                    </table>
+
+                    <pre><code class="language-yaml"># Security-hardened multi-container pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-multi
+spec:
+  # shareProcessNamespace: false  # Default — keep it!
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  initContainers:
+  - name: init-setup
+    image: busybox:1.36@sha256:abc123  # Pinned digest
+    command: ["sh", "-c", "cp /config/* /shared/"]
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      runAsUser: 10001
+    volumeMounts:
+    - name: shared-config
+      mountPath: /shared
+    - name: config-source
+      mountPath: /config
+      readOnly: true           # Read-only source
+  containers:
+  - name: app
+    image: myapp:1.0@sha256:def456
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      runAsUser: 10001
+    volumeMounts:
+    - name: shared-config
+      mountPath: /app/config
+      readOnly: true           # App reads only
+  - name: log-sidecar
+    image: fluentd:1.16@sha256:ghi789
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      runAsUser: 10002         # Different UID from app
+    volumeMounts:
+    - name: app-logs
+      mountPath: /logs
+      readOnly: true           # Sidecar only reads logs
+  volumes:
+  - name: shared-config
+    emptyDir: {}
+  - name: config-source
+    configMap:
+      name: app-config
+  - name: app-logs
+    emptyDir: {}</code></pre>
+                </div>
+
+                <div class="cks-exam-questions">
+                    <h4>Chapter 32 — CKS Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-1</span>
+                        <div class="eq-question">A logging sidecar has write access to the application's data volume. Fix the security issue.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># BEFORE (insecure): sidecar has read-write access
+containers:
+- name: app
+  volumeMounts:
+  - name: data
+    mountPath: /data
+- name: log-sidecar
+  volumeMounts:
+  - name: data
+    mountPath: /data     # Read-write — can modify app data!
+
+# AFTER (secure): separate volumes + read-only
+containers:
+- name: app
+  volumeMounts:
+  - name: data
+    mountPath: /data
+  - name: logs
+    mountPath: /var/log/app    # App writes logs here
+- name: log-sidecar
+  volumeMounts:
+  - name: logs
+    mountPath: /logs
+    readOnly: true             # Sidecar only reads logs
+  # No access to /data volume at all!</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Principle of least privilege: sidecars should only access what they need. On CKS, fix volume sharing issues by: (1) using separate volumes for different data types, (2) mounting as <code>readOnly: true</code> when only reading, (3) never giving sidecars access to application data volumes unless necessary.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-2</span>
+                        <div class="eq-question">Why is <code>shareProcessNamespace: true</code> a security risk and when is it acceptable?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># Risky: enables process visibility across containers
+apiVersion: v1
+kind: Pod
+metadata:
+  name: shared-pid
+spec:
+  shareProcessNamespace: true  # All containers see each other's processes
+  containers:
+  - name: app
+    image: myapp:1.0
+  - name: sidecar
+    image: debug-sidecar:1.0
+    # Can now: ps aux, kill processes, read /proc/*/environ</code></pre>
+                                <pre><code class="language-bash"># Inside sidecar — can see app's processes and secrets
+ps aux
+# PID  COMMAND
+# 1    /app/server
+# 20   /sidecar
+
+# Read app's environment variables (may contain secrets)
+cat /proc/1/environ | tr '\0' '\n'
+
+# Acceptable use cases:
+# - Ephemeral debug containers (kubectl debug)
+# - Process monitoring sidecars with proper RBAC
+# - Signal forwarding (graceful shutdown)</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p><code>shareProcessNamespace</code> breaks container process isolation. On CKS, it's risky because sidecars can read <code>/proc/*/environ</code> (environment secrets), kill processes, and access <code>/proc/*/fd</code> (file descriptors). Only enable for debugging or when containers genuinely need to see each other's PIDs. Default is <code>false</code> — keep it that way.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-3</span>
+                        <div class="eq-question">An init container runs as root to set up files. Harden it while keeping it functional.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># Hardened init container
+initContainers:
+- name: init-permissions
+  image: busybox:1.36@sha256:abc123
+  command:
+  - sh
+  - -c
+  - |
+    cp /source/* /data/
+    chmod 644 /data/*
+  securityContext:
+    runAsUser: 10001           # Non-root
+    runAsGroup: 10001
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+      # Only add CHOWN/FOWNER if absolutely needed
+      # add: ["CHOWN"]
+  resources:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 50m
+      memory: 32Mi
+  volumeMounts:
+  - name: data
+    mountPath: /data
+  - name: source
+    mountPath: /source
+    readOnly: true</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Init containers often run as root for setup tasks, but this violates the <code>restricted</code> PSA profile. On CKS, harden init containers: run as non-root, set <code>readOnlyRootFilesystem</code>, drop ALL capabilities (add back only what's needed like CHOWN), set resource limits, pin image digests. Init containers also need security contexts for PSA compliance.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-4</span>
+                        <div class="eq-question">How do you prevent a compromised sidecar from accessing the Kubernetes API?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># Disable SA token automount for the pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-sidecar-pod
+spec:
+  serviceAccountName: minimal-sa
+  automountServiceAccountToken: false
+  containers:
+  - name: app
+    image: myapp:1.0
+    # Only app gets a projected token if needed
+    volumeMounts:
+    - name: app-token
+      mountPath: /var/run/secrets/tokens
+      readOnly: true
+  - name: sidecar
+    image: fluentd:1.16
+    # NO token mount — cannot access K8s API
+  volumes:
+  - name: app-token
+    projected:
+      sources:
+      - serviceAccountToken:
+          path: token
+          expirationSeconds: 3600
+          audience: my-api</code></pre>
+                                <pre><code class="language-bash"># Also: NetworkPolicy to block sidecar → API server
+# The API server is typically at 10.96.0.1 or kubernetes.default
+kubectl get svc kubernetes -o jsonpath='{.spec.clusterIP}'</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>By default, all containers in a pod share the same SA token. On CKS, disable <code>automountServiceAccountToken</code> at the pod level, then selectively mount projected tokens only to containers that need API access. This follows least privilege — a compromised sidecar can't call the K8s API to escalate privileges.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-5</span>
+                        <div class="eq-question">How do you ensure each container in a multi-container pod runs with the minimum required capabilities?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: minimal-caps
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: web-server
+    image: nginx:1.25
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+        add: ["NET_BIND_SERVICE"]  # Only for port &lt;1024
+      runAsUser: 101               # nginx user
+  - name: log-collector
+    image: fluentd:1.16
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]             # No capabilities needed
+      runAsUser: 999
+  - name: metrics-exporter
+    image: prom/node-exporter:1.7
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]             # No capabilities needed
+      runAsUser: 65534            # nobody user</code></pre>
+                                <pre><code class="language-bash"># Verify capabilities at runtime
+kubectl exec minimal-caps -c web-server -- cat /proc/1/status | grep Cap
+# CapEff should show only NET_BIND_SERVICE bit
+
+# Decode capability bitmask
+capsh --decode=0000000000000400
+# = cap_net_bind_service</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Each container should run with the minimum capabilities. On CKS, always <code>drop: ["ALL"]</code> first, then add back only what's needed. Common additions: <code>NET_BIND_SERVICE</code> (bind ports &lt;1024), <code>CHOWN</code> (change file ownership). Verify at runtime with <code>/proc/1/status</code> Cap fields. The PSA <code>restricted</code> profile enforces dropping ALL capabilities.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
             </div> <!-- End Chapter 32 content -->
 
             <!-- ═══════════════════════════════════════════════════════════════════════════════ -->
@@ -54089,6 +55238,310 @@ kubectl taint node worker-1 key:NoSchedule-
                     </div>
                 </div>
 
+                <div class="cks-security-section">
+                    <h4>🛡️ CKS Security Perspective — Taint-Based Security Isolation & Node Security Zones</h4>
+                    <span class="cks-domain-tag">CLUSTER HARDENING 15%</span>
+                    <span class="cks-domain-tag">CLUSTER SETUP 15%</span>
+
+                    <p>Scheduling controls determine WHERE pods run. Taints, node affinity, and topology constraints create security zones — isolating sensitive workloads on dedicated, hardened nodes.</p>
+
+                    <table class="compare-table">
+                        <thead><tr><th>Mechanism</th><th>Security Use Case</th><th>Direction</th></tr></thead>
+                        <tbody>
+                            <tr><td>Taints + Tolerations</td><td>Restrict nodes to specific workloads</td><td>Node repels pods</td></tr>
+                            <tr><td>Node Affinity</td><td>Pin sensitive pods to hardened nodes</td><td>Pod selects nodes</td></tr>
+                            <tr><td>Pod Anti-Affinity</td><td>Prevent co-location of sensitive pods</td><td>Pod avoids other pods</td></tr>
+                            <tr><td>RuntimeClass</td><td>Run pods in sandboxed runtimes (gVisor/Kata)</td><td>Pod selects runtime</td></tr>
+                            <tr><td>NodeRestriction</td><td>Prevent nodes from modifying other nodes' pods</td><td>API server admission</td></tr>
+                        </tbody>
+                    </table>
+
+                    <pre><code class="language-bash"># Create security-tiered nodes
+# Tier 1: Highly sensitive (PCI-DSS, financial)
+kubectl taint nodes secure-node-1 security-tier=pci:NoSchedule
+kubectl label nodes secure-node-1 security-zone=pci
+
+# Tier 2: Standard production
+kubectl label nodes prod-node-1 security-zone=standard
+
+# Tier 3: Development/testing
+kubectl label nodes dev-node-1 security-zone=dev</code></pre>
+                    <pre><code class="language-yaml"># Pod that MUST run on PCI-compliant nodes
+apiVersion: v1
+kind: Pod
+metadata:
+  name: payment-service
+spec:
+  tolerations:
+  - key: security-tier
+    value: pci
+    operator: Equal
+    effect: NoSchedule
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: security-zone
+            operator: In
+            values: ["pci"]
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: security-zone
+            operator: NotIn
+            values: ["pci"]
+        topologyKey: kubernetes.io/hostname
+  containers:
+  - name: payment
+    image: payment:1.0@sha256:abc123
+    securityContext:
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]</code></pre>
+                    <pre><code class="language-yaml"># RuntimeClass for sandboxed execution (gVisor)
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+scheduling:
+  nodeSelector:
+    runtime: gvisor
+---
+# Pod using sandboxed runtime
+apiVersion: v1
+kind: Pod
+metadata:
+  name: untrusted-workload
+spec:
+  runtimeClassName: gvisor     # Run in gVisor sandbox
+  containers:
+  - name: app
+    image: untrusted-app:1.0</code></pre>
+                </div>
+
+                <div class="cks-exam-questions">
+                    <h4>Chapter 33 — CKS Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-1</span>
+                        <div class="eq-question">Create a taint on node <code>secure-node</code> so only pods with a specific toleration can be scheduled there.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Add taint to the secure node
+kubectl taint nodes secure-node \
+  security-level=high:NoSchedule
+
+# Label the node for affinity rules
+kubectl label nodes secure-node \
+  security-zone=restricted
+
+# Verify taint
+kubectl describe node secure-node | grep Taints
+# Expected: security-level=high:NoSchedule</code></pre>
+                                <pre><code class="language-yaml"># Pod that can run on the tainted node
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-app
+spec:
+  tolerations:
+  - key: security-level
+    value: high
+    operator: Equal
+    effect: NoSchedule
+  nodeSelector:
+    security-zone: restricted
+  containers:
+  - name: app
+    image: secure-app:1.0</code></pre>
+                                <pre><code class="language-bash"># Verify: pod without toleration gets rejected
+kubectl run test --image=nginx --dry-run=client -o yaml | \
+  kubectl apply -f -
+# Pod stays Pending — node is tainted
+
+# Verify: secure-app is scheduled on secure-node
+kubectl get pod secure-app -o wide
+# NODE column should show secure-node</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Taints with <code>NoSchedule</code> prevent untolerated pods from being scheduled. On CKS, use taints to create security zones — sensitive workloads on dedicated nodes that reject general pods. Combine with <code>nodeSelector</code> or <code>nodeAffinity</code> to ensure the pod targets the correct node AND has the toleration to run there.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-2</span>
+                        <div class="eq-question">Configure a RuntimeClass to run untrusted workloads in a gVisor sandbox.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># Create RuntimeClass for gVisor
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc          # gVisor handler name
+scheduling:
+  nodeSelector:
+    sandbox-runtime: gvisor   # Only nodes with gVisor installed
+---
+# Use the RuntimeClass in a pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sandboxed-pod
+spec:
+  runtimeClassName: gvisor
+  containers:
+  - name: untrusted
+    image: untrusted-app:1.0
+    securityContext:
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true</code></pre>
+                                <pre><code class="language-bash"># Verify the pod is using gVisor
+kubectl get pod sandboxed-pod -o jsonpath='{.spec.runtimeClassName}'
+# Expected: gvisor
+
+# Inside the pod — verify kernel is gVisor (not Linux)
+kubectl exec sandboxed-pod -- dmesg | head
+# Shows "gVisor" kernel messages instead of Linux</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>RuntimeClass lets you run pods with different container runtimes. On CKS, gVisor (<code>runsc</code>) provides a user-space kernel that intercepts syscalls — attackers can't exploit host kernel vulnerabilities. Kata Containers use lightweight VMs. Use RuntimeClass for untrusted multi-tenant workloads where container breakout is a concern.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-3</span>
+                        <div class="eq-question">How does the NodeRestriction admission plugin improve cluster security?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Verify NodeRestriction is enabled
+kubectl -n kube-system get pod kube-apiserver-master \
+  -o yaml | grep enable-admission
+# Should include: NodeRestriction
+
+# What NodeRestriction prevents:
+# 1. Nodes can only modify their OWN Node object
+# 2. Nodes can only modify pods bound to THEIR node
+# 3. Nodes cannot add labels with node-restriction.kubernetes.io/ prefix
+# 4. Prevents compromised node from affecting other nodes
+
+# If NOT enabled, add to kube-apiserver.yaml:
+--enable-admission-plugins=NodeRestriction,...
+
+# Test: try to label another node from a compromised node
+# (This should fail with NodeRestriction enabled)
+# On the node, using the kubelet's credentials:
+curl -X PATCH https://api-server:6443/api/v1/nodes/other-node \
+  --cert /var/lib/kubelet/pki/kubelet-client-current.pem
+# Expected: Forbidden</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>NodeRestriction limits what kubelets can do via the API. Without it, a compromised node's kubelet could modify pods on other nodes or change labels to attract sensitive workloads. On CKS, verify it's in <code>--enable-admission-plugins</code>. It prevents lateral movement from node compromise — critical for multi-tenant clusters.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-4</span>
+                        <div class="eq-question">Use pod anti-affinity to ensure replicas of a sensitive service don't co-locate on the same node.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secret-manager
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: secret-manager
+  template:
+    metadata:
+      labels:
+        app: secret-manager
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values: ["secret-manager"]
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: secret-manager
+        image: vault:1.15
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true</code></pre>
+                                <pre><code class="language-bash"># Verify pods are on different nodes
+kubectl get pods -l app=secret-manager -o wide
+# Each pod should be on a different NODE</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Pod anti-affinity prevents co-location. On CKS, spreading sensitive pods across nodes limits blast radius — if one node is compromised, only one replica is affected. <code>requiredDuringScheduling</code> is hard anti-affinity (won't schedule if no valid node). <code>topologyKey: kubernetes.io/hostname</code> means one pod per node.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-5</span>
+                        <div class="eq-question">How do you prevent a pod from being scheduled on control plane nodes?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Control plane nodes have this taint by default:
+kubectl describe node master | grep Taints
+# node-role.kubernetes.io/control-plane:NoSchedule
+
+# If missing, add it:
+kubectl taint nodes master \
+  node-role.kubernetes.io/control-plane:NoSchedule
+
+# Verify no user pods are on control plane
+kubectl get pods -A -o wide --field-selector spec.nodeName=master
+
+# Only system pods should be there:
+# - kube-apiserver
+# - kube-controller-manager
+# - kube-scheduler
+# - etcd
+# - coredns (with toleration)
+# - kube-proxy (with toleration)
+
+# Remove a taint if needed (careful!)
+kubectl taint nodes master \
+  node-role.kubernetes.io/control-plane:NoSchedule-</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Control plane nodes should only run system components. The default taint <code>node-role.kubernetes.io/control-plane:NoSchedule</code> prevents user pods from being scheduled there. On CKS, verify this taint exists. System pods (kube-proxy, CNI, CoreDNS) have built-in tolerations. User pods on control plane nodes can access etcd and API server locally — a critical security risk.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
             </div> <!-- End Chapter 33 content -->
 
             <!-- ═══════════════════════════════════════════════════════════════════════════════ -->
@@ -55093,6 +56546,319 @@ spec:
                             <div class="eq-explanation">
                                 <div class="eq-exp-label">Explanation</div>
                                 <p>Every sidecar is an additional container consuming CPU and memory. For 100 pods, that's 100 extra containers. The latency overhead (proxy hop) compounds with call depth. On the CKAD, service mesh concepts help with multi-container patterns and understanding proxy-based architectures. In real projects, evaluate whether the observability and security benefits justify the resource and complexity cost.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
+                <div class="cks-security-section">
+                    <h4>🛡️ CKS Security Perspective — Service Mesh mTLS & Zero-Trust Networking</h4>
+                    <span class="cks-domain-tag">MINIMIZE MICROSERVICE VULNS 20%</span>
+                    <span class="cks-domain-tag">CLUSTER HARDENING 15%</span>
+
+                    <p>Service meshes enforce mTLS (mutual TLS) for all pod-to-pod communication, implementing zero-trust networking where every connection is authenticated and encrypted.</p>
+
+                    <table class="compare-table">
+                        <thead><tr><th>Feature</th><th>Without Service Mesh</th><th>With Service Mesh (Istio/Linkerd)</th></tr></thead>
+                        <tbody>
+                            <tr><td>Pod-to-pod encryption</td><td>❌ Plaintext by default</td><td>✅ Automatic mTLS</td></tr>
+                            <tr><td>Identity verification</td><td>❌ IP-based only</td><td>✅ Certificate-based (SPIFFE)</td></tr>
+                            <tr><td>Authorization policies</td><td>NetworkPolicy (L3/L4)</td><td>L7 policies (path, method, headers)</td></tr>
+                            <tr><td>Traffic observability</td><td>Limited</td><td>Full request/response metrics</td></tr>
+                            <tr><td>Certificate rotation</td><td>Manual</td><td>Automatic (24h default)</td></tr>
+                        </tbody>
+                    </table>
+
+                    <pre><code class="language-yaml"># Istio PeerAuthentication — Enforce mTLS
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: production
+spec:
+  mtls:
+    mode: STRICT       # Only allow mTLS connections
+
+---
+# Istio AuthorizationPolicy — L7 access control
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-api-policy
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: payment-api
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/production/sa/frontend"]
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/api/v1/payments"]
+  # All other traffic is DENIED</code></pre>
+                    <pre><code class="language-bash"># Verify mTLS is working
+# Istio: check if traffic is encrypted
+istioctl x describe pod payment-api-pod -n production
+# Shows: mTLS: STRICT
+
+# Check certificate details
+istioctl proxy-config secret payment-api-pod -n production
+# Shows SPIFFE ID and certificate expiry
+
+# Attempt plaintext connection (should fail in STRICT mode)
+kubectl exec non-mesh-pod -- curl http://payment-api.production:8080
+# Expected: connection refused (no valid TLS cert)</code></pre>
+                </div>
+
+                <div class="cks-exam-questions">
+                    <h4>Chapter 34 — CKS Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-1</span>
+                        <div class="eq-question">Configure Istio to enforce strict mTLS for all services in the <code>production</code> namespace.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># Namespace-wide strict mTLS
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: production
+spec:
+  mtls:
+    mode: STRICT
+
+---
+# For mesh-wide enforcement (all namespaces)
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system    # Root namespace = mesh-wide
+spec:
+  mtls:
+    mode: STRICT</code></pre>
+                                <pre><code class="language-bash"># Verify enforcement
+kubectl get peerauthentication -n production
+kubectl get peerauthentication -n istio-system
+
+# Check mTLS status for a service
+istioctl x describe svc payment-api -n production
+# Should show: mTLS STRICT
+
+# Attempt non-mTLS connection (should fail)
+kubectl exec non-injected-pod -n default -- \
+  curl -v http://payment-api.production.svc:8080
+# Expected: connection closed</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p><code>PeerAuthentication</code> controls mTLS mode per namespace or mesh-wide. <code>STRICT</code> = only accept mTLS connections (rejects plaintext). On CKS, know the difference: <code>PERMISSIVE</code> accepts both (for migration), <code>STRICT</code> enforces mTLS. Apply in <code>istio-system</code> namespace for mesh-wide enforcement.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-2</span>
+                        <div class="eq-question">Create an Istio AuthorizationPolicy that allows only the <code>frontend</code> service to call <code>POST /api/orders</code> on the <code>order-service</code>.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml">apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: order-service-policy
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: order-service
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/frontend"
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/api/orders"]
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/production/sa/frontend"
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/api/orders/*", "/health"]
+
+---
+# Deny all other traffic (implicit when ALLOW rules exist)
+# But explicit deny-all is recommended for clarity
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: production
+spec:
+  {}  # Empty spec = deny all without explicit ALLOW</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>AuthorizationPolicy provides L7 access control — far more granular than NetworkPolicy. On CKS, know that <code>source.principals</code> uses SPIFFE IDs (based on ServiceAccount). An empty <code>spec: {}</code> creates a deny-all policy. When ALLOW policies exist, traffic not matching any rule is denied (implicit deny).</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-3</span>
+                        <div class="eq-question">How do you verify that pod-to-pod traffic is actually encrypted with mTLS?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Method 1: Istio proxy-config
+istioctl proxy-config secret frontend-pod -n production -o json | \
+  jq '.dynamicActiveSecrets[0].secret.tlsCertificate'
+# Shows certificate chain and SPIFFE ID
+
+# Method 2: Check Envoy proxy logs
+kubectl logs frontend-pod -c istio-proxy -n production | \
+  grep "tls_inspector"
+
+# Method 3: tcpdump from a debug pod
+kubectl debug -it frontend-pod --image=nicolaka/netshoot \
+  --target=istio-proxy -- tcpdump -i eth0 -w /tmp/capture.pcap
+# Open in Wireshark — should show TLS handshake
+
+# Method 4: Istio describe
+istioctl x describe pod frontend-pod -n production
+# Output shows:
+# - mTLS: STRICT
+# - Certificate chain valid
+# - SPIFFE ID: spiffe://cluster.local/ns/production/sa/frontend
+
+# Method 5: Check Kiali dashboard
+# Shows green lock icons for mTLS connections</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Verification is critical — don't assume mTLS works. On CKS, use <code>istioctl x describe</code> for quick checks and <code>proxy-config secret</code> for certificate details. The SPIFFE ID format is <code>spiffe://cluster.local/ns/NAMESPACE/sa/SERVICE_ACCOUNT</code>. Packet capture with tcpdump can definitively prove encryption.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-4</span>
+                        <div class="eq-question">What security risks does a service mesh sidecar introduce and how do you mitigate them?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Risk 1: Sidecar has access to plaintext traffic
+# Mitigation: Sidecar (Envoy proxy) is trusted infrastructure
+# — secure the sidecar image supply chain
+
+# Risk 2: Sidecar injection can be bypassed
+# Mitigation: Enforce injection at namespace level
+kubectl label namespace production istio-injection=enabled
+
+# Risk 3: Sidecar runs with elevated capabilities
+# Check sidecar security context
+kubectl get pod frontend -n production -o json | \
+  jq '.spec.containers[] | select(.name == "istio-proxy") | .securityContext'
+
+# Risk 4: Control plane compromise affects all traffic
+# Mitigation: Harden istiod
+kubectl get deployment istiod -n istio-system -o yaml | \
+  grep -A5 securityContext
+
+# Risk 5: Certificate authority compromise
+# Mitigation: Use external CA (Vault, cert-manager)
+# Rotate root CA regularly</code></pre>
+                                <pre><code class="language-yaml"># Prevent sidecar injection bypass via policy
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: require-mtls-everywhere
+  namespace: istio-system
+spec:
+  action: DENY
+  rules:
+  - from:
+    - source:
+        notPrincipals: ["*"]   # Deny non-mTLS traffic</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Service mesh sidecars terminate TLS and see plaintext — they're a privileged component. On CKS, key risks: sidecar injection bypass (pods skip the mesh), control plane compromise (istiod manages all certificates), and expanded attack surface (each pod gets an extra container). Mitigate with mandatory injection, hardened control plane RBAC, and external CA integration.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-5</span>
+                        <div class="eq-question">Compare NetworkPolicy and service mesh AuthorizationPolicy for pod-level security.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml"># NetworkPolicy: L3/L4 — IP and port based
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: order-service
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+# Can only filter by IP/port — cannot distinguish
+# GET /health from POST /admin
+
+---
+# AuthorizationPolicy: L7 — HTTP method, path, headers
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend-orders
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: order-service
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/production/sa/frontend"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/api/orders*"]
+    when:
+    - key: request.headers[x-api-version]
+      values: ["v2"]
+# Can filter by HTTP method, path, headers, JWT claims</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>On CKS, know both mechanisms. NetworkPolicy works at L3/L4 (kernel/CNI level) — zero performance overhead, works without service mesh. AuthorizationPolicy works at L7 (application level) — can filter HTTP methods, paths, headers, JWT claims. Best practice: use NetworkPolicy as a baseline (default-deny) PLUS AuthorizationPolicy for fine-grained L7 control. Defense in depth!</p>
                             </div>
                         </details>
                     </div>
@@ -56372,6 +58138,362 @@ kubectl get backups
                             <div class="eq-explanation">
                                 <div class="eq-exp-label">Explanation</div>
                                 <p><code>additionalPrinterColumns</code> makes <code>kubectl get</code> output useful for CRs — without it, you only see NAME and AGE. Use <code>jsonPath</code> to extract values from the CR. On the CKAD, you may see CRDs with or without printer columns. You can always use <code>-o yaml</code> or <code>-o jsonpath</code> to extract any field regardless.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
+                <div class="cks-security-section">
+                    <h4>🛡️ CKS Security Perspective — Admission Webhooks, OPA Gatekeeper & Policy-as-Code</h4>
+                    <span class="cks-domain-tag">SUPPLY CHAIN SECURITY 20%</span>
+                    <span class="cks-domain-tag">CLUSTER HARDENING 15%</span>
+                    <span class="cks-domain-tag">MINIMIZE MICROSERVICE VULNS 20%</span>
+
+                    <p>CRDs and Operators can extend the Kubernetes API with custom resources, but they also introduce new attack surfaces. Admission webhooks and policy engines like OPA Gatekeeper are the CKS-tested controls for governing custom resources.</p>
+
+                    <table class="compare-table">
+                        <thead><tr><th>Webhook Type</th><th>Purpose</th><th>Can Modify?</th><th>CKS Use Case</th></tr></thead>
+                        <tbody>
+                            <tr><td>ValidatingWebhookConfiguration</td><td>Accept/reject requests</td><td>No</td><td>Block non-compliant resources</td></tr>
+                            <tr><td>MutatingWebhookConfiguration</td><td>Modify requests before persistence</td><td>Yes</td><td>Inject security defaults (labels, security context)</td></tr>
+                            <tr><td>OPA Gatekeeper</td><td>Policy-as-code framework</td><td>Validating only</td><td>Enforce org-wide policies via Rego</td></tr>
+                            <tr><td>Kyverno</td><td>K8s-native policy engine</td><td>Both</td><td>YAML-based policies (no Rego needed)</td></tr>
+                        </tbody>
+                    </table>
+
+                    <pre><code class="language-yaml"># ValidatingWebhookConfiguration — block privileged pods
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: deny-privileged
+webhooks:
+- name: deny-privileged.security.example.com
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  clientConfig:
+    service:
+      name: webhook-server
+      namespace: security
+      path: /validate
+    caBundle: LS0tLS1...       # CA cert for TLS
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+  failurePolicy: Fail          # Reject if webhook unavailable
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values: ["kube-system"]  # Skip system namespace</code></pre>
+                    <pre><code class="language-yaml"># OPA Gatekeeper — ConstraintTemplate for label enforcement
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8srequiredlabels
+      violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+        provided := {label | input.review.object.metadata.labels[label]}
+        required := {label | label := input.parameters.labels[_]}
+        missing := required - provided
+        count(missing) > 0
+        msg := sprintf("Missing required labels: %v", [missing])
+      }
+---
+# Apply the constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: require-team-label
+spec:
+  match:
+    kinds: [{apiGroups: [""], kinds: ["Namespace"]}]
+  parameters:
+    labels: ["team", "cost-center"]</code></pre>
+                </div>
+
+                <div class="cks-exam-questions">
+                    <h4>Chapter 35 — CKS Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-1</span>
+                        <div class="eq-question">Create an OPA Gatekeeper ConstraintTemplate that blocks containers running as root.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml">apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdenyroot
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDenyRoot
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8sdenyroot
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not container.securityContext.runAsNonRoot
+        msg := sprintf("container <%v> must set runAsNonRoot: true", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        container.securityContext.runAsUser == 0
+        msg := sprintf("container <%v> must not run as root (UID 0)", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.initContainers[_]
+        container.securityContext.runAsUser == 0
+        msg := sprintf("init container <%v> must not run as root", [container.name])
+      }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sDenyRoot
+metadata:
+  name: deny-root-all-namespaces
+spec:
+  match:
+    kinds:
+    - apiGroups: [""]
+      kinds: ["Pod"]
+    excludedNamespaces: ["kube-system"]</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>OPA Gatekeeper uses Rego to define policies. On CKS, know the ConstraintTemplate structure: <code>crd.spec</code> defines the custom resource, <code>targets[].rego</code> defines the policy logic. The <code>violation</code> rule returns messages for non-compliant resources. Check both <code>containers</code> and <code>initContainers</code>. Exclude <code>kube-system</code> to avoid breaking system components.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-2</span>
+                        <div class="eq-question">Configure a ValidatingWebhookConfiguration that rejects pods without resource limits.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-yaml">apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: require-resource-limits
+webhooks:
+- name: limits.security.example.com
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  clientConfig:
+    service:
+      name: resource-limits-webhook
+      namespace: security-webhooks
+      path: /validate-resources
+    caBundle: LS0tLS1CRUdJTi...
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: ["", "apps"]
+    apiVersions: ["v1"]
+    resources: ["pods", "deployments"]
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values: ["kube-system", "security-webhooks"]
+  timeoutSeconds: 10</code></pre>
+                                <pre><code class="language-bash"># Test: create a pod without limits
+kubectl run test-no-limits --image=nginx
+# Expected: Error from webhook — resource limits required
+
+# Test: create a pod WITH limits
+kubectl run test-with-limits --image=nginx \
+  --limits='cpu=200m,memory=256Mi' \
+  --requests='cpu=100m,memory=128Mi'
+# Expected: Created successfully</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>ValidatingWebhookConfiguration sends admission requests to your webhook server for accept/reject decisions. On CKS, key fields: <code>failurePolicy: Fail</code> (deny if webhook is down — fail-closed), <code>caBundle</code> (TLS verification), <code>namespaceSelector</code> (exclude system namespaces). The webhook service must be running before creating the configuration, otherwise all matching operations will fail.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-3</span>
+                        <div class="eq-question">How do you secure a custom admission webhook service itself?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># 1. TLS — webhook MUST serve HTTPS
+# Generate certificates (or use cert-manager)
+openssl req -x509 -newkey rsa:4096 \
+  -keyout webhook-key.pem -out webhook-cert.pem \
+  -days 365 -nodes \
+  -subj "/CN=webhook-server.security.svc"
+# Add SANs for the service DNS name
+
+# 2. Store cert as Secret
+kubectl create secret tls webhook-tls \
+  -n security \
+  --cert=webhook-cert.pem \
+  --key=webhook-key.pem
+
+# 3. RBAC — minimal permissions for webhook SA
+kubectl create role webhook-role -n security \
+  --verb=get,list --resource=pods,deployments
+kubectl create rolebinding webhook-binding -n security \
+  --role=webhook-role \
+  --serviceaccount=security:webhook-sa
+
+# 4. NetworkPolicy — limit who can reach webhook
+cat &lt;&lt;EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webhook-netpol
+  namespace: security
+spec:
+  podSelector:
+    matchLabels:
+      app: webhook-server
+  policyTypes: [Ingress]
+  ingress:
+  - from: []   # API server needs to reach it
+    ports:
+    - protocol: TCP
+      port: 8443
+EOF
+
+# 5. SecurityContext — harden the webhook pod
+# Run as non-root, read-only filesystem, drop all capabilities</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Admission webhooks are security-critical infrastructure — they decide what runs in your cluster. On CKS, secure them with: TLS (mandatory — API server only calls HTTPS), minimal RBAC, NetworkPolicy to restrict access, hardened SecurityContext, and monitoring. A compromised webhook can approve any resource or inject malicious mutations.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-4</span>
+                        <div class="eq-question">What are the security risks of Custom Resource Definitions (CRDs) and how do you mitigate them?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># Risk 1: CRDs with cluster-scoped RBAC
+# Audit who can create CRDs
+kubectl auth can-i create customresourcedefinitions --as=system:serviceaccount:default:default
+# Should be "no" for most service accounts
+
+# Risk 2: CRDs without validation
+# Always add OpenAPI validation:
+# spec.versions[].schema.openAPIV3Schema
+
+# Risk 3: Operator with excessive RBAC
+kubectl get clusterrolebindings -o json | jq -r '
+  .items[] |
+  select(.subjects[]?.kind == "ServiceAccount") |
+  select(.roleRef.name == "cluster-admin") |
+  {binding: .metadata.name,
+   sa: "\(.subjects[0].namespace)/\(.subjects[0].name)"}'
+
+# Risk 4: CRDs storing sensitive data without encryption
+# Ensure EncryptionConfiguration covers CR resources:
+resources:
+- resources:
+  - secrets
+  - certificates.cert-manager.io  # CRDs with sensitive data
+  providers:
+  - aescbc:
+      keys:
+      - name: key1
+        secret: &lt;base64-key&gt;
+
+# Risk 5: Conversion webhooks
+# CRD version conversion webhooks have same risks
+# as admission webhooks — secure with TLS + RBAC</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>CRDs extend the API but don't automatically get security controls. On CKS, CRD risks include: no built-in validation (add OpenAPI schemas), operators with cluster-admin (use namespaced roles), CRs storing sensitive data (add to EncryptionConfiguration), no admission control (add Gatekeeper constraints for CRDs). Audit CRD RBAC with <code>kubectl auth can-i</code>.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">CKS-5</span>
+                        <div class="eq-question">How do you audit all admission webhooks in the cluster and verify they are using TLS correctly?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code class="language-bash"># List all validating webhooks
+kubectl get validatingwebhookconfigurations -o json | jq -r '
+  .items[] | {
+    name: .metadata.name,
+    webhooks: [.webhooks[] | {
+      name: .name,
+      failurePolicy: .failurePolicy,
+      service: "\(.clientConfig.service.namespace // "")/\(.clientConfig.service.name // "")",
+      hasCA: (.clientConfig.caBundle != null),
+      sideEffects: .sideEffects,
+      timeout: .timeoutSeconds
+    }]
+  }'
+
+# List all mutating webhooks
+kubectl get mutatingwebhookconfigurations -o json | jq -r '
+  .items[] | {
+    name: .metadata.name,
+    webhooks: [.webhooks[] | {
+      name: .name,
+      failurePolicy: .failurePolicy,
+      hasCA: (.clientConfig.caBundle != null)
+    }]
+  }'
+
+# Check for dangerous configurations:
+# 1. failurePolicy: Ignore (fail-open — bad!)
+kubectl get validatingwebhookconfigurations -o json | jq -r '
+  .items[].webhooks[] |
+  select(.failurePolicy == "Ignore") |
+  .name'
+
+# 2. Missing caBundle (insecure TLS)
+# 3. sideEffects not set to "None"
+# 4. Very long timeouts (DoS risk)
+
+# Verify webhook service is running
+kubectl get pods -n security -l app=webhook-server
+kubectl logs -n security -l app=webhook-server --tail=20</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>On CKS, audit admission webhooks for: <code>failurePolicy: Ignore</code> (should be <code>Fail</code> for security webhooks — fail-closed), missing <code>caBundle</code> (TLS not verified), <code>sideEffects</code> not <code>None</code> (webhook makes external changes), and long timeouts (API latency). All security-critical webhooks should fail closed to prevent bypass when the webhook is unavailable.</p>
                             </div>
                         </details>
                     </div>
