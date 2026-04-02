@@ -6457,6 +6457,269 @@
                 <div class="cka-speed-tip">
                     <p><strong>Chapter 1 CKA Quick Wins:</strong> When asked about architecture on the exam, remember: <code>kube-apiserver</code> → front door, <code>etcd</code> → brain, <code>kube-scheduler</code> → which-node, <code>kube-controller-manager</code> → reconciliation. All run as static pods in <code>/etc/kubernetes/manifests/</code>.</p>
                 </div>
+
+                <!-- Chapter 1 Exam Questions -->
+                <div class="cka-exam-questions">
+                    <h4>📝 Chapter 1 — CKA Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q1</span>
+                        <div class="eq-question">A newly deployed Kubernetes cluster has the control plane running, but worker nodes show <code>NotReady</code>. You SSH into a worker node and find that <code>kubelet</code> is not running. Which component is responsible for registering the node with the API server and managing pod lifecycle on that node?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The <strong>kubelet</strong> is responsible. It runs on every worker node and performs two critical functions: (1) registers the node with the kube-apiserver, and (2) watches for Pod specs assigned to its node, then ensures containers are running and healthy.</p>
+                                <pre><code># Start kubelet on the worker node
+sudo systemctl start kubelet
+sudo systemctl enable kubelet
+
+# Verify node status from control plane
+kubectl get nodes</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>The kubelet is the <em>primary node agent</em>. Without it, the node cannot communicate with the API server, so it appears <code>NotReady</code>. On the CKA exam, if a node is NotReady, always check <code>systemctl status kubelet</code> and <code>journalctl -u kubelet</code> first. The kubelet receives PodSpecs from the API server (via a watch) and ensures the described containers are running via the container runtime (containerd).</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q2</span>
+                        <div class="eq-question">What are the four core control plane components in Kubernetes, and what is each one's primary responsibility? List them and briefly describe their roles.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <table style="width:100%; border-collapse: collapse; margin: 10px 0;">
+                                    <thead>
+                                        <tr style="border-bottom: 2px solid #6366f1;">
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Component</th>
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Role</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><code>kube-apiserver</code></td>
+                                            <td style="padding: 8px;">Front door — all communication goes through it. RESTful API, authentication, authorization, admission control</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><code>etcd</code></td>
+                                            <td style="padding: 8px;">Distributed key-value store — the cluster's single source of truth for all state</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><code>kube-scheduler</code></td>
+                                            <td style="padding: 8px;">Assigns unscheduled pods to nodes based on resource requirements, affinity, taints/tolerations</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px;"><code>kube-controller-manager</code></td>
+                                            <td style="padding: 8px;">Runs reconciliation loops — ensures desired state matches actual state (Deployment, ReplicaSet, Node controllers, etc.)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>These four components make up the control plane. On the CKA exam, they run as <strong>static pods</strong> in <code>/etc/kubernetes/manifests/</code> on the control plane node. The API server is the only component that communicates directly with etcd. All other components (scheduler, controller-manager, kubelet) communicate through the API server. This star topology is a key architectural concept tested on the exam.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q3</span>
+                        <div class="eq-question">Explain the <strong>reconciliation loop</strong> (control loop) in Kubernetes. A Deployment specifies 3 replicas, but you manually delete one pod. What happens and why?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The <strong>ReplicaSet controller</strong> (running inside kube-controller-manager) detects that the <em>current state</em> (2 pods) doesn't match the <em>desired state</em> (3 replicas). It immediately creates a new pod to restore the count to 3.</p>
+                                <pre><code># Demonstrate the reconciliation loop
+kubectl create deployment nginx --image=nginx --replicas=3
+kubectl get pods  # 3 pods running
+
+# Delete one pod
+kubectl delete pod nginx-xxxxx-yyyyy
+kubectl get pods  # Still 3 pods — a new one was created!</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>This is the <strong>declarative model</strong> in action. You declare "I want 3 replicas" and Kubernetes continuously enforces that state. The control loop runs: <strong>Observe</strong> (watch current state) → <strong>Diff</strong> (compare to desired) → <strong>Act</strong> (create/delete resources to converge). This self-healing behavior is fundamental to Kubernetes and a heavily tested concept on the CKA. Controllers never stop watching — they run indefinitely.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q4</span>
+                        <div class="eq-question">What is the difference between the <strong>control plane</strong> and a <strong>worker node</strong>? Which components run exclusively on each?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><strong>Control plane node:</strong> Runs the cluster management components — <code>kube-apiserver</code>, <code>etcd</code>, <code>kube-scheduler</code>, <code>kube-controller-manager</code>. These are deployed as static pods.</p>
+                                <p><strong>Worker node:</strong> Runs application workloads. Has <code>kubelet</code> (pod lifecycle), <code>kube-proxy</code> (networking rules), and a <strong>container runtime</strong> (containerd or CRI-O).</p>
+                                <p><strong>Both:</strong> kubelet and kube-proxy also run on control plane nodes (control plane nodes are also nodes, just tainted).</p>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>The CKA exam avoids the term "master node" — use <strong>control plane node</strong>. By default, control plane nodes have a taint (<code>node-role.kubernetes.io/control-plane:NoSchedule</code>) that prevents regular workloads from being scheduled there. The kubelet runs on ALL nodes because it's needed to manage static pods (like the API server itself) on control plane nodes too.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q5</span>
+                        <div class="eq-question">You run <code>kubectl apply -f deployment.yaml</code>. Trace the complete path of this request through the Kubernetes architecture — which components are involved and in what order?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The request flows through these components in order:</p>
+                                <ol>
+                                    <li><strong>kubectl</strong> → sends HTTPS request to the API server</li>
+                                    <li><strong>kube-apiserver</strong> → authenticates, authorizes, runs admission controllers, validates the object</li>
+                                    <li><strong>etcd</strong> → API server persists the Deployment object to etcd</li>
+                                    <li><strong>Deployment controller</strong> (in kube-controller-manager) → creates a ReplicaSet</li>
+                                    <li><strong>ReplicaSet controller</strong> → creates Pod objects (with <code>nodeName</code> empty)</li>
+                                    <li><strong>kube-scheduler</strong> → watches for unscheduled pods, assigns them to nodes by setting <code>nodeName</code></li>
+                                    <li><strong>kubelet</strong> (on assigned node) → detects the pod, pulls images via container runtime, starts containers</li>
+                                </ol>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>This request flow demonstrates the <strong>asynchronous, event-driven</strong> nature of Kubernetes. No single component orchestrates the entire process. Each component watches for changes relevant to it (via the API server's watch mechanism) and acts independently. This loose coupling is what makes Kubernetes resilient — if the scheduler goes down temporarily, pods queue up and get scheduled when it recovers. Understanding this flow is essential for CKA troubleshooting scenarios.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q6</span>
+                        <div class="eq-question">What is <code>etcd</code> and why is backing it up critical for cluster recovery? What command would you use to take an etcd snapshot?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><code>etcd</code> is a distributed, consistent key-value store that holds <strong>all cluster state</strong> — every pod, service, secret, configmap, RBAC rule, and custom resource. If etcd is lost without a backup, the entire cluster state is gone.</p>
+                                <pre><code># Take an etcd snapshot (CKA exam tested!)
+ETCDCTL_API=3 etcdctl snapshot save /tmp/etcd-backup.db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+# Verify the snapshot
+ETCDCTL_API=3 etcdctl snapshot status /tmp/etcd-backup.db --write-table</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>etcd backup/restore is a <strong>guaranteed CKA exam topic</strong>. Key points: (1) Always use <code>ETCDCTL_API=3</code> — version 2 API is deprecated. (2) You need three TLS flags: <code>--cacert</code>, <code>--cert</code>, <code>--key</code> — find them in the etcd pod spec at <code>/etc/kubernetes/manifests/etcd.yaml</code>. (3) The endpoint is typically <code>https://127.0.0.1:2379</code>. On the exam, check the etcd static pod manifest for the exact values.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q7</span>
+                        <div class="eq-question">What is the role of <code>kube-proxy</code> on a Kubernetes node? If kube-proxy is not running on a node, what symptoms would you observe?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><code>kube-proxy</code> maintains network rules on nodes that allow network communication to pods via Services. It runs as a DaemonSet and operates in one of three modes: <strong>iptables</strong> (default), <strong>IPVS</strong>, or <strong>userspace</strong> (legacy).</p>
+                                <p><strong>Symptoms if kube-proxy is down:</strong></p>
+                                <ul>
+                                    <li>Services (ClusterIP, NodePort) stop forwarding traffic to pods</li>
+                                    <li>Pod-to-pod communication via pod IPs still works (handled by CNI)</li>
+                                    <li>DNS resolution via CoreDNS may fail (CoreDNS is accessed via a Service)</li>
+                                    <li><code>kubectl exec</code> and <code>kubectl logs</code> still work (direct API server → kubelet)</li>
+                                </ul>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>kube-proxy is a network proxy that implements the Kubernetes <strong>Service</strong> concept. It watches the API server for Service and Endpoint objects, then programs iptables/IPVS rules so that traffic to a Service's ClusterIP gets load-balanced across the backend pods. Important distinction: kube-proxy handles <em>Service networking</em>, while the <strong>CNI plugin</strong> (Calico, Flannel, Cilium) handles <em>pod-to-pod networking</em>. On the CKA, if services aren't reachable but pods can ping each other by IP, suspect kube-proxy.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q8</span>
+                        <div class="eq-question">What is the <strong>Container Runtime Interface (CRI)</strong>? Name two CRI-compliant runtimes. Why was Docker's direct support removed in Kubernetes v1.24?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The <strong>CRI</strong> is a plugin interface that allows the kubelet to communicate with any container runtime without needing runtime-specific code. Two CRI-compliant runtimes:</p>
+                                <ul>
+                                    <li><strong>containerd</strong> — the most widely used, extracted from Docker</li>
+                                    <li><strong>CRI-O</strong> — purpose-built for Kubernetes, popular in OpenShift</li>
+                                </ul>
+                                <p>Docker was removed because it doesn't implement CRI directly. Kubernetes used a shim layer called <code>dockershim</code> to translate CRI calls to Docker API calls, adding unnecessary complexity. Docker internally uses containerd anyway, so removing the shim layer simplified the architecture.</p>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>This is a commonly tested conceptual question. Key point: Docker images still work perfectly — OCI (Open Container Initiative) images are universal. Only the <em>runtime</em> changed, not the image format. After v1.24, you use <code>crictl</code> (not <code>docker</code> commands) to inspect containers directly on nodes. The CKA expects you to use <code>crictl ps</code>, <code>crictl logs</code>, and <code>crictl inspect</code> for node-level troubleshooting.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q9</span>
+                        <div class="eq-question">What is the difference between <strong>imperative</strong> and <strong>declarative</strong> management in Kubernetes? Which approach is recommended for the CKA exam and why?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><strong>Imperative:</strong> Tell Kubernetes <em>what to do</em> step by step — <code>kubectl create</code>, <code>kubectl run</code>, <code>kubectl expose</code>. Fast, one-off, no YAML needed.</p>
+                                <p><strong>Declarative:</strong> Tell Kubernetes <em>what you want</em> — write a YAML manifest and <code>kubectl apply -f</code>. Idempotent, version-controllable, repeatable.</p>
+                                <p><strong>CKA strategy:</strong> Use <strong>imperative commands to generate YAML</strong>, then edit and apply declaratively:</p>
+                                <pre><code># Generate YAML without creating the resource
+kubectl run nginx --image=nginx --dry-run=client -o yaml > pod.yaml
+
+# Edit the YAML as needed, then apply
+kubectl apply -f pod.yaml</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>On the CKA exam, <strong>speed matters</strong>. The hybrid approach — imperative generation + declarative application — is the gold standard. Use <code>--dry-run=client -o yaml</code> to scaffold YAML instantly, then tweak it in <code>vim</code>. This saves massive time compared to writing YAML from scratch. Pure imperative commands (<code>kubectl create</code>) work for simple tasks, but for complex configurations (multi-container pods, volumes, probes), you'll need the YAML approach.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q10</span>
+                        <div class="eq-question">You've been asked to verify the health of a Kubernetes cluster during the CKA exam. Write the sequence of commands you would run and explain what each reveals about cluster health.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code># 1. Check all nodes are Ready
+kubectl get nodes
+
+# 2. Check control plane component pods
+kubectl get pods -n kube-system
+
+# 3. Check cluster endpoint info
+kubectl cluster-info
+
+# 4. Check for cluster-wide events/issues
+kubectl get events -A --sort-by='.lastTimestamp' | tail -20
+
+# 5. Check system pod health across all namespaces
+kubectl get pods -A | grep -v Running
+
+# 6. Verify DNS is working
+kubectl run dns-test --image=busybox --rm -it --restart=Never -- nslookup kubernetes
+
+# 7. If a node is NotReady, SSH and check kubelet
+ssh node01
+sudo systemctl status kubelet
+sudo journalctl -u kubelet --no-pager | tail -30</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Cluster health verification is a fundamental CKA skill. The commands above form a systematic <strong>top-down diagnosis</strong>: nodes → control plane pods → system events → DNS → individual node logs. Key things to look for: (1) All nodes <code>Ready</code>, (2) All kube-system pods <code>Running</code>, (3) No <code>CrashLoopBackOff</code> or <code>Error</code> pods, (4) DNS resolving the <code>kubernetes</code> service. If a component is down, check its static pod manifest in <code>/etc/kubernetes/manifests/</code> and the kubelet logs on that node.</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -7081,6 +7344,326 @@ CMD ["gunicorn", "anihpj.wsgi:application", "--bind", "0.0.0.0:8000"]</code></pr
                     <code>crictl ps</code> — list running containers on a node<br>
                     <code>crictl images</code> — list images cached on a node<br>
                     <code>crictl logs &lt;container-id&gt;</code> — view container logs directly via CRI
+                </div>
+
+                <!-- Chapter 2 Exam Questions -->
+                <div class="cka-exam-questions">
+                    <h4>📝 Chapter 2 — CKA Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q1</span>
+                        <div class="eq-question">A pod is stuck in <code>ImagePullBackOff</code>. You run <code>kubectl describe pod myapp</code> and see the event: <em>"Failed to pull image 'myregistry.io/app:v2': rpc error: code = Unknown desc = Error response from daemon: unauthorized"</em>. What is the most likely cause and how do you fix it?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The image is stored in a <strong>private registry</strong> and the pod doesn't have credentials configured. Fix by creating an <code>imagePullSecret</code> and referencing it in the pod spec:</p>
+                                <pre><code># Create the secret with registry credentials
+kubectl create secret docker-registry regcred \
+  --docker-server=myregistry.io \
+  --docker-username=myuser \
+  --docker-password=mypass
+
+# Add to pod spec under spec.imagePullSecrets:
+# imagePullSecrets:
+#   - name: regcred</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p><code>ImagePullBackOff</code> means the kubelet failed to pull the container image. The "unauthorized" error specifically indicates authentication failure. Common causes: (1) Private registry without <code>imagePullSecrets</code>, (2) Expired/wrong credentials, (3) Wrong registry URL. On the CKA exam, always check the <strong>Events</strong> section of <code>kubectl describe pod</code> — it tells you exactly why the pull failed. Other ImagePullBackOff causes include typos in the image name or tag not existing.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q2</span>
+                        <div class="eq-question">What is the difference between <code>crictl</code> and <code>docker</code> commands? On a Kubernetes node running containerd, which tool should you use to list running containers and why?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>Use <strong><code>crictl</code></strong>. It communicates directly with the CRI (Container Runtime Interface) and works with any CRI-compliant runtime (containerd, CRI-O).</p>
+                                <table style="width:100%; border-collapse: collapse; margin: 10px 0;">
+                                    <thead>
+                                        <tr style="border-bottom: 2px solid #6366f1;">
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Task</th>
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">crictl Command</th>
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Docker Equivalent</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;">List containers</td>
+                                            <td style="padding: 8px;"><code>crictl ps</code></td>
+                                            <td style="padding: 8px;"><code>docker ps</code></td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;">List images</td>
+                                            <td style="padding: 8px;"><code>crictl images</code></td>
+                                            <td style="padding: 8px;"><code>docker images</code></td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;">View logs</td>
+                                            <td style="padding: 8px;"><code>crictl logs &lt;id&gt;</code></td>
+                                            <td style="padding: 8px;"><code>docker logs &lt;id&gt;</code></td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px;">Inspect container</td>
+                                            <td style="padding: 8px;"><code>crictl inspect &lt;id&gt;</code></td>
+                                            <td style="padding: 8px;"><code>docker inspect &lt;id&gt;</code></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Since Kubernetes v1.24 removed <code>dockershim</code>, Docker is no longer a supported runtime. Most clusters now use <code>containerd</code> directly. The <code>crictl</code> tool is the standard debugging tool for CRI runtimes. On the CKA exam, if you SSH to a node and need to inspect containers at the runtime level, <code>crictl</code> is the expected tool. Configure it via <code>/etc/crictl.yaml</code> to point at the runtime socket (e.g., <code>unix:///run/containerd/containerd.sock</code>).</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q3</span>
+                        <div class="eq-question">Explain the difference between the three <code>imagePullPolicy</code> values: <code>Always</code>, <code>IfNotPresent</code>, and <code>Never</code>. What is the default policy when you use the <code>:latest</code> tag versus a specific tag like <code>:v1.2</code>?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <ul>
+                                    <li><strong><code>Always</code></strong> — kubelet always contacts the registry to check for newer image. Re-pulls if digest changed.</li>
+                                    <li><strong><code>IfNotPresent</code></strong> — kubelet uses the local cached image if available; pulls only if not cached.</li>
+                                    <li><strong><code>Never</code></strong> — kubelet never pulls; uses local image only. Fails if image isn't cached.</li>
+                                </ul>
+                                <p><strong>Defaults:</strong></p>
+                                <ul>
+                                    <li><code>:latest</code> tag → defaults to <code>Always</code></li>
+                                    <li>Specific tag (e.g., <code>:v1.2</code>) → defaults to <code>IfNotPresent</code></li>
+                                    <li>No tag specified → treated as <code>:latest</code> → defaults to <code>Always</code></li>
+                                </ul>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>This is a common trap on the CKA. If you specify <code>image: nginx</code> without a tag, Kubernetes treats it as <code>nginx:latest</code> with <code>imagePullPolicy: Always</code>. This means every pod restart will contact the registry. In air-gapped or exam environments, this can cause unexpected <code>ImagePullBackOff</code> errors. Best practice: always use specific tags and explicitly set <code>imagePullPolicy</code> to avoid surprises.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q4</span>
+                        <div class="eq-question">What is a <strong>container image layer</strong>? Why are layers important for both storage efficiency and pod startup speed in Kubernetes?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>A container image is built from <strong>read-only layers</strong>. Each layer represents a filesystem change from a Dockerfile instruction (<code>FROM</code>, <code>RUN</code>, <code>COPY</code>, etc.). Layers are:</p>
+                                <ul>
+                                    <li><strong>Cached and shared</strong> — If two images share a base layer (e.g., <code>python:3.11-slim</code>), the layer is stored and downloaded only once</li>
+                                    <li><strong>Content-addressable</strong> — Each layer is identified by its SHA256 digest, enabling deduplication</li>
+                                    <li><strong>Immutable</strong> — once built, a layer never changes; containers add a thin writable layer on top</li>
+                                </ul>
+                                <p>For Kubernetes: shared layers mean that if node already has the base image cached, pulling a new version only downloads changed layers, dramatically speeding up pod startup.</p>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>While the CKA doesn't test image building, understanding layers helps diagnose issues: (1) Large images cause slow pulls and startup — use slim/alpine bases. (2) <code>imagePullPolicy: IfNotPresent</code> leverages the layer cache. (3) If a node's disk fills up with cached images, use <code>crictl rmi --prune</code> to clean unused images. The kubelet also has garbage collection settings (<code>imageGCHighThresholdPercent</code>) that automatically clean old images when disk pressure is detected.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q5</span>
+                        <div class="eq-question">A pod spec references a <strong>multi-container pod</strong> with an init container and a sidecar container. Explain the difference between init containers and regular sidecar containers in terms of execution order and lifecycle.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><strong>Init containers:</strong></p>
+                                <ul>
+                                    <li>Run <strong>sequentially before</strong> any app containers start</li>
+                                    <li>Must complete successfully (exit 0) before the next init container or app containers start</li>
+                                    <li>If an init container fails, the pod restarts according to its <code>restartPolicy</code></li>
+                                    <li>Common uses: wait for a dependency, clone a git repo, populate a shared volume</li>
+                                </ul>
+                                <p><strong>Sidecar containers:</strong></p>
+                                <ul>
+                                    <li>Run <strong>alongside</strong> the main app container for the entire pod lifetime</li>
+                                    <li>Share the pod's network namespace (communicate via <code>localhost</code>) and volumes</li>
+                                    <li>Common uses: log shipping, service mesh proxy, monitoring agent</li>
+                                </ul>
+                                <pre><code>spec:
+  initContainers:            # Run first, sequentially
+    - name: init-db-check
+      image: busybox
+      command: ['sh', '-c', 'until nslookup db-service; do sleep 2; done']
+  containers:                # Run together after init completes
+    - name: app              # Main container
+      image: myapp:v1
+    - name: log-shipper      # Sidecar
+      image: fluentd:latest</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>The CKA frequently tests multi-container pod patterns. Key points: (1) Init containers share volumes with app containers but NOT the same array — they're under <code>initContainers:</code>. (2) As of Kubernetes v1.28+, there's a native <code>restartPolicy: Always</code> for sidecar containers declared in <code>initContainers</code> that makes them true sidecars. (3) All containers in a pod share the same IP address and port space. A sidecar on port 8080 conflicts with the app on 8080.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q6</span>
+                        <div class="eq-question">You need to troubleshoot a pod on a worker node. The <code>kubectl</code> command is not available on the node. What tools can you use to inspect containers, view logs, and check images directly on the node?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code># List all running containers on the node
+sudo crictl ps
+
+# List all containers (including stopped/failed)
+sudo crictl ps -a
+
+# View logs of a specific container
+sudo crictl logs &lt;container-id&gt;
+sudo crictl logs --tail 50 &lt;container-id&gt;
+
+# Inspect container details (config, state, mounts)
+sudo crictl inspect &lt;container-id&gt;
+
+# List all pods on this node
+sudo crictl pods
+
+# List cached images
+sudo crictl images
+
+# Check kubelet status and logs
+sudo systemctl status kubelet
+sudo journalctl -u kubelet --no-pager | tail -50</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>On the CKA exam, you will encounter scenarios where you must SSH to a node and troubleshoot without <code>kubectl</code>. The two essential tools are: (1) <strong><code>crictl</code></strong> — for container-level inspection, and (2) <strong><code>journalctl -u kubelet</code></strong> — for kubelet logs showing why pods fail to start. Remember that <code>crictl</code> talks to the container runtime (containerd) via the CRI socket, while <code>kubectl</code> talks to the API server. They show different views of the same containers.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q7</span>
+                        <div class="eq-question">What is the OCI (Open Container Initiative) and why does it matter that Docker images are OCI-compliant? Can you use Docker-built images on a Kubernetes cluster running containerd?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><strong>Yes, absolutely.</strong> Docker-built images work perfectly on containerd or CRI-O clusters because they conform to the <strong>OCI Image Specification</strong>.</p>
+                                <p>The OCI defines two standards:</p>
+                                <ul>
+                                    <li><strong>OCI Image Spec</strong> — how container images are structured (layers, manifests, configs)</li>
+                                    <li><strong>OCI Runtime Spec</strong> — how containers are executed (runc, crun)</li>
+                                </ul>
+                                <p>Docker, containerd, CRI-O, and Podman all produce and consume OCI-compliant images. The tool you use to <em>build</em> the image is irrelevant — what matters is the resulting image format.</p>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>A common misconception is that removing Docker from Kubernetes means Docker images no longer work. This is false. The removal of <code>dockershim</code> only affects the <em>runtime layer</em>, not the <em>image format</em>. You can build with Docker, Buildah, Kaniko, or any OCI-compliant tool and run the images on any CRI-compliant runtime. The CKA may test this conceptual understanding in a scenario where someone incorrectly believes images need to be "converted" for containerd.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q8</span>
+                        <div class="eq-question">A pod is in <code>CrashLoopBackOff</code> state. What does this status mean, and what are the systematic steps to diagnose the root cause?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><code>CrashLoopBackOff</code> means the container starts, crashes, and Kubernetes keeps restarting it with exponentially increasing delays (10s, 20s, 40s... up to 5 minutes).</p>
+                                <p><strong>Diagnostic steps:</strong></p>
+                                <pre><code># Step 1: Check pod status and restart count
+kubectl get pod myapp -o wide
+
+# Step 2: Check events for clues
+kubectl describe pod myapp | grep -A 20 "Events:"
+
+# Step 3: Check container logs (current attempt)
+kubectl logs myapp
+
+# Step 4: Check previous crash logs
+kubectl logs myapp --previous
+
+# Step 5: Check if it's an OOMKill
+kubectl describe pod myapp | grep -i "OOMKilled"
+
+# Step 6: Check if command/args are wrong
+kubectl get pod myapp -o yaml | grep -A 5 "command\|args"</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p><code>CrashLoopBackOff</code> is one of the most common CKA troubleshooting scenarios. Common root causes: (1) <strong>Application error</strong> — app crashes on startup (check <code>kubectl logs --previous</code>), (2) <strong>Wrong command/args</strong> — container entrypoint fails, (3) <strong>Missing ConfigMap/Secret</strong> — referenced env vars don't exist, (4) <strong>OOMKilled</strong> — container exceeds memory limit, (5) <strong>Liveness probe failure</strong> — probe kills the container before it's ready. The <code>--previous</code> flag is crucial because it shows logs from the <em>last crashed</em> instance, not the currently starting one.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q9</span>
+                        <div class="eq-question">What is a <strong>container registry</strong>? Explain the full image reference format <code>registry/repository:tag@sha256:digest</code> and what each part means.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>A container registry is a storage and distribution system for container images. The full reference format:</p>
+                                <pre><code>registry.example.com/namespace/image-name:tag@sha256:abc123...
+
+│                    │          │          │    │
+├─ Registry host     │          │          │    └─ Digest (immutable hash)
+│  (docker.io if     │          │          └─ Tag (mutable label)
+│   omitted)         │          └─ Image name
+│                    └─ Namespace/org
+└─ Full reference</code></pre>
+                                <p><strong>Examples:</strong></p>
+                                <ul>
+                                    <li><code>nginx</code> → <code>docker.io/library/nginx:latest</code></li>
+                                    <li><code>mycompany/app:v2</code> → <code>docker.io/mycompany/app:v2</code></li>
+                                    <li><code>gcr.io/my-project/app:v1</code> → explicit registry</li>
+                                </ul>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Understanding image references is critical for troubleshooting <code>ImagePullBackOff</code> errors on the CKA. Common mistakes: (1) Omitting the registry for private images, (2) Using <code>:latest</code> when a specific tag is needed, (3) Not specifying <code>imagePullSecrets</code> for private registries. The <strong>digest</strong> (<code>@sha256:...</code>) is the most reliable way to pin an image — tags are mutable and can be overwritten, but digests are content-addressable and immutable.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q10</span>
+                        <div class="eq-question">You SSH to a Kubernetes worker node and run <code>crictl ps</code> but get the error: <em>"connect: no such file or directory"</em>. What is wrong and how do you fix it?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The <code>crictl</code> tool cannot find the container runtime socket. Fix by configuring the runtime endpoint:</p>
+                                <pre><code># Option 1: Set environment variable
+export CONTAINER_RUNTIME_ENDPOINT=unix:///run/containerd/containerd.sock
+
+# Option 2: Create/edit crictl config file
+sudo cat &gt; /etc/crictl.yaml &lt;&lt;EOF
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 10
+debug: false
+EOF
+
+# Now try again
+sudo crictl ps</code></pre>
+                                <p><strong>Common socket paths:</strong></p>
+                                <ul>
+                                    <li>containerd: <code>unix:///run/containerd/containerd.sock</code></li>
+                                    <li>CRI-O: <code>unix:///var/run/crio/crio.sock</code></li>
+                                </ul>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>The CKA exam may present a node where <code>crictl</code> isn't configured. The tool needs to know which socket to connect to — this is the CRI endpoint. If <code>/etc/crictl.yaml</code> doesn't exist or has the wrong socket path, <code>crictl</code> will fail. To find the correct socket, check what runtime is installed: <code>systemctl status containerd</code> or <code>systemctl status crio</code>. Then set the endpoint accordingly. This is a quick fix that can save you from being stuck on a troubleshooting question.</p>
+                            </div>
+                        </details>
+                    </div>
                 </div>
             </div>
         </div>
@@ -7850,6 +8433,363 @@ kubectl get nodes</code></pre>
                         <li>5. Fix the manifest → kubelet auto-restarts the static pod</li>
                     </ul>
                     <p><strong>Key insight:</strong> On the CKA, if <code>kubectl</code> doesn't work, go to the node and use <code>crictl</code> + <code>journalctl</code>.</p>
+                </div>
+
+                <!-- Chapter 3 Exam Questions -->
+                <div class="cka-exam-questions">
+                    <h4>📝 Chapter 3 — CKA Practice Questions</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q1</span>
+                        <div class="eq-question">You SSH to the control plane node and find that <code>kubectl get nodes</code> returns <em>"The connection to the server was refused"</em>. The kubelet is running. What is the most likely problem and how do you diagnose it?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The <strong>kube-apiserver</strong> is down. Since it's a static pod, diagnose as follows:</p>
+                                <pre><code># 1. Check if the API server container is running
+sudo crictl ps | grep kube-apiserver
+
+# 2. If not running, check the static pod manifest
+sudo cat /etc/kubernetes/manifests/kube-apiserver.yaml
+
+# 3. Check kubelet logs for manifest errors
+sudo journalctl -u kubelet | grep -i "error\|apiserver" | tail -20
+
+# 4. Common fixes:
+#    - Fix YAML syntax errors in the manifest
+#    - Fix wrong certificate paths (--tls-cert-file, --tls-private-key-file)
+#    - Fix wrong etcd endpoints (--etcd-servers)
+#    - Fix port conflicts (--secure-port)</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>This is a <strong>classic CKA troubleshooting scenario</strong>. The kube-apiserver runs as a static pod managed by the kubelet. If the manifest file in <code>/etc/kubernetes/manifests/</code> has errors, the kubelet cannot start the pod. Key diagnostic path: <code>crictl ps</code> → <code>journalctl -u kubelet</code> → check manifest → fix → kubelet automatically restarts the static pod. No <code>kubectl apply</code> needed — static pods are managed by the kubelet directly from filesystem watching.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q2</span>
+                        <div class="eq-question">What are <strong>static pods</strong>? Where are they defined, which component manages them, and how are they different from regular pods created via the API server?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><strong>Static pods</strong> are pods managed directly by the <strong>kubelet</strong> on a specific node, without going through the API server.</p>
+                                <table style="width:100%; border-collapse: collapse; margin: 10px 0;">
+                                    <thead>
+                                        <tr style="border-bottom: 2px solid #6366f1;">
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Feature</th>
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Static Pods</th>
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Regular Pods</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;">Managed by</td>
+                                            <td style="padding: 8px;">kubelet (filesystem watcher)</td>
+                                            <td style="padding: 8px;">API server → scheduler → kubelet</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;">Defined in</td>
+                                            <td style="padding: 8px;"><code>/etc/kubernetes/manifests/</code></td>
+                                            <td style="padding: 8px;">etcd (via kubectl/API)</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;">Visible in API</td>
+                                            <td style="padding: 8px;">Yes, as a <em>mirror pod</em> (read-only)</td>
+                                            <td style="padding: 8px;">Yes, fully managed</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px;">Can be deleted via kubectl</td>
+                                            <td style="padding: 8px;">No — delete the file to remove</td>
+                                            <td style="padding: 8px;">Yes</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Static pods are how the control plane bootstraps itself — <code>kube-apiserver</code>, <code>etcd</code>, <code>kube-scheduler</code>, and <code>kube-controller-manager</code> all run as static pods. The kubelet watches the <code>staticPodPath</code> (configured in <code>/var/lib/kubelet/config.yaml</code>) and automatically creates/restarts pods from YAML files found there. On the CKA, you may be asked to create a static pod: simply place a valid pod manifest in <code>/etc/kubernetes/manifests/</code> and the kubelet will start it.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q3</span>
+                        <div class="eq-question">Explain the <strong>kube-scheduler's</strong> decision process. When a new pod is created without a <code>nodeName</code>, what steps does the scheduler take to place it on a node?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The scheduler follows a <strong>two-phase process</strong>:</p>
+                                <p><strong>Phase 1: Filtering</strong> — Eliminates nodes that can't run the pod:</p>
+                                <ul>
+                                    <li>Insufficient CPU/memory resources</li>
+                                    <li>Taints that the pod doesn't tolerate</li>
+                                    <li>Node affinity rules not satisfied</li>
+                                    <li>PodAntiAffinity constraints</li>
+                                    <li>Unschedulable nodes (<code>cordon</code>ed)</li>
+                                </ul>
+                                <p><strong>Phase 2: Scoring</strong> — Ranks remaining nodes by preference:</p>
+                                <ul>
+                                    <li>Resource balance (spread workloads evenly)</li>
+                                    <li>Node affinity preferences (soft rules)</li>
+                                    <li>Pod topology spread constraints</li>
+                                    <li>Image locality (node already has the image cached)</li>
+                                </ul>
+                                <p>The highest-scoring node wins. The scheduler then sets <code>spec.nodeName</code> via the API server.</p>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>The CKA tests scheduling concepts heavily (15% of the exam). Key scenarios: (1) Pod stuck in <code>Pending</code> — all nodes filtered out (check taints, resources, node selectors). (2) Pod scheduled to wrong node — scoring preferences not configured correctly. (3) Manually bypass the scheduler by setting <code>spec.nodeName</code> directly in the pod spec. If a pod is Pending, <code>kubectl describe pod</code> events will show <em>"0/3 nodes are available: 1 node(s) had taint..."</em> — this tells you exactly which filter failed.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q4</span>
+                        <div class="eq-question">The <code>kube-controller-manager</code> runs many controllers. Name at least 5 built-in controllers and describe what each one is responsible for.</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <table style="width:100%; border-collapse: collapse; margin: 10px 0;">
+                                    <thead>
+                                        <tr style="border-bottom: 2px solid #6366f1;">
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Controller</th>
+                                            <th style="text-align:left; padding: 8px; color: #a5b4fc;">Responsibility</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><strong>Node Controller</strong></td>
+                                            <td style="padding: 8px;">Monitors node heartbeats (every 10s), marks NotReady after 40s, evicts pods after 5min</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><strong>ReplicaSet Controller</strong></td>
+                                            <td style="padding: 8px;">Ensures the correct number of pod replicas are running at all times</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><strong>Deployment Controller</strong></td>
+                                            <td style="padding: 8px;">Manages ReplicaSets for rolling updates, rollbacks, and scaling</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><strong>Endpoint Controller</strong></td>
+                                            <td style="padding: 8px;">Populates Endpoints objects (maps Services to pod IPs)</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><strong>ServiceAccount Controller</strong></td>
+                                            <td style="padding: 8px;">Creates default ServiceAccount + token for every new namespace</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #334155;">
+                                            <td style="padding: 8px;"><strong>Job Controller</strong></td>
+                                            <td style="padding: 8px;">Tracks Job completions and creates new pods until the desired completion count is reached</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px;"><strong>Namespace Controller</strong></td>
+                                            <td style="padding: 8px;">Cleans up resources when a namespace is deleted (cascading deletion)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>All these controllers run as goroutines inside a single <code>kube-controller-manager</code> binary/pod. Each controller follows the same <strong>Observe → Diff → Act</strong> pattern. On the CKA exam, understanding controllers helps diagnose issues: if replicas aren't being created, the controller-manager might be down. If nodes stay <code>NotReady</code> for too long without pod eviction, check the node controller's <code>--pod-eviction-timeout</code> flag.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q5</span>
+                        <div class="eq-question">How does the <code>kubelet</code> know which static pod manifests to watch? What configuration file controls the <code>staticPodPath</code>, and how would you find it?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code># Find kubelet's config file
+ps aux | grep kubelet | grep -- --config
+# Typically: --config=/var/lib/kubelet/config.yaml
+
+# Check the staticPodPath in kubelet config
+cat /var/lib/kubelet/config.yaml | grep staticPodPath
+# Output: staticPodPath: /etc/kubernetes/manifests
+
+# List static pod manifests
+ls /etc/kubernetes/manifests/
+# etcd.yaml  kube-apiserver.yaml  kube-controller-manager.yaml  kube-scheduler.yaml</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>On the CKA exam, you may need to create a static pod on a specific node. The steps are: (1) SSH to the target node, (2) Find the <code>staticPodPath</code> from the kubelet config, (3) Place your pod YAML file in that directory, (4) The kubelet automatically detects and creates the pod. To find the kubelet config: <code>systemctl status kubelet</code> shows the systemd unit file, which contains the <code>--config</code> flag pointing to the config file. Default path is almost always <code>/etc/kubernetes/manifests/</code>.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q6</span>
+                        <div class="eq-question">What is the role of <strong>CoreDNS</strong> in a Kubernetes cluster? If DNS resolution fails inside a pod, what troubleshooting steps would you take?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><strong>CoreDNS</strong> provides cluster-internal DNS resolution. It runs as a Deployment in the <code>kube-system</code> namespace and resolves:</p>
+                                <ul>
+                                    <li><code>service-name.namespace.svc.cluster.local</code> → ClusterIP</li>
+                                    <li><code>pod-ip-dashed.namespace.pod.cluster.local</code> → Pod IP</li>
+                                </ul>
+                                <p><strong>Troubleshooting DNS failure:</strong></p>
+                                <pre><code># 1. Check if CoreDNS pods are running
+kubectl get pods -n kube-system -l k8s-app=kube-dns
+
+# 2. Check CoreDNS logs
+kubectl logs -n kube-system -l k8s-app=kube-dns
+
+# 3. Verify the kube-dns Service exists
+kubectl get svc kube-dns -n kube-system
+
+# 4. Test DNS from inside a pod
+kubectl run dns-test --image=busybox --rm -it --restart=Never \
+  -- nslookup kubernetes.default
+
+# 5. Check pod's /etc/resolv.conf
+kubectl exec myapp -- cat /etc/resolv.conf
+# Should point to kube-dns ClusterIP (usually 10.96.0.10)</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>DNS is critical infrastructure in Kubernetes. Every pod gets a <code>/etc/resolv.conf</code> pointing to the CoreDNS service's ClusterIP. If DNS fails, almost everything breaks — service discovery, external API calls, etc. Common causes: (1) CoreDNS pods not running, (2) kube-dns Service ClusterIP changed, (3) Network policy blocking DNS traffic on port 53, (4) CoreDNS ConfigMap misconfigured, (5) kube-proxy not programming iptables rules for the kube-dns service. This is a high-priority CKA troubleshooting topic.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q7</span>
+                        <div class="eq-question">Explain the difference between the <code>kube-apiserver</code>'s <strong>authentication</strong>, <strong>authorization</strong>, and <strong>admission control</strong> stages. What happens at each stage when a request arrives?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>Every API request passes through three stages in order:</p>
+                                <ol>
+                                    <li><strong>Authentication</strong> — <em>"Who are you?"</em> — Verifies identity via client certificates, bearer tokens, or service account tokens. If authentication fails → <code>401 Unauthorized</code></li>
+                                    <li><strong>Authorization</strong> — <em>"Are you allowed to do this?"</em> — Checks RBAC rules (Role/ClusterRole + RoleBinding/ClusterRoleBinding). If denied → <code>403 Forbidden</code></li>
+                                    <li><strong>Admission Control</strong> — <em>"Should we modify or reject this?"</em> — Webhooks and built-in plugins that can mutate (change defaults) or validate (reject invalid) requests. Examples: <code>LimitRanger</code> (set default resource limits), <code>NamespaceLifecycle</code> (reject requests to terminating namespaces)</li>
+                                </ol>
+                                <pre><code>Request → [Authentication] → [Authorization] → [Admission] → etcd
+              401?                  403?              Reject/Mutate</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Understanding this pipeline is critical for CKA RBAC and security questions. When you get a "forbidden" error, it's authorization (RBAC). When you get "unauthorized", it's authentication (bad/expired cert or token). Admission controllers can silently modify your objects — for example, <code>DefaultStorageClass</code> adds a storage class to PVCs that don't specify one. The CKA tests RBAC extensively (creating Roles, ClusterRoles, Bindings). Remember: Roles are namespace-scoped, ClusterRoles are cluster-wide.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q8</span>
+                        <div class="eq-question">A Kubernetes node's kubelet is configured with <code>--pod-cidr=10.244.1.0/24</code>. What does this mean, and how does the CNI plugin use this information to assign IP addresses to pods?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p>The <code>--pod-cidr</code> defines the <strong>subnet of IP addresses</strong> allocated to pods on that specific node. Each node gets a unique pod CIDR from the cluster's overall pod network CIDR (e.g., <code>10.244.0.0/16</code>).</p>
+                                <p><strong>How it works:</strong></p>
+                                <ul>
+                                    <li>Controller-manager assigns each node a unique <code>/24</code> subnet from the cluster CIDR</li>
+                                    <li>The CNI plugin (Flannel, Calico, Cilium) reads the node's pod CIDR</li>
+                                    <li>When a pod is created, the CNI assigns an IP from that node's subnet</li>
+                                    <li>Node 1: <code>10.244.0.0/24</code> → pods get <code>10.244.0.2</code>, <code>10.244.0.3</code>, etc.</li>
+                                    <li>Node 2: <code>10.244.1.0/24</code> → pods get <code>10.244.1.2</code>, <code>10.244.1.3</code>, etc.</li>
+                                </ul>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Understanding pod networking is essential for the CKA's "Services & Networking" domain (20%). The pod CIDR is configured during cluster initialization (<code>kubeadm init --pod-network-cidr=10.244.0.0/16</code>). Each node gets a unique subnet. The CNI plugin handles the actual IP assignment and inter-node routing. If pods can't communicate across nodes, check: (1) CNI plugin is installed, (2) pod CIDRs don't overlap with node IPs, (3) firewall rules allow inter-node pod traffic.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q9</span>
+                        <div class="eq-question">You run <code>kubectl get componentstatuses</code> and see that <code>scheduler</code> shows <code>Unhealthy</code>. What could cause this, and how would you fix it?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <pre><code># 1. Check if the scheduler pod is running
+kubectl get pods -n kube-system | grep scheduler
+
+# 2. If not running, check the static pod manifest
+sudo cat /etc/kubernetes/manifests/kube-scheduler.yaml
+
+# 3. Check kubelet logs for scheduler errors
+sudo journalctl -u kubelet | grep scheduler
+
+# 4. Check scheduler logs directly
+kubectl logs -n kube-system kube-scheduler-controlplane
+
+# 5. Common issues:
+#    - Wrong kubeconfig path (--kubeconfig flag)
+#    - Certificate expired or wrong path
+#    - Port conflict (--secure-port)
+#    - YAML syntax error in manifest file</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p><strong>Note:</strong> <code>kubectl get componentstatuses</code> (or <code>cs</code>) is <strong>deprecated</strong> since v1.19, but may still appear on the CKA. It checks health endpoints of control plane components. If the scheduler is unhealthy: (1) The scheduler static pod may have crashed — check its manifest in <code>/etc/kubernetes/manifests/</code>, (2) The scheduler's health endpoint may be unreachable. Symptoms of a dead scheduler: new pods stay in <code>Pending</code> state because nothing assigns them to nodes. Existing pods continue running — only new scheduling decisions are blocked.</p>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">Q10</span>
+                        <div class="eq-question">Draw or describe the complete communication flow between all Kubernetes components when a user runs <code>kubectl delete pod myapp</code>. Which components are involved and what happens at each step?</div>
+                        <details>
+                            <summary>Show Answer</summary>
+                            <div class="eq-answer">
+                                <div class="eq-answer-label">Answer</div>
+                                <p><strong>Pod deletion flow:</strong></p>
+<pre><code>kubectl delete pod myapp
+        │
+        ▼
+┌─────────────────┐
+│  kube-apiserver  │ ← Receives DELETE request
+│  1. Authenticate │
+│  2. Authorize    │
+│  3. Set deletion │
+│     timestamp    │
+└────────┬────────┘
+         │ Updates etcd: pod.deletionTimestamp = now
+         │ pod.deletionGracePeriodSeconds = 30 (default)
+         ▼
+┌─────────────────┐
+│    kubelet       │ ← Watches API, sees deletionTimestamp
+│  1. Send SIGTERM │
+│  2. Wait 30s     │    to containers
+│  3. Send SIGKILL │    (if still running)
+│  4. Report back  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  kube-apiserver  │ ← kubelet confirms termination
+│  Remove from     │
+│  etcd            │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Endpoint ctrl    │ ← Removes pod IP from Service endpoints
+└─────────────────┘</code></pre>
+                            </div>
+                            <div class="eq-explanation">
+                                <div class="eq-exp-label">Explanation</div>
+                                <p>Key points for the CKA: (1) Deletion is <strong>graceful</strong> by default — containers get SIGTERM and 30 seconds to shut down. (2) The <code>--grace-period=0 --force</code> flags skip the grace period (useful for stuck pods). (3) The Endpoint controller removes the pod from Service endpoints <em>concurrently</em> with the grace period, so in-flight requests may still reach a terminating pod. (4) <code>preStop</code> hooks run before SIGTERM — use them for graceful shutdown logic. Understanding pod lifecycle is critical for troubleshooting stuck deletions and graceful application shutdown.</p>
+                            </div>
+                        </details>
+                    </div>
                 </div>
             </div>
         </div>
@@ -34930,6 +35870,35 @@ spec:
                         <li>Can you set up PodDisruptionBudgets and anti-affinity for production workloads?</li>
                     </ul>
                 </div>
+
+                <!-- CKA Augmentation: Chapter 35 -->
+                <div class="cka-gotcha">
+                    <h4>⚠️ CKA Gotcha: High Availability Traps</h4>
+                    <ul>
+                        <li><strong>Stacked vs External etcd</strong> — Stacked: etcd runs on control plane nodes (simpler, fewer machines). External: etcd on dedicated nodes (better isolation, harder to set up). The CKA uses stacked topology. Know both for conceptual questions</li>
+                        <li><strong>etcd quorum formula</strong> — <code>(N/2) + 1</code> members must be alive. 3 nodes = tolerate 1 failure. 5 nodes = tolerate 2. Always use ODD numbers. Even numbers waste a node without improving fault tolerance</li>
+                        <li><strong>Leader election</strong> — Only ONE controller-manager and ONE scheduler are active at a time (the leader). Others are standby. Check leader: <code>kubectl get lease -n kube-system</code>. If the leader dies, a new one is elected in ~15s</li>
+                        <li><strong><code>--control-plane-endpoint</code> is critical</strong> — Must point to a load balancer, not a single node IP. Without this, adding control plane nodes later fails. Set during <code>kubeadm init</code> and it CANNOT be changed after</li>
+                        <li><strong>Pod anti-affinity for HA workloads</strong> — Without <code>podAntiAffinity</code>, all replicas could land on the same node. If that node dies, 100% downtime. Always spread critical workloads across nodes</li>
+                    </ul>
+                </div>
+
+                <div class="cka-speed-tip">
+                    <p><strong>CKA Speed Tip — HA concepts to know:</strong><br>
+                    <code>kubectl get lease -n kube-system</code> — see leader election leases<br>
+                    <code>kubectl get endpoints -n kube-system kube-scheduler -o yaml</code> — current leader annotation<br>
+                    Quorum table: 1 node=no HA, 3=tolerate 1, 5=tolerate 2, 7=tolerate 3<br>
+                    <strong>Rule:</strong> Never run production with fewer than 3 control plane nodes</p>
+                </div>
+
+                <div class="cka-imperative-ref">
+                    <strong>⚡ HA inspection commands:</strong>
+                    <code>kubectl get nodes -l node-role.kubernetes.io/control-plane</code> — list control plane nodes<br>
+                    <code>kubectl get lease -n kube-system</code> — leader election status<br>
+                    <code>ETCDCTL_API=3 etcdctl member list</code> — etcd cluster members<br>
+                    <code>kubectl get pdb -A</code> — verify PDBs protect critical workloads<br>
+                    <code>kubectl get pod -o wide -l app=&lt;name&gt;</code> — verify pods spread across nodes
+                </div>
             </div>
         </div>
 
@@ -35621,6 +36590,36 @@ spec:
                         <li>Can you create a managed cluster and deploy workloads on any of the 3 clouds?</li>
                         <li>Can you describe how the Cluster Autoscaler scales nodes up and down?</li>
                     </ul>
+                </div>
+
+                <!-- CKA Augmentation: Chapter 36 -->
+                <div class="cka-gotcha">
+                    <h4>⚠️ CKA Gotcha: Cloud Kubernetes Traps</h4>
+                    <ul>
+                        <li><strong>CKA is cloud-agnostic</strong> — The exam tests vanilla Kubernetes (kubeadm clusters), NOT EKS/GKE/AKS specifics. But understanding cloud vs self-managed helps you know WHAT the CKA is actually testing (the control plane parts cloud providers hide)</li>
+                        <li><strong>StorageClass differences</strong> — Cloud clusters have default StorageClasses (gp2, standard, default). CKA kubeadm clusters may NOT have a default. Always check: <code>kubectl get sc</code>. If no <code>(default)</code> annotation, PVCs without <code>storageClassName</code> stay Pending</li>
+                        <li><strong>LoadBalancer Service type</strong> — Only works on cloud. On kubeadm/bare-metal, <code>type: LoadBalancer</code> stays <code>Pending</code> with no EXTERNAL-IP. Use <code>NodePort</code> or install MetalLB. The CKA exam uses NodePort</li>
+                        <li><strong>Cloud IAM vs Kubernetes RBAC</strong> — Cloud providers use their own IAM (AWS IAM, GCP IAM, Azure AD) to control WHO can access the cluster. Inside the cluster, Kubernetes RBAC controls WHAT they can do. Both layers matter</li>
+                        <li><strong>Cluster Autoscaler vs HPA</strong> — HPA scales pods. CA scales nodes (when pods are Pending due to insufficient resources). They work together: HPA creates more pods → pods go Pending → CA adds nodes → pods get scheduled</li>
+                    </ul>
+                </div>
+
+                <div class="cka-speed-tip">
+                    <p><strong>CKA Speed Tip — CKA skills that transfer to cloud:</strong><br>
+                    ✅ RBAC, NetworkPolicies, PV/PVC, ConfigMaps/Secrets — identical across all platforms<br>
+                    ✅ Deployments, Services, Ingress, DaemonSets — same YAML everywhere<br>
+                    ✅ Troubleshooting (logs, describe, exec) — universal toolkit<br>
+                    ❌ kubeadm, etcd backup, static pods, certificate management — cloud providers handle these<br>
+                    <strong>The CKA tests everything including what cloud hides from you.</strong></p>
+                </div>
+
+                <div class="cka-imperative-ref">
+                    <strong>⚡ Cloud-relevant commands:</strong>
+                    <code>kubectl get sc</code> — check available StorageClasses and default<br>
+                    <code>kubectl get svc -A</code> — check for LoadBalancer services and their EXTERNAL-IP<br>
+                    <code>kubectl top nodes</code> — capacity planning (works on cloud and bare-metal with metrics-server)<br>
+                    <code>kubectl get hpa -A</code> — list HorizontalPodAutoscalers<br>
+                    <code>kubectl autoscale deployment &lt;name&gt; --min=2 --max=10 --cpu-percent=70</code> — create HPA
                 </div>
             </div>
         </div>
@@ -36571,6 +37570,49 @@ patches:
                         <li><strong>HPA + Cluster Autoscaler</strong> — Scale pods and nodes based on traffic</li>
                     </ul>
                     <p>This is the <strong>modern Kubernetes deployment stack</strong> used by most teams. You now understand every layer.</p>
+                </div>
+
+                <!-- CKA Augmentation: Chapter 37 -->
+                <div class="cka-gotcha">
+                    <h4>⚠️ CKA Gotcha: CI/CD &amp; GitOps Traps</h4>
+                    <ul>
+                        <li><strong>CKA doesn't test CI/CD directly</strong> — But understanding the deployment pipeline helps with troubleshooting questions. If a deployment is broken, knowing whether the issue is in the image (CI) vs the manifest (CD) vs the cluster saves time</li>
+                        <li><strong>Helm is NOT on the CKA exam</strong> — But <code>Kustomize</code> IS available via <code>kubectl apply -k</code>. Know that <code>-k</code> applies a kustomization directory. You may see it in exam documentation</li>
+                        <li><strong><code>kubectl apply</code> vs <code>kubectl create</code></strong> — <code>apply</code> is declarative (idempotent, can update). <code>create</code> is imperative (fails if resource exists). GitOps uses <code>apply</code>. The exam expects you to know both — use <code>create</code> for speed, <code>apply</code> for YAML files</li>
+                        <li><strong>Image pull policies</strong> — <code>Always</code> (default for <code>:latest</code>), <code>IfNotPresent</code> (default for tagged), <code>Never</code>. If a CI pipeline pushes a new image with the same tag, pods with <code>IfNotPresent</code> won't pull the update. This is a real-world trap</li>
+                        <li><strong>Rolling update strategy</strong> — <code>maxSurge</code> and <code>maxUnavailable</code> control deployment speed. Default is 25% each. For zero-downtime: <code>maxUnavailable: 0</code>, <code>maxSurge: 1</code>. Know how to set these on the exam</li>
+                    </ul>
+                </div>
+
+                <div class="cka-speed-tip">
+                    <p><strong>CKA Speed Tip — Deployment update commands:</strong><br>
+                    <code>kubectl set image deployment/&lt;name&gt; &lt;container&gt;=&lt;image&gt;:&lt;tag&gt;</code> — update image<br>
+                    <code>kubectl rollout status deployment/&lt;name&gt;</code> — watch rollout progress<br>
+                    <code>kubectl rollout history deployment/&lt;name&gt;</code> — see revision history<br>
+                    <code>kubectl rollout undo deployment/&lt;name&gt;</code> — rollback to previous version<br>
+                    <code>kubectl rollout undo deployment/&lt;name&gt; --to-revision=2</code> — rollback to specific revision</p>
+                </div>
+
+                <div class="cka-imperative-ref">
+                    <strong>⚡ Deployment &amp; rollout commands:</strong>
+                    <code>kubectl apply -k ./overlays/prod/</code> — apply Kustomize overlay<br>
+                    <code>kubectl diff -f manifest.yaml</code> — preview changes before applying<br>
+                    <code>kubectl annotate deployment &lt;name&gt; kubernetes.io/change-cause="reason"</code> — record change reason<br>
+                    <code>kubectl rollout pause deployment/&lt;name&gt;</code> — pause mid-rollout<br>
+                    <code>kubectl rollout resume deployment/&lt;name&gt;</code> — resume paused rollout
+                </div>
+
+                <div class="info-box note">
+                    <h5>📝 Chapter 37 Practice Drill</h5>
+                    <p><strong>Timed challenge (target: 5 minutes):</strong></p>
+                    <ul>
+                        <li>1. Create a deployment: <code>kubectl create deploy webapp --image=nginx:1.24 --replicas=3</code></li>
+                        <li>2. Update the image: <code>kubectl set image deploy/webapp nginx=nginx:1.25</code></li>
+                        <li>3. Watch the rollout: <code>kubectl rollout status deploy/webapp</code></li>
+                        <li>4. Check history: <code>kubectl rollout history deploy/webapp</code></li>
+                        <li>5. Rollback: <code>kubectl rollout undo deploy/webapp</code></li>
+                        <li>6. Verify: <code>kubectl describe deploy webapp | grep Image</code> — should show nginx:1.24</li>
+                    </ul>
                 </div>
             </div>
         </div>
