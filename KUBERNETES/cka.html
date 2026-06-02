@@ -56283,6 +56283,297 @@ jobs:
                     <h5>🎯 Key Takeaway for CKA</h5>
                     <p>The CKA won't ask you to write CI/CD YAML, but understanding this pipeline helps you grasp <strong>why image tags matter</strong> (they trigger rolling updates), <strong>why container registries matter</strong> (image pull policies, imagePullSecrets), and <strong>how deployments update</strong> — all directly tested on the CKA.</p>
                 </div>
+
+                <h4>Multi-Stage Dockerfile — Security + Efficiency for anihpj</h4>
+                <p>A multi-stage build separates the <strong>build environment</strong> (with compilers, dev dependencies) from the <strong>runtime environment</strong> (minimal, secure). This shrinks the final image by 60-80% and eliminates build tools that attackers could exploit:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Dockerfile — Multi-stage build for anihpj</span>
+                    </div>
+                    <pre><code class="language-dockerfile"># ═══════════════ STAGE 1: BUILDER (compilers, dev deps) ═══════════════
+FROM python:3.12-slim AS builder
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# ═══════════════ STAGE 2: RUNTIME (minimal, no build tools) ═══════════════
+FROM python:3.12-slim
+WORKDIR /app
+
+# Copy ONLY installed packages from builder (no pip, gcc, headers)
+COPY --from=builder /root/.local /root/.local
+COPY . .
+
+# Run as non-root user
+RUN useradd -m -u 1000 anihpj && chown -R anihpj:anihpj /app
+USER anihpj
+
+ENV PATH=/root/.local/bin:$PATH
+EXPOSE 8000
+CMD ["gunicorn", "anihpj.wsgi:application", "--bind", "0.0.0.0:8000"]</code></pre>
+                </div>
+                <div class="info-box tip">
+                    <h5>💡 Why Multi-Stage Matters for the CKA Exam</h5>
+                    <p>The CKA won't ask you to write a Dockerfile, but <strong>image size directly affects pod startup time</strong>. A 1GB image takes 60+ seconds to pull; a 50MB image takes 3 seconds. When you <code>kubectl describe pod</code> and see "Pulling image" for 2 minutes during the exam — that's a real-world consequence of bloated images.</p>
+                </div>
+
+                <h4>Image Tagging Strategy — What Every Tag Means in Production</h4>
+                <div class="diagram-container">
+                    <h4>Image Tag Strategy — anihpj Examples</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  IMAGE TAGGING STRATEGY                                                      │
+│                                                                              │
+│  Tag Pattern        Meaning              When to Use        Example          │
+│  ─────────────────  ───────────────────  ─────────────────  ───────────────  │
+│  :latest            Latest build         NEVER in prod      ⚠️ Avoid         │
+│  :v1.2.3            Semantic version     Production release  anihpj:v2.1.0  │
+│  :&lt;git-sha&gt;         Commit-specific      CI builds           anihpj:abc1234  │
+│  :v2.1-stable       Named stable track   Promotion pipeline  anihpj:stable   │
+│  :dev / :staging    Environment-specific  Dev pipelines       anihpj:dev      │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│                                                                              │
+│  HOW TAGS DRIVE ROLLING UPDATES:                                             │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────┐      │
+│  │ 1. CI builds image → anihpj:abc1234 (git SHA tag)                │      │
+│  │ 2. CI updates deployment YAML → image: anihpj:abc1234            │      │
+│  │ 3. kubectl apply → Deployment sees NEW image → triggers rollout  │      │
+│  │ 4. ReplicaSet creates pods with anihpj:abc1234 image             │      │
+│  │ 5. Old ReplicaSet scales down → new one scales up               │      │
+│  │                                                                   │      │
+│  │ ⚠️  If image tag didn't change → NO rollout (kubectl is a no-op) │      │
+│  │ ⚠️  :latest with imagePullPolicy: IfNotPresent → NEVER updates   │      │
+│  └───────────────────────────────────────────────────────────────────┘      │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Container Image Internals — What Actually Is an "Image"?</h4>
+                <p>Understanding what a container image really is helps you debug image pull issues, optimize builds, and secure your supply chain. An image is NOT a single file — it's a <strong>collection of layers + a manifest</strong> stored in a registry:</p>
+                <div class="diagram-container">
+                    <h4>OCI Image Anatomy — Inside ghcr.io/user/anihpj:v2.1</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  CONTAINER IMAGE INTERNALS — OCI SPECIFICATION                                │
+│                                                                              │
+│  Image Reference: ghcr.io/user/anihpj:v2.1                                   │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                     IMAGE MANIFEST (JSON)                            │    │
+│  │  ┌─────────────────────────────────────────────────────────────┐    │    │
+│  │  │ {                                                            │    │    │
+│  │  │   "schemaVersion": 2,                                        │    │    │
+│  │  │   "mediaType": "application/vnd.oci.image.manifest.v1+json", │    │    │
+│  │  │   "config": {                                                │    │    │
+│  │  │     "mediaType": "application/vnd.oci.image.config.v1+json", │    │    │
+│  │  │     "digest": "sha256:abc123...",  ← Config blob digest     │    │    │
+│  │  │     "size": 1204                                             │    │    │
+│  │  │   },                                                         │    │    │
+│  │  │   "layers": [                                                │    │    │
+│  │  │     {                                                        │    │    │
+│  │  │       "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",│    │    │
+│  │  │       "digest": "sha256:def456...",  ← Layer 1 digest        │    │    │
+│  │  │       "size": 28123456                                       │    │    │
+│  │  │     },                                                       │    │    │
+│  │  │     { digest: "sha256:ghi789...", size: 12345 },  ← Layer 2 │    │    │
+│  │  │     { digest: "sha256:jkl012...", size: 567890 }   ← Layer 3│    │    │
+│  │  │   ]                                                          │    │    │
+│  │  │ }                                                            │    │    │
+│  │  └─────────────────────────────────────────────────────────────┘    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  IMAGE LAYERS (content-addressable, immutable):                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                       │    │
+│  │  ┌──────────────────────────────────────────────────────────────┐    │    │
+│  │  │  Layer 3: COPY . .                     (anihpj source code)   │    │    │
+│  │  │  sha256:jkl012...   567KB                                      │    │    │
+│  │  │  ┌──────────────────────────────────────────────────────────┐ │    │    │
+│  │  │  │  Layer 2: RUN pip install -r requirements.txt            │ │    │    │
+│  │  │  │  sha256:ghi789...   12MB   (Django, gunicorn, etc.)      │ │    │    │
+│  │  │  │  ┌──────────────────────────────────────────────────────┐ │ │    │    │
+│  │  │  │  │  Layer 1: FROM python:3.12-slim                      │ │ │    │    │
+│  │  │  │  │  sha256:def456...   28MB   (OS + Python runtime)     │ │ │    │    │
+│  │  │  │  │                                                       │ │ │    │    │
+│  │  │  │  └──────────────────────────────────────────────────────┘ │ │    │    │
+│  │  │  └──────────────────────────────────────────────────────────┘ │    │    │
+│  │  └──────────────────────────────────────────────────────────────┘    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  KEY CONCEPTS:                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ CONTENT-ADDRESSABLE: Each layer is named by its SHA256 hash.        │    │
+│  │   Same content = same hash = same layer. This is how caching works. │    │
+│  │                                                                      │    │
+│  │ LAYER SHARING: If two images use the same base (python:3.12-slim),  │    │
+│  │   the 28MB base layer is downloaded ONCE and shared.                │    │
+│  │   → 10 microservices using python:3.12-slim = 28MB total, not 280MB│    │
+│  │                                                                      │    │
+│  │ IMMUTABLE: Layers are never modified. Changing one line of code    │    │
+│  │   creates a NEW layer (new SHA256 hash). Old layers persist in      │    │
+│  │   registry until garbage collected.                                 │    │
+│  │                                                                      │    │
+│  │ UNION FILESYSTEM: At runtime, container runtime (containerd) uses   │    │
+│  │   overlay2 to stack layers + adds a writable top layer (ephemeral). │    │
+│  │   All writes go to the top layer; base layers are read-only.        │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Image Pull Lifecycle — What Happens When kubelet Pulls an Image</h4>
+                <p>When you create a pod with image <code>ghcr.io/user/anihpj:v2.1</code>, here's the exact sequence kubelet follows:</p>
+                <div class="diagram-container">
+                    <h4>Image Pull Sequence (kubelet + CRI + containerd)</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  IMAGE PULL LIFECYCLE (chronological)                                        │
+│                                                                              │
+│  T=0: Pod scheduled to node                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ kubelet receives Pod spec from API server                            │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  T=0.01s: Check imagePullPolicy                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ ┌─────────────────┬──────────────────────────────────────────────┐  │    │
+│  │ │ Always          │ Pull EVERY time pod starts (even if cached)  │  │    │
+│  │ │ IfNotPresent    │ Pull only if not cached locally              │  │    │
+│  │ │ Never            │ Use ONLY local image (fail if not present)   │  │    │
+│  │ └─────────────────┴──────────────────────────────────────────────┘  │    │
+│  │                                                                       │    │
+│  │ ⚠️  Default: IfNotPresent for tagged images (:v2.1)                 │    │
+│  │ ⚠️  Default: Always for :latest tag                                 │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  T=0.02s: Resolve registry authentication                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ 1. Check Pod's imagePullSecrets for registry credentials            │    │
+│  │ 2. Check ServiceAccount's imagePullSecrets (pod-level overrides)    │    │
+│  │ 3. Check node's configured credential providers (ECR, ACR, GCR)    │    │
+│  │ 4. For ghcr.io: check ~/.docker/config.json equivalent              │    │
+│  │                                                                       │    │
+│  │ If no credentials found → ANONYMOUS pull (public repos only)        │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  T=0.05s: Fetch image manifest (HTTP GET)                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ GET /v2/user/anihpj/manifests/v2.1                                  │    │
+│  │ Host: ghcr.io                                                        │    │
+│  │ Authorization: Bearer &lt;token&gt;                                       │    │
+│  │                                                                       │    │
+│  │ Response: Image Manifest JSON (list of layer digests)                │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  T=0.1s: Download layers (parallel, content-addressable)                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ For each layer in manifest:                                         │    │
+│  │   1. Check local cache: sha256:def456... exists?                    │    │
+│  │   2. If YES → SKIP (already cached!)                                │    │
+│  │   3. If NO → GET /v2/user/anihpj/blobs/sha256:def456...            │    │
+│  │   4. Verify: downloaded blob's SHA == expected SHA                  │    │
+│  │   5. Extract: gunzip + untar to content store                       │    │
+│  │                                                                       │    │
+│  │ Layers are downloaded in PARALLEL (up to 3 concurrent by default)   │    │
+│  │                                                                       │    │
+│  │ ⏱️  Time: depends on layer sizes + network bandwidth               │    │
+│  │    • Base layer (python:3.12-slim): 28MB → ~3s on good connection  │    │
+│  │    • App layer (anihpj code): 567KB → ~0.1s                        │    │
+│  │    • Total: ~3-5 seconds for cached base, ~20-30s for full pull    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  T=5s: Unpack layers + prepare rootfs                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ containerd uses snapshotter (overlay2) to:                          │    │
+│  │   1. Stack layers in order (Layer 1 → Layer 2 → Layer 3)           │    │
+│  │   2. Create writable snapshot (empty top layer)                     │    │
+│  │   3. Apply image config (ENV, CMD, WORKDIR, USER)                   │    │
+│  │   4. Result: runnable container root filesystem                     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  T=6s: Container starts                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ kubectl describe pod → Events:                                      │    │
+│  │   Normal  Pulling     6s    Pulling image "ghcr.io/user/anihpj:v2.1"│    │
+│  │   Normal  Pulled      5s    Successfully pulled image               │    │
+│  │   Normal  Created     4s    Created container anihpj                │    │
+│  │   Normal  Started     3s    Started container anihpj                │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  COMMON IMAGE PULL ERRORS:                                                   │
+│  ┌────────────────────────────────┬──────────────────────────────────────┐  │
+│  │ ErrImagePull                    │ Network timeout, registry down,      │  │
+│  │                                 │ authentication failed                │  │
+│  │ ImagePullBackOff                │ Retrying after previous failure      │  │
+│  │                                 │ (exponential backoff: 10s→20s→40s)  │  │
+│  │ ErrImageNeverPull               │ imagePullPolicy: Never, not cached  │  │
+│  │ InvalidImageName                │ Malformed image reference            │  │
+│  │ manifest unknown                 │ Tag doesn't exist in registry        │  │
+│  │ unauthorized                    │ Authentication failed (check secret) │  │
+│  └────────────────────────────────┴──────────────────────────────────────┘  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>imagePullSecrets — Registry Authentication in Kubernetes</h4>
+                <p>Private registries (like ghcr.io private repos, ECR, ACR) require authentication. Here's the end-to-end setup:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Terminal — Setting up private registry access for anihpj</span>
+                    </div>
+                    <pre><code class="language-bash"># ═══════════════════════════════════════
+# CREATE DOCKER REGISTRY SECRET
+# ═══════════════════════════════════════
+$ kubectl create secret docker-registry ghcr-secret \
+    --docker-server=ghcr.io \
+    --docker-username=youruser \
+    --docker-password=$GITHUB_TOKEN \
+    --docker-email=you@example.com \
+    -n anihpj
+
+# ═══════════════════════════════════════
+# OPTION 1: Reference in Pod spec
+# ═══════════════════════════════════════
+apiVersion: v1
+kind: Pod
+spec:
+  imagePullSecrets:
+  - name: ghcr-secret        # Used for ALL containers in this pod
+  containers:
+  - name: anihpj
+    image: ghcr.io/youruser/anihpj:v2.1
+
+# ═══════════════════════════════════════
+# OPTION 2: Attach to ServiceAccount (recommended)
+# ═══════════════════════════════════════
+$ kubectl patch serviceaccount default \
+    -n anihpj \
+    -p '{"imagePullSecrets": [{"name": "ghcr-secret"}]}'
+# Now EVERY pod using this ServiceAccount auto-gets ghcr-secret
+
+# ═══════════════════════════════════════
+# VERIFY: Check if kubelet can pull using the secret
+# ═══════════════════════════════════════
+$ kubectl describe pod anihpj-web-xxx -n anihpj | grep -A5 "Pulling"
+# Normal  Pulling   Pulling image "ghcr.io/youruser/anihpj:v2.1"
+# Normal  Pulled    Successfully pulled image  ← Secret works!</code></pre>
+                </div>
+                <div class="info-box tip">
+                    <h5>💡 CKA Exam Tip: imagePullSecrets</h5>
+                    <p>The CKA exam frequently tests imagePullSecrets. Remember: if you create a secret in namespace X and the pod is in namespace Y, the pod CANNOT use the secret. Secrets are namespace-scoped. Also, patching a ServiceAccount with imagePullSecrets only affects NEW pods — existing pods must be restarted.</p>
+                </div>
             </div>
 
             <!-- ─── Section 37.2: GitOps with ArgoCD ─── -->
@@ -56362,6 +56653,392 @@ jobs:
 └──────────────────────────────────────────────────────────────────────────────┘
                     </pre>
                     </div>
+                </div>
+
+                <h4>Webhooks vs Polling — Instant Sync</h4>
+                <p>ArgoCD polls Git every 3 minutes by default. For instant deployment, configure a <strong>webhook</strong> in your Git provider (GitHub, GitLab, BitBucket) so ArgoCD syncs within seconds of a push:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Terminal — Webhook setup for ArgoCD</span>
+                    </div>
+                    <pre><code class="language-bash"># ═══════════════════════════════════════
+# GITHUB WEBHOOK CONFIGURATION
+# ═══════════════════════════════════════
+# 1. Expose argocd-server (production uses Ingress/LB, not port-forward)
+$ kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+
+# 2. Get ArgoCD admin password
+$ ARGO_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+    -o jsonpath="{.data.password}" | base64 -d)
+
+# 3. Login via CLI
+$ argocd login localhost:8080 --username admin --password $ARGO_PASS --insecure
+
+# 4. Set webhook on GitHub repo:
+#    GitHub Repo → Settings → Webhooks → Add webhook
+#    Payload URL: https://argocd.example.com/api/webhook
+#    Content type: application/json
+#    Events: Just the push event
+#    Secret: &lt;generate-a-random-string&gt;
+
+# 5. Configure webhook secret in ArgoCD
+$ argocd admin settings rbac \
+    --set argocd-secret.github-webhook-secret=&lt;random-string&gt;
+
+# ═══════════════════════════════════════
+# TEST: Push to Git → ArgoCD syncs in &lt;5 seconds!
+# ═══════════════════════════════════════</code></pre>
+                </div>
+
+                <h4>ArgoCD RBAC — Who Can Sync What?</h4>
+                <p>ArgoCD has its own RBAC layer — separate from Kubernetes RBAC. It controls who can access the ArgoCD UI/CLI and what actions they can perform on specific apps:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">argocd-rbac-cm.yaml — ArgoCD RBAC Configuration</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+data:
+  # Default policy — deny all unless explicitly allowed
+  policy.default: role:none
+
+  # Scopes define permission granularity
+  scopes: '[groups, email]'
+
+  # ═══════════════════════════════════════
+  # RBAC MATRIX — who can do what to which apps
+  # ═══════════════════════════════════════
+  policy.csv: |
+    # Syntax: p, &lt;subject&gt;, &lt;resource&gt;, &lt;action&gt;, &lt;object&gt;
+    # ────────────────────────────────────────────────
+    # TEAM BACKEND — full control over anihpj
+    p, role:backend-team, applications, *, anihpj/*, allow
+    p, role:backend-team, logs, get, anihpj/*, allow
+
+    # TEAM PLATFORM — read-only for all apps (monitoring)
+    p, role:platform-team, applications, get, *, allow
+
+    # CI BOT — sync-only (no manual access)
+    p, role:ci-bot, applications, sync, anihpj/*, allow
+
+    # ADMIN — full control (use sparingly)
+    g, admin@company.com, role:admin
+
+    # ═══════════════════════════════════
+    # SUBJECT RESOLUTION — SSO groups → roles
+    # ═══════════════════════════════════
+    g, backend@yourorg.com, role:backend-team
+    g, platform@yourorg.com, role:platform-team</code></pre>
+                </div>
+
+                <h4>Sync Strategies — Automated, Manual, and Hybrid</h4>
+                <div class="diagram-container">
+                    <h4>ArgoCD Sync Strategy Comparison</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  SYNC STRATEGIES                                                             │
+│                                                                              │
+│  STRATEGY A: FULL AUTO-SYNC (dev / staging)                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ syncPolicy:                                                     │        │
+│  │   automated:                                                    │        │
+│  │     prune: true        # Remove resources deleted from Git      │        │
+│  │     selfHeal: true     # Auto-fix manual kubectl changes       │        │
+│  │                                                                 │        │
+│  │ Git push ──▶ Auto-sync ──▶ Cluster updated  (seconds)          │        │
+│  │ Drift detected ──▶ Auto-heal ──▶ Back to Git state (seconds)   │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  STRATEGY B: MANUAL SYNC (production)                                        │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ syncPolicy: {}   # Empty — no automated sync                    │        │
+│  │                                                                 │        │
+│  │ Git push ──▶ ArgoCD shows OutOfSync ──▶ Human clicks Sync      │        │
+│  │ Why? Release windows, change control, pre-sync approvals        │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  STRATEGY C: HYBRID (recommended for production)                             │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ syncPolicy:                                                     │        │
+│  │   automated:                                                    │        │
+│  │     prune: false       # NEVER auto-delete in prod              │        │
+│  │     selfHeal: true     # Fix drift (someone ran kubectl)        │        │
+│  │                                                                 │        │
+│  │ Result: Drift auto-fixed. Resource deletions require manual     │        │
+│  │         approval (PR + Sync button). Safe for production!       │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  ⚠️  CRITICAL: selfHeal in production — if an incident response team        │
+│      manually scales up a deployment (kubectl scale), selfHeal will         │
+│      scale it BACK DOWN. In emergencies, pause ArgoCD first!               │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>ArgoCD Reconciliation Loop — Under the Hood</h4>
+                <p>The <strong>application-controller</strong> is the brain of ArgoCD. It runs an infinite reconciliation loop that ensures cluster state matches Git state. Understanding this loop is key to debugging sync issues:</p>
+                <div class="diagram-container">
+                    <h4>ArgoCD Controller Reconciliation Loop (Deep Dive)</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  ARGOCD APPLICATION CONTROLLER — RECONCILIATION LOOP                         │
+│                                                                              │
+│  Every 3 minutes (or on webhook):                                            │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PHASE 1: FETCH DESIRED STATE (from Git/Helm repo)                  │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ 1. Clone/pull Git repo (shallow clone, --depth=1)          │     │    │
+│  │  │ 2. Checkout targetRevision (main branch, tag, or commit)   │     │    │
+│  │  │ 3. If Helm: helm template → render YAML                     │     │    │
+│  │  │ 4. If Kustomize: kustomize build → render YAML              │     │    │
+│  │  │ 5. If plain YAML: read directory as-is                      │     │    │
+│  │  │ 6. Result: list of K8s resource objects (desired state)    │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PHASE 2: FETCH LIVE STATE (from cluster via K8s API)               │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ 1. kubectl get &lt;resource&gt; -n &lt;namespace&gt; -o yaml           │     │    │
+│  │  │ 2. For each desired resource, fetch live equivalent         │     │    │
+│  │  │ 3. Cache live state in Redis for 3 min (reduces API load)  │     │    │
+│  │  │ 4. Result: list of K8s resource objects (live state)       │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PHASE 3: COMPARE (three-way diff)                                   │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ 1. Diff desired vs live YAML                                │     │    │
+│  │  │ 2. Normalize both sides (strip runtime fields)              │     │    │
+│  │  │ 3. Fields normalized out:                                   │     │    │
+│  │  │    - metadata.generation, metadata.resourceVersion          │     │    │
+│  │  │    - status.* (all status subfields)                        │     │    │
+│  │  │    - spec.clusterIP (assigned by cluster)                   │     │    │
+│  │  │ 4. Result: Synced (no diff) or OutOfSync (diff found)      │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PHASE 4: SYNC (if auto-sync or manual trigger)                     │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ 1. PreSync hooks execute (kubectl apply hook resources)   │     │    │
+│  │  │ 2. Apply resources in wave order (0, 1, 2, ...)           │     │    │
+│  │  │ 3. Each resource: kubectl apply -f &lt;resource&gt;              │     │    │
+│  │  │ 4. If prune=true: delete resources in live but not in git │     │    │
+│  │  │ 5. PostSync hooks execute                                   │     │    │
+│  │  │ 6. Health assessment (check pod status, etc.)              │     │    │
+│  │  │ 7. Result: Synced + Healthy/Degraded                       │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  KEY INSIGHT: ArgoCD uses kubectl apply (declarative), not kubectl create    │
+│  (imperative). This means:                                                   │
+│  - apply is idempotent — running it twice = same result                     │
+│  - apply uses last-applied-configuration annotation to track changes         │
+│  - apply can update AND create resources                                     │
+│  - Removing a field from Git → apply removes it from cluster               │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>ArgoCD Health Assessment — How Healthy/Degraded Is Determined</h4>
+                <p>ArgoCD doesn't just check if a resource exists — it evaluates <strong>resource-specific health rules</strong> written in Lua. You can customize these rules for CRDs:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">argocd-cm.yaml — Custom health check for Django app CRD</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  # ═══════════════════════════════════════
+  # BUILT-IN HEALTH CHECKS (what ArgoCD does internally):
+  # ═══════════════════════════════════════
+  # Deployment:  Healthy if .status.availableReplicas >= .spec.replicas
+  # StatefulSet: Healthy if .status.readyReplicas == .spec.replicas
+  # DaemonSet:   Healthy if .status.numberReady == .status.desiredNumberScheduled
+  # Service:     Healthy if .spec.type != LoadBalancer OR .status.loadBalancer.ingress exists
+  # Ingress:     Healthy if .status.loadBalancer.ingress exists
+  # Pod:         Healthy if .status.phase == "Running"
+  # Job:         Healthy if .status.succeeded >= 1
+  # PersistentVolumeClaim: Healthy if .status.phase == "Bound"
+
+  # ═══════════════════════════════════════
+  # CUSTOM HEALTH CHECK for DjangoApp CRD (Lua script)
+  # ═══════════════════════════════════════
+  resource.customizations: |
+    anihpj.io/DjangoApp:
+      health.lua: |
+        hs = {}
+        hs.status = "Progressing"
+        hs.message = "Waiting for DjangoApp to be ready"
+        
+        if obj.status ~= nil then
+          if obj.status.phase == "Running" then
+            hs.status = "Healthy"
+            hs.message = "DjangoApp is running"
+            return hs
+          elseif obj.status.phase == "Failed" then
+            hs.status = "Degraded"
+            hs.message = "DjangoApp failed: " .. (obj.status.reason or "unknown")
+            return hs
+          end
+        end
+        return hs</code></pre>
+                </div>
+
+                <h4>Multi-Cluster ArgoCD — Hub-Spoke Pattern</h4>
+                <p>In production, you run ArgoCD in a <strong>management cluster</strong> and have it deploy to <strong>multiple workload clusters</strong>. This is the hub-spoke pattern:</p>
+                <div class="diagram-container">
+                    <h4>Hub-Spoke Architecture</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  MULTI-CLUSTER GITOPS — HUB-SPOKE PATTERN                                    │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                    MANAGEMENT CLUSTER (Hub)                           │   │
+│  │                                                                       │   │
+│  │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐         │   │
+│  │  │ ArgoCD   │   │ ArgoCD   │   │ Git Repo │   │   SSO    │         │   │
+│  │  │ Server   │   │ App Ctlr │   │  Mirror  │   │ (OIDC)   │         │   │
+│  │  └──────────┘   └─────┬────┘   └──────────┘   └──────────┘         │   │
+│  │                       │                                               │   │
+│  └───────────────────────┼───────────────────────────────────────────────┘   │
+│                          │                                                    │
+│              ┌───────────┼───────────┐                                       │
+│              │           │           │                                        │
+│              ▼           ▼           ▼                                        │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                         │
+│  │  PROD-US-EAST │ │  PROD-EU-WEST│ │   STAGING    │   (Spoke Clusters)     │
+│  │               │ │               │ │               │                         │
+│  │ anihpj v2.1   │ │ anihpj v2.1   │ │ anihpj v2.2   │                         │
+│  │ 5 replicas    │ │ 5 replicas    │ │ 2 replicas    │                         │
+│  └──────────────┘ └──────────────┘ └──────────────┘                         │
+│                                                                              │
+│  CONFIGURATION (on hub cluster):                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ # Add spoke clusters to ArgoCD                                     │     │
+│  │ $ argocd cluster add prod-us-east-context   # Adds kubeconfig       │     │
+│  │ $ argocd cluster add prod-eu-west-context                          │     │
+│  │                                                                     │     │
+│  │ # Application YAML targets specific cluster:                       │     │
+│  │ spec:                                                               │     │
+│  │   destination:                                                      │     │
+│  │     server: https://prod-us-east-cluster.example.com               │     │
+│  │     namespace: anihpj                                               │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  BENEFITS:                                                                   │
+│  ✅ One ArgoCD instance manages ALL clusters                                 │
+│  ✅ Single pane of glass for multi-cluster deployments                       │
+│  ✅ Spoke clusters have NO ArgoCD running (less resource usage)              │
+│  ✅ If spoke cluster is down, hub still tracks desired state                 │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Diff Customization — Ignoring Irrelevant Differences</h4>
+                <p>Sometimes ArgoCD reports OutOfSync for differences you don't care about (like HPA setting replicas at runtime). Configure diff customization to ignore these:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">argocd-cm.yaml — Ignore HPA replicas, mutating webhook annotations</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  # ═══════════════════════════════════════
+  # IGNORE FIELDS that change at runtime
+  # ═══════════════════════════════════════
+  resource.customizations.ignoreDifferences.all: |
+    # Ignore HPA-controlled replica count (HPA changes it dynamically)
+    jsonPointers:
+    - /spec/replicas
+    
+  resource.customizations.ignoreDifferences.admissionregistration.k8s.io_MutatingWebhookConfiguration: |
+    jsonPointers:
+    - /webhooks/0/clientConfig/caBundle    # Rotated by cert-manager
+    
+  # App-level overrides (in Application YAML):
+  # spec:
+  #   ignoreDifferences:
+  #   - group: apps
+  #     kind: Deployment
+  #     jsonPointers:
+  #     - /spec/replicas                    # Ignore HPA changes</code></pre>
+                </div>
+
+                <h4>ArgoCD Notifications — Alerting on Sync Failures</h4>
+                <p>ArgoCD can send notifications to Slack, email, or webhooks when syncs succeed, fail, or health degrades:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">argocd-notifications-cm.yaml — Slack alerts for anihpj</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+data:
+  # ═══════════════════════════════════════
+  # SLACK INTEGRATION
+  # ═══════════════════════════════════════
+  service.slack: |
+    token: $slack-token
+
+  # ═══════════════════════════════════════
+  # TRIGGER: When to send notification
+  # ═══════════════════════════════════════
+  trigger.on-sync-failed: |
+    - when: app.status.operationState.phase == 'Failed'
+      send: [on-sync-failed-slack]
+  trigger.on-sync-succeeded: |
+    - when: app.status.operationState.phase == 'Succeeded'
+      send: [on-sync-succeeded-slack]
+  trigger.on-health-degraded: |
+    - when: app.status.health.status == 'Degraded'
+      send: [on-health-degraded-slack]
+
+  # ═══════════════════════════════════════
+  # TEMPLATE: What the message looks like
+  # ═══════════════════════════════════════
+  template.on-sync-failed-slack: |
+    message: |
+      🚨 *Sync FAILED*: {{.app.metadata.name}}
+      • Environment: {{.app.spec.destination.namespace}}
+      • Revision: {{.app.status.sync.revision}}
+      • Error: {{.app.status.operationState.message}}
+      • Operator: {{.app.status.operationState.operation.initiatedBy.username}}
+      • <{{.context.argocdUrl}}/applications/{{.app.metadata.name}}|View in ArgoCD>
+
+  # ═══════════════════════════════════════
+  # SUBSCRIPTION: Which apps get notified
+  # ═══════════════════════════════════════
+  subscriptions: |
+    - recipients:
+      - slack:anihpj-alerts
+      triggers:
+      - on-sync-failed
+      - on-health-degraded
+      selector: team=backend    # Only apps with label team=backend</code></pre>
                 </div>
             </div>
 
@@ -56549,6 +57226,265 @@ $ argocd app rollback anihpj 2    # Go back to revision 2</code></pre>
                     </pre>
                     </div>
                 </div>
+
+                <h4>Sync Waves &amp; Hooks — Controlling Deployment Order</h4>
+                <p>When deploying anihpj, order matters: ConfigMap before Deployment, Deployment before HPA, migrate DB before new pods start. Sync waves and hooks let you enforce this:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">YAML — Sync waves and hooks for ordered deployment</span>
+                    </div>
+                    <pre><code class="language-yaml"># ═══════════════════════════════════════
+# WAVE 0: Namespace first
+# ═══════════════════════════════════════
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"    # Created FIRST
+
+---
+# ═══════════════════════════════════════
+# WAVE 1: ConfigMaps and Secrets (before pods)
+# ═══════════════════════════════════════
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anihpj-config
+  namespace: anihpj
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"    # Created SECOND
+data:
+  DJANGO_SETTINGS_MODULE: "anihpj.settings.production"
+
+---
+# ═══════════════════════════════════════
+# HOOK: PreSync — Run DB migrations before deploy
+# ═══════════════════════════════════════
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: anihpj-db-migrate
+  namespace: anihpj
+  annotations:
+    argocd.argoproj.io/hook: PreSync      # Runs BEFORE sync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded  # Clean up after
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: ghcr.io/youruser/anihpj-web:v2.1
+        command: ["python", "manage.py", "migrate", "--noinput"]
+
+---
+# ═══════════════════════════════════════
+# WAVE 2: Deployments (after configs)
+# ═══════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-web
+  namespace: anihpj
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"    # Created THIRD
+
+---
+# ═══════════════════════════════════════
+# HOOK: PostSync — Run health check (smoke test)
+# ═══════════════════════════════════════
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: anihpj-smoke-test
+  namespace: anihpj
+  annotations:
+    argocd.argoproj.io/hook: PostSync     # Runs AFTER sync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: test
+        image: curlimages/curl:latest
+        command: ["sh", "-c"]
+        args:
+        - |
+          # Wait for service, then check health
+          sleep 5
+          curl -f http://anihpj-web.anihpj:8000/health/ || exit 1
+          echo "✅ anihpj is healthy!"</code></pre>
+                </div>
+                <div class="diagram-container">
+                    <h4>Sync Wave Execution Order</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  SYNC ORDER (single sync operation):                                         │
+│                                                                              │
+│  Phase 1: PreSync hooks execute                                              │
+│  ┌──────────────────┐                                                        │
+│  │ DB migration Job  │  → python manage.py migrate                          │
+│  └──────┬───────────┘                                                        │
+│         │                                                                     │
+│  Phase 2: Apply resources in wave order (lowest to highest)                  │
+│         ▼                                                                     │
+│  Wave 0  Wave 1       Wave 2        Wave 3                                   │
+│  ┌────┐  ┌─────────┐  ┌──────────┐  ┌───────┐                               │
+│  │ NS │→│ConfigMap│→│Deployment│→│  HPA  │                               │
+│  │    │  │ Secrets │  │ Service  │  │  PDB  │                               │
+│  └────┘  └─────────┘  └──────────┘  └───────┘                               │
+│                                                                              │
+│  Phase 3: PostSync hooks execute                                             │
+│  ┌──────────────────┐                                                        │
+│  │ Smoke test Job    │  → curl /health/ → ✅ or ❌                           │
+│  └──────────────────┘                                                        │
+│                                                                              │
+│  If PostSync hook FAILS → Sync marked as Failed (but resources stay)        │
+│  If PostSync hook SUCCEEDS → Sync = Synced &amp; Healthy                        │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>AppProject — Organizing Multiple Apps with Guardrails</h4>
+                <p>The <code>Application</code> resources live in <code>argocd</code> namespace, but the <strong>AppProject</strong> defines what destinations and sources are allowed — a crucial security boundary:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">anihpj-appproject.yaml — Scoped deployment boundaries</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: anihpj-team
+  namespace: argocd
+spec:
+  description: "anihpj application project — backend team"
+
+  # ═══════════════════════════════════════
+  # ALLOWED SOURCES — which Git repos / chart repos
+  # ═══════════════════════════════════════
+  sourceRepos:
+  - https://github.com/youruser/anihpj-k8s-manifests
+  - https://charts.bitnami.com/bitnami   # Allowed Helm charts
+
+  # ═══════════════════════════════════════
+  # ALLOWED DESTINATIONS — which clusters / namespaces
+  # ═══════════════════════════════════════
+  destinations:
+  - namespace: anihpj
+    server: https://kubernetes.default.svc
+  - namespace: anihpj-staging
+    server: https://kubernetes.default.svc
+
+  # ═══════════════════════════════════════
+  # ALLOWED RESOURCE KINDS — deny dangerous types
+  # ═══════════════════════════════════════
+  clusterResourceWhitelist:
+  - group: ""
+    kind: Namespace
+  - group: "rbac.authorization.k8s.io"
+    kind: ClusterRole
+
+  # ═══════════════════════════════════════
+  # DENY SPECIFIC RESOURCES (blacklist)
+  # ═══════════════════════════════════════
+  namespaceResourceBlacklist:
+  - group: ""
+    kind: ResourceQuota    # Don't let apps set cluster quotas
+  - group: "policy"
+    kind: PodSecurityPolicy</code></pre>
+                </div>
+                <div class="cka-gotcha">
+                    <h4>⚠️ ArgoCD Gotcha — AppProject vs Application</h4>
+                    <p>Every Application <strong>must</strong> belong to a project (default is <code>project: default</code>). The <code>default</code> project allows ALL sources and ALL destinations — fine for learning, but in production, create scoped AppProjects. If an Application references a repo/destination not whitelisted in its project, ArgoCD shows <code>Unknown</code> status with no helpful error — check the <code>argocd-application-controller</code> logs.</p>
+                </div>
+
+                <h4>ArgoCD Sync Internals — What Actually Happens During Sync</h4>
+                <p>When ArgoCD syncs, it doesn't just run <code>kubectl apply</code> blindly. It goes through a precise sequence that you can observe and control:</p>
+                <div class="diagram-container">
+                    <h4>Sync Operation — Phase-by-Phase Breakdown</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  SYNC OPERATION — INTERNAL PHASES                                            │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │ PHASE: PreSync (hooks with argocd.argoproj.io/hook: PreSync)            ││
+│  │ ┌────────────────────────────────────────────────────────────────────┐  ││
+│  │ │ • Runs Jobs/Pods marked as PreSync                                 │  ││
+│  │ │ • ArgoCD WAITS for these to complete (success or failure)          │  ││
+│  │ │ • If PreSync hook FAILS → sync ABORTED (no resources applied)      │  ││
+│  │ │ • Use case: DB backup, schema validation, external approval        │  ││
+│  │ └────────────────────────────────────────────────────────────────────┘  ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │ PHASE: Sync (apply resources in wave order)                              ││
+│  │ ┌────────────────────────────────────────────────────────────────────┐  ││
+│  │ │ For each wave (0, 1, 2, ...):                                      │  ││
+│  │ │   1. kubectl apply --dry-run=client → validate YAML                │  ││
+│  │ │   2. If dry-run fails → sync FAILS for that resource               │  ││
+│  │ │   3. kubectl apply -f &lt;resource&gt; → actually apply                  │  ││
+│  │ │   4. Wait for resource to become "Synced" (matches desired state)  │  ││
+│  │ │   5. Move to next resource in same wave (parallel within wave)     │  ││
+│  │ │   6. After all resources in wave complete → move to next wave      │  ││
+│  │ │                                                                     │  ││
+│  │ │ If prune=true:                                                      │  ││
+│  │ │   • After ALL waves: delete resources in cluster but NOT in Git    │  ││
+│  │ │   • Uses Kubernetes ownerReferences to track what ArgoCD created   │  ││
+│  │ └────────────────────────────────────────────────────────────────────┘  ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │ PHASE: PostSync (hooks with argocd.argoproj.io/hook: PostSync)          ││
+│  │ ┌────────────────────────────────────────────────────────────────────┐  ││
+│  │ │ • Runs Jobs/Pods marked as PostSync                                │  ││
+│  │ │ • If PostSync FAILS → sync status = "Failed" (but resources stay)  │  ││
+│  │ │ • Use case: smoke tests, integration tests, cache warmup           │  ││
+│  │ └────────────────────────────────────────────────────────────────────┘  ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  SYNC OPTIONS (argocd app sync anihpj --&lt;option&gt;):                            │
+│  ┌─────────────────┬───────────────────────────────────────────────────┐    │
+│  │ --dry-run       │ Show what WOULD happen (no actual changes)        │    │
+│  │ --prune         │ Delete resources not in Git (default with auto)   │    │
+│  │ --force         │ Force delete + recreate (for immutable fields)    │    │
+│  │ --replace       │ Use kubectl replace instead of apply              │    │
+│  │ --server-side   │ Use server-side apply (for large resources)       │    │
+│  │ --async         │ Don't wait for sync to complete                   │    │
+│  │ --timeout 600   │ Wait up to 600 seconds for sync                   │    │
+│  └─────────────────┴───────────────────────────────────────────────────┘    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>ArgoCD Resource Tracking — How ArgoCD Knows What It Manages</h4>
+                <p>ArgoCD adds a special <strong>annotation</strong> to every resource it creates. This is how it knows which resources to prune and which to ignore:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">How ArgoCD tracks managed resources</span>
+                    </div>
+                    <pre><code class="language-bash"># Every resource managed by ArgoCD has this annotation:
+$ kubectl get deployment anihpj-web -n anihpj -o yaml | grep argocd
+    argocd.argoproj.io/instance: anihpj        # Which Application owns this
+    argocd.argoproj.io/tracking-id: anihpj:apps/Deployment:anihpj/anihpj-web
+
+# How pruning works:
+# 1. ArgoCD lists ALL resources with argocd.argoproj.io/instance=anihpj
+# 2. Compares this list against what's currently in Git
+# 3. Any resource in cluster but NOT in Git → DELETE (if prune=true)
+# 4. Any resource in Git but NOT in cluster → CREATE
+
+# This is why you can't "steal" an ArgoCD-managed resource:
+# Even if you remove the argocd.argoproj.io/instance annotation,
+# selfHeal=true will add it back on the next sync loop!</code></pre>
+                </div>
             </div>
 
             <!-- ─── Section 37.4: Helm — Kubernetes Package Manager ─── -->
@@ -56706,6 +57642,324 @@ spec:
                 <div class="cka-gotcha">
                     <h4>⚠️ Helm Debugging Tips</h4>
                     <p>Template not rendering correctly? Use <code>helm template ./chart --debug</code> to see the rendered YAML. Common errors: missing <code>{{- }}</code> whitespace control causes extra blank lines, and forgetting <code>| nindent N</code> causes YAML indentation errors. Always validate with <code>helm lint ./chart</code> before installing.</p>
+                </div>
+
+                <h4>Helm Chart Dependencies — Composing the Stack</h4>
+                <p>Helm charts can depend on other charts. For anihpj to run, it needs PostgreSQL and Redis. Instead of creating them manually, declare them as dependencies:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Chart.yaml — anihpj with sub-chart dependencies</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: v2
+name: anihpj
+description: A Helm chart for anihpj Django application
+type: application
+version: 1.0.0
+appVersion: "2.1.0"
+
+# ═══════════════════════════════════════
+# CHART DEPENDENCIES (installed automatically)
+# ═══════════════════════════════════════
+dependencies:
+- name: postgresql
+  version: "15.x.x"
+  repository: https://charts.bitnami.com/bitnami
+  condition: postgresql.enabled      # Can toggle via --set postgresql.enabled=false
+  alias: anihpj-db                   # Referenced as .Values.anihpj-db in templates
+
+- name: redis
+  version: "19.x.x"
+  repository: https://charts.bitnami.com/bitnami
+  condition: redis.enabled
+  alias: anihpj-cache
+
+# ═══════════════════════════════════════
+# DOWNLOAD DEPENDENCIES
+# ═══════════════════════════════════════
+# $ helm dependency update    # Downloads charts/ directory
+# $ helm dependency build     # Builds from Chart.lock</code></pre>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Dependency Benefits for CKA Context</h5>
+                    <p>When you <code>helm install anihpj ./chart</code>, Helm <strong>automatically installs PostgreSQL and Redis first</strong>, then anihpj. This mirrors what Kubernetes operators do — one command stands up an entire multi-tier application. The CKA may test your ability to <strong>troubleshoot multi-tier deployments</strong>, where knowing dependency order (DB before app) saves time diagnosing CrashLoopBackOff.</p>
+                </div>
+
+                <h4>Helm Hooks — Controlling Install/Upgrade Lifecycle</h4>
+                <p>Just like ArgoCD hooks, Helm hooks run Jobs at specific lifecycle stages. Common use: run Django database migrations <strong>before</strong> the new deployment starts:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">templates/hook-db-migrate.yaml — Helm pre-upgrade hook</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-db-migrate
+  annotations:
+    # Run BEFORE upgrade (migrate DB, then start new pods)
+    "helm.sh/hook": pre-upgrade
+    # Delete job after it succeeds (no clutter)
+    "helm.sh/hook-delete-policy": hook-succeeded
+    # Job must complete before deployment rolls out
+    "helm.sh/hook-weight": "0"
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        command: ["python", "manage.py", "migrate", "--noinput"]
+
+# ═══════════════════════════════════════════════════
+# HELM HOOK REFERENCE:
+# ═══════════════════════════════════════════════════
+# pre-install      → Before chart is first installed
+# post-install     → After chart is first installed
+# pre-delete       → Before resources are deleted
+# post-delete      → After resources are deleted
+# pre-upgrade      → Before an upgrade (release exists)
+# post-upgrade     → After an upgrade
+# pre-rollback     → Before a rollback
+# post-rollback    → After a rollback
+# test             → When `helm test` is run
+
+# ═══════════════════════════════════════════════════
+# HOOK DELETE POLICIES:
+# ═══════════════════════════════════════════════════
+# hook-succeeded   → Delete after success (cleanup)
+# hook-failed      → Delete after failure (leave for debugging)
+# before-hook-creation → Delete previous hook before running again</code></pre>
+                </div>
+
+                <h4>Helm Test — Verifying a Release</h4>
+                <p>Helm supports built-in test pods that validate a deployment is working. The test runs in its own pod and reports success/failure without affecting production traffic:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">templates/tests/test-health.yaml — Automated smoke test</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Release.Name }}-health-test"
+  annotations:
+    "helm.sh/hook": test        # Only runs during `helm test`
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: curlimages/curl:latest
+    command: ["sh", "-c"]
+    args:
+    - |
+      STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+        http://{{ .Release.Name }}-web.{{ .Release.Namespace }}:8000/health/)
+      if [ "$STATUS" != "200" ]; then
+        echo "❌ Health check failed: HTTP $STATUS"
+        exit 1
+      fi
+      echo "✅ anihpj is healthy (HTTP $STATUS)"
+
+# Usage:
+# $ helm install anihpj ./chart
+# $ helm test anihpj              # Run the test pod
+# NAME: anihpj-health-test
+# STATUS: Succeeded
+# ✅ anihpj is healthy (HTTP 200)</code></pre>
+                </div>
+
+                <h4>Helm Release Storage — Where Helm Keeps State</h4>
+                <p>Helm doesn't have a database. It stores release history as <strong>Kubernetes Secrets</strong> (or ConfigMaps in Helm 2). Every install, upgrade, or rollback creates a new versioned Secret:</p>
+                <div class="diagram-container">
+                    <h4>Helm Release Storage Internals</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  HELM RELEASE STORAGE — VERSIONED SECRETS                                    │
+│                                                                              │
+│  $ helm install anihpj ./chart -n anihpj                                     │
+│  → Creates Secret: sh.helm.release.v1.anihpj.v1                              │
+│                                                                              │
+│  $ helm upgrade anihpj ./chart --set replicas=3 -n anihpj                    │
+│  → Creates Secret: sh.helm.release.v1.anihpj.v2                              │
+│                                                                              │
+│  $ helm upgrade anihpj ./chart --set image.tag=v2.2 -n anihpj                │
+│  → Creates Secret: sh.helm.release.v1.anihpj.v3                              │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ $ kubectl get secrets -n anihpj -l owner=helm                   │        │
+│  │ NAME                               TYPE     DATA   AGE            │        │
+│  │ sh.helm.release.v1.anihpj.v1       helm.sh/release.v1   1   2d   │        │
+│  │ sh.helm.release.v1.anihpj.v2       helm.sh/release.v1   1   1d   │        │
+│  │ sh.helm.release.v1.anihpj.v3       helm.sh/release.v1   1   2h   │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  WHAT'S INSIDE EACH SECRET:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ $ helm get manifest anihpj --revision 2                         │        │
+│  │ # Shows the EXACT YAML that was applied at revision 2           │        │
+│  │                                                                  │        │
+│  │ $ helm get values anihpj --revision 2                            │        │
+│  │ # Shows the values used at revision 2                            │        │
+│  │                                                                  │        │
+│  │ $ helm get hooks anihpj --revision 2                             │        │
+│  │ # Shows any hooks that ran at revision 2                         │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│                                                                              │
+│  RELEASE STORAGE LIMITS:                                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ • Default: keeps last 256 revisions (configurable with          │        │
+│  │   --history-max flag)                                            │        │
+│  │ • Each secret is ~10KB (base64+gzip encoded manifest)           │        │
+│  │ • 256 revisions × ~10KB = ~2.5MB per release                    │        │
+│  │ • 100 releases × 2.5MB = 250MB of cluster storage               │        │
+│  │ • Tip: $ helm upgrade --history-max 10  # Keep only 10 revs     │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  ⚠️  CRITICAL: Helm 3 uses Secrets (base64, not encrypted). Anyone with     │
+│      kubectl get secrets access can read ALL your Helm values including     │
+│      passwords! Use sealed-secrets or external-secrets for sensitive data.  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Helm Rendering Pipeline — From Chart to YAML Step-by-Step</h4>
+                <p>Understanding the exact sequence Helm follows when rendering templates is essential for debugging. Here's the complete pipeline:</p>
+                <div class="diagram-container">
+                    <h4>The Helm Template Rendering Pipeline</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  HELM RENDERING PIPELINE (what `helm template` does internally)              │
+│                                                                              │
+│  INPUT:                                                                       │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ 1. values.yaml (default values)                                   │       │
+│  │ 2. --values values-prod.yaml (user overrides)                     │       │
+│  │ 3. --set replicas=5 (command-line overrides, HIGHEST priority)    │       │
+│  │ 4. Chart.yaml (metadata about this chart)                         │       │
+│  │ 5. templates/*.yaml (Go template files)                           │       │
+│  │ 6. charts/* (dependency charts, if any)                           │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 1: VALUE MERGING (from lowest to highest priority)                     │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ Priority (lowest → highest):                                      │       │
+│  │   values.yaml  →  parent chart values  →  --values file          │       │
+│  │   → --set key=val  →  --set-string key=val                       │       │
+│  │                                                                    │       │
+│  │ Example:                                                          │       │
+│  │   values.yaml:        replicas: 1                                 │       │
+│  │   values-prod.yaml:   replicas: 3                                 │       │
+│  │   --set replicas=5                                                │       │
+│  │   → Final: replicas = 5 (--set wins)                             │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 2: BUILD RENDER CONTEXT (the "." object)                                │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ The "." passed to templates contains:                             │       │
+│  │                                                                    │       │
+│  │ .Values          → merged values from step 1                      │       │
+│  │ .Release          → release metadata:                             │       │
+│  │   .Name           → "anihpj" (helm install NAME)                  │       │
+│  │   .Namespace      → "anihpj" (-n flag)                            │       │
+│  │   .Revision       → 1, 2, 3, ... (auto-incrementing)             │       │
+│  │   .IsInstall      → true on first install                         │       │
+│  │   .IsUpgrade       → true on upgrades                             │       │
+│  │ .Chart            → Chart.yaml contents                           │       │
+│  │   .Name            → "anihpj"                                     │       │
+│  │   .Version         → "1.0.0"                                      │       │
+│  │   .AppVersion      → "2.1.0"                                      │       │
+│  │ .Capabilities      → K8s cluster capabilities:                   │       │
+│  │   .KubeVersion     → "1.30" (server version)                      │       │
+│  │   .APIVersions     → all available API versions                   │       │
+│  │ .Template          → current template info                        │       │
+│  │   .Name            → "anihpj/templates/deployment.yaml"           │       │
+│  │   .BasePath        → path to templates/ directory                 │       │
+│  │ .Files             → access to non-template files in chart/       │       │
+│  │ .Library           → library chart utilities                      │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 3: TEMPLATE EXECUTION (for each file in templates/)                    │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ For each file in templates/ (NOT in templates/NOTES.txt):         │       │
+│  │                                                                    │       │
+│  │ a. Parse file as Go text/template                                 │       │
+│  │ b. Execute template with merged context "."                        │       │
+│  │ c. Apply Sprig template functions (60+ functions)                  │       │
+│  │ d. Collect output (rendered YAML string)                           │       │
+│  │                                                                    │       │
+│  │ Special files:                                                    │       │
+│  │   templates/NOTES.txt → rendered AFTER install (helm status)      │       │
+│  │   templates/tests/    → only executed during `helm test`          │       │
+│  │   templates/_*.tpl    → partials, NOT rendered directly           │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 4: YAML PARSING & VALIDATION                                           │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ a. Split multi-document YAML (--- separator)                      │       │
+│  │ b. Parse each document as K8s resource                            │       │
+│  │ c. Validate required fields: apiVersion, kind, metadata.name      │       │
+│  │ d. If validation fails → ERROR (with template file + line)        │       │
+│  │ e. helm lint does extra: checks for deprecated APIs               │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 5: RESOURCE ORDERING (for apply)                                       │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ Helm applies resources in this order (Helm's built-in sort):      │       │
+│  │                                                                    │       │
+│  │ 1. Namespace        6. Deployment                                 │       │
+│  │ 2. NetworkPolicy     7. StatefulSet                               │       │
+│  │ 3. ResourceQuota     8. DaemonSet                                 │       │
+│  │ 4. LimitRange        9. Job                                       │       │
+│  │ 5. PodSecurityPolicy 10. CronJob                                  │       │
+│  │ 11. Secret/ConfigMap 12. Service                                  │       │
+│  │ 13. Ingress          14. PVC                                      │       │
+│  │ 15. ServiceAccount   16. Role/RoleBinding                         │       │
+│  │ 17. ClusterRole/CRB  18. Hooks run at specific lifecycle points   │       │
+│  │                                                                    │       │
+│  │ ⚠️  Helm's built-in ordering is NOT always correct for your app. │       │
+│  │     Use hook weights (helm.sh/hook-weight: "0") to control order. │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Chart.lock — Reproducible Deployments</h4>
+                <p>Just like <code>package-lock.json</code> or <code>go.sum</code>, Helm's <code>Chart.lock</code> pins exact dependency versions for reproducible builds:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Chart.lock — Pinned dependency versions</span>
+                    </div>
+                    <pre><code class="language-yaml">dependencies:
+- name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 15.5.20          # EXACT version (from Chart.yaml: "15.x.x")
+- name: redis
+  repository: https://charts.bitnami.com/bitnami
+  version: 19.6.2            # EXACT version (from Chart.yaml: "19.x.x")
+digest: sha256:8f9e7d6c5b4a3e2d1f0e9d8c7b6a5f4e3d2c1b0a9e8f7d6c5b4a3e2d1f0e9
+
+# ═══════════════════════════════════════
+# Why Chart.lock matters:
+# ═══════════════════════════════════════
+# Without lock: helm dependency update may fetch 15.5.21 (patch bump)
+#                → Could introduce bugs from dependency change
+# With lock:    helm dependency build uses EXACT versions from lock
+#                → Reproducible across CI, dev laptops, production
+# 
+# Rule: COMMIT Chart.lock to Git. It's generated code but critical
+#       for reproducibility. CI should fail if lock is out of date.</code></pre>
                 </div>
             </div>
 
@@ -56904,6 +58158,323 @@ patches:
                     <h5>🎯 CKA Exam — Kustomize</h5>
                     <p>The CKA exam may reference Kustomize in the exam environment. Know these two commands cold: <code>kubectl apply -k &lt;directory&gt;</code> applies Kustomize configuration, and <code>kubectl kustomize &lt;directory&gt;</code> previews without applying. The <code>-k</code> flag is your friend!</p>
                 </div>
+
+                <h4>Replacements — Cross-Resource Value Injection (Substitutions)</h4>
+                <p>Kustomize <strong>replacements</strong> (replacing the deprecated <code>vars</code>) let you inject values from one resource into another — like taking a Service's ClusterIP and putting it into a ConfigMap:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">kustomization.yaml — Replacements for cross-resource references</span>
+                    </div>
+                    <pre><code class="language-yaml"># ═══════════════════════════════════════
+# USE CASE: Inject Service name into Django ALLOWED_HOSTS
+# ═══════════════════════════════════════
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base
+
+# ═══════════════════════════════════════
+# REPLACEMENT: Take Service name → inject into ConfigMap
+# ═══════════════════════════════════════
+replacements:
+- source:
+    kind: Service
+    name: anihpj-web
+    fieldPath: metadata.name        # Source: "prod-anihpj-web"
+  targets:
+  - select:
+      kind: ConfigMap
+      name: anihpj-config
+    fieldPaths:
+    - data.ANIHU_SERVICE_NAME       # Target: ANIHU_SERVICE_NAME=prod-anihpj-web
+
+# ═══════════════════════════════════════
+# RESULT (rendered output):
+# ═══════════════════════════════════════
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: anihpj-config
+# data:
+#   ANIHU_SERVICE_NAME: prod-anihpj-web    ← Injected from Service!
+
+# ═══════════════════════════════════════
+# ANOTHER EXAMPLE: Inject namespace into deployment env
+# ═══════════════════════════════════════
+replacements:
+- source:
+    kind: Namespace
+    name: anihpj-production
+    fieldPath: metadata.name
+  targets:
+  - select:
+      kind: Deployment
+      name: anihpj-web
+    fieldPaths:
+    - spec.template.spec.containers.[name=anihpj].env.[name=K8S_NAMESPACE].value</code></pre>
+                </div>
+
+                <h4>Patch Types — Strategic Merge vs JSON Patch (6902)</h4>
+                <p>Kustomize supports two patch strategies. Know when to use each:</p>
+                <div class="diagram-container">
+                    <h4>Strategic Merge vs JSON Patch — Comparison</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  PATCH TYPE COMPARISON                                                        │
+│                                                                              │
+│  STRATEGIC MERGE PATCH (default for patches:):                               │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ File: patch-replicas.yaml                                       │        │
+│  │ apiVersion: apps/v1                                              │        │
+│  │ kind: Deployment                                                 │        │
+│  │ metadata:                                                        │        │
+│  │   name: anihpj-web                                              │        │
+│  │ spec:                                                            │        │
+│  │   replicas: 5         ← Merged: ONLY this field changes         │        │
+│  │                                                                  │        │
+│  │ ✅ K8s-aware: knows list merge strategy for containers, ports   │        │
+│  │ ✅ Simple: just write the YAML you want to override             │        │
+│  │ ⚠️  Can't remove fields (set to null → ignored)                 │        │
+│  │ ⚠️  Can't rename keys                                           │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  JSON PATCH (RFC 6902) — patchesJson6902:                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ - target:                                                       │        │
+│  │     kind: Deployment                                             │        │
+│  │     name: anihpj-web                                           │        │
+│  │   patch: |-                                                     │        │
+│  │     - op: replace                                               │        │
+│  │       path: /spec/replicas                                      │        │
+│  │       value: 5                                                  │        │
+│  │     - op: add                                                   │        │
+│  │       path: /spec/template/metadata/labels/new-label            │        │
+│  │       value: "true"                                            │        │
+│  │     - op: remove                                                │        │
+│  │       path: /spec/template/spec/containers/0/resources/limits   │        │
+│  │                                                                  │        │
+│  │ ✅ Precise: add, replace, remove, copy, move, test operations   │        │
+│  │ ✅ Can REMOVE fields (strategic merge can't)                    │        │
+│  │ ⚠️  Verbose: path syntax is tedious                            │        │
+│  │ ⚠️  Not K8s-aware: need exact JSON paths                        │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  RULE OF THUMB:                                                              │
+│  ┌────────────────────────────────────────────────────────────────┐         │
+│  │ Use strategic merge 90% of the time (simpler, K8s-aware)      │         │
+│  │ Use JSON patch when you need to REMOVE a field or rename keys │         │
+│  └────────────────────────────────────────────────────────────────┘         │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Kustomize Components — Reusable, Composable Modules</h4>
+                <p>Components are like mini-Kustomizations you can mix into any overlay — ideal for shared concerns like TLS certificates, monitoring sidecars, or common labels:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">components/ — Reusable building blocks</span>
+                    </div>
+                    <pre><code class="language-yaml"># ═══════════════════════════════════════
+# components/tls/kustomization.yaml
+# ═══════════════════════════════════════
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+- path: add-tls-volume.yaml
+  target:
+    kind: Deployment
+    name: anihpj-web
+
+---
+# ═══════════════════════════════════════
+# components/monitoring/kustomization.yaml
+# ═══════════════════════════════════════
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+- path: add-prometheus-annotations.yaml
+  target:
+    kind: Deployment
+    name: anihpj-web
+
+---
+# ═══════════════════════════════════════
+# USAGE IN OVERLAY — mix in components as needed
+# ═══════════════════════════════════════
+# overlays/production/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../../base
+components:                      # Mix in reusable parts!
+- ../../components/tls            # TLS for production
+- ../../components/monitoring     # Prometheus annotations
+# Dev overlay: only uses ../../base (no TLS, no monitoring)
+
+# ═══════════════════════════════════════
+# DIFFERENCE: resources vs components
+# ═══════════════════════════════════════
+# resources:  Add NEW resources to the output
+# components: Apply PATCHES/CONFIG to existing resources
+# Think: resources = new things, components = modify existing things</code></pre>
+                </div>
+
+                <h4>Kustomize Merge Algorithm — How Bases + Overlays Combine</h4>
+                <p>Understanding <strong>how</strong> Kustomize merges YAML is essential for debugging when patches don't apply as expected. Here's the exact algorithm:</p>
+                <div class="diagram-container">
+                    <h4>Strategic Merge Patch Algorithm — Under the Hood</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  KUSTOMIZE BUILD PROCESS (what `kubectl kustomize` does)                     │
+│                                                                              │
+│  STEP 1: RESOURCE COLLECTION                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ • Read kustomization.yaml                                            │   │
+│  │ • Load all resources: listed in resources:, from generators, etc.    │   │
+│  │ • Recursively load bases (each base is a kustomization directory)    │   │
+│  │ • Result: flat list of ALL K8s resource objects                     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 2: LABEL/ANNOTATION APPLICATION                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ • Apply commonLabels to ALL resources                                 │   │
+│  │ • Apply commonAnnotations to ALL resources                            │   │
+│  │ • Apply namePrefix/nameSuffix to all resource names                   │   │
+│  │ • Set namespace on all namespaced resources                           │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 3: PATCH APPLICATION (the critical step)                                │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ For each patch in patches:                                            │   │
+│  │                                                                        │   │
+│  │ a. MATCH target resource:                                             │   │
+│  │    • Match by kind + name (from target: selector)                     │   │
+│  │    • If no match → patch silently skipped (WARNING!)                  │   │
+│  │                                                                        │   │
+│  │ b. APPLY strategic merge:                                              │   │
+│  │                                                                        │   │
+│  │    EXAMPLE:                                                            │   │
+│  │    Base:                          Patch:                               │   │
+│  │    ┌──────────────────────┐       ┌──────────────────────┐            │   │
+│  │    │ replicas: 1          │       │ replicas: 5          │            │   │
+│  │    │ containers:          │  +    │ containers:          │  =         │   │
+│  │    │ - name: web          │       │ - name: web          │            │   │
+│  │    │   image: anihpj:v1   │       │   image: anihpj:v2   │            │   │
+│  │    │   ports:             │       │   ports:             │            │   │
+│  │    │   - containerPort:80 │       │   - containerPort:80 │            │   │
+│  │    └──────────────────────┘       └──────────────────────┘            │   │
+│  │                                                                        │   │
+│  │    Result:                                                            │   │
+│  │    ┌──────────────────────┐                                           │   │
+│  │    │ replicas: 5          │  ← Scalar: patch value wins               │   │
+│  │    │ containers:          │                                           │   │
+│  │    │ - name: web          │                                           │   │
+│  │    │   image: anihpj:v2   │  ← List merged by "name" key              │   │
+│  │    │   ports:             │                                           │   │
+│  │    │   - containerPort:80 │  ← Sub-list merged by "containerPort"     │   │
+│  │    └──────────────────────┘                                           │   │
+│  │                                                                        │   │
+│  │ RULES OF STRATEGIC MERGE:                                              │   │
+│  │ ┌─────────────────────────────────────────────────────────────┐      │   │
+│  │ │ Scalar fields (replicas, image tag):    patch value WINS    │      │   │
+│  │ │ Lists with merge key (containers[name]): MERGED by key      │      │   │
+│  │ │ Lists without merge key (command args):  patch REPLACES     │      │   │
+│  │ │ Maps (labels, annotations):              MERGED (union)     │      │   │
+│  │ │ Null values in patch:                    IGNORED (can't     │      │   │
+│  │ │                                          delete fields)     │      │   │
+│  │ └─────────────────────────────────────────────────────────────┘      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 4: IMAGE TRANSFORMATION                                                │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ • Replace image names and tags per images: config                     │   │
+│  │ • images: [{name: anihpj/web, newTag: v2.1}]                         │   │
+│  │   → Any container with image "anihpj/web" gets tag "v2.1"            │   │
+│  │ • This runs AFTER patches, so it overrides patch-level image changes │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 5: GENERATOR HASH SUFFIXES                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ • ConfigMapGenerator creates ConfigMap with content hash suffix       │   │
+│  │ • Name: anihpj-config-7g8h9j0k                                       │   │
+│  │ • Deployment automatically updated to reference new ConfigMap name   │   │
+│  │ • WHY: If ConfigMap content changes → hash changes → new name        │   │
+│  │   → Deployment rolls out new pods (picks up new config)              │   │
+│  │ • This is how Kustomize triggers rolling updates on config changes!  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  COMMON PITFALL:                                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ Patch doesn't match → silently ignored                             │     │
+│  │                                                                     │     │
+│  │ Example:                                                            │     │
+│  │   target:                                                           │     │
+│  │     kind: Deployment                                                │     │
+│  │     name: anihpj-web          ← Base has name "anihpj-web"          │     │
+│  │                                                                     │     │
+│  │ BUT overlay has namePrefix: prod-                                   │     │
+│  │ → Resource name is now "prod-anihpj-web"                            │     │
+│  │ → Patch target "anihpj-web" DOESN'T MATCH "prod-anihpj-web"        │     │
+│  │ → Patch silently dropped!                                           │     │
+│  │                                                                     │     │
+│  │ FIX: Use annotation-based targeting instead:                        │     │
+│  │   target:                                                           │     │
+│  │     annotationSelector: app=anihpj                                  │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Kustomize Name Reference Tracking — How ConfigMap Hashes Work</h4>
+                <p>Kustomize's killer feature: when a ConfigMap changes, the Deployment automatically rolls. Here's exactly how:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Name reference tracking — before and after kustomize build</span>
+                    </div>
+                    <pre><code class="language-bash"># ═══════════════════════════════════════
+# BEFORE kustomize build:
+# ═══════════════════════════════════════
+# base/deployment.yaml references ConfigMap by literal name:
+#   configMapRef:
+#     name: anihpj-config
+
+# kustomization.yaml uses configMapGenerator:
+#   configMapGenerator:
+#   - name: anihpj-config
+#     literals:
+#     - DJANGO_DEBUG=false
+
+# ═══════════════════════════════════════
+# AFTER kubectl kustomize:
+# ═══════════════════════════════════════
+# ConfigMap gets content hash suffix:
+#   name: anihpj-config-7g8h9j0k  # hash of all literals/files
+
+# Deployment's configMapRef is automatically updated:
+#   configMapRef:
+#     name: anihpj-config-7g8h9j0k  # ← Auto-updated to match!
+
+# ═══════════════════════════════════════
+# WHAT HAPPENS ON CONFIG CHANGE:
+# ═══════════════════════════════════════
+# 1. You change DJANGO_DEBUG=true in configMapGenerator
+# 2. kustomize build → new ConfigMap: anihpj-config-a1b2c3d4
+# 3. Deployment YAML updated: configMapRef → anihpj-config-a1b2c3d4
+# 4. kubectl apply → Deployment spec changed → triggers rolling update
+# 5. New pods mount new ConfigMap → pick up DJANGO_DEBUG=true
+#
+# This is Kustomize's secret weapon: config changes trigger deployments
+# automatically, with NO templating required!</code></pre>
+                </div>
             </div>
 
             <!-- ─── Section 37.6: Helm vs Kustomize — When to Use Each ─── -->
@@ -57037,7 +58608,393 @@ patches:
                     <p>This is the <strong>modern Kubernetes deployment stack</strong> used by most teams. You now understand every layer.</p>
                 </div>
 
-                <!-- CKA Augmentation: Chapter 37 -->
+                <h4>Complete Production Deployment Architecture for anihpj</h4>
+                <div class="diagram-container">
+                    <h4>End-to-End: Code → Production in One Diagram</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  COMPLETE GITOPS ARCHITECTURE — anihpj Production                            │
+│                                                                              │
+│  ┌─────────────────────────┐        ┌─────────────────────────┐            │
+│  │  GIT REPO: anihpj-code  │        │ GIT REPO: anihpj-k8s    │            │
+│  │                         │        │                         │            │
+│  │  src/                   │        │  base/                  │            │
+│  │  Dockerfile             │        │  overlays/              │            │
+│  │  requirements.txt       │        │    dev/                 │            │
+│  │  .github/workflows/     │        │    staging/             │            │
+│  └────────┬────────────────┘        │    production/          │            │
+│           │                         └────────┬────────────────┘            │
+│           │ Push to main                     │ Git tag: anihpj-v2.1        │
+│           ▼                                  │                              │
+│  ┌─────────────────────────┐                │                              │
+│  │  GITHUB ACTIONS (CI)    │                │                              │
+│  │  ┌───────────────────┐  │                │                              │
+│  │  │ 1. Python tests   │  │                │                              │
+│  │  │ 2. Docker build   │  │                │                              │
+│  │  │ 3. Push to GHCR   │──┼───▶ ghcr.io/user/anihpj:v2.1                 │
+│  │  │ 4. Update k8s repo│──┼───▶ ─────────────────────────────┐            │
+│  │  └───────────────────┘  │                                   │            │
+│  └─────────────────────────┘                                   │            │
+│                                                                 ▼            │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                          ARGOCD (GitOps Engine)                        │  │
+│  │                                                                        │  │
+│  │  ┌──────────────────────────────────────────────────────────────────┐ │  │
+│  │  │ App: anihpj-prod                                                  │ │  │
+│  │  │ Source: anihpj-k8s/overlays/production (Kustomize)                │ │  │
+│  │  │ Destination: anihpj-production namespace                          │ │  │
+│  │  │ Sync: Automated (selfHeal=true, prune=false)                      │ │  │
+│  │  │                                                                    │ │  │
+│  │  │ Sync Phases:                                                      │ │  │
+│  │  │ ┌────────────┐   ┌───────────┐   ┌────────────┐   ┌──────────┐  │ │  │
+│  │  │ │PreSync Hook│──▶│Wave 0: NS │──▶│Wave 1: CM  │──▶│Wave 2:   │  │ │  │
+│  │  │ │DB Migrate  │   │           │   │+ Secrets   │   │Deployment │  │ │  │
+│  │  │ └────────────┘   └───────────┘   └────────────┘   └──────────┘  │ │  │
+│  │  └──────────────────────────────────────────────────────────────────┘ │  │
+│  └─────────────────────────────────┬───────────────────────────────────────┘  │
+│                                    │                                           │
+│                                    ▼                                           │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                       KUBERNETES CLUSTER                               │  │
+│  │                                                                        │  │
+│  │  Namespace: anihpj-production                                          │  │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐      │  │
+│  │  │ anihpj-web │  │ anihpj-web │  │ anihpj-web │  │ anihpj     │      │  │
+│  │  │  Pod v2.1  │  │  Pod v2.1  │  │  Pod v2.1  │  │  Service   │      │  │
+│  │  │  Ready ✅  │  │  Ready ✅  │  │  Ready ✅  │  │  ClusterIP │      │  │
+│  │  └────────────┘  └────────────┘  └────────────┘  └─────┬──────┘      │  │
+│  │                                                        │              │  │
+│  │  ┌─────────────────────────────────────────────────────┘              │  │
+│  │  │  Namespace: ingress-nginx (installed via Helm)                     │  │
+│  │  │  ┌────────────────┐                                                │  │
+│  │  │  │ nginx-ingress  │────▶ anihpj.com → anihpj-web:8000            │  │
+│  │  │  │ LoadBalancer   │                                                │  │
+│  │  │  └────────────────┘                                                │  │
+│  │                                                                        │  │
+│  │  Monitoring (installed via Helm):                                      │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                │  │
+│  │  │  Prometheus  │  │   Grafana    │  │ AlertManager │                │  │
+│  │  │  (metrics)   │  │  (dashboards)│  │  (alerts)    │                │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘                │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  TOOL USAGE IN THIS ARCHITECTURE:                                            │
+│  ┌────────────────┬────────────────────────────────────────────────────┐    │
+│  │ GitHub Actions │ CI: build, test, push image, update manifest repo  │    │
+│  │ ArgoCD         │ CD: detect Git change → sync to cluster            │    │
+│  │ Kustomize      │ Manages anihpj's OWN manifests (dev/staging/prod)  │    │
+│  │ Helm           │ Manages THIRD-PARTY tools (nginx, Prometheus)      │    │
+│  │ Docker/OCI     │ container images in GHCR (or ECR/ACR/GCR)          │    │
+│  └────────────────┴────────────────────────────────────────────────────┘    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Image Promotion Pipeline — Dev → Staging → Production</h4>
+                <p>In a real team workflow, images don't go directly to production. They get <strong>promoted</strong> through environments:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Terminal — Image promotion workflow</span>
+                    </div>
+                    <pre><code class="language-bash"># ═══════════════════════════════════════
+# STEP 1: PR merges to main → CI builds &amp; pushes
+# ═══════════════════════════════════════
+# CI outputs: ghcr.io/user/anihpj:abc1234 (git SHA tag)
+
+# ═══════════════════════════════════════
+# STEP 2: Deploy to DEV (auto-sync via ArgoCD)
+# ═══════════════════════════════════════
+# ArgoCD watches overlays/dev/ — auto-deploys :abc1234
+# Dev team tests new features here
+
+# ═══════════════════════════════════════
+# STEP 3: Promote to STAGING (manual PR)
+# ═══════════════════════════════════════
+# Developer creates PR in anihpj-k8s repo:
+#   overlays/staging/kustomization.yaml:
+#     images:
+#     - name: anihpj/web
+#       newTag: abc1234    # ← Promote this SHA to staging
+# PR merged → ArgoCD syncs staging environment
+
+# ═══════════════════════════════════════
+# STEP 4: Promote to PRODUCTION (release tag + PR)
+# ═══════════════════════════════════════
+# After QA signs off on staging:
+$ docker tag ghcr.io/user/anihpj:abc1234 ghcr.io/user/anihpj:v2.1
+$ docker push ghcr.io/user/anihpj:v2.1
+
+# PR in anihpj-k8s repo:
+#   overlays/production/kustomization.yaml:
+#     images:
+#     - name: anihpj/web
+#       newTag: v2.1       # ← Promote release tag to production
+# PR merged → ArgoCD syncs production
+
+# ═══════════════════════════════════════
+# STEP 5: EMERGENCY ROLLBACK (seconds!)
+# ═══════════════════════════════════════
+# Option A: Git revert the PR → ArgoCD syncs back
+$ git revert HEAD &amp;&amp; git push
+
+# Option B: ArgoCD CLI rollback (faster in emergency)
+$ argocd app rollback anihpj-prod @prev
+
+# Option C: kubectl rollout (fastest, but Git drifts)
+$ kubectl rollout undo deployment/anihpj-web -n anihpj-production
+# ⚠️  ArgoCD will detect drift and (with selfHeal) revert it back!
+#     In emergencies, pause ArgoCD first:
+$ argocd app set anihpj-prod --sync-policy none</code></pre>
+                </div>
+
+                <h4>Canary Deployments — Progressive Rollout with Traffic Splitting</h4>
+                <p>Instead of replacing all pods at once (risky!), a <strong>canary deployment</strong> sends a small percentage of traffic to the new version first. If it's healthy, gradually increase. If not, rollback instantly:</p>
+                <div class="diagram-container">
+                    <h4>Canary Deployment — Step by Step</h4>
+                    <div class="diagram-box"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  CANARY DEPLOYMENT PATTERN                                                   │
+│                                                                              │
+│  STEP 1: Both versions running, 100% traffic to v2.0 (stable)                │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │                                                                    │        │
+│  │  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐      │        │
+│  │  │ anihpj v2.0  │     │ anihpj v2.0  │     │ anihpj v2.0  │      │        │
+│  │  │   Pod 1      │     │   Pod 2      │     │   Pod 3      │  100%│        │
+│  │  └──────────────┘     └──────────────┘     └──────────────┘  ◀─── │        │
+│  │                                                                    │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  STEP 2: Deploy 1 canary pod (v2.1), send 10% traffic                       │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │                                                                    │        │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────┐ │        │
+│  │  │ anihpj v2.0  │ │ anihpj v2.0  │ │ anihpj v2.0  │ │ v2.1 🆕 │ │        │
+│  │  │   Pod 1      │ │   Pod 2      │ │   Pod 3      │ │ canary  │ │        │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘ └─────────┘ │        │
+│  │       ◀──── 90% traffic ────▶                       ◀ 10% ──    │        │
+│  │                                                                   │        │
+│  │ Monitor: error rate, latency, CPU for 5-10 minutes                │        │
+│  │ ✅ v2.1 looks good!                                                │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  STEP 3: Increase canary → 50% traffic                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │                                                                    │        │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────┐ │        │
+│  │  │ anihpj v2.0  │ │ anihpj v2.0  │ │ anihpj v2.1  │ │ v2.1 🆕 │ │        │
+│  │  │   Pod 1      │ │   Pod 2      │ │   Pod 3      │ │ canary  │ │        │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘ └─────────┘ │        │
+│  │       ◀──── 50% traffic ────▶       ◀──── 50% traffic ────▶     │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  STEP 4: Full promotion → 100% v2.1                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐              │        │
+│  │  │ anihpj v2.1  │ │ anihpj v2.1  │ │ anihpj v2.1  │  100%        │        │
+│  │  │   Pod 1      │ │   Pod 2      │ │   Pod 3      │  ◀──────     │        │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘              │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│  IF CANARY FAILS:                                                            │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │ 1. Detect: error rate spikes, latency increases                  │        │
+│  │ 2. Rollback: scale canary to 0, OR                               │        │
+│  │ 3. Git revert + ArgoCD sync (returns to v2.0)                    │        │
+│  │ 4. Only 10% of users affected (vs 100% with rolling update!)     │        │
+│  └─────────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                </div>
+
+                <h4>Blue-Green Deployments — Instant Rollback by Switching Services</h4>
+                <p>Blue-Green runs TWO complete environments side by side and switches traffic instantly by updating a Service selector:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">Blue-Green Deployment — anihpj example</span>
+                    </div>
+                    <pre><code class="language-yaml"># ═══════════════════════════════════════
+# BLUE (current production) — labeled version: blue
+# ═══════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-blue
+  labels:
+    app: anihpj
+    version: blue
+spec:
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        version: blue        # Service currently points to "blue"
+    spec:
+      containers:
+      - name: anihpj
+        image: ghcr.io/user/anihpj:v2.0
+
+---
+# ═══════════════════════════════════════
+# GREEN (new version) — labeled version: green
+# ═══════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-green
+  labels:
+    app: anihpj
+    version: green
+spec:
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: anihpj
+        version: green       # Not receiving traffic yet
+    spec:
+      containers:
+      - name: anihpj
+        image: ghcr.io/user/anihpj:v2.1  # NEW version
+
+---
+# ═══════════════════════════════════════
+# SERVICE — switch between blue and green
+# ═══════════════════════════════════════
+apiVersion: v1
+kind: Service
+metadata:
+  name: anihpj-web
+spec:
+  selector:
+    app: anihpj
+    version: blue            # ← Change to "green" to switch!
+
+# ═══════════════════════════════════════
+# SWITCHING TRAFFIC (zero downtime):
+# ═══════════════════════════════════════
+# 1. Deploy green alongside blue (both running)
+# 2. Test green: kubectl port-forward deploy/anihpj-green 8080:8000
+# 3. Smoke test green internally
+# 4. Switch Service: kubectl patch svc anihpj-web -p '{"spec":{"selector":{"version":"green"}}}'
+#    → All traffic now goes to green INSTANTLY
+#
+# 5. PROBLEM? Switch back:
+#    kubectl patch svc anihpj-web -p '{"spec":{"selector":{"version":"blue"}}}'
+#    → Instant rollback! (sub-second, no pod restarts)
+#
+# 6. Green stable for 24h → delete blue deployment
+
+# ═══════════════════════════════════════
+# ROLLING UPDATE vs BLUE-GREEN vs CANARY:
+# ═══════════════════════════════════════
+# ┌──────────────────┬──────────────┬──────────────┬──────────────┐
+# │                  │ Rolling      │ Blue-Green   │ Canary       │
+# ├──────────────────┼──────────────┼──────────────┼──────────────┤
+# │ Rollback speed   │ Minutes      │ Seconds      │ Seconds      │
+# │ Resource usage   │ Same         │ 2× (both env)│ 1.1×         │
+# │ Risk             │ Medium       │ Low          │ Lowest       │
+# │ Complexity        │ Low          │ Medium       │ High         │
+# │ K8s native?      │ ✅ Built-in  │ ⚙️ Manual    │ ⚙️ Manual    │
+# │ Best for          │ Most apps    │ Critical     │ High-traffic │
+# └──────────────────┴──────────────┴──────────────┴──────────────┘</code></pre>
+                </div>
+
+                <h4>Argo Rollouts — Progressive Delivery with Automated Analysis</h4>
+                <p>Argo Rollouts is a Kubernetes controller that makes canary and blue-green deployments <strong>first-class resources</strong>, with automated metric analysis:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span>
+                        <span class="code-lang">anihpj-rollout.yaml — Argo Rollouts with automated canary</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Rollout                          # Replaces Deployment
+metadata:
+  name: anihpj-web
+spec:
+  replicas: 5
+  strategy:
+    canary:                            # Canary strategy
+      steps:
+      - setWeight: 10                  # 10% traffic to canary
+        pause: {duration: 5m}          # Wait 5 minutes
+      - setWeight: 30                  # 30% traffic
+        pause: {duration: 10m}         # Wait 10 minutes
+      - setWeight: 50                  # 50% traffic
+        pause: {duration: 10m}
+      - setWeight: 100                 # Full promotion
+      
+      # ═══════════════════════════════════
+      # AUTOMATED ANALYSIS (Prometheus metrics)
+      # ═══════════════════════════════════
+      analysis:
+        templates:
+        - templateName: canary-health-check
+        startingStep: 1                # Start analysis at 10% step
+        
+        args:
+        - name: service-name
+          value: anihpj-web
+
+  template:
+    spec:
+      containers:
+      - name: anihpj
+        image: ghcr.io/user/anihpj:v2.1
+
+---
+# ═══════════════════════════════════════
+# ANALYSIS TEMPLATE — Automated pass/fail criteria
+# ═══════════════════════════════════════
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canary-health-check
+spec:
+  metrics:
+  - name: error-rate
+    interval: 30s
+    failureLimit: 3                   # Fail if 3 consecutive bad checks
+    successCondition: result[0] < 0.01 # Error rate must be < 1%
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring:9090
+        query: |
+          rate(http_requests_total{
+            service="{{args.service-name}}",
+            status=~"5.."
+          }[1m]) / rate(http_requests_total{
+            service="{{args.service-name}}"
+          }[1m])
+  
+  - name: latency-p99
+    interval: 30s
+    failureLimit: 2
+    successCondition: result[0] < 0.5  # p99 < 500ms
+    provider:
+      prometheus:
+        query: |
+          histogram_quantile(0.99,
+            rate(http_request_duration_seconds_bucket{
+              service="{{args.service-name}}"
+            }[1m]))
+
+# ═══════════════════════════════════════
+# WHAT HAPPENS:
+# ═══════════════════════════════════════
+# 1. Rollout starts → 10% pods get v2.1
+# 2. AnalysisTemplate runs every 30s
+# 3. If error-rate stays below 1% AND p99 < 500ms → continue
+# 4. If either metric fails → AUTOMATIC ROLLBACK to v2.0
+# 5. No human intervention needed!
+#
+# This is the gold standard of production deployments.</code></pre>
+                </div>
+            </div>
                 <div class="cka-gotcha">
                     <h4>⚠️ CKA Gotcha: CI/CD &amp; GitOps Traps</h4>
                     <ul>
