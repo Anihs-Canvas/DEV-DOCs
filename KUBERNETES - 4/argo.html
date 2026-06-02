@@ -7791,6 +7791,13 @@ metadata:
 └──────────────────────────────────────────────────────────────┘
 </pre>
                 </div>
+                <div class="code-block-wrapper"><pre><code class="language-bash"># Argo Workflows CLI (NOT argocd — it's 'argo'!)
+argo submit workflow.yaml                  # Submit a workflow
+argo submit workflow.yaml -p image-tag=v2  # Submit with parameters
+argo list                                  # List all workflows
+argo get @latest                           # Get details of latest workflow
+argo logs @latest                          # View logs of latest workflow
+argo delete @latest                        # Delete latest workflow</code></pre></div>
             </div>
 
             <!-- Section 20.3 -->
@@ -8082,6 +8089,16 @@ spec:
                                   └──────────────────────────┘
 </pre>
                 </div>
+                <div class="compare-table"><table>
+                    <thead><tr><th>Aspect</th><th>Blue-Green</th><th>Canary</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Cutover</strong></td><td>Instant (promote)</td><td>Gradual (setWeight steps)</td></tr>
+                        <tr><td><strong>Services</strong></td><td>activeService + previewService</td><td>Single service (traffic split)</td></tr>
+                        <tr><td><strong>Rollback</strong></td><td>Instant (swap back)</td><td>Gradual (reverse setWeight)</td></tr>
+                        <tr><td><strong>Infrastructure</strong></td><td>No extras needed</td><td>Service mesh or Ingress needed</td></tr>
+                        <tr><td><strong>Best For</strong></td><td>Critical apps, fast rollback</td><td>Risk-averse, gradual exposure</td></tr>
+                    </tbody>
+                </table></div>
             </div>
 
             <!-- 21.2 -->
@@ -8239,6 +8256,17 @@ spec:
                     <div class="info-card"><h5>📚 Allowed Resources</h5><p>Open-book exam! You can reference <strong>argoproj.github.io</strong> documentation during the exam. Bookmark key pages before exam day.</p></div>
                 </div>
                 <div class="info-box tip"><h5>🎯 Top 5 Exam Day Tips</h5><p><strong>1.</strong> Know API groups — <code>argoproj.io/v1alpha1</code> is used by ALL Argo CRDs. <strong>2.</strong> Know ConfigMap names — each has a specific purpose. <strong>3.</strong> Understand sync vs health — they're independent. <strong>4.</strong> Know RBAC syntax — <code>p, subject, resource, action, object, effect</code>. <strong>5.</strong> Don't confuse ArgoCD CLI (<code>argocd</code>) with Argo Workflows CLI (<code>argo</code>).</p></div>
+                <div class="compare-table"><table>
+                    <thead><tr><th>✅ Must-Know</th><th>❌ Common Mistakes</th></tr></thead>
+                    <tbody>
+                        <tr><td>ArgoCD = Pull model (Git → K8s)</td><td>Thinking ArgoCD is a CI tool (it's CD!)</td></tr>
+                        <tr><td>All CRDs use <code>argoproj.io/v1alpha1</code></td><td>Mixing up ConfigMap names</td></tr>
+                        <tr><td>RBAC: <code>p, subj, res, act, obj, effect</code></td><td>Forgetting the 6th field (effect)</td></tr>
+                        <tr><td>Sync ≠ Health (independent checks)</td><td>Assuming Synced = Healthy</td></tr>
+                        <tr><td>Prune = delete, Self-Heal = correct</td><td>Using prune and self-heal interchangeably</td></tr>
+                        <tr><td><code>argocd admin export</code> for backups</td><td>Not knowing backup/restore commands</td></tr>
+                    </tbody>
+                </table></div>
             </div>
 
             <div class="capa-gotcha">
@@ -8252,6 +8280,478 @@ spec:
 
             <div class="capa-speed-tip">
                 <p><strong>Chapter 22 CAPA Quick Wins:</strong> 4 domains: Concepts (35%), Admin (25%), App Mgmt (20%), Workflows (20%). 60 questions, 90 minutes. All Argo CRDs = <code>argoproj.io/v1alpha1</code>. Open-book exam — use documentation. Flag and skip hard questions.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--           PART 9: PRODUCTION & REAL-WORLD PATTERNS              -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="part9">
+        <h2>🚀 Part 9: Production & Real-World Patterns <span class="chapter-badge">🔴 Advanced</span></h2>
+
+        <!-- ═══════════ CHAPTER 23 ═══════════ -->
+        <div id="ch23">
+            <div class="chapter-intro">
+                <h3>Chapter 23: Production ArgoCD — Monitoring, Backups, and Scaling</h3>
+                <p>Running ArgoCD in production requires monitoring, backup strategies, and scaling for enterprise workloads. This chapter covers the operational aspects: Prometheus metrics, disaster recovery procedures, horizontal scaling patterns, and the ArgoCD Operator for automated lifecycle management.</p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🔴 Advanced</span>
+                    <span class="meta-tag">⏱️ ~2 hours</span>
+                    <span class="meta-tag">🏭 Production</span>
+                    <span class="meta-tag">⚙️ Operations</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ Monitoring ArgoCD with Prometheus metrics and Grafana dashboards</li>
+                    <li>✅ Backup strategies: argocd admin export, Velero, and disaster recovery</li>
+                    <li>✅ Scaling ArgoCD horizontally for enterprise workloads</li>
+                    <li>✅ ArgoCD Operator for declarative instance management</li>
+                </ul>
+            </div>
+
+            <!-- 23.1 -->
+            <div class="section-block" id="s23-1">
+                <h3>23.1 Monitoring ArgoCD with Prometheus + Grafana</h3>
+                <p>ArgoCD exposes <strong>Prometheus metrics</strong> via the <code>argocd-metrics</code> service on port 8082. Key metrics include sync status counts, reconciliation duration, API request latency, and repository server performance.</p>
+                <div class="code-block-wrapper"><pre><code class="language-yaml"># Prometheus ServiceMonitor for ArgoCD
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-metrics
+  endpoints:
+  - port: metrics
+    interval: 30s
+
+# Key metrics to monitor:
+# argocd_app_sync_status        — App sync status (Synced/OutOfSync)
+# argocd_app_health_status      — App health (Healthy/Degraded)
+# argocd_app_reconcile_count    — Reconciliation count
+# argocd_app_reconcile_duration — How long syncs take</code></pre></div>
+            </div>
+
+            <!-- 23.2 -->
+            <div class="section-block" id="s23-2">
+                <h3>23.2 ArgoCD Backups and Disaster Recovery</h3>
+                <div class="code-block-wrapper"><pre><code class="language-bash"># Export ALL ArgoCD configuration (apps, projects, repos, clusters, settings)
+argocd admin export > argocd-backup.yaml
+
+# Restore from backup
+argocd admin import argocd-backup.yaml
+
+# What's backed up: Applications, AppProjects, repositories, clusters,
+#                   RBAC policies, SSO config, notifications config
+
+# Velero backup for full namespace (includes Secrets + ConfigMaps)
+velero backup create argocd-backup --include-namespaces argocd
+
+# Disaster recovery procedure:
+# 1. Restore argocd namespace (velero restore or argocd admin import)
+# 2. Re-add clusters: argocd cluster add &lt;context&gt;
+# 3. Re-add repos: argocd repo add &lt;url&gt;
+# 4. All apps auto-heal and reconcile themselves</code></pre></div>
+            </div>
+
+            <!-- 23.3 -->
+            <div class="section-block" id="s23-3">
+                <h3>23.3 Scaling ArgoCD for Enterprise</h3>
+                <div class="card-grid cols-2">
+                    <div class="info-card highlight"><h5>📈 API Server</h5><p><strong>Horizontally scalable.</strong> Run multiple replicas behind a load balancer. Stateless — no leader election needed.</p></div>
+                    <div class="info-card"><h5>📦 Repo Server</h5><p><strong>Horizontally scalable.</strong> Each replica handles repo cloning independently. Consider sharding by repo type (git, helm, OCI).</p></div>
+                    <div class="info-card"><h5>🔄 App Controller</h5><p><strong>Single active (leader election).</strong> Only one controller reconciles apps at a time. Others are hot standby. Shard by cluster for scale.</p></div>
+                    <div class="info-card"><h5>🗄️ Redis</h5><p><strong>Single instance or HA with Sentinel.</strong> Stores app cache and sync state. If Redis goes down, ArgoCD continues but performance degrades.</p></div>
+                </div>
+            </div>
+
+            <!-- 23.4 -->
+            <div class="section-block" id="s23-4">
+                <h3>23.4 ArgoCD Operator — Automated Lifecycle Management</h3>
+                <div class="code-block-wrapper"><pre><code class="language-yaml"># Define your entire ArgoCD instance declaratively
+apiVersion: argoproj.io/v1alpha1
+kind: ArgoCD
+metadata:
+  name: argocd
+spec:
+  server:
+    route:
+      enabled: true                    # Auto-create OpenShift Route
+    insecure: false
+  repo:
+    replicas: 3                         # HA repo server
+  controller:
+    sharding:
+      enabled: true                     # Enable cluster sharding
+  ha:
+    enabled: true                       # Enable Redis HA with Sentinel
+  monitoring:
+    enabled: true                       # Auto-create ServiceMonitors
+  rbac:
+    policy: |
+      g, admin, role:admin
+    defaultPolicy: role:readonly</code></pre></div>
+            </div>
+
+            <div class="capa-speed-tip">
+                <p><strong>Chapter 23 Quick Wins:</strong> Monitor via <code>argocd-metrics</code> on :8082. Backup with <code>argocd admin export</code> or Velero. API/Repo server = horizontally scalable. App Controller = single active (leader election). Operator = ArgoCD CRD.</p>
+            </div>
+
+            <div class="capa-exam-questions">
+                <h4>📝 Chapter 23 — CAPA Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">Which ArgoCD service exposes Prometheus metrics?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong><code>argocd-metrics</code></strong> on port 8082. It exposes metrics like <code>argocd_app_sync_status</code> and <code>argocd_app_health_status</code>.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">How do you backup all ArgoCD configuration?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>argocd admin export</code> — exports all apps, projects, repos, clusters, and settings as YAML. Restore via <code>argocd admin import</code>.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Which ArgoCD component uses leader election?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The <strong>Application Controller</strong>. Only one instance is active at a time. Others are hot standby. API Server and Repo Server scale horizontally without leader election.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What CRD does the ArgoCD Operator use?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong><code>ArgoCD</code></strong> (apiVersion: <code>argoproj.io/v1alpha1</code>). It declaratively manages the entire ArgoCD instance lifecycle including HA, monitoring, and upgrades.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════ CHAPTER 24 ═══════════ -->
+        <div id="ch24">
+            <div class="chapter-intro">
+                <h3>Chapter 24: CI/CD Integration Patterns</h3>
+                <p>ArgoCD handles the "CD" (Continuous Delivery) part — but how does CI feed into it? This chapter covers the complete CI/CD pipeline: building images, updating GitOps repos, integrating with GitHub Actions and Jenkins, using ArgoCD Image Updater, and creating preview environments for pull requests.</p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🔴 Advanced</span>
+                    <span class="meta-tag">⏱️ ~2.5 hours</span>
+                    <span class="meta-tag">🔄 CI/CD</span>
+                    <span class="meta-tag">🏭 Production</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ The complete CI/CD + GitOps pipeline flow</li>
+                    <li>✅ ArgoCD Image Updater for automatic image tag updates</li>
+                    <li>✅ GitHub Actions workflow integration with ArgoCD</li>
+                    <li>✅ Jenkins pipeline integration with ArgoCD</li>
+                    <li>✅ PR-based preview environments with ApplicationSet PR Generator</li>
+                </ul>
+            </div>
+
+            <!-- 24.1 -->
+            <div class="section-block" id="s24-1">
+                <h3>24.1 The CI/CD + GitOps Pipeline</h3>
+                <div class="diagram-container">
+                    <div class="diagram-title">END-TO-END CI/CD WITH GITOPS</div>
+<pre>
+┌──────────────────────────────────────────────────────────────────────────┐
+│  CI (GitHub Actions / Jenkins)              CD (ArgoCD)                   │
+│  ────────────────────────────              ────────────                   │
+│                                                                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+│  │ Source   │─▶│ Build    │─▶│ Push     │─▶│ Update   │─▶│ ArgoCD   │  │
+│  │ Code     │  │ Image    │  │ to       │  │ GitOps   │  │ Detects  │  │
+│  │ (GitHub) │  │ (Docker) │  │ Registry │  │ Repo     │  │ & Syncs  │  │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │
+│       │             │             │              │              │         │
+│  anihpj/       docker build   docker push    sed image tag   kubectl     │
+│  jobpost/      -t anihpj:v2   ghcr.io/       in kustomi-     apply       │
+│  views.py                     anihpj:v2      zation.yaml                 │
+└──────────────────────────────────────────────────────────────────────────┘
+  CI tools NEVER push to K8s directly — they only update Git.
+  ArgoCD is the ONLY thing that applies to the cluster.
+</pre>
+                </div>
+            </div>
+
+            <!-- 24.2 -->
+            <div class="section-block" id="s24-2">
+                <h3>24.2 Image Updater — Automatic Image Tag Updates</h3>
+                <div class="code-block-wrapper"><pre><code class="language-yaml"># ArgoCD Image Updater — auto-updates image tags
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: anihpj=ghcr.io/anihs-canvas/anihpj
+    argocd-image-updater.argoproj.io/anihpj.update-strategy: semver
+    argocd-image-updater.argoproj.io/write-back-method: git
+    # Strategies: semver, latest, digest, name
+    # Write-back: git (commit to repo) or argocd (set parameter)</code></pre></div>
+            </div>
+
+            <!-- 24.3 -->
+            <div class="section-block" id="s24-3">
+                <h3>24.3 GitHub Actions + ArgoCD</h3>
+                <div class="code-block-wrapper"><pre><code class="language-yaml"># .github/workflows/ci-cd.yml
+name: CI/CD Pipeline
+on:
+  push:
+    branches: [main]
+jobs:
+  build-and-update:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build & Push Docker image
+      run: |
+        docker build -t ghcr.io/anihs-canvas/anihpj:${{ github.sha }} .
+        docker push ghcr.io/anihs-canvas/anihpj:${{ github.sha }}
+
+    - name: Update GitOps repo
+      run: |
+        git clone https://github.com/Anihs-Canvas/anihpj-gitops.git
+        cd anihpj-gitops
+        cd apps/anihpj/overlays/prod
+        kustomize edit set image anihpj=ghcr.io/anihs-canvas/anihpj:${{ github.sha }}
+        git commit -am "Update anihpj to ${{ github.sha }}"
+        git push
+    # ArgoCD detects the commit in ~3 minutes and auto-syncs!</code></pre></div>
+            </div>
+
+            <!-- 24.4 -->
+            <div class="section-block" id="s24-4">
+                <h3>24.4 Jenkins + ArgoCD</h3>
+                <div class="code-block-wrapper"><pre><code class="language-groovy">// Jenkinsfile
+pipeline {
+  agent any
+  environment {
+    IMAGE_TAG = "${env.BUILD_NUMBER}"
+  }
+  stages {
+    stage('Build & Push') {
+      steps {
+        sh "docker build -t anihpj:${IMAGE_TAG} ."
+        sh "docker push anihpj:${IMAGE_TAG}"
+      }
+    }
+    stage('Update GitOps') {
+      steps {
+        sh """
+          git clone https://github.com/Anihs-Canvas/anihpj-gitops.git
+          cd anihpj-gitops/apps/anihpj/overlays/prod
+          kustomize edit set image anihpj=anihpj:${IMAGE_TAG}
+          git commit -am "Jenkins: Update to build ${IMAGE_TAG}"
+          git push
+        """
+      }
+    }
+    // Jenkins NEVER touches K8s — ArgoCD handles deployment
+  }
+}</code></pre></div>
+            </div>
+
+            <!-- 24.5 -->
+            <div class="section-block" id="s24-5">
+                <h3>24.5 Preview Environments with Pull Request Generator</h3>
+                <div class="diagram-container">
+                    <div class="diagram-title">PR PREVIEW ENVIRONMENT WORKFLOW</div>
+<pre>
+  Developer opens PR #42 ──▶ ArgoCD creates preview app "anihpj-pr-42"
+                                    │
+                                    ▼
+                              🌐 https://pr-42.anihpj.dev
+                              (Isolated namespace, test DB)
+                                    │
+  Developer pushes commits   ──▶ Preview env auto-updates
+                                    │
+  PR merged or closed        ──▶ Preview env auto-deleted 🗑️
+</pre>
+                </div>
+            </div>
+
+            <div class="capa-speed-tip">
+                <p><strong>Chapter 24 Quick Wins:</strong> CI tools NEVER push to K8s — they update Git. ArgoCD is the sole CD tool. Image Updater = auto-update image tags. GitHub Actions/Jenkins update GitOps repo → ArgoCD syncs. PR Generator = ephemeral preview envs.</p>
+            </div>
+
+            <div class="capa-exam-questions">
+                <h4>📝 Chapter 24 — CAPA Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">In a GitOps pipeline, should CI tools push directly to Kubernetes?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>No.</strong> CI tools should only update the GitOps repository. ArgoCD is the only component that applies changes to the cluster. This is the core GitOps principle of separation of concerns.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What does ArgoCD Image Updater do?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>It <strong>automatically monitors container registries</strong> for new image versions and updates the Application's image tag. Strategies: semver, latest, digest, name.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">What are the two write-back methods for Image Updater?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>git</strong> (commits to GitOps repo) and <strong>argocd</strong> (sets parameter directly on the Application). Git is the GitOps-native approach.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What happens to preview environments when a PR is merged?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The <strong>PR Generator auto-deletes</strong> the ephemeral Application and all its resources. No manual cleanup needed.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════ CHAPTER 25 ═══════════ -->
+        <div id="ch25">
+            <div class="chapter-intro">
+                <h3>Chapter 25: Enterprise GitOps Patterns & Best Practices</h3>
+                <p>This final chapter ties everything together with production-proven patterns: App of Apps for bootstrapping, multi-tenancy strategies, Git repository structure best practices, disaster recovery procedures, and the complete anihpj production GitOps stack architecture.</p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🔴 Advanced</span>
+                    <span class="meta-tag">⏱️ ~2 hours</span>
+                    <span class="meta-tag">🏗️ Architecture</span>
+                    <span class="meta-tag">📐 Patterns</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ App of Apps 3-layer pattern for cluster bootstrapping</li>
+                    <li>✅ Multi-tenancy: namespace-per-team, AppProject-per-team</li>
+                    <li>✅ Git repository structure best practices for GitOps</li>
+                    <li>✅ Disaster recovery and emergency procedures</li>
+                    <li>✅ The complete anihpj production GitOps stack architecture</li>
+                </ul>
+            </div>
+
+            <!-- 25.1 -->
+            <div class="section-block" id="s25-1">
+                <h3>25.1 App of Apps Pattern — Deep Dive</h3>
+                <div class="diagram-container">
+                    <div class="diagram-title">3-LAYER APP OF APPS — CLUSTER BOOTSTRAPPING</div>
+<pre>
+  Layer 1: ROOT (single meta-app)
+  ┌──────────────────────────────────────────────────────────┐
+  │  Application "root" → path: bootstrap/                   │
+  └──────────────────────────┬───────────────────────────────┘
+                             │
+                             ▼
+  Layer 2: INFRASTRUCTURE (platform services)
+  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+  │ Ingress  │ │ Cert-    │ │ External │ │ Sealed   │
+  │ Nginx    │ │ Manager  │ │ Secrets  │ │ Secrets  │
+  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘
+       └──────────────┼──────────────┼─────────────┘
+                      │              │
+                      ▼              ▼
+  Layer 3: APPLICATIONS (team workloads)
+  ┌──────────────────────┐ ┌──────────────────────┐
+  │  anihpj (jobpost)    │ │  Monitoring Stack    │
+  │  • Deployment        │ │  • Prometheus        │
+  │  • Service           │ │  • Grafana           │
+  │  • Ingress           │ │  • AlertManager      │
+  └──────────────────────┘ └──────────────────────┘
+
+  💡 One kubectl apply → entire platform deploys in minutes!
+</pre>
+                </div>
+            </div>
+
+            <!-- 25.2 -->
+            <div class="section-block" id="s25-2">
+                <h3>25.2 Multi-Tenancy Patterns</h3>
+                <div class="card-grid cols-2">
+                    <div class="info-card highlight"><h5>🏠 Namespace per Team</h5><p>Each team gets their own namespace. Simple RBAC via K8s. ArgoCD deploys to respective namespaces. <strong>Best for:</strong> Small orgs, clear team boundaries.</p></div>
+                    <div class="info-card"><h5>📁 AppProject per Team</h5><p>Each team has an AppProject with RBAC, resource allow-lists, and sync windows. Teams can only see and manage their own apps. <strong>Best for:</strong> Enterprise multi-tenancy.</p></div>
+                    <div class="info-card"><h5>☸️ Shared ArgoCD</h5><p>One ArgoCD instance serves all teams. Cost-effective. RBAC + AppProjects enforce isolation. <strong>Risk:</strong> Noisy neighbor, single point of failure.</p></div>
+                    <div class="info-card"><h5>🔀 Dedicated ArgoCD</h5><p>Each team/tenant gets their own ArgoCD instance. Maximum isolation. <strong>Risk:</strong> Higher operational overhead, harder to maintain consistency across instances.</p></div>
+                </div>
+            </div>
+
+            <!-- 25.3 -->
+            <div class="section-block" id="s25-3">
+                <h3>25.3 Git Repository Structure Best Practices</h3>
+                <div class="diagram-container">
+                    <div class="diagram-title">RECOMMENDED GITOPS REPO STRUCTURE</div>
+<pre>
+  anihpj-gitops/
+  ├── apps/
+  │   ├── anihpj/                 # One directory per application
+  │   │   ├── base/               # Common configuration
+  │   │   │   ├── deployment.yaml
+  │   │   │   ├── service.yaml
+  │   │   │   └── kustomization.yaml
+  │   │   └── overlays/           # Per-environment customization
+  │   │       ├── dev/
+  │   │       ├── staging/
+  │   │       └── prod/
+  │   ├── redis/                  # Another application
+  │   └── monitoring/
+  ├── bootstrap/                  # App of Apps root
+  │   └── root-app.yaml
+  └── clusters/                   # Per-cluster configuration
+      ├── dev-cluster/
+      └── prod-cluster/
+  
+  ✅ apps/<app>/overlays/<env>/ — Standard Kustomize layout
+  ✅ Separate config repo from source code repo
+  ✅ One branch (main), directories for environments
+</pre>
+                </div>
+            </div>
+
+            <!-- 25.4 -->
+            <div class="section-block" id="s25-4">
+                <h3>25.4 Disaster Recovery & Emergency Procedures</h3>
+                <div class="code-block-wrapper"><pre><code class="language-bash"># EMERGENCY: Bad sync broke production?
+# Step 1: Rollback to last known good revision
+argocd app rollback anihpj-prod 3        # Rollback to history ID 3
+
+# Step 2: Force sync to apply the rollback
+argocd app sync anihpj-prod --force
+
+# EMERGENCY: ArgoCD itself is down?
+# Step 1: kubectl apply the last known good manifests directly
+kubectl apply -k apps/anihpj/overlays/prod
+
+# Step 2: Document the manual change in the GitOps repo
+git commit -m "EMERGENCY: Manual kubectl apply during ArgoCD outage"
+
+# Step 3: When ArgoCD recovers, it reconciles — ensure Git matches reality
+
+# INCIDENT CHECKLIST:
+# ☐ 1. Identify what changed (argocd app diff)
+# ☐ 2. Rollback or fix (argocd app rollback OR git revert + sync)
+# ☐ 3. Verify health (argocd app get)
+# ☐ 4. Document and root-cause the incident</code></pre></div>
+            </div>
+
+            <!-- 25.5 -->
+            <div class="section-block" id="s25-5">
+                <h3>25.5 The Complete anihpj Production GitOps Stack</h3>
+                <div class="diagram-container">
+                    <div class="diagram-title">ANIHJP PRODUCTION GITOPS STACK — FULL ARCHITECTURE</div>
+<pre>
+┌──────────────────────────────────────────────────────────────────────────┐
+│                     🚀 ANIHJP PRODUCTION GITOPS STACK                     │
+│                                                                          │
+│  ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐    │
+│  │ SOURCE CODE     │     │ GITOPS CONFIG   │     │ CONTAINER REG   │    │
+│  │ GitHub: anihpj  │     │ GitHub: anihpj- │     │ ghcr.io/anihs-  │    │
+│  │ • jobpost/      │     │   gitops        │     │   canvas/anihpj │    │
+│  │ • views.py      │     │ • apps/anihpj/  │     │ • v1.0, v1.1... │    │
+│  │ • models.py     │     │ • bootstrap/    │     │ • latest        │    │
+│  └────────┬────────┘     └────────┬────────┘     └────────┬────────┘    │
+│           │                       │                       │              │
+│  ┌────────┴───────────────────────┴───────────────────────┴────────┐    │
+│  │                     ☸️ KUBERNETES CLUSTER                        │    │
+│  │                                                                  │    │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │    │
+│  │  │ ARGOCD   │ │Sealed    │ │External  │ │Argo      │           │    │
+│  │  │ (GitOps  │ │Secrets   │ │Secrets   │ │Rollouts  │           │    │
+│  │  │  CD)     │ │Controller│ │Operator  │ │(Canary)  │           │    │
+│  │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘           │    │
+│  │       │            │            │            │                  │    │
+│  │       ▼            ▼            ▼            ▼                  │    │
+│  │  ┌──────────────────────────────────────────────────┐          │    │
+│  │  │              ANIHJP WORKLOADS                     │          │    │
+│  │  │  • Django Deployment (3 replicas, canary)        │          │    │
+│  │  │  • PostgreSQL (via Helm/Bitnami)                  │          │    │
+│  │  │  • Redis (caching)                                │          │    │
+│  │  │  • Ingress (NGINX + cert-manager TLS)            │          │    │
+│  │  └──────────────────────────────────────────────────┘          │    │
+│  │                                                                  │    │
+│  │  ┌──────────────────────────────────────────────────┐          │    │
+│  │  │              MONITORING STACK                     │          │    │
+│  │  │  • Prometheus (metrics scraping)                  │          │    │
+│  │  │  • Grafana (dashboards)                           │          │    │
+│  │  │  • ArgoCD Notifications → Slack #deployments     │          │    │
+│  │  └──────────────────────────────────────────────────┘          │    │
+│  └──────────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────────┘
+</pre>
+                </div>
+            </div>
+
+            <div class="capa-speed-tip">
+                <p><strong>Chapter 25 Quick Wins:</strong> App of Apps = 3-layer bootstrap. Multi-tenancy = AppProject per team. Repo structure = <code>apps/&lt;app&gt;/overlays/&lt;env&gt;/</code>. Disaster recovery = rollback first, then investigate. Full stack = ArgoCD + Sealed Secrets + ESO + Rollouts + Monitoring.</p>
+            </div>
+
+            <div class="capa-exam-questions">
+                <h4>📝 Chapter 25 — CAPA Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What are the three layers of the App of Apps pattern?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Root (meta-app)</strong> → <strong>Infrastructure</strong> (platform services) → <strong>Applications</strong> (team workloads). Each layer deploys the next.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What's the recommended GitOps repo directory structure?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>apps/&lt;app&gt;/overlays/&lt;env&gt;/</code> — standard Kustomize layout. Separate config repo from source code repo. One branch (main) with directories for environments.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">How do you rollback a bad deployment in ArgoCD?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>argocd app rollback &lt;app&gt; &lt;history-id&gt;</code> then <code>argocd app sync &lt;app&gt; --force</code>. This reverts to a previous known-good state.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What should you do if ArgoCD itself is down and you need to deploy urgently?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Manually kubectl apply</strong> the manifests, document the change in Git, and when ArgoCD recovers, ensure Git matches cluster state so it doesn't revert your emergency fix.</p></div></details></div>
             </div>
         </div>
     </section>

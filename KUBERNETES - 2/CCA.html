@@ -633,7 +633,23 @@
         }
         
         .chapter-intro {
-            margin-bottom: 30px;
+            background: linear-gradient(135deg, #1e3a5f 0%, #161b22 100%);
+            border: 1px solid #326ce5;
+            border-radius: 16px;
+            padding: 32px;
+            margin: 24px 0 40px 0;
+            position: relative;
+            box-shadow: 0 4px 24px rgba(50,108,229,0.1);
+        }
+        .chapter-intro::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #326ce5, #60a5fa, #a78bfa, #60a5fa, #326ce5);
+            border-radius: 16px 16px 0 0;
         }
         
         .chapter-intro h3 {
@@ -651,19 +667,28 @@
         
         .chapter-meta {
             display: flex;
+            gap: 12px;
             flex-wrap: wrap;
-            gap: 8px;
-            margin: 12px 0;
+            margin-top: 16px;
         }
         
         .meta-tag {
-            display: inline-block;
-            background: #21262d;
-            border: 1px solid #30363d;
-            border-radius: 14px;
-            padding: 4px 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(50, 108, 229, 0.12);
+            border: 1px solid rgba(50, 108, 229, 0.25);
+            color: #93c5fd;
+            padding: 6px 14px;
+            border-radius: 20px;
             font-size: 12px;
-            color: #a1a1aa;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            transition: all 0.2s ease;
+        }
+        .meta-tag:hover {
+            background: rgba(50, 108, 229, 0.2);
+            border-color: rgba(50, 108, 229, 0.5);
         }
         
         .learning-objectives {
@@ -692,10 +717,10 @@
             font-size: 0.95em;
         }
         
+        /* Section blocks */
         .section-block {
-            margin: 30px 0;
-            padding: 20px 0;
-            border-top: 1px solid #21262d;
+            margin: 50px 0;
+            padding-top: 20px;
         }
         
         .section-block h3 {
@@ -2715,6 +2740,7 @@
                         <ul class="sub-toc">
                             <li><a href="#sap-e1">E.1 Cilium Install</a></li>
                             <li><a href="#sap-e2">E.2 NetworkPolicy Set</a></li>
+                            <li><a href="#sap-e2b">E.2b Backend CNP Example</a></li>
                             <li><a href="#sap-e3">E.3 Hubble Config</a></li>
                             <li><a href="#sap-e4">E.4 WireGuard</a></li>
                             <li><a href="#sap-e5">E.5 Prometheus</a></li>
@@ -9754,6 +9780,49 @@ spec:
                     </div>
                 </div>
 
+                <div class="section-block" id="sap-e2b">
+                    <h3>Complete anihpj Backend CNP — Production-Ready Example</h3>
+                    <p style="color:#8b949e;font-size:13px;">This is the actual <code>CiliumNetworkPolicy</code> you would apply to secure the anihpj backend. It combines ingress rules (allow frontend) and egress rules (DNS + database).</p>
+                    <div class="code-block-wrapper"><div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang-label">YAML</span></div><div class="code-block-body"><pre><code class="language-yaml">apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: secure-backend
+  namespace: anihpj
+spec:
+  endpointSelector:
+    matchLabels:
+      app: backend        # Protects ALL backend pods
+  ingress:                # WHO can reach the backend?
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend     # Only frontend pods
+    toPorts:
+    - ports:
+      - port: "8000"      # Django runs on port 8000
+        protocol: TCP
+  egress:                 # Where can the backend reach OUT?
+  - toEndpoints:           # RULE 1: DNS (ALWAYS first!)
+    - matchLabels:
+        io.kubernetes.pod.namespace: kube-system
+        k8s-app: coredns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+  - toEndpoints:           # RULE 2: Database access
+    - matchLabels:
+        app: postgres
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP</code></pre></div></div>
+
+                    <div class="callout-enhanced tip" style="margin-top:10px;">
+                        <h5>🔑 Novice: How to Read This Policy in Plain English</h5>
+                        <p>"Protect pods labeled <strong>app: backend</strong>. Only allow <strong>frontend</strong> pods to connect on port <strong>8000</strong>. Allow the backend to send DNS queries to <strong>CoreDNS</strong> (needed to resolve domain names). Allow the backend to connect to <strong>postgres</strong> on port <strong>5432</strong>. Everything else is denied."</p>
+                    </div>
+                </div>
+
                 <div class="section-block" id="sap-e3">
                     <h3>E.3 Hubble Configuration for anihpj</h3>
                     <div class="code-block-wrapper"><div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang-label">YAML</span></div><div class="code-block-body"><pre><code class="language-yaml">apiVersion: v1
@@ -9959,6 +10028,59 @@ CMD ["gunicorn", "anihpj.wsgi:application", \
 </pre>
                     </div>
                 </div>
+
+                <!-- Quick Deploy Card -->
+                <div class="diagram-container" style="margin-top:16px;">
+                    <div class="diagram-title">🚀 anihpj Quick Deploy — Full Command Sequence</div>
+                    <div style="display:flex;flex-direction:column;gap:6px;padding:10px 0;">
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.05);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">1</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Install Cilium:</strong> <code>cilium install --set kubeProxyReplacement=true --set hubble.enabled=true --set encryption.type=wireguard</code></span>
+                        </div>
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.03);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">2</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Verify:</strong> <code>cilium status --wait</code> → all components should show ✅</span>
+                        </div>
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.05);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">3</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Build image:</strong> <code>docker build -t anihpj-backend:v1.0 .</code> (use E.8 Dockerfile)</span>
+                        </div>
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.03);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">4</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Apply baseline:</strong> <code>kubectl apply -f default-deny-all.yaml</code> (B.4 template, Appendix B)</span>
+                        </div>
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.05);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">5</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Allow DNS:</strong> <code>kubectl apply -f allow-dns.yaml</code> (UDP 53 to CoreDNS — critical!)</span>
+                        </div>
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.03);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">6</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Deploy policies:</strong> Apply frontend→backend→database CNPs (E.2 policy table)</span>
+                        </div>
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.05);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">7</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Test everything:</strong> <code>cilium connectivity test</code> → 21+ tests should pass</span>
+                        </div>
+                        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 12px;background:rgba(50,108,229,0.03);border-radius:6px;">
+                            <span style="color:#60a5fa;font-weight:700;font-size:11px;min-width:20px;">8</span>
+                            <span style="font-size:11px;color:#c9d1d9;"><strong>Monitor:</strong> <code>hubble observe</code> → watch traffic flow in real-time!</span>
+                        </div>
+                    </div>
+                    <div style="color:#8b949e;font-size:11px;text-align:center;margin-top:8px;">💡 This sequence deploys a fully secured, observable anihpj cluster in ~5 minutes.</div>
+                </div>
+
+                <!-- CCA Practice Questions -->
+                <div class="cca-exam-questions" style="margin-top:20px;">
+                    <h4>📝 Appendix E — CCA Practice Questions (8 Questions)</h4>
+                    <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What command installs Cilium with kube-proxy replacement and Hubble enabled?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>cilium install --set kubeProxyReplacement=true --set hubble.enabled=true --set hubble.relay.enabled=true --set hubble.ui.enabled=true</code></p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What is the correct order for applying NetworkPolicies in a zero-trust setup?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>1. Default-deny-all CCNP (lock everything), 2. DNS egress rule (allow name resolution), 3. App-specific CNPs (frontend→backend→database), 4. L7 rules (optional), 5. Egress controls (optional).</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">How do you verify WireGuard encryption is active?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>cilium encrypt status</code> — all nodes should show "OK" with the encryption type (WireGuard/IPSec). If not active, check kernel module: <code>modprobe wireguard</code>.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What ServiceMonitor configuration scrapes Hubble metrics from Cilium agents?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Use a Prometheus ServiceMonitor with <code>selector: matchLabels: app: cilium</code>, endpoint port <code>hubble-metrics</code>, and <code>namespaceSelector: matchNames: [kube-system]</code>.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">How does Cilium enable canary deployments without sidecars?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Cilium uses identity-based traffic splitting. The canary pods get a different label (e.g., <code>version: canary</code>) which maps to a different Cilium identity. eBPF load balancers split traffic by identity — no sidecar proxy needed.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What command validates the entire Cilium deployment end-to-end?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>cilium connectivity test</code> — runs 21+ tests covering pod-to-pod, Services, DNS, NetworkPolicy, Encryption, Hubble, and Performance.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">Why does the anihpj Dockerfile use gunicorn instead of the Django dev server?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The Django dev server (<code>manage.py runserver</code>) is single-threaded and not designed for production. Gunicorn is a production-grade WSGI server with multiple workers, proper logging, and can handle concurrent requests. The CMD uses 3 workers bound to 0.0.0.0:8000.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">What Grafana panels would you create to monitor anihpj with Hubble metrics?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>1. HTTP Request Rate monitoring <code>hubble_http_requests_total</code>, 2. Policy Drops tracking <code>hubble_drop_total</code>, 3. DNS Query Rate via <code>hubble_dns_responses_total</code>, 4. TCP Flow Rate by Verdict using <code>hubble_tcp_flags_total</code>.</p></div></details></div>
+                </div>
             </div> <!-- End Appendix E -->
 
             <!-- APPENDIX F -->
@@ -10085,6 +10207,61 @@ CMD ["gunicorn", "anihpj.wsgi:application", \
                         <p>✅ Apply your Cilium knowledge — build Project 1 from Chapter 21.2!</p>
                         <p>✅ Join the Cilium Slack and share your experience. Help the next batch of CCA candidates!</p>
                     </div>
+                </div>
+
+                <!-- Domain Review Checklist -->
+                <div class="diagram-container" style="margin-top:16px;">
+                    <div class="diagram-title">📋 Domain-by-Domain Final Review — Night Before Checklist</div>
+                    <div class="comparison-table">
+                        <table>
+                            <thead><tr><th>Domain (Weight)</th><th>Must-Review Topics</th><th>Key Commands</th><th>☐</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>Architecture (30%)</strong></td><td>eBPF lifecycle, Cilium components, Identity, CRDs, XDP/TC hooks</td><td><code>cilium status</code>, <code>cilium endpoint list</code></td><td>☐</td></tr>
+                                <tr><td><strong>Network Policy (20%)</strong></td><td>CNP vs CCNP, L3/L4 vs L7, toFQDNs, DNS requirement, audit mode</td><td><code>cilium policy get</code>, <code>hubble observe --verdict DROPPED</code></td><td>☐</td></tr>
+                                <tr><td><strong>Service Mesh (20%)</strong></td><td>KPR, Maglev, sidecar-less mesh, BGP, Ingress, canary</td><td><code>cilium service list</code>, <code>cilium bpf lb list</code></td><td>☐</td></tr>
+                                <tr><td><strong>Observability (18%)</strong></td><td>Hubble CLI flags, Relay, UI, metrics types, Prometheus integration</td><td><code>hubble observe --from-pod</code>, <code>hubble status</code></td><td>☐</td></tr>
+                                <tr><td><strong>Installation (12%)</strong></td><td>Install flags, prerequisites, connectivity test, upgrade, migration</td><td><code>cilium install --help</code>, <code>cilium connectivity test</code></td><td>☐</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Last 5 Minutes Strategy -->
+                <div class="diagram-container" style="margin-top:16px;">
+                    <div class="diagram-title">⏰ The Last 5 Minutes — What to Do</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 0;">
+                        <div style="background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:14px;">
+                            <h6 style="color:#4ade80;margin:0 0 8px 0;font-size:12px;">✅ DO in the Last 5 Minutes</h6>
+                            <ul style="color:#c9d1d9;font-size:11px;margin:0;padding-left:16px;line-height:1.8;">
+                                <li>Verify ALL questions are answered (no blanks!)</li>
+                                <li>Review flagged questions — pick best guess</li>
+                                <li>Double-check domain counts (12-20 Qs each)</li>
+                                <li>Take 3 deep breaths — you're almost done!</li>
+                            </ul>
+                        </div>
+                        <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:8px;padding:14px;">
+                            <h6 style="color:#f87171;margin:0 0 8px 0;font-size:12px;">❌ DON'T in the Last 5 Minutes</h6>
+                            <ul style="color:#c9d1d9;font-size:11px;margin:0;padding-left:16px;line-height:1.8;">
+                                <li>Don't change answers without solid evidence</li>
+                                <li>Don't panic if you flagged many — it's normal</li>
+                                <li>Don't start researching new concepts now</li>
+                                <li>Don't close the browser until you see "Submitted"</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CCA Practice Questions -->
+                <div class="cca-exam-questions" style="margin-top:20px;">
+                    <h4>📝 Appendix F — CCA Practice Questions (8 Questions)</h4>
+                    <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">How long is the CCA exam and what is the recommended time per question?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>90 minutes for approximately 60 questions. That's about 1.5 minutes per question. Flag hard ones and return in the last 10 minutes.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">Is the CCA exam open book? What specific resource is allowed?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Yes — docs.cilium.io is the ONLY allowed resource. No Google, no notes, no other websites. Pre-bookmark key pages for instant access.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">What should you do the night before the exam?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Light review only (glossary + chapter summaries). Set up quiet workspace. Charge laptop. Prepare ID. Go to bed early — sleep is more important than last-minute cramming.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What is the best strategy for using docs.cilium.io during the exam?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Open docs BEFORE the exam starts. Use Ctrl+F to search for keywords (not browsing). Know which page has what: /security/policy/ for CNP syntax, /observability/hubble/ for CLI flags, /gettingstarted/ for install options.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What are the 5 CCA exam domains and their weights?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Architecture 30%, Network Policy 20%, Service Mesh 20%, Observability 18%, Installation 12%. Spend time proportionally to the weight.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What should you do if you encounter a question you don't know?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Flag it immediately, eliminate obviously wrong answers, make your best guess, then move on. Return in the last 10 minutes. NEVER leave a question unanswered — there's no penalty for wrong answers.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What system requirements must be met for the online proctored exam?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Stable internet connection, working webcam and microphone, quiet room with cleared desk, government-issued valid ID. Run the system check 30 minutes before the exam.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">What's the most important exam strategy rule?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Answer EVERY question.</strong> No penalty for wrong answers. Flag hard ones. Use docs.cilium.io efficiently (Ctrl+F). Trust your first instinct unless you have clear evidence to change. And breathe — you've prepared for this!</p></div></details></div>
                 </div>
             </div> <!-- End Appendix F -->
 
