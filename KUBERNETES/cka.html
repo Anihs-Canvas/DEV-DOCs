@@ -36134,6 +36134,91 @@ spec:
                     </ul>
                 </div>
 
+                <!-- ═══ UTH Chapter 21 — How Volume Mounts Are Implemented ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Volume Mounts Are Actually Implemented: Bind Mounts, tmpfs, and the Container Filesystem Stack</summary>
+                <div class="uth-body">
+                <h5>🗺️ The Container Filesystem Stack — Where Volumes Fit</h5>
+                <p>When a container mounts a volume, the kubelet instructs the container runtime to create an additional mount point that overlays the container's root filesystem. Understanding where volumes sit in the filesystem stack helps you debug mount failures and data persistence issues.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  CONTAINER FILESYSTEM STACK — Layers from Top to Bottom                      │
+│                                                                              │
+│  Container's view of /:                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                      │    │
+│  │  /app/                                                               │    │
+│  │  ├── media/          ← VOLUME MOUNT (emptyDir/hostPath/PVC)          │    │
+│  │  │   └── uploads/    ← Survives container restart                   │    │
+│  │  ├── manage.py       ← From image layer 3 (COPY . .)               │    │
+│  │  ├── requirements/   ← From image layer 2 (pip install)            │    │
+│  │  └── usr/bin/python  ← From image layer 1 (FROM python:3.12)       │    │
+│  │                                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  UNDERLYING IMPLEMENTATION (overlay2 + volume mounts):                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                      │    │
+│  │  ┌──────────────────────────┐  ← VOLUME MOUNT (separate mount)      │    │
+│  │  │ /var/lib/kubelet/pods/   │    This sits ON TOP of the image       │    │
+│  │  │   &lt;uid&gt;/volumes/kuber-   │    layers. Everything written here     │    │
+│  │  │   netes.io~empty-dir/    │    stays on the node until pod is      │    │
+│  │  │   media/                 │    deleted.                             │    │
+│  │  └──────────────────────────┘                                         │    │
+│  │                                                                      │    │
+│  │  ┌──────────────────────────┐  ← WRITABLE LAYER (ephemeral)         │    │
+│  │  │ /var/lib/containerd/...  │    All writes NOT in volume mounts     │    │
+│  │  │   &lt;container-id&gt;/upper   │    go here. DELETED on container stop. │    │
+│  │  └──────────────────────────┘                                         │    │
+│  │                                                                      │    │
+│  │  ┌──────────────────────────┐  ← IMAGE LAYERS (read-only)           │    │
+│  │  │ anihpj code (sha:jkl012) │    Never modified. Shared across      │    │
+│  │  │ pip packages (sha:ghi789)│    all containers using same layers.  │    │
+│  │  │ python:3.12 (sha:def456) │                                        │    │
+│  │  └──────────────────────────┘                                         │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  VOLUME TYPE IMPLEMENTATIONS:                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                      │    │
+│  │  emptyDir:                                                           │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ • Created as a DIRECTORY on the node's filesystem           │     │    │
+│  │  │ • Default: /var/lib/kubelet/pods/&lt;uid&gt;/volumes/...         │     │    │
+│  │  │ • medium: "" → node's default disk (ext4/xfs)               │     │    │
+│  │  │ • medium: "Memory" → tmpfs (RAM-backed, faster, ephemeral) │     │    │
+│  │  │ • LIFETIME: Tied to POD. Survives container restarts.       │     │    │
+│  │  │   DELETED when pod is deleted from the node.                │     │    │
+│  │  │ • Use case: scratch space, cache, inter-container sharing   │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  │                                                                      │    │
+│  │  hostPath:                                                           │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ • Direct bind-mount from NODE filesystem → container        │     │    │
+│  │  │ • /var/log on node → /host-logs in container                │     │    │
+│  │  │ • LIFETIME: Survives pod deletion (data stays on node)      │     │    │
+│  │  │ • DANGER: Pod scheduled to different node → DIFFERENT data  │     │    │
+│  │  │ • Use case: accessing node logs, Docker socket, /sys        │     │    │
+│  │  │ • CKA: hostPath is the simplest PV type for testing         │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  │                                                                      │    │
+│  │  PVC (PersistentVolumeClaim):                                        │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ • kubelet ATTACHES the PV's storage to the node             │     │    │
+│  │  │ • For cloud: AWS EBS → AttachVolume → mount to container    │     │    │
+│  │  │ • For NFS: mount -t nfs &lt;server&gt;:&lt;path&gt; &lt;mountpoint&gt;        │     │    │
+│  │  │ • LIFETIME: Survives pod deletion (PV must be manually       │     │    │
+│  │  │   deleted or reclaimed per reclaimPolicy)                   │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> On the CKA, emptyDir is your go-to for sharing data between containers in a pod. hostPath is for accessing node filesystem directly (but avoid in production except for specific use cases like log collectors). PVC is for persistent data across pod restarts. Remember: emptyDir lasts as long as the POD exists; hostPath lasts as long as the NODE exists; PVC lasts as long as the PV exists.
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 21 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 21 — CKA Practice Questions</h4>
@@ -37722,6 +37807,99 @@ kubectl get pvc exam-pvc
                         <li>6. Create a StorageClass with <code>provisioner: kubernetes.io/no-provisioner</code> and <code>volumeBindingMode: WaitForFirstConsumer</code></li>
                     </ul>
                 </div>
+
+                <!-- ═══ UTH Chapter 22 — How PVs and PVCs Bind ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How PVs and PVCs Bind: The Matching Algorithm, Access Modes, Dynamic Provisioning, and CSI Driver Architecture</summary>
+                <div class="uth-body">
+                <h5>🗺️ PV-PVC Binding Algorithm — How Kubernetes Matches Claims to Volumes</h5>
+                <p>The persistent volume controller runs a matching loop that pairs PVCs with PVs. Understanding the exact matching criteria helps you debug "PVC stuck in Pending" issues.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  PV-PVC BINDING ALGORITHM — Step by Step                                     │
+│                                                                              │
+│  PVC: anihpj-media (requests: storage=10Gi, accessModes=[RWO])               │
+│  Available PVs:                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ PV-1: 100Gi, RWO, Retain    PV-2: 10Gi, RWO, Delete                │    │
+│  │ PV-3: 10Gi, RWX, Retain     PV-4: 5Gi,  RWO, Retain                │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  STEP 1: FILTER by storage size (PVC requests 10Gi)                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ PV-1: 100Gi >= 10Gi ✅     PV-2: 10Gi >= 10Gi ✅                    │    │
+│  │ PV-3: 10Gi >= 10Gi ✅     PV-4: 5Gi >= 10Gi  ❌ (too small)        │    │
+│  │ Remaining: PV-1, PV-2, PV-3                                          │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  STEP 2: FILTER by access mode (PVC requests RWO)                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ PV-1: RWO ✅              PV-2: RWO ✅                               │    │
+│  │ PV-3: RWX ✅ (RWX includes RWO capability)                           │    │
+│  │ Remaining: PV-1, PV-2, PV-3                                          │    │
+│  │                                                                      │    │
+│  │ ACCESS MODE COMPATIBILITY:                                            │    │
+│  │ ┌──────────┬───────────────────────────────────────────────────┐    │    │
+│  │ │ RWO      │ ReadWriteOnce — single node read/write             │    │    │
+│  │ │ ROX      │ ReadOnlyMany — many nodes read only               │    │    │
+│  │ │ RWX      │ ReadWriteMany — many nodes read/write              │    │    │
+│  │ │ RWOP     │ ReadWriteOncePod — single pod (new in 1.29)        │    │    │
+│  │ └──────────┴───────────────────────────────────────────────────┘    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  STEP 3: SELECT best match (smallest sufficient PV wins)                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ PV-1: 100Gi → EXCESSIVE (wastes 90Gi)                               │    │
+│  │ PV-2: 10Gi  → PERFECT MATCH 🏆 (exact size)                        │    │
+│  │ PV-3: 10Gi  → Also matches, but PV-2 selected first                 │    │
+│  │                                                                      │    │
+│  │ SELECTION RULES:                                                     │    │
+│  │ 1. Smallest PV >= PVC request wins                                   │    │
+│  │ 2. If same size, PV created earliest wins                            │    │
+│  │ 3. Binding is EXCLUSIVE — one PV = one PVC                           │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  AFTER BINDING:                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ PVC status: Bound → PV-2                                              │    │
+│  │ PV status:   Bound → Claim: default/anihpj-media                     │    │
+│  │ PV-2 is now UNAVAILABLE for any other PVC                             │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  STORAGECLASS — Dynamic Provisioning:                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ Without StorageClass: Admin creates PV manually → PVC binds          │    │
+│  │ With StorageClass:     PVC specifies StorageClass → provisioner      │    │
+│  │                        AUTO-CREATES PV → PVC binds automatically     │    │
+│  │                                                                      │    │
+│  │  CSI (Container Storage Interface) Drivers:                          │    │
+│  │  ┌────────────────────────────────────────────────────────────┐     │    │
+│  │  │ 1. PVC created with storageClassName: aws-ebs               │     │    │
+│  │  │ 2. StorageClass provisioner: ebs.csi.aws.com                │     │    │
+│  │  │ 3. CSI provisioner calls AWS API: CreateVolume(10Gi)        │     │    │
+│  │  │ 4. AWS creates EBS volume → returns volumeID                 │     │    │
+│  │  │ 5. CSI creates PV object with volumeHandle=&lt;volumeID&gt;       │     │    │
+│  │  │ 6. PV binds to PVC                                             │     │    │
+│  │  │ 7. Pod created → CSI node plugin ATTACHES volume to node    │     │    │
+│  │  │ 8. CSI node plugin MOUNTS volume into container              │     │    │
+│  │  └────────────────────────────────────────────────────────────┘     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  RECLAIM POLICIES — What Happens When PVC Is Deleted:                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ Retain:  PV stays (Released). Admin must MANUALLY delete + clean    │    │
+│  │          up underlying storage. Data persists.                       │    │
+│  │ Delete:  PV + underlying storage DELETED automatically. Data gone.  │    │
+│  │ Recycle: DEPRECATED. Was: scrub data (rm -rf) → make Available.    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> PVC stuck in Pending? Check: (1) <code>kubectl describe pvc</code> — what's the error? "no persistent volumes available" = create a PV or StorageClass. (2) <code>kubectl get pv</code> — any Available PVs with sufficient capacity and matching access mode? (3) StorageClass with <code>volumeBindingMode: WaitForFirstConsumer</code> delays binding until a pod uses the PVC — this is NORMAL (pod must be scheduled first for topology-aware provisioning).
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 22 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -39484,6 +39662,109 @@ kubectl exec webapp-pod -n webapp -- cat /etc/secrets/DB_PASS
                     </ul>
                 </div>
 
+                <!-- ═══ UTH Chapter 23 — How ConfigMaps and Secrets Are Injected ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How ConfigMaps and Secrets Are Injected Into Pods: Volume Mounts vs Environment Variables, Atomic Updates, and Encryption at Rest</summary>
+                <div class="uth-body">
+                <h5>🗺️ ConfigMap/Secret Injection — Two Mechanisms, Different Behaviors</h5>
+                <p>ConfigMaps and Secrets can be consumed as environment variables OR volume mounts. These mechanisms behave differently — especially when config is updated at runtime.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  INJECTION METHOD 1: ENVIRONMENT VARIABLES                                    │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  apiVersion: v1                                                      │    │
+│  │  spec:                                                                │    │
+│  │    containers:                                                        │    │
+│  │    - name: anihpj                                                     │    │
+│  │      env:                                                             │    │
+│  │      - name: DB_HOST           ← Single key                          │    │
+│  │        valueFrom:                                                     │    │
+│  │          configMapKeyRef:                                             │    │
+│  │            name: anihpj-config                                        │    │
+│  │            key: DB_HOST                                               │    │
+│  │      envFrom:                  ← ALL keys at once                    │    │
+│  │      - configMapRef:                                                  │    │
+│  │          name: anihpj-config                                          │    │
+│  │      - secretRef:                                                     │    │
+│  │          name: anihpj-db-creds                                        │    │
+│  │                                                                      │    │
+│  │  BEHAVIOR:                                                            │    │
+│  │  ✅ Simple, well-understood by applications                          │    │
+│  │  ❌ VALUES ARE FROZEN at pod start — updating ConfigMap does NOT    │    │
+│  │     update env vars in running pods. Pod must be RESTARTED.         │    │
+│  │  ❌ All Secret data visible in /proc/&lt;pid&gt;/environ (for root)      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  INJECTION METHOD 2: VOLUME MOUNTS                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  apiVersion: v1                                                      │    │
+│  │  spec:                                                                │    │
+│  │    containers:                                                        │    │
+│  │    - name: anihpj                                                     │    │
+│  │      volumeMounts:                                                    │    │
+│  │      - name: config                                                   │    │
+│  │        mountPath: /etc/config   ← Each key becomes a FILE            │    │
+│  │        readOnly: true                                                   │    │
+│  │  volumes:                                                             │    │
+│  │  - name: config                                                       │    │
+│  │    configMap:                                                         │    │
+│  │      name: anihpj-config                                              │    │
+│  │                                                                      │    │
+│  │  RESULT: /etc/config/                                                │    │
+│  │  ├── DB_HOST     (file containing "postgres")                        │    │
+│  │  ├── DB_PORT     (file containing "5432")                            │    │
+│  │  └── DJANGO_DEBUG (file containing "false")                          │    │
+│  │                                                                      │    │
+│  │  BEHAVIOR:                                                            │    │
+│  │  ✅ AUTO-UPDATES: When ConfigMap changes, kubelet updates mount      │    │
+│  │     files within ~60 seconds (configurable via kubelet sync)         │    │
+│  │  ✅ Atomic: Symlink swap — no partial updates visible               │    │
+│  │  ✅ SubPath: Mount single key as file at specific path              │    │
+│  │  ⚠️  App must watch files for changes (or use inotify)              │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  SECRET ENCRYPTION — Defense in Depth:                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  LAYER 1: etcd at rest — Secrets are base64 encoded in etcd. This  │    │
+│  │           is NOT encryption, just encoding. Anyone with etcd        │    │
+│  │           access can decode them.                                    │    │
+│  │                                                                      │    │
+│  │  LAYER 2: Encryption at rest — API Server encrypts Secret data      │    │
+│  │           BEFORE writing to etcd. Requires EncryptionConfiguration. │    │
+│  │                                                                      │    │
+│  │  LAYER 3: RBAC — Only authorized ServiceAccounts/pods/users can     │    │
+│  │           GET the Secret.                                            │    │
+│  │                                                                      │    │
+│  │  LAYER 4: External secrets management — Sealed Secrets, External    │    │
+│  │           Secrets Operator (ESO), Vault injector. Secrets never     │    │
+│  │           stored in K8s at all.                                      │    │
+│  │                                                                      │    │
+│  │  ⚠️  CKA FACT: By default, Secrets in etcd are base64 ENCODED, not │    │
+│  │     ENCRYPTED. `echo c3VwZXJzZWNyZXQ= | base64 -d` → supersecret!  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  ATOMIC CONFIGMAP UPDATES — How Kubelet Swaps Config Without Downtime:      │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  1. ConfigMap updated via kubectl                                    │    │
+│  │  2. kubelet detects change (periodic sync, default ~60s)            │    │
+│  │  3. kubelet creates NEW directory: ..data_tmp/&lt;timestamp&gt;/          │    │
+│  │  4. kubelet writes updated files to new directory                   │    │
+│  │  5. kubelet atomically swaps symlink:                                │    │
+│  │     ..data → ..data_tmp/&lt;timestamp&gt;/  (atomic rename)              │    │
+│  │  6. Container sees updated files INSTANTLY (no restart needed)      │    │
+│  │                                                                      │    │
+│  │  $ ls -la /etc/config/                                               │    │
+│  │  ..data -> ..2026_06_02_10_05_23.123456789  ← Updated symlink!      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> On the CKA, you'll frequently create ConfigMaps and Secrets. Key differences to remember: ConfigMap for non-sensitive config (DB_HOST, DEBUG), Secret for sensitive data (DB_PASSWORD, API_KEY). Use <code>--from-literal</code> for single values, <code>--from-file</code> for files. Secrets must be base64 encoded in YAML but NOT in imperative commands: <code>kubectl create secret generic --from-literal=key=value</code> auto-encodes. A pod referencing a non-existent ConfigMap will fail to start with <code>CreateContainerConfigError</code>.
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 23 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 23 — CKA Practice Questions</h4>
@@ -41026,6 +41307,104 @@ kubectl auth can-i get pods --as=testuser -n exam-practice
                     <code>kubectl auth can-i --list --as=jane -n dev</code> — list ALL permissions for a user
                 </div>
 
+                <!-- ═══ UTH Chapter 24 — How RBAC Authorization Is Evaluated ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How RBAC Authorization Is Evaluated: Role/ClusterRole Resolution, Binding Matching, and the can-i Algorithm</summary>
+                <div class="uth-body">
+                <h5>🗺️ RBAC Evaluation Algorithm — How the API Server Decides ALLOW/DENY</h5>
+                <p>Every API request passes through the RBAC authorizer. Understanding the exact evaluation order helps you debug "why can't this user do X" and craft correct policies.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  RBAC AUTHORIZATION PIPELINE — Request Evaluation                            │
+│                                                                              │
+│  Request: User "jane" wants to GET /api/v1/namespaces/dev/pods               │
+│                                                                              │
+│  STEP 1: Extract Subject Identity                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ From TLS cert: CN=jane, O=developers, O=viewers                      │   │
+│  │ OR from JWT token: sub=jane, groups=[developers, viewers]            │   │
+│  │ → Subject: User=jane, Groups=[developers, viewers]                    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  STEP 2: Build ALL Potential Roles (union of ALL bindings)                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ Find RoleBindings matching jane OR [developers] OR [viewers]:         │   │
+│  │                                                                        │   │
+│  │ RoleBinding: pod-reader (namespace: dev)                               │   │
+│  │   subjects: [{kind:User, name:jane}]  ← Direct match!                 │   │
+│  │   roleRef: {kind:Role, name:pod-reader}                               │   │
+│  │                                                                        │   │
+│  │ RoleBinding: view-ns (namespace: dev)                                  │   │
+│  │   subjects: [{kind:Group, name:viewers}] ← Group match!               │   │
+│  │   roleRef: {kind:ClusterRole, name:view}                              │   │
+│  │                                                                        │   │
+│  │ → Collected roles: [pod-reader (Role), view (ClusterRole)]            │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  STEP 3: Check EACH Role for Matching Rules (UNION of all rules)             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ Role: pod-reader (namespace: dev):                                     │   │
+│  │   rules:                                                               │   │
+│  │   - apiGroups: [""]     ← core API group (v1)                        │   │
+│  │     resources: ["pods"]  ← Match! (request is for pods)              │   │
+│  │     verbs: ["get","list","watch"] ← Match! (request verb is "get")   │   │
+│  │   → RULE MATCHED! Pod reader allows get pods in dev.                  │   │
+│  │                                                                        │   │
+│  │ ClusterRole: view:                                                     │   │
+│  │   rules:                                                               │   │
+│  │   - apiGroups: [""]                                                    │   │
+│  │     resources: ["pods","services","deployments",...]                 │   │
+│  │     verbs: ["get","list","watch"]                                    │   │
+│  │   → RULE ALSO MATCHED (but redundant — pod-reader already covers it) │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  STEP 4: FINAL DECISION                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ At least one matching rule found → ALLOW ✅                           │   │
+│  │ No matching rules found → DENY ❌                                     │   │
+│  │                                                                        │   │
+│  │ RBAC IS ADDITIVE ONLY:                                                 │   │
+│  │   ✅ Roles ADD permissions (union of all matching rules)              │   │
+│  │   ❌ There is NO "deny" rule in RBAC                                 │   │
+│  │   ❌ You cannot "subtract" a permission once granted                  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CLUSTERROLE vs ROLE — SCOPE MATTERS:                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ Rule:     apiGroups: [""]                                             │   │
+│  │           resources: ["nodes"]                                        │   │
+│  │           verbs: ["get"]                                              │   │
+│  │                                                                        │   │
+│  │ In a ROLE (namespaced):        In a CLUSTERROLE (cluster-wide):       │   │
+│  │ → Can get pods in dev          → Can get pods in ALL namespaces      │   │
+│  │ → Can get services in dev      → Can get nodes (cluster-scoped)       │   │
+│  │ → CANNOT get nodes!             → Can get namespaces (cluster-scoped) │   │
+│  │   (nodes are cluster-scoped)                                           │   │
+│  │                                                                        │   │
+│  │ A ClusterRole can be bound via:                                        │   │
+│  │   RoleBinding → grants ClusterRole permissions in ONE namespace       │   │
+│  │   ClusterRoleBinding → grants ClusterRole permissions CLUSTER-WIDE    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  IMPERSONATION — Testing RBAC (CKA Superpower):                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ $ kubectl auth can-i create deployments --as=jane -n dev             │   │
+│  │ yes  /  no                                                            │   │
+│  │                                                                        │   │
+│  │ $ kubectl auth can-i --list --as=jane -n dev                          │   │
+│  │ Resources  Non-Resource URLs  Resource Names  Verbs                   │   │
+│  │ pods       []                 []              [get list watch]        │   │
+│  │ configmaps []                 []              [get]                   │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> RBAC is a guaranteed CKA topic. The exam tests creating Roles + RoleBindings for specific scenarios. Key tips: (1) RBAC is additive only — no deny rules, (2) ClusterRole + RoleBinding = namespaced permissions, (3) ClusterRole + ClusterRoleBinding = cluster-wide, (4) Always test with <code>kubectl auth can-i --as=&lt;user&gt;</code> before submitting your answer, (5) RoleBinding subjects support User, Group, and ServiceAccount.
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 24 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 24 — CKA Practice Questions</h4>
@@ -42343,6 +42722,86 @@ echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | \
                         </div>
                     </div>
                 </div>
+
+                <!-- ═══ UTH Chapter 25 — How ServiceAccount Token Authentication Works ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How ServiceAccount Token Authentication Works: JWT Lifecycle, TokenRequest API, and the Token Projection Flow</summary>
+                <div class="uth-body">
+                <h5>🗺️ ServiceAccount Token Lifecycle — From Creation to API Call</h5>
+                <p>Every pod gets a ServiceAccount token mounted at <code>/var/run/secrets/kubernetes.io/serviceaccount/token</code>. This JWT is the pod's identity and is used for ALL API calls from within the pod.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  SERVICEACCOUNT — Complete Identity System                                   │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  WHAT A SA GIVES A POD:                                               │   │
+│  │                                                                        │   │
+│  │  /var/run/secrets/kubernetes.io/serviceaccount/                        │   │
+│  │  ├── token           ← JWT (JSON Web Token) — pod's identity          │   │
+│  │  ├── ca.crt          ← Cluster CA certificate — validate API Server  │   │
+│  │  └── namespace       ← Namespace name — "anihpj-dev"                  │   │
+│  │                                                                        │   │
+│  │  JWT PAYLOAD (decoded):                                                │   │
+│  │  {                                                                     │   │
+│  │    "iss": "kubernetes/serviceaccount",                                  │   │
+│  │    "sub": "system:serviceaccount:anihpj-dev:default",  ← IDENTITY    │   │
+│  │    "kubernetes.io": {                                                 │   │
+│  │      "namespace": "anihpj-dev",                                       │   │
+│  │      "serviceaccount": {                                              │   │
+│  │        "name": "default",                                             │   │
+│  │        "uid": "abc-123-def"                                           │   │
+│  │      }                                                                 │   │
+│  │    },                                                                  │   │
+│  │    "exp": 1717333899,  ← EXPIRATION (typically 1 hour)                │   │
+│  │    "iat": 1717330299   ← Issued at                                    │   │
+│  │  }                                                                     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  TOKEN LIFECYCLE (Automated TokenRequest API — K8s 1.24+):                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  OLD WAY (pre-1.24):                                                  │   │
+│  │   1. SA created → Secret auto-created (non-expiring token)            │   │
+│  │   2. Pod mounts Secret → permanent token                              │   │
+│  │   3. ⚠️  Token NEVER expires — if stolen, valid forever              │   │
+│  │                                                                        │   │
+│  │  NEW WAY (1.24+, TokenRequest API):                                    │   │
+│  │   1. SA created → NO automatic Secret                                 │   │
+│  │   2. kubelet calls TokenRequest API for EACH pod start                │   │
+│  │   3. API Server creates time-limited token (1h, bounded by SA)        │   │
+│  │   4. kubelet projects token into pod's tmpfs volume                   │   │
+│  │   5. kubelet REFRESHES token before expiry (every ~20 min)            │   │
+│  │   6. ✅ Token auto-expires + auto-refreshes — secure by default       │   │
+│  │                                                                        │   │
+│  │  TO VERIFY CURRENT TOKEN EXPIRY:                                       │   │
+│  │  $ kubectl exec pod -- cat /var/run/secrets/.../token | cut -d. -f2  │   │
+│  │    | base64 -d 2>/dev/null | jq .exp                                  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  RBAC WITH SERVICEACCOUNTS — The Complete Chain:                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  ServiceAccount (identity)                                            │   │
+│  │      │                                                                │   │
+│  │      │  Bound via ClusterRoleBinding/RoleBinding                      │   │
+│  │      ▼                                                                │   │
+│  │  Role/ClusterRole (permissions)                                        │   │
+│  │      │                                                                │   │
+│  │      │  Defines: apiGroups, resources, verbs                         │   │
+│  │      ▼                                                                │   │
+│  │  Pod uses token → API Server validates → RBAC authorizes → ALLOW/DENY│   │
+│  │                                                                        │   │
+│  │  Example binding:                                                      │   │
+│  │  kubectl create clusterrolebinding anihpj-deployer \                  │   │
+│  │    --clusterrole=edit \                                                │   │
+│  │    --serviceaccount=anihpj-dev:deploy-sa                               │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> On the CKA, you'll create SAs and bind them to Roles. Remember: <code>kubectl create sa &lt;name&gt; -n &lt;ns&gt;</code> creates the SA. <code>kubectl create rolebinding &lt;name&gt; --role=&lt;role&gt; --serviceaccount=&lt;ns&gt;:&lt;sa&gt; -n &lt;ns&gt;</code> binds it. In pod YAML: <code>spec.serviceAccountName: &lt;sa&gt;</code>. SA subjects in RBAC use format: <code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>.
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 25 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -43686,6 +44145,77 @@ kubectl get pods -n kube-system | grep apiserver</code></pre>
                         </div>
                     </div>
                 </div>
+
+                <!-- ═══ UTH Chapter 26 — How Kubernetes PKI Works ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Kubernetes PKI Works: Certificate Chains, kubeadm cert renewal, CSR API, and TLS Bootstrap</summary>
+                <div class="uth-body">
+                <h5>🗺️ Kubernetes PKI — The Certificate Trust Chain</h5>
+                <p>Every component in Kubernetes authenticates using TLS certificates. Understanding the trust chain helps you debug "x509: certificate signed by unknown authority" errors and manage certificate rotation.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  KUBERNETES PKI — Certificate Hierarchy                                      │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                     ROOT CA (ca.crt + ca.key)                         │   │
+│  │                     /etc/kubernetes/pki/ca.*                           │   │
+│  │                     Self-signed, 10-year validity                     │   │
+│  │                     Signs ALL cluster certificates                    │   │
+│  └───────────────┬──────────────────────┬────────────────────────────────┘   │
+│                  │                      │                                     │
+│         ┌────────▼────────┐    ┌────────▼────────┐                          │
+│         │  API SERVER CERT │    │  ETCD CA        │                          │
+│         │  apiserver.crt   │    │  etcd/ca.crt     │                          │
+│         │  SANs:            │    │  Signs etcd certs│                          │
+│         │   kubernetes      │    └────────┬────────┘                          │
+│         │   kubernetes.     │             │                                    │
+│         │   default         │    ┌────────▼────────┐                          │
+│         │   127.0.0.1       │    │  ETCD SERVER     │                          │
+│         │   10.96.0.1       │    │  etcd/server.crt │                          │
+│         └────────┬──────────┘    │  CN=etcd-&lt;node&gt;  │                          │
+│                  │               └──────────────────┘                          │
+│                  │                                                            │
+│         ┌────────▼──────────┐   ┌──────────────────────────┐                 │
+│         │  KUBELET CLIENTS  │   │  FRONT-PROXY CA          │                 │
+│         │  (signed by CA)   │   │  front-proxy-ca.crt      │                 │
+│         │                    │   │  Signs aggregator certs   │                 │
+│         │  apiserver-kubelet-│   └──────────────────────────┘                 │
+│         │  client.crt       │                                                │
+│         │  (API→kubelet auth)│                                                │
+│         └───────────────────┘                                                │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CERTIFICATE RENEWAL (CKA Exam Topic):                                       │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ $ kubeadm certs check-expiration                                      │   │
+│  │ CERTIFICATE                EXPIRES                  RESIDUAL TIME     │   │
+│  │ admin.conf                 Mar 10, 2025 09:00 UTC   364d              │   │
+│  │ apiserver                  Mar 10, 2025 09:00 UTC   364d              │   │
+│  │ apiserver-kubelet-client   Mar 10, 2025 09:00 UTC   364d              │   │
+│  │                                                                        │   │
+│  │ $ kubeadm certs renew all                                              │   │
+│  │ # Renews ALL certificates. Restart control plane pods after.          │   │
+│  │                                                                        │   │
+│  │ $ kubeadm certs renew apiserver  # Renew only API server cert         │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CSR API — Requesting Client Certificates Programmatically:                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. User generates private key + CSR                                   │   │
+│  │ 2. User creates CertificateSigningRequest K8s object                  │   │
+│  │ 3. Admin approves: kubectl certificate approve &lt;csr-name&gt;            │   │
+│  │ 4. controller-manager signs the CSR with CA key                       │   │
+│  │ 5. Signed certificate stored in CSR.status.certificate                │   │
+│  │ 6. User extracts: kubectl get csr &lt;name&gt; -o jsonpath='{.status.      │   │
+│  │    certificate}' | base64 -d > user.crt                               │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> Certificate management is directly tested on the CKA. Memorize: <code>kubeadm certs check-expiration</code> (view expiry), <code>kubeadm certs renew all</code> (renew all), <code>kubeadm certs renew apiserver</code> (renew specific). After renewal, restart the affected control plane pod by moving its manifest temporarily. CSR API: <code>kubectl certificate approve</code> / <code>deny</code>.
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 26 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -45046,6 +45576,111 @@ kubectl get pod kube-apiserver-controlplane \
                         </div>
                     </div>
                 </div>
+
+                <!-- ═══ UTH Chapter 27 — How Pod Security Admission Enforces Standards ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Pod Security Admission Enforces Standards: SecurityContext Resolution, Capability Dropping, and seccomp Profiles</summary>
+                <div class="uth-body">
+                <h5>🗺️ Pod Security Admission (PSA) — Replacing PSP</h5>
+                <p>PSA is a built-in admission controller that enforces security standards at the namespace level. It replaces the deprecated PodSecurityPolicy (PSP). It's simpler, faster, and checked at pod creation time.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  POD SECURITY ADMISSION — Three Built-in Standards                           │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  STANDARD: PRIVILEGED (completely unrestricted)                       │   │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │   │
+│  │  │ • Allows everything — no restrictions                          │  │   │
+│  │  │ • Use case: system pods, CSI drivers, CNI plugins              │  │   │
+│  │  │ • Equivalent to no PSA enforcement                             │  │   │
+│  │  └────────────────────────────────────────────────────────────────┘  │   │
+│  │                                                                        │   │
+│  │  STANDARD: BASELINE (common hardening, minimal disruption)             │   │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │   │
+│  │  │ • Prevents known privilege escalations                          │  │   │
+│  │  │ • Blocks: hostNetwork, hostPID, hostIPC, hostPath volumes       │  │   │
+│  │  │ • Blocks: privileged containers, CAP_SYS_ADMIN                  │  │   │
+│  │  │ • Allows: running as root, default capabilities                 │  │   │
+│  │  │ • Use case: most application workloads                          │  │   │
+│  │  └────────────────────────────────────────────────────────────────┘  │   │
+│  │                                                                        │   │
+│  │  STANDARD: RESTRICTED (highest security, follows best practices)      │   │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │   │
+│  │  │ • All Baseline restrictions                                     │  │   │
+│  │  │ • MUST run as non-root (runAsNonRoot: true)                     │  │   │
+│  │  │ • MUST drop ALL capabilities (then add back if needed)          │  │   │
+│  │  │ • MUST set seccomp profile (RuntimeDefault or Localhost)         │  │   │
+│  │  │ • Volume types limited to: configMap, csi, downwardAPI, etc.    │  │   │
+│  │  │ • Use case: multi-tenant clusters, sensitive workloads          │  │   │
+│  │  └────────────────────────────────────────────────────────────────┘  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  NAMESPACE-LEVEL ENFORCEMENT:                                                │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  Namespace label: pod-security.kubernetes.io/enforce=restricted       │   │
+│  │                                                                        │   │
+│  │  MODES (3 independent modes per namespace):                            │   │
+│  │  ┌─────────────┬──────────────────────────────────────────────────┐   │   │
+│  │  │ enforce     │ REJECTS non-compliant pods (hard block)          │   │   │
+│  │  │ audit       │ LOGS non-compliant pods (allowed, but recorded)  │   │   │
+│  │  │ warn        │ WARNS user about non-compliance (allowed)        │   │   │
+│  │  └─────────────┴──────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │  Example:                                                              │   │
+│  │  kubectl label ns anihpj-dev \                                         │   │
+│  │    pod-security.kubernetes.io/enforce=restricted \                     │   │
+│  │    pod-security.kubernetes.io/warn=restricted \                        │   │
+│  │    pod-security.kubernetes.io/audit=restricted                         │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  SECURITY CONTEXT — Pod/Container-Level Hardening:                           │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  apiVersion: v1                                                       │   │
+│  │  kind: Pod                                                             │   │
+│  │  spec:                                                                 │   │
+│  │    securityContext:          ← Pod-level (applies to ALL containers)  │   │
+│  │      runAsUser: 1000        ← Run as UID 1000 (non-root)             │   │
+│  │      runAsGroup: 3000       ← GID 3000                                │   │
+│  │      fsGroup: 2000          ← Volume filesystem group                  │   │
+│  │    containers:                                                         │   │
+│  │    - name: anihpj                                                      │   │
+│  │      securityContext:       ← Container-level (OVERRIDES pod-level)  │   │
+│  │        allowPrivilegeEscalation: false                                 │   │
+│  │        readOnlyRootFilesystem: true                                    │   │
+│  │        capabilities:                                                   │   │
+│  │          drop: ["ALL"]        ← Drop all Linux capabilities           │   │
+│  │          add: ["NET_BIND_SERVICE"] ← Add back only what's needed     │   │
+│  │        seccompProfile:                                                 │   │
+│  │          type: RuntimeDefault ← Restrict syscalls                     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  LINUX CAPABILITIES — Breaking Root Into 40+ Pieces:                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  Traditional Linux: root = ALL power                                  │   │
+│  │  Capabilities: root power split into 40+ individual permissions       │   │
+│  │                                                                        │   │
+│  │  Common capabilities:                                                 │   │
+│  │  ┌────────────────────┬──────────────────────────────────────────┐   │   │
+│  │  │ CAP_NET_BIND_SERVICE│ Bind to ports < 1024 (e.g., port 80)     │   │   │
+│  │  │ CAP_SYS_TIME        │ Set system clock                         │   │   │
+│  │  │ CAP_SYS_ADMIN       │ DANGEROUS — mount, swapon, many admin ops│   │   │
+│  │  │ CAP_NET_RAW         │ Raw sockets (ping)                       │   │   │
+│  │  │ CAP_SYS_PTRACE      │ Trace other processes                    │   │   │
+│  │  │ CAP_CHOWN           │ Change file ownership                    │   │   │
+│  │  └────────────────────┴──────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │  Best practice: drop ALL, add back only what your app needs.          │   │
+│  │  Most web apps need only: NET_BIND_SERVICE (port 80/443).            │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> Pod security is a CKA topic. Key commands: <code>kubectl label ns &lt;ns&gt; pod-security.kubernetes.io/enforce=restricted</code> to enable PSA. For exam pods: always use <code>runAsNonRoot: true</code>, <code>capabilities.drop: ["ALL"]</code>, and <code>seccompProfile.type: RuntimeDefault</code> for the restricted standard. If a pod is rejected by PSA, check the event: <code>kubectl describe rs &lt;name&gt;</code> or <code>kubectl get events</code>.
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 27 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -46643,6 +47278,93 @@ apt-cache madison kubeadm
                     <code>apt-cache madison kubeadm</code> — find available package versions
                 </div>
 
+                <!-- ═══ UTH Chapter 28 — How kubeadm upgrade Actually Works ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How kubeadm upgrade Actually Works: Component-by-Component Version Bump, Static Pod Manifest Updates, and Node Drain Sequencing</summary>
+                <div class="uth-body">
+                <h5>🗺️ Cluster Upgrade — The Complete Sequence</h5>
+                <p><code>kubeadm upgrade</code> doesn't upgrade running containers in-place. It updates static pod manifests AND upgrades kubelet/kubectl binaries. Understanding the exact sequence prevents catastrophic upgrade failures.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  CLUSTER UPGRADE — Full Sequence (1.30.0 → 1.31.0)                           │
+│                                                                              │
+│  PHASE 1: UPGRADE CONTROL PLANE NODE (cp-node-1)                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. DRAIN the node (move workloads to other nodes):                   │   │
+│  │    $ kubectl drain cp-node-1 --ignore-daemonsets                      │   │
+│  │    → All pods evicted to other nodes                                  │   │
+│  │                                                                       │   │
+│  │ 2. UPGRADE kubeadm binary:                                            │   │
+│  │    $ sudo apt-mark unhold kubeadm                                     │   │
+│  │    $ sudo apt-get update && apt-get install -y kubeadm=1.31.0-*     │   │
+│  │    $ sudo apt-mark hold kubeadm                                       │   │
+│  │                                                                       │   │
+│  │ 3. UPGRADE control plane (kubeadm updates static pod manifests):     │   │
+│  │    $ sudo kubeadm upgrade plan   ← SEE what will change              │   │
+│  │    $ sudo kubeadm upgrade apply v1.31.0                               │   │
+│  │                                                                       │   │
+│  │    kubeadm upgrade apply DOES:                                        │   │
+│  │    ┌────────────────────────────────────────────────────────────┐    │   │
+│  │    │ • Update /etc/kubernetes/manifests/kube-apiserver.yaml     │    │   │
+│  │    │   → image: registry.k8s.io/kube-apiserver:v1.30.0          │    │   │
+│  │    │                        ↓                                   │    │   │
+│  │    │   → image: registry.k8s.io/kube-apiserver:v1.31.0          │    │   │
+│  │    │                                                              │    │   │
+│  │    │ • Same for: kube-controller-manager.yaml, kube-scheduler.yaml│    │   │
+│  │    │ • Update kubeadm-config + kubelet-config ConfigMaps         │    │   │
+│  │    │ • Renew certificates if close to expiry                     │    │   │
+│  │    │ • Add new API resources for v1.31 (if any)                  │    │   │
+│  │    │                                                              │    │   │
+│  │    │ ⚡ KUBELET DETECTS manifest changes → restarts static pods  │    │   │
+│  │    │ ⚡ New API Server starts with v1.31.0 image                 │    │   │
+│  │    └────────────────────────────────────────────────────────────┘    │   │
+│  │                                                                       │   │
+│  │ 4. UPGRADE kubelet + kubectl on this node:                           │   │
+│  │    $ sudo apt-get install -y kubelet=1.31.0-* kubectl=1.31.0-*     │   │
+│  │    $ sudo systemctl daemon-reload                                     │   │
+│  │    $ sudo systemctl restart kubelet                                   │   │
+│  │                                                                       │   │
+│  │ 5. UNCORDON the node:                                                 │   │
+│  │    $ kubectl uncordon cp-node-1                                        │   │
+│  │    → Node is schedulable again                                         │   │
+│  │                                                                       │   │
+│  │ 6. VERIFY:                                                             │   │
+│  │    $ kubectl get nodes                                                │   │
+│  │    cp-node-1   Ready   control-plane   v1.31.0 ✅                    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  PHASE 2: UPGRADE WORKER NODES (for EACH worker)                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. DRAIN worker: kubectl drain worker-1 --ignore-daemonsets           │   │
+│  │ 2. Upgrade kubeadm: apt-get install -y kubeadm=1.31.0-*              │   │
+│  │ 3. Upgrade node: sudo kubeadm upgrade node                            │   │
+│  │    → Updates kubelet-config, NOT static pod manifests (worker)       │   │
+│  │ 4. Upgrade kubelet: apt-get install -y kubelet=1.31.0-*              │   │
+│  │ 5. Restart kubelet: sudo systemctl restart kubelet                    │   │
+│  │ 6. Uncordon: kubectl uncordon worker-1                                │   │
+│  │ 7. Repeat for each worker                                             │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  VERSION SKEW POLICY (CKA Critical):                                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ • kube-apiserver must be at version X or X+1 (can be 1 ahead)        │   │
+│  │ • kubelet/kube-proxy must be at version X or X-1 (1 behind allowed)  │   │
+│  │ • kubectl: X or X+1 or X-1 (1 version skew in either direction)      │   │
+│  │                                                                        │   │
+│  │ Upgrade ORDER (MUST follow):                                          │   │
+│  │   1. Control Plane FIRST                                              │   │
+│  │   2. Workers AFTER (one at a time, drain before each)                │   │
+│  │                                                                        │   │
+│  │ NEVER skip minor versions: 1.30 → 1.31 → 1.32 (NOT 1.30 → 1.32)     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> Cluster upgrade is a GUARANTEED CKA exam question. Memorize the sequence: drain→upgrade kubeadm→upgrade apply (cp) or upgrade node (worker)→upgrade kubelet→restart→uncordon. Common traps: forgetting to hold packages after upgrade, draining without --ignore-daemonsets (blocks on DaemonSet pods), and skipping version skew policy (always upgrade one minor at a time).
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 28 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 28 — CKA Practice Questions</h4>
@@ -48157,6 +48879,102 @@ spec:
                         <li>7. Verify: <code>kubectl get ns backup-test</code> should return NotFound (pre-backup state)</li>
                     </ul>
                 </div>
+
+                <!-- ═══ UTH Chapter 29 — How etcd Backup and Restore Actually Works ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How etcd Backup and Restore Actually Works: Snapshot Internals, Restoration Mechanics, and Disaster Recovery Scenarios</summary>
+                <div class="uth-body">
+                <h5>🗺️ etcd Snapshot Internals — What's Inside a Backup File</h5>
+                <p>An etcd snapshot is NOT just a file copy. It's a point-in-time, consistent dump of the entire key space that resets cluster membership — allowing the backup to be restored to a completely different cluster.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  ETCD SNAPSHOT INTERNALS                                                      │
+│                                                                              │
+│  $ etcdctl snapshot save /opt/backup.db                                       │
+│                                                                              │
+│  SNAPSHOT FILE CONTENTS:                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  /opt/backup.db (single file, SQLite/BoltDB format)                   │   │
+│  │                                                                        │   │
+│  │  ┌────────────────────────────────────────────────────────────┐      │   │
+│  │  │  HEADER:                                                     │      │   │
+│  │  │  • etcd version (e.g., 3.5.x)                               │      │   │
+│  │  │  • Cluster ID (unique to this cluster)                       │      │   │
+│  │  │  • Member ID                                                │      │   │
+│  │  │  • Snapshot revision (e.g., 105432)                          │      │   │
+│  │  │  • Total key count                                          │      │   │
+│  │  │  • Total size                                               │      │   │
+│  │  └────────────────────────────────────────────────────────────┘      │   │
+│  │                                                                        │   │
+│  │  ┌────────────────────────────────────────────────────────────┐      │   │
+│  │  │  KEY SPACE (ALL keys at snapshot revision):                  │      │   │
+│  │  │                                                               │      │   │
+│  │  │  /registry/namespaces/default            → {json}            │      │   │
+│  │  │  /registry/namespaces/anihpj-prod        → {json}            │      │   │
+│  │  │  /registry/pods/default/nginx            → {json}            │      │   │
+│  │  │  /registry/deployments/anihpj-dev/web    → {json}            │      │   │
+│  │  │  /registry/services/anihpj-dev/web-svc   → {json}            │      │   │
+│  │  │  /registry/secrets/anihpj-dev/db-creds   → {json}            │      │   │
+│  │  │  ... (ALL other K8s objects)                                  │      │   │
+│  │  │  ... (ALL leases, endpoints, events, etc.)                    │      │   │
+│  │  └────────────────────────────────────────────────────────────┘      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  RESTORE MECHANICS — What Actually Happens:                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  $ etcdctl snapshot restore /opt/backup.db \                          │   │
+│  │      --data-dir=/var/lib/etcd-restored                                │   │
+│  │                                                                        │   │
+│  │  RESTORE DOES:                                                         │   │
+│  │  1. Creates NEW BoltDB from snapshot data                             │   │
+│  │  2. Creates NEW WAL files                                             │   │
+│  │  3. Creates NEW member directory                                       │   │
+│  │  4. RESETS cluster membership (new Cluster ID, new Member ID)          │   │
+│  │  5. Makes this member the SINGLE member of a new cluster               │   │
+│  │  6. Does NOT touch existing /var/lib/etcd/data                         │   │
+│  │                                                                        │   │
+│  │  AFTER RESTORE, YOU MUST:                                              │   │
+│  │  ┌────────────────────────────────────────────────────────────┐      │   │
+│  │  │ 1. EDIT etcd.yaml static pod manifest:                      │      │   │
+│  │  │       --data-dir=/var/lib/etcd-restored  ← CHANGE PATH     │      │   │
+│  │  │                                                            │      │   │
+│  │  │ 2. UPDATE volume mount in etcd.yaml:                       │      │   │
+│  │  │       volumes:                                              │      │   │
+│  │  │       - hostPath:                                           │      │   │
+│  │  │           path: /var/lib/etcd-restored  ← CHANGE PATH     │      │   │
+│  │  │                                                            │      │   │
+│  │  │ 3. WAIT for kubelet to detect manifest change               │      │   │
+│  │  │    → kubelet restarts etcd with NEW data-dir               │      │   │
+│  │  │    → etcd starts as single-node cluster                     │      │   │
+│  │  │                                                            │      │   │
+│  │  │ 4. VERIFY pods are back:                                    │      │   │
+│  │  │    kubectl get pods -A (may take 30-60 seconds)            │      │   │
+│  │  └────────────────────────────────────────────────────────────┘      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  DISASTER RECOVERY — When ALL etcd Is Lost:                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ Scenario: All 3 etcd nodes corrupted, no quorum possible              │   │
+│  │                                                                        │   │
+│  │ Recovery (requires backup):                                            │   │
+│  │  1. Stop all etcd instances                                            │   │
+│  │  2. Pick ONE node to restore to                                        │   │
+│  │  3. Restore snapshot to a fresh data-dir on that node                  │   │
+│  │  4. Update etcd.yaml manifest on THAT node                             │   │
+│  │  5. Start etcd → it runs as SINGLE-node cluster                       │   │
+│  │  6. API Server connects → cluster is back (from snapshot point)       │   │
+│  │  7. Rebuild remaining etcd nodes from this single member               │   │
+│  │                                                                        │   │
+│  │  ⚠️  ALL changes after the snapshot time are LOST!                    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> etcd backup/restore is guaranteed on the CKA. The restore changes the cluster to a single-node etcd — all HA control plane nodes except the restore target must be removed from the etcd cluster. After restore, you MUST update --data-dir in BOTH the command AND the hostPath volume mount in etcd.yaml. Forgetting the volume mount is the #1 mistake — etcd starts but uses the old (empty) data directory.
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 29 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -49858,6 +50676,114 @@ kubectl get nodes
                     </ul>
                 </div>
 
+                <!-- ═══ UTH Chapter 30 — How Node Draining and PodDisruptionBudgets Work ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Node Draining and PodDisruptionBudgets Work: Graceful Eviction, PDB Enforcement, and the Cordon/Drain Distinction</summary>
+                <div class="uth-body">
+                <h5>🗺️ Node Maintenance — The Complete Drain Lifecycle</h5>
+                <p>Draining a node is more than just deleting pods. It respects PDBs, honors graceful termination, and can stall indefinitely if not understood properly.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  NODE DRAIN — Internal Sequence                                              │
+│                                                                              │
+│  $ kubectl drain worker-1 --ignore-daemonsets --delete-emptydir-data        │
+│                                                                              │
+│  STEP 1: CORDON the node (prevent new pods)                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ kubectl cordon worker-1                                               │   │
+│  │ → Sets node.spec.unschedulable = true                                 │   │
+│  │ → Node condition: SchedulingDisabled                                  │   │
+│  │ → EXISTING pods continue running                                       │   │
+│  │ → NEW pods CANNOT be scheduled to this node                            │   │
+│  │                                                                        │   │
+│  │ CORDON ONLY: Pods stay, no new pods. Useful for quick isolation.      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  STEP 2: EVICT pods (one by one, respecting constraints)                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ For each pod on the node (except DaemonSets + mirror pods):            │   │
+│  │                                                                        │   │
+│  │  a) CHECK PodDisruptionBudget:                                         │   │
+│  │     → Does evicting this pod violate any PDB?                          │   │
+│  │     → PDB .status.disruptionsAllowed must be >= 1                      │   │
+│  │     → If NOT allowed → DRAIN BLOCKS (waits, retries)                   │   │
+│  │                                                                        │   │
+│  │  b) SEND SIGTERM to pod (graceful shutdown):                           │   │
+│  │     → Pod receives SIGTERM                                             │   │
+│  │     → App has terminationGracePeriodSeconds (default 30s) to cleanup  │   │
+│  │     → If pod doesn't exit → SIGKILL after grace period                 │   │
+│  │                                                                        │   │
+│  │  c) REMOVE pod from node:                                              │   │
+│  │     → API Server deletes the pod object                                │   │
+│  │     → ReplicaSet controller creates replacement pod                    │   │
+│  │     → Replacement scheduled to a DIFFERENT node (this one is cordoned) │   │
+│  │                                                                        │   │
+│  │  d) REPEAT for next pod                                                 │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  CORDON vs DRAIN:                                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ ┌──────────┬─────────────────────────────────────────────────────┐   │   │
+│  │ │ CORDON   │ Marks node unschedulable. Existing pods STAY.        │   │   │
+│  │ │          │ Use: quick "do not use this node" flag.             │   │   │
+│  │ ├──────────┼─────────────────────────────────────────────────────┤   │   │
+│  │ │ DRAIN    │ Cordons + EVICTS all pods. Node becomes empty.       │   │   │
+│  │ │          │ Use: maintenance, decommissioning, upgrades.         │   │   │
+│  │ └──────────┴─────────────────────────────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │ DRAIN FLAGS:                                                           │   │
+│  │  --ignore-daemonsets    ← Skip DaemonSet pods (they restart anyway)  │   │
+│  │  --delete-emptydir-data ← Delete emptyDir volumes (data loss warning)│   │
+│  │  --force                 ← Force even if pod not managed by controller│   │
+│  │  --timeout=5m           ← Max time to wait for drain to complete     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  PODDISRUPTIONBUDGET — Protecting Application Availability:                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  apiVersion: policy/v1                                                │   │
+│  │  kind: PodDisruptionBudget                                             │   │
+│  │  metadata:                                                             │   │
+│  │    name: anihpj-pdb                                                    │   │
+│  │  spec:                                                                 │   │
+│  │    minAvailable: 2    ← At least 2 pods must be running               │   │
+│  │    selector:                                                           │   │
+│  │      matchLabels: {app: anihpj}                                       │   │
+│  │                                                                        │   │
+│  │  PDB MATH:                                                             │   │
+│  │  ┌────────────────────────────────────────────────────────────┐      │   │
+│  │  │ Deployment: anihpj-web (replicas=5)                         │      │   │
+│  │  │ PDB: minAvailable=2                                          │      │   │
+│  │  │                                                               │      │   │
+│  │  │ disruptionsAllowed = total pods - minAvailable               │      │   │
+│  │  │                    = 5 - 2 = 3                                │      │   │
+│  │  │                                                               │      │   │
+│  │  │ → Up to 3 pods can be disrupted simultaneously               │      │   │
+│  │  │ → At least 2 pods ALWAYS running during maintenance          │      │   │
+│  │  │                                                               │      │   │
+│  │  │ DRAIN with PDB: Drains pods until disruptionsAllowed == 0,  │      │   │
+│  │  │ then blocks until pods on other nodes are healthy again.     │      │   │
+│  │  └────────────────────────────────────────────────────────────┘      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  GRACEFUL TERMINATION — The Full 30-Second Sequence:                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  1. Pod status set to "Terminating"                                  │   │
+│  │  2. Pod removed from ALL Service Endpoints (stops receiving traffic)  │   │
+│  │  3. SIGTERM sent to container (PID 1)                                 │   │
+│  │  4. Container runs preStop hook (if defined)                          │   │
+│  │  5. App has terminationGracePeriodSeconds (default 30s) to exit       │   │
+│  │  6. After grace period: SIGKILL sent (force kill)                     │   │
+│  │  7. Pod deleted from API Server                                       │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> Node maintenance is a CKA staple. Always drain before maintenance: <code>kubectl drain &lt;node&gt; --ignore-daemonsets --delete-emptydir-data</code>. If drain hangs: check PDBs (<code>kubectl get pdb -A</code>), check for pods not managed by controllers (<code>kubectl get pods -o wide | grep &lt;node&gt;</code> — bare pods block drain unless --force). After maintenance: <code>kubectl uncordon &lt;node&gt;</code> to allow scheduling again.
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 30 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 30 — CKA Practice Questions</h4>
@@ -51060,6 +51986,90 @@ kubectl debug node/&lt;node-name&gt; -it --image=busybox</code></pre>
                     <code>kubectl get pod &lt;name&gt; -o jsonpath='{.status.containerStatuses[0].state}'</code> — detailed state
                 </div>
 
+                <!-- ═══ UTH Chapter 31 — How Pod Lifecycle States and Status Codes Work ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Pod Lifecycle States and Status Codes Actually Work: The Full Finita State Machine, Container Exit Code Meanings, and CrashLoopBackOff Internals</summary>
+                <div class="uth-body">
+                <h5>🗺️ Pod Lifecycle — The Complete State Machine</h5>
+                <p>A pod goes through a precise sequence of phases. Understanding each phase and transition helps you diagnose exactly where things went wrong.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  POD LIFECYCLE STATE MACHINE                                                  │
+│                                                                              │
+│  ┌──────────┐    ┌──────────────────┐    ┌──────────┐    ┌──────────┐      │
+│  │ Pending  │───▶│ ContainerCreating│───▶│ Running  │───▶│Succeeded │      │
+│  │          │    │                  │    │          │    │  (exit 0)│      │
+│  └────┬─────┘    └────────┬─────────┘    └────┬─────┘    └──────────┘      │
+│       │                   │                  │                                │
+│       │                   │                  │                                │
+│       │         ┌─────────▼──────────┐       │                                │
+│       │         │ ImagePullBackOff   │       │                                │
+│       │         │ (image pull fails) │       │                                │
+│       │         └─────────┬──────────┘       │                                │
+│       │                   │                  │                                │
+│       │         ┌─────────▼──────────┐       │                                │
+│       │         │ CrashLoopBackOff   │◀──────┘                                │
+│       │         │ (container exits   │                                         │
+│       │         │  non-zero, repeats)│                                         │
+│       │         └────────┬──────────┘                                         │
+│       │                  │                                                     │
+│       │         ┌────────▼──────────┐                                         │
+│       │         │     Failed        │                                         │
+│       │         │ (backoff limit    │                                         │
+│       │         │  exceeded)         │                                         │
+│       │         └───────────────────┘                                         │
+│       │                                                                        │
+│  ┌────▼──────────┐                                                            │
+│  │   Unknown     │  ← Node lost contact with API Server                       │
+│  │ (node down)   │                                                            │
+│  └───────────────┘                                                            │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CRASHLOOPBACKOFF INTERNALS — Exponential Backoff Algorithm:                 │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ Container exits → kubelet restarts → fails again → repeat            │   │
+│  │                                                                       │   │
+│  │ Backoff timing (exponential with cap):                                │   │
+│  │   Crash 1: wait 10s → restart                                        │   │
+│  │   Crash 2: wait 20s → restart (10×2^1)                              │   │
+│  │   Crash 3: wait 40s → restart (10×2^2)                              │   │
+│  │   Crash 4: wait 80s → restart                                        │   │
+│  │   Crash 5: wait 160s → restart                                       │   │
+│  │   Crash 6+: wait 300s (5min cap) → restart                           │   │
+│  │                                                                       │   │
+│  │  Duration: backoff resets after pod runs successfully for 10min     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CONTAINER EXIT CODES — Quick Reference:                                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ CODE  MEANING              CAUSE               DEBUG COMMAND          │   │
+│  │ ───────────────────────────────────────────────────────────────────  │   │
+│  │  0    Success              Normal completion    No action needed      │   │
+│  │  1    Application error    App crashed           kubectl logs         │   │
+│  │  126  Command not exec     Wrong CMD/ENTRYPOINT  kubectl describe     │   │
+│  │  127  Command not found    Missing binary         kubectl logs         │   │
+│  │  137  SIGKILL (OOM)        Memory limit exceeded  Describe→OOMKilled  │   │
+│  │  139  SIGSEGV              Segmentation fault     kubectl logs         │   │
+│  │  143  SIGTERM              Graceful termination   Normal shutdown      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  DEBUGGING TOOLKIT PRIORITY (CKA Speed):                                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. kubectl get pods -o wide           ← Which node? Status? Restarts?│   │
+│  │ 2. kubectl describe pod &lt;name&gt;        ← Events, state, exit codes   │   │
+│  │ 3. kubectl logs &lt;pod&gt; --previous       ← Previous crashed container   │   │
+│  │ 4. kubectl exec &lt;pod&gt; -- &lt;cmd&gt;         ← Run diagnostic commands     │   │
+│  │ 5. kubectl get events --sort-by=.lastTimestamp ← Cluster perspective │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> Troubleshooting is 30% of the CKA exam. The golden debugging sequence: <code>kubectl get pods</code> → <code>kubectl describe pod</code> → <code>kubectl logs</code> → <code>kubectl exec</code>. Exit code 137 ALWAYS means OOMKilled. Exit code 1 is app error (check logs). CrashLoopBackOff means kubelet is retrying with exponential backoff — check logs of the PREVIOUS container instance with <code>--previous</code>.
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 31 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 31 — CKA Practice Questions</h4>
@@ -52206,6 +53216,81 @@ kubectl logs -n kube-system -l k8s-app=kube-proxy
                 </div>
             </div>
 
+                <!-- ═══ UTH Chapter 32 — How Node and Control Plane Troubleshooting Works ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Node and Control Plane Troubleshooting Works: NotReady Diagnosis, Component Health Checks, and the Systemd/CRI Debug Chain</summary>
+                <div class="uth-body">
+                <h5>🗺️ Node NotReady — Systematic Diagnosis Flow</h5>
+                <p>A node going NotReady is one of the most common CKA scenarios. The kubelet stops reporting heartbeats, and the node controller marks it NotReady after ~40 seconds.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  NODE NOTREADY — Root Cause Diagnosis Tree                                    │
+│                                                                              │
+│  $ kubectl get nodes → worker-1   NotReady                                   │
+│                                                                              │
+│  LEVEL 1: Check kubelet (most common cause)                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ $ ssh worker-1                                                        │   │
+│  │ $ sudo systemctl status kubelet   ← Is kubelet running?               │   │
+│  │                                                                        │   │
+│  │  ┌───────────────────┐                                                │   │
+│  │  │ kubelet STOPPED    │ → sudo systemctl start kubelet                │   │
+│  │  │ (inactive/dead)   │    Check why: journalctl -u kubelet -n 50     │   │
+│  │  └───────────────────┘                                                │   │
+│  │                                                                        │   │
+│  │  ┌───────────────────┐                                                │   │
+│  │  │ kubelet RUNNING    │ → Check kubelet logs for errors:              │   │
+│  │  │ but node NotReady │    sudo journalctl -u kubelet -f               │   │
+│  │  └───────────────────┘                                                │   │
+│  │                                                                        │   │
+│  │  Common kubelet issues:                                               │   │
+│  │  • Container runtime (containerd) stopped                              │   │
+│  │    → sudo systemctl status containerd                                  │   │
+│  │  • Kubelet cert expired                                                │   │
+│  │    → Look for "certificate expired" in journalctl                     │   │
+│  │  • API Server unreachable                                              │   │
+│  │    → Check: curl -k https://&lt;api-server&gt;:6443/healthz                │   │
+│  │  • Node disk full                                                      │   │
+│  │    → df -h (check /var, /var/lib/kubelet)                             │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  LEVEL 2: Check control plane components                                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ $ kubectl get pods -n kube-system | grep -v Running                   │   │
+│  │ → Any control plane pods crashing?                                     │   │
+│  │                                                                        │   │
+│  │ $ kubectl get events -A --sort-by=.lastTimestamp | tail -20          │   │
+│  │ → Recent cluster-wide issues                                           │   │
+│  │                                                                        │   │
+│  │ NODE CONTROLLER:                                                       │   │
+│  │ 1. kubelet sends heartbeat to API Server every node-status-update-    │   │
+│  │    frequency (default 10s)                                             │   │
+│  │ 2. Node controller checks: last heartbeat < node-monitor-grace-period │   │
+│  │    (default 40s)                                                       │   │
+│  │ 3. If grace period exceeded → marks node NotReady                     │   │
+│  │ 4. After pod-eviction-timeout (default 5m) → evicts pods              │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CONTROL PLANE COMPONENT FAILURE DIAGNOSIS:                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ SYMPTOM                      LIKELY CAUSE         CHECK              │   │
+│  │ ───────────────────────────────────────────────────────────────────  │   │
+│  │ kubectl: connection refused  API Server down       crictl ps | grep  │   │
+│  │                                                     kube-apiserver    │   │
+│  │ kubectl: etcd errors         etcd unavailable       crictl ps | grep  │   │
+│  │                                                     etcd              │   │
+│  │ Controller manager logs      kubeconfig invalid    Check mount paths  │   │
+│  │ "0/3 nodes available"        Scheduler down        Get scheduler pod  │   │
+│  │ All pods pending              Scheduler down        Check scheduler    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> Node troubleshooting is CKA core. Diagnostic sequence: <code>kubectl describe node &lt;name&gt;</code> (check Conditions section) → <code>ssh node</code> → <code>systemctl status kubelet</code> → <code>journalctl -u kubelet</code> → <code>systemctl status containerd</code>. If kubelet is running but node NotReady: check kubelet logs for certificate/API server errors. The `Conditions` section in `describe node` shows exactly why the node is NotReady (MemoryPressure, DiskPressure, PIDPressure, NetworkUnavailable).
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 32 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 32 — CKA Practice Questions</h4>
@@ -53300,6 +54385,81 @@ kubectl describe pod anihpj-web-xxxx -n anihpj | grep -A8 "Requests\|Limits"</co
                     <code>kubectl get events -A --sort-by=.lastTimestamp</code> — recent cluster events<br>
                     <code>kubectl logs &lt;pod&gt; -c &lt;container&gt; --previous</code> — previous crashed container's logs
                 </div>
+
+                <!-- ═══ UTH Chapter 33 — How Logging and Monitoring Architectures Work ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Logging and Monitoring Architectures Work: kubelet Log Management, Container Runtime Logs, and the Metrics Pipeline</summary>
+                <div class="uth-body">
+                <h5>🗺️ Kubernetes Logging Architecture — Where Logs Live</h5>
+                <p>kubectl logs doesn't connect to a central log server. It reads directly from the node's filesystem where the container runtime writes stdout/stderr.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  KUBERNETES LOGGING — Data Flow                                              │
+│                                                                              │
+│  Container stdout/stderr                                                      │
+│       │                                                                       │
+│       ▼                                                                       │
+│  containerd captures output → writes to JSON file:                           │
+│  /var/log/pods/&lt;namespace&gt;_&lt;pod-name&gt;_&lt;pod-uid&gt;/&lt;container&gt;/0.log          │
+│                                                                              │
+│  kubectl logs → kubelet reads from this file via CRI                        │
+│                                                                              │
+│  NODE-LEVEL LOG LOCATIONS:                                                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ Application logs: /var/log/pods/                                       │   │
+│  │ Container logs:   /var/log/containers/ (symlinks to pod logs)         │   │
+│  │ kubelet logs:     journalctl -u kubelet                               │   │
+│  │ containerd logs:  journalctl -u containerd                             │   │
+│  │ API Server logs:  /var/log/kube-apiserver.log OR crictl logs &lt;id&gt;    │   │
+│  │ etcd logs:        crictl logs &lt;id&gt;                                     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  LOG ROTATION (kubelet-managed):                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ kubelet rotates logs when:                                            │   │
+│  │   containerLogMaxSize: "10Mi"  ← Max size per log file               │   │
+│  │   containerLogMaxFiles: 5      ← Max rotated files to keep           │   │
+│  │                                                                        │   │
+│  │ After rotation: 0.log → 0.log.1 → 0.log.2 → ... → deleted            │   │
+│  │                                                                        │   │
+│  │ ⚠️  kubectl logs --previous reads from the PREVIOUS (rotated) file    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  METRICS PIPELINE — How kubectl top Works:                                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ cAdvisor (in kubelet) → collects CPU/memory per container            │   │
+│  │       │                                                                │   │
+│  │       ▼                                                                │   │
+│  │ metrics-server → aggregates cAdvisor data from all nodes              │   │
+│  │       │  (Deployment in kube-system, needs metrics-server installed)  │   │
+│  │       ▼                                                                │   │
+│  │ kubectl top pod/node → queries metrics-server API                     │   │
+│  │                                                                        │   │
+│  │ WITHOUT metrics-server: kubectl top returns "error: Metrics API not    │   │
+│  │   available". Install: kubectl apply -f metrics-server components.yaml │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  EVENTS — The Cluster's Timeline:                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ kubectl get events --sort-by=.lastTimestamp -A | tail -30            │   │
+│  │                                                                        │   │
+│  │ Events are kept for 1 hour by default. They tell you:                 │   │
+│  │ • Why a pod was killed (OOMKilling)                                   │   │
+│  │ • Why a pod can't start (FailedMount, FailedScheduling)               │   │
+│  │ • Why a probe failed (Unhealthy)                                      │   │
+│  │ • When nodes changed state (NodeReady→NodeNotReady)                   │   │
+│  │                                                                        │   │
+│  │ Events are your FIRST stop for any cluster issue.                     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> On the CKA, <code>kubectl logs</code> is your primary diagnostic tool. Remember: <code>--previous</code> for crashed container logs, <code>--tail=50</code> for last N lines, <code>--since=5m</code> for time-windowed logs, <code>--all-containers</code> for multi-container pods, <code>-l app=web</code> for aggregate logs across pods. For control plane component logs, use <code>crictl logs</code> on the node since they run as static pods (not accessible via kubectl logs in kube-system).
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 33 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -54873,6 +56033,75 @@ kubectl logs -l app=web,tier=frontend
                     </div>
                 </div>
             </div>
+
+                <!-- ═══ UTH Chapter 34 — How Multi-Layer Troubleshooting Scenarios Work ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Multi-Layer Troubleshooting Scenarios Work: The Systematic Debugging Methodology, Dependency Chain Analysis, and the CKA Troubleshooting Mindset</summary>
+                <div class="uth-body">
+                <h5>🗺️ The CKA Troubleshooting Methodology — Systematic Root Cause Analysis</h5>
+                <p>Complex CKA scenarios involve multiple failing components. The key is a systematic top-down approach that isolates the root cause layer by layer.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  SYSTEMATIC TROUBLESHOOTING METHODOLOGY                                       │
+│                                                                              │
+│  LAYER MODEL (debug from top down):                                           │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ LAYER 1: APPLICATION (logs, exit codes, probes)                       │   │
+│  │   └── LAYER 2: POD (status, events, describe, resource usage)         │   │
+│  │       └── LAYER 3: CONTROLLER (Deployment/RS/DaemonSet status)        │   │
+│  │           └── LAYER 4: SERVICE/NETWORK (endpoints, DNS, NetworkPolicy)│   │
+│  │               └── LAYER 5: NODE (kubelet, containerd, disk, memory)   │   │
+│  │                   └── LAYER 6: CONTROL PLANE (API, etcd, scheduler)   │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  SCENARIO: "Deployment is running but unreachable"                           │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. APP: kubectl logs → app listening on correct port? ✅              │   │
+│  │ 2. POD: kubectl describe → probes passing? ready? ✅                  │   │
+│  │ 3. CONTROLLER: kubectl get deploy,rs → desired=ready? ✅              │   │
+│  │ 4. SERVICE: kubectl get svc → selector matches pod labels?           │   │
+│  │    kubectl get endpoints → ENDPOINTS is &lt;none&gt;? ❌                   │   │
+│  │    → Service selector doesn't match pod labels!                      │   │
+│  │    → Fix: update Service selector or pod labels                      │   │
+│  │                                                                        │   │
+│  │ 5. VERIFY: curl &lt;svc-ip&gt;:&lt;port&gt; → works now ✅                       │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  DEPENDENCY CHAIN ANALYSIS — Finding the Root Cause:                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ When multiple things are broken, find the DEPENDENCY that broke first│   │
+│  │                                                                        │   │
+│  │  Chain: DNS down → Services unreachable → Pods can't talk → app dead  │   │
+│  │  ROOT CAUSE: CoreDNS pods crashed (check kube-system)                 │   │
+│  │  FIX: Restart CoreDNS → everything recovers                            │   │
+│  │                                                                        │   │
+│  │  Chain: Node disk full → kubelet can't write → node NotReady           │   │
+│  │  → pods evicted → Deployment shows fewer replicas                      │   │
+│  │  ROOT CAUSE: DiskPressure on node (check df -h)                       │   │
+│  │  FIX: Clean disk → node recovers                                       │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CKA TROUBLESHOOTING MINDSET — Rules for the Exam:                           │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. ALWAYS check namespace first: -n &lt;ns&gt; (most common mistake)       │   │
+│  │ 2. ALWAYS check context: kubectl config current-context               │   │
+│  │ 3. DESCRIBE before LOGS: describe gives events + state; logs gives    │   │
+│  │    application-level details                                          │   │
+│  │ 4. CHECK EVENTS: kubectl get events --sort-by=.lastTimestamp          │   │
+│  │ 5. WHEN STUCK: Move up one layer. Pod broken? Check node. Node        │   │
+│  │    broken? Check kubelet. Kubelet broken? Check disk/containerd.      │   │
+│  │ 6. VERIFY AFTER FIXING: Don't assume. Run a test command.             │   │
+│  │ 7. ONE FIX AT A TIME: Fix one thing, verify, then fix the next.       │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> Troubleshooting is 30% of the CKA — the largest single domain. Exam questions often have 2-3 cascading failures. Fix the ROOT CAUSE first (not the symptoms). Common root causes: wrong namespace, wrong context, label mismatch, missing ConfigMap/Secret, insufficient resources, expired certs. After every fix, verify with a test command before moving on. Don't fix-and-forget.
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 34 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -56519,6 +57748,93 @@ spec:
                 </div>
             </div>
 
+                <!-- ═══ UTH Chapter 35 — How High Availability Clusters Work ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How High Availability Clusters Actually Work: Stacked vs External etcd, Quorum Math, and Leader Election Across Components</summary>
+                <div class="uth-body">
+                <h5>🗺️ HA Topologies — Stacked vs External etcd</h5>
+                <p>Kubernetes HA comes in two architectures. Understanding the trade-offs helps you choose the right topology and debug HA failures on the CKA.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  HA TOPOLOGIES — Stacked vs External etcd                                     │
+│                                                                              │
+│  STACKED ETCD (default, simpler):                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  CP Node 1          CP Node 2          CP Node 3                     │   │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │   │
+│  │  │ API Server  │    │ API Server  │    │ API Server  │              │   │
+│  │  │ etcd        │◀──▶│ etcd        │◀──▶│ etcd        │              │   │
+│  │  └─────────────┘    └─────────────┘    └─────────────┘              │   │
+│  │                                                                       │   │
+│  │  ✅ Simpler to set up (1 command: kubeadm join --control-plane)      │   │
+│  │  ✅ Fewer nodes needed (3 CP nodes = 3 etcd nodes)                   │   │
+│  │  ⚠️  etcd competes for resources with API Server                    │   │
+│  │  ⚠️  If CP node fails, lose BOTH API Server AND etcd member         │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  EXTERNAL ETCD (separate etcd cluster):                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  CP Node 1          CP Node 2          CP Node 3                     │   │
+│  │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐            │   │
+│  │  │  API Server  │   │  API Server  │   │  API Server  │            │   │
+│  │  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘            │   │
+│  │         │                 │                 │                        │   │
+│  │         └─────────────────┼─────────────────┘                        │   │
+│  │                           ▼                                           │   │
+│  │  etcd Node 1        etcd Node 2        etcd Node 3                   │   │
+│  │  ┌────────────┐     ┌────────────┐     ┌────────────┐               │   │
+│  │  │   etcd     │◀───▶│   etcd     │◀───▶│   etcd     │               │   │
+│  │  └────────────┘     └────────────┘     └────────────┘               │   │
+│  │                                                                       │   │
+│  │  ✅ API Server and etcd failures are independent                      │   │
+│  │  ✅ etcd on dedicated nodes → better performance                     │   │
+│  │  ⚠️  More nodes (3 CP + 3 etcd = 6 minimum)                         │   │
+│  │  ⚠️  More complex setup                                               │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  QUORUM MATH — How Many Failures Can Your Cluster Survive:                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  etcd uses RAFT — needs MAJORITY (N/2 + 1) to commit writes          │   │
+│  │                                                                        │   │
+│  │  ┌───────┬──────────┬──────────────┬─────────────────────────────┐   │   │
+│  │  │ Nodes │ Majority │ Max Failures │ Notes                        │   │   │
+│  │  ├───────┼──────────┼──────────────┼─────────────────────────────┤   │   │
+│  │  │   1   │    1     │      0       │ No HA — single point of      │   │   │
+│  │  │       │          │              │ failure                       │   │   │
+│  │  │   2   │    2     │      0       │ Worse than 1 — needs both!    │   │   │
+│  │  │   3   │    2     │      1       │ Minimum for production HA     │   │   │
+│  │  │   4   │    3     │      1       │ Still only 1 failure allowed  │   │   │
+│  │  │   5   │    3     │      2       │ Production recommendation     │   │   │
+│  │  │   7   │    4     │      3       │ Maximum recommended            │   │   │
+│  │  └───────┴──────────┴──────────────┴─────────────────────────────┘   │   │
+│  │                                                                        │   │
+│  │  RULE: ALWAYS use ODD number of etcd nodes (3, 5, 7).                 │   │
+│  │  Even numbers waste resources with NO reliability gain.               │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  API SERVER LOAD BALANCING:                                                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  ┌──────────┐                                                         │   │
+│  │  │  kubectl │────▶ haproxy/nginx LB (10.0.1.200:6443)                │   │
+│  │  └──────────┘        │                                                 │   │
+│  │              ┌───────┼───────┐                                         │   │
+│  │              ▼       ▼       ▼                                         │   │
+│  │         CP-Node1  CP-Node2  CP-Node3                                  │   │
+│  │         :6443     :6443     :6443                                      │   │
+│  │                                                                        │   │
+│  │  All API Servers are ACTIVE (no leader election for API Server).      │   │
+│  │  Any API Server can serve read requests.                              │   │
+│  │  Writes go through ANY API Server → etcd (Raft leader handles).      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> On the CKA, you may be asked about etcd quorum. Formula: <code>quorum = floor(N/2) + 1</code>, <code>max failures = floor((N-1)/2)</code>. Always use odd numbers (3, 5, 7). 3 etcd nodes tolerate 1 failure. API Servers have NO leader election — ALL are active. Controller manager and scheduler DO have leader election (only one active at a time). Check with: <code>kubectl get leases -n kube-system</code>.
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 35 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 35 — CKA Practice Questions</h4>
@@ -57997,6 +59313,77 @@ spec:
                     </div>
                 </div>
             </div>
+
+                <!-- ═══ UTH Chapter 36 — How Managed Kubernetes Services Work ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How Managed Kubernetes Services Actually Work: Control Plane Hosting, Cloud Controller Manager, and the Shared Responsibility Model</summary>
+                <div class="uth-body">
+                <h5>🗺️ Managed Kubernetes — What the Cloud Provider Runs vs What You Run</h5>
+                <p>EKS, GKE, and AKS don't just "host Kubernetes." They run the control plane for you while you manage worker nodes and workloads. Understanding the boundary is critical for CKA scenarios involving cloud clusters.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  MANAGED KUBERNETES — Shared Responsibility Model                             │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                       CLOUD PROVIDER MANAGES                          │   │
+│  │  ┌────────────────────────────────────────────────────────────┐      │   │
+│  │  │  kube-apiserver     etcd     kube-controller-manager        │      │   │
+│  │  │  kube-scheduler     cloud-controller-manager                │      │   │
+│  │  │  (YOU CANNOT SSH INTO CONTROL PLANE NODES!)                 │      │   │
+│  │  └────────────────────────────────────────────────────────────┘      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                          YOU MANAGE                                   │   │
+│  │  ┌────────────────────────────────────────────────────────────┐      │   │
+│  │  │  Worker Nodes (EC2/VM instances)                            │      │   │
+│  │  │  kubelet + container runtime (managed node groups possible) │      │   │
+│  │  │  Pods, Deployments, Services, Ingress, etc.                 │      │   │
+│  │  │  RBAC, NetworkPolicies, PodSecurity                         │      │   │
+│  │  │  Storage (PV/PVC/StorageClass)                               │      │   │
+│  │  │  Monitoring, Logging, Backup                                 │      │   │
+│  │  └────────────────────────────────────────────────────────────┘      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  CLOUD CONTROLLER MANAGER — The Bridge to Cloud APIs:                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  Node Controller:                                                     │   │
+│  │    Detects unhealthy nodes → removes from cloud LB → terminates VM  │   │
+│  │                                                                        │   │
+│  │  Route Controller:                                                     │   │
+│  │    Creates cloud routes for pod CIDRs (pod-to-pod across nodes)      │   │
+│  │                                                                        │   │
+│  │  Service Controller:                                                     │   │
+│  │    Creates cloud LoadBalancers for type: LoadBalancer Services       │   │
+│  │                                                                        │   │
+│  │  Volume Controller:                                                     │   │
+│  │    Creates cloud volumes for PVCs (via CSI driver)                    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  PROVIDER DIFFERENCES:                                                       │
+│  ┌────────────────┬──────────────┬──────────────┬───────────────────────┐   │
+│  │ FEATURE        │ EKS (AWS)    │ GKE (GCP)    │ AKS (Azure)           │   │
+│  ├────────────────┼──────────────┼──────────────┼───────────────────────┤   │
+│  │ Auth           │ aws-iam-     │ GKE Workload │ Azure AD Pod Identity  │   │
+│  │                │ authenticator│ Identity     │                        │   │
+│  │ Networking     │ VPC CNI      │ Native CNI   │ Azure CNI              │   │
+│  │ Storage        │ EBS CSI      │ Persistent   │ Azure Disk/File CSI    │   │
+│  │                │              │ Disk CSI     │                        │   │
+│  │ Ingress        │ AWS LB       │ GKE Ingress  │ Application Gateway    │   │
+│  │                │ Controller   │ Controller   │ Ingress Controller     │   │
+│  │ Autoscaling    │ Cluster      │ Cluster      │ Cluster Autoscaler     │   │
+│  │                │ Autoscaler   │ Autoscaler   │                        │   │
+│  │ Upgrade        │ eksctl       │ Auto-upgrade │ az aks upgrade         │   │
+│  │                │ upgrade      │ channels     │                        │   │
+│  └────────────────┴──────────────┴──────────────┴───────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> The CKA is distribution-neutral but may reference cloud concepts. Key differences from self-managed: you CANNOT SSH into control plane nodes, etcd is fully managed (no manual backup needed), upgrades are handled by the provider, and you must use cloud-specific CSI drivers and CNI plugins. For the exam, focus on the kubeadm-based cluster management — cloud specifics are supplementary knowledge.
+                </div>
+                </div>
+                </details>
 
                 <!-- Chapter 36 Exam Questions -->
                 <div class="cka-exam-questions">
@@ -61652,6 +63039,75 @@ spec:
                 </div>
             </div>
 
+                <!-- ═══ UTH Chapter 37 — How GitOps Reconciliation and Controller Patterns Work ═══ -->
+                <details class="uth-toggle"><summary>🔧 Under the Hood — How GitOps Reconciliation and Controller Patterns Actually Work: ArgoCD Sync Loop Internals, Helm Storage Secrets, and Kustomize Strategic Merge Algorithm</summary>
+                <div class="uth-body">
+                <h5>🗺️ GitOps Reconciliation — The Pull-Based Deployment Model</h5>
+                <p>Unlike traditional CI/CD that pushes to clusters, GitOps tools like ArgoCD continuously reconcile cluster state with Git. This provides drift detection, auto-healing, and a complete audit trail.</p>
+                <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  GITOPS RECONCILIATION LOOP — ArgoCD Internals                               │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                         GIT REPO (source of truth)                     │   │
+│  │  ┌──────────────────────────────────────────────────────────────┐    │   │
+│  │  │  anihpj-k8s-manifests/                                        │    │   │
+│  │  │  ├── overlays/dev/                                             │    │   │
+│  │  │  ├── overlays/staging/                                         │    │   │
+│  │  │  └── overlays/production/  ← ArgoCD watches this              │    │   │
+│  │  └──────────────────────────────────────────────────────────────┘    │   │
+│  └──────────────────────────────┬───────────────────────────────────────┘   │
+│                                 │                                            │
+│                    Every 3 min (or webhook):                                  │
+│                                 │                                            │
+│                                 ▼                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  ARGOCD APPLICATION CONTROLLER                                        │   │
+│  │                                                                        │   │
+│  │  1. FETCH DESIRED STATE:                                              │   │
+│  │     Git clone → kustomize build overlays/production → YAML resources │   │
+│  │                                                                        │   │
+│  │  2. FETCH LIVE STATE:                                                 │   │
+│  │     kubectl get &lt;resource&gt; -n anihpj-prod → actual resources        │   │
+│  │                                                                        │   │
+│  │  3. COMPARE (three-way diff):                                         │   │
+│  │     desired YAML vs live YAML vs last-applied-configuration           │   │
+│  │     → Synced (matches) or OutOfSync (diff detected)                   │   │
+│  │                                                                        │   │
+│  │  4. ACT (if auto-sync enabled):                                       │   │
+│  │     kubectl apply desired resources → drive cluster to Git state      │   │
+│  │     kubectl delete resources not in Git (if prune=true)               │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  PUSH vs PULL DEPLOYMENT:                                                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  PUSH (CI/CD):          CI runs kubectl apply → cluster              │   │
+│  │  Issues: Who ran it? What changed? How to rollback? Drift?           │   │
+│  │                                                                        │   │
+│  │  PULL (GitOps):         CI updates Git → ArgoCD syncs → cluster       │   │
+│  │  Benefits: Full audit (git log), rollback (git revert), drift fix     │   │
+│  │  (selfHeal), no cluster creds in CI, PR-based deployments            │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  HELM + KUSTOMIZE — Complementary, Not Competitive:                          │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  Helm: Templates + values → great for SHARING (chart repos)          │   │
+│  │  Kustomize: Base + patches → great for INTERNAL config management    │   │
+│  │                                                                        │   │
+│  │  BEST PRACTICE: Use Helm for third-party tools (nginx, Prometheus)   │   │
+│  │  and Kustomize for your OWN apps (anihpj dev/staging/prod).          │   │
+│  │  ArgoCD supports BOTH natively as sources.                            │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+                <div class="uth-callout">
+                <strong>🔑 CKA Insight:</strong> CI/CD and GitOps are not directly tested on the CKA, but understanding deployment patterns helps with exam scenarios. Key concepts: (1) Deployment rolling updates use maxSurge/maxUnavailable, (2) Rollback = <code>kubectl rollout undo</code>, (3) kubectl apply is declarative and idempotent, (4) Image pull policies determine when new images are fetched. These ARE tested on the CKA.
+                </div>
+                </div>
+                </details>
+
                 <!-- Chapter 37 Exam Questions -->
                 <div class="cka-exam-questions">
                     <h4>📝 Chapter 37 — CKA Practice Questions</h4>
@@ -63240,6 +64696,170 @@ kubectl auth can-i create customresourcedefinitions --as=system:serviceaccount:a
 # no  ← only cluster admins should create/delete CRDs</code></pre>
                 </div>
             </div>
+
+            <!-- ═══ UTH Chapter 38 — How Kubernetes API Extensions Work ═══ -->
+            <details class="uth-toggle"><summary>🔧 Under the Hood — How Kubernetes API Extensions Actually Work: CRD Schema Validation, Operator Reconciliation Loop, Admission Webhook Flow, and API Aggregation Architecture</summary>
+            <div class="uth-body">
+            <h5>🗺️ CRD Internals — How Custom Resources Become Part of the API</h5>
+            <p>A CRD is not just a YAML file — it registers a new resource type in the Kubernetes API, creates an etcd key prefix, and enables standard kubectl operations on custom objects.</p>
+            <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  CRD LIFECYCLE — Registration to Usable Resource                              │
+│                                                                              │
+│  STEP 1: CREATE CRD                                                           │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ $ kubectl apply -f djangoapp-crd.yaml                                 │   │
+│  │                                                                        │   │
+│  │ apiVersion: apiextensions.k8s.io/v1                                   │   │
+│  │ kind: CustomResourceDefinition                                         │   │
+│  │ metadata:                                                              │   │
+│  │   name: djangoapps.anihpj.io  ← Must be: &lt;plural&gt;.&lt;group&gt;             │   │
+│  │ spec:                                                                  │   │
+│  │   group: anihpj.io                                                     │   │
+│  │   versions:                                                            │   │
+│  │   - name: v1                                                           │   │
+│  │     served: true                                                       │   │
+│  │     storage: true                                                      │   │
+│  │     schema:                                                            │   │
+│  │       openAPIV3Schema:  ← Defines structure + validation              │   │
+│  │         type: object                                                   │   │
+│  │         properties:                                                    │   │
+│  │           spec:                                                        │   │
+│  │             type: object                                               │   │
+│  │             properties:                                                │   │
+│  │               replicas: {type: integer, minimum: 1}                   │   │
+│  │               image: {type: string}                                    │   │
+│  │   scope: Namespaced  ← Namespaced or Cluster                           │   │
+│  │   names:                                                               │   │
+│  │     plural: djangoapps                                                 │   │
+│  │     singular: djangoapp                                                │   │
+│  │     kind: DjangoApp                                                    │   │
+│  │     shortNames: [da]                                                   │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  STEP 2: API SERVER REGISTERS THE CRD                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. API Server detects new CRD in etcd                                 │   │
+│  │ 2. Registers new REST endpoint:                                       │   │
+│  │    /apis/anihpj.io/v1/namespaces/{ns}/djangoapps                      │   │
+│  │ 3. Creates etcd key prefix:                                            │   │
+│  │    /registry/anihpj.io/djangoapps/                                     │   │
+│  │ 4. OpenAPI schema updated → kubectl explain DjangoApp works!          │   │
+│  │ 5. kubectl api-resources now shows: djangoapps da anihpj.io/v1 true   │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  STEP 3: CREATE CUSTOM RESOURCE INSTANCES                                    │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ $ kubectl apply -f my-djangoapp.yaml                                   │   │
+│  │                                                                        │   │
+│  │ apiVersion: anihpj.io/v1                                              │   │
+│  │ kind: DjangoApp                                                        │   │
+│  │ metadata:                                                              │   │
+│  │   name: anihpj-production                                              │   │
+│  │ spec:                                                                  │   │
+│  │   replicas: 3                                                          │   │
+│  │   image: ghcr.io/user/anihpj:v2.1                                     │   │
+│  │                                                                        │   │
+│  │ CRD instances are just like any other K8s resource:                   │   │
+│  │ $ kubectl get djangoapps                                               │   │
+│  │ $ kubectl describe djangoapp anihpj-production                         │   │
+│  │ $ kubectl edit djangoapp anihpj-production                             │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+
+            <h5>🔬 Operator Pattern — Custom Controller Reconciliation</h5>
+            <p>An Operator = CRD + Custom Controller. The controller watches CRD instances and reconciles actual state with desired state — the same pattern used by built-in controllers:</p>
+            <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  OPERATOR RECONCILIATION LOOP                                                 │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  1. WATCH: DjangoApp CRD instances (via K8s API watch)                │   │
+│  │     → djangoapp/anihpj-production created                              │   │
+│  │                                                                        │   │
+│  │  2. RECONCILE:                                                         │   │
+│  │     Desired (CRD spec):        Actual (cluster):                       │   │
+│  │     ┌──────────────────┐       ┌──────────────────┐                   │   │
+│  │     │ replicas: 3       │       │ No Deployment yet │                   │   │
+│  │     │ image: anihpj:v2.1│  vs   │ No Service yet    │                   │   │
+│  │     │ env: [DB_HOST,...] │       │ No ConfigMap yet  │                   │   │
+│  │     └──────────────────┘       └──────────────────┘                   │   │
+│  │                                                                        │   │
+│  │  3. ACT:                                                               │   │
+│  │     → Create ConfigMap (from spec.env)                                 │   │
+│  │     → Create Deployment (spec.replicas, spec.image)                    │   │
+│  │     → Create Service (ClusterIP, port 8000)                            │   │
+│  │     → Update CRD status: phase=Running, url=anihpj-svc:8000           │   │
+│  │                                                                        │   │
+│  │  4. LOOP: Watch for changes → reconcile again                          │   │
+│  │     → User changes replicas: 3→5 → controller scales Deployment       │   │
+│  │     → User updates image → controller updates Deployment → rollout    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  OPERATOR FRAMEWORKS (simplify controller development):                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ • Operator SDK (Go/Ansible/Helm) — Red Hat's framework                │   │
+│  │ • Kubebuilder — Official k8s SIG project, Go-based                   │   │
+│  │ • KUDO — Declarative operator building                                │   │
+│  │ • Kopf — Python operator framework                                     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+
+            <h5>🔧 Admission Webhooks — Mutating + Validating Request Interception</h5>
+            <p>Webhooks let external services intercept and modify/validate API requests BEFORE they're persisted to etcd:</p>
+            <div class="uth-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  ADMISSION WEBHOOK FLOW                                                       │
+│                                                                              │
+│  kubectl create pod → API Server                                              │
+│                               │                                               │
+│                               ▼                                               │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  MUTATING WEBHOOKS (run FIRST, in order):                             │   │
+│  │  ┌──────────────────────────────────────────────────────────────┐    │   │
+│  │  │ 1. API Server sends AdmissionReview (JSON) to webhook URL     │    │   │
+│  │  │ 2. Webhook modifies the object (e.g., inject sidecar,        │    │   │
+│  │  │    add labels, set defaults)                                   │    │   │
+│  │  │ 3. Webhook returns AdmissionResponse with JSON patch           │    │   │
+│  │  │ 4. API Server applies the patch                                │    │   │
+│  │  │                                                               │    │   │
+│  │  │  Example: Istio injects sidecar container into every pod      │    │   │
+│  │  └──────────────────────────────────────────────────────────────┘    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                               │                                               │
+│                               ▼                                               │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  VALIDATING WEBHOOKS (run AFTER mutating):                            │   │
+│  │  ┌──────────────────────────────────────────────────────────────┐    │   │
+│  │  │ 1. API Server sends AdmissionReview to webhook URL            │    │   │
+│  │  │ 2. Webhook validates the object (policy checks)              │    │   │
+│  │  │ 3. Returns: allowed: true OR allowed: false + message        │    │   │
+│  │  │ 4. If false → API Server rejects the request (403 Forbidden) │    │   │
+│  │  │                                                               │    │   │
+│  │  │  Example: Require all pods to have resource limits           │    │   │
+│  │  └──────────────────────────────────────────────────────────────┘    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                               │                                               │
+│                               ▼                                               │
+│                          PERSIST TO etcd                                     │
+│                                                                              │
+│  WEBHOOK REQUIREMENTS:                                                       │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ • Must be accessible via HTTPS (TLS required)                         │   │
+│  │ • Runs as a Service inside the cluster                                │   │
+│  │ • Requires caBundle in webhook config (CA cert for TLS validation)    │   │
+│  │ • Timeout: default 10s (webhook must respond in time)                 │   │
+│  │ • Failure policy: Ignore (allow request) or Fail (reject request)     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+            <div class="uth-callout">
+            <strong>🔑 CKA Insight:</strong> While CRDs and Operators are not heavily tested on the CKA, understanding the extension model helps with troubleshooting. Key points: (1) CRDs create new API endpoints — <code>kubectl api-resources</code> shows them, (2) CRD schema validation is OpenAPI v3 based, (3) Admission webhooks intercept ALL matching requests — a broken webhook with failurePolicy=Fail can BLOCK all pod creation, (4) Always check webhook configurations if pods suddenly can't be created: <code>kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations</code>.
+            </div>
+            </div>
+            </details>
 
             <!-- ─── Exam Questions ─── -->
             <div class="section-block" id="s38-exam">

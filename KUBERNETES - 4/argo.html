@@ -8335,6 +8335,16 @@ spec:
 # argocd_app_health_status      — App health (Healthy/Degraded)
 # argocd_app_reconcile_count    — Reconciliation count
 # argocd_app_reconcile_duration — How long syncs take</code></pre></div>
+                <div class="compare-table"><table>
+                    <thead><tr><th>Metric</th><th>What It Tells You</th><th>Alert If</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>argocd_app_sync_status</code></td><td>How many apps are OutOfSync</td><td>&gt; 0 for &gt; 30 min</td></tr>
+                        <tr><td><code>argocd_app_health_status</code></td><td>How many apps are Degraded</td><td>&gt; 0 in production</td></tr>
+                        <tr><td><code>argocd_app_reconcile_count</code></td><td>Reconciliation activity</td><td>Sudden drop = controller issues</td></tr>
+                        <tr><td><code>argocd_app_k8s_request_total</code></td><td>API calls to Kubernetes</td><td>Spike = rate-limiting risk</td></tr>
+                        <tr><td><code>argocd_repo_server_repo_errors</code></td><td>Repository access failures</td><td>&gt; 0 — check credentials</td></tr>
+                    </tbody>
+                </table></div>
             </div>
 
             <!-- 23.2 -->
@@ -8408,6 +8418,12 @@ spec:
                 <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">How do you backup all ArgoCD configuration?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>argocd admin export</code> — exports all apps, projects, repos, clusters, and settings as YAML. Restore via <code>argocd admin import</code>.</p></div></details></div>
                 <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Which ArgoCD component uses leader election?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The <strong>Application Controller</strong>. Only one instance is active at a time. Others are hot standby. API Server and Repo Server scale horizontally without leader election.</p></div></details></div>
                 <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What CRD does the ArgoCD Operator use?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong><code>ArgoCD</code></strong> (apiVersion: <code>argoproj.io/v1alpha1</code>). It declaratively manages the entire ArgoCD instance lifecycle including HA, monitoring, and upgrades.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">Can you run multiple Application Controllers simultaneously?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Yes, but only one is active.</strong> Multiple replicas run but only one holds the leader election lock. Others are hot standby.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What port does argocd-metrics listen on?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>8082.</strong> Key metrics: <code>argocd_app_sync_status</code>, <code>argocd_app_reconcile_count</code>.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What happens if Redis goes down?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>ArgoCD <strong>continues working</strong> with degraded performance. App cache is lost — all apps re-evaluated from cluster. Use Redis HA with Sentinel for production.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">How do you restore ArgoCD after cluster failure?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>1.</strong> Restore argocd namespace (Velero/import). <strong>2.</strong> Re-add clusters. <strong>3.</strong> Re-add repos. <strong>4.</strong> Apps auto-reconcile.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">What is the benefit of the ArgoCD Operator?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Automated lifecycle:</strong> Upgrades, HA, backup, monitoring — all declarative via the ArgoCD CRD. No manual intervention.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">Which ArgoCD components scale horizontally?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>API Server + Repo Server</strong> scale horizontally. Application Controller = single active (leader election). Redis = HA with Sentinel.</p></div></details></div>
             </div>
         </div>
 
@@ -8662,11 +8678,22 @@ pipeline {
       ├── dev-cluster/
       └── prod-cluster/
   
-  ✅ apps/<app>/overlays/<env>/ — Standard Kustomize layout
+  ✅ apps/&lt;app&gt;/overlays/&lt;env&gt;/ — Standard Kustomize layout
   ✅ Separate config repo from source code repo
   ✅ One branch (main), directories for environments
 </pre>
                 </div>
+                <div class="compare-table"><table>
+                    <thead><tr><th>Aspect</th><th>Monorepo</th><th>Multi-Repo</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Structure</strong></td><td>All apps in one repo</td><td>One repo per app/team</td></tr>
+                        <tr><td><strong>Visibility</strong></td><td class="winner">Full system view</td><td>Scattered — harder to audit</td></tr>
+                        <tr><td><strong>CI/CD</strong></td><td>Harder to scope triggers</td><td class="winner">Independent pipelines</td></tr>
+                        <tr><td><strong>Access Control</strong></td><td>Fine-grained (CODEOWNERS)</td><td class="winner">Repo-level isolation</td></tr>
+                        <tr><td><strong>Best For</strong></td><td>Small-medium teams</td><td>Large orgs, microservices</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="info-box tip"><h5>💡 The Hybrid Approach</h5><p>Most enterprises use a <strong>hybrid</strong>: separate repos for source code (anihpj, redis, monitoring), one centralized GitOps config repo. This gives app teams independence (CI) while maintaining a single source of truth for deployments (CD).</p></div>
             </div>
 
             <!-- 25.4 -->
@@ -8753,6 +8780,1179 @@ git commit -m "EMERGENCY: Manual kubectl apply during ArgoCD outage"
                 <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">How do you rollback a bad deployment in ArgoCD?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>argocd app rollback &lt;app&gt; &lt;history-id&gt;</code> then <code>argocd app sync &lt;app&gt; --force</code>. This reverts to a previous known-good state.</p></div></details></div>
                 <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What should you do if ArgoCD itself is down and you need to deploy urgently?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Manually kubectl apply</strong> the manifests, document the change in Git, and when ArgoCD recovers, ensure Git matches cluster state so it doesn't revert your emergency fix.</p></div></details></div>
             </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--              APPENDIX A: argocd CLI COMMAND REFERENCE           -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-a">
+        <h2>📎 Appendix A: argocd CLI Command Reference</h2>
+        <p>Complete reference for the <code>argocd</code> command-line tool. These commands are essential for both the CAPA exam and daily ArgoCD operations.</p>
+
+        <div class="card-grid cols-2" style="margin-bottom:24px">
+            <div class="info-card highlight"><h5>🎯 CAPA Most-Tested Commands</h5><p><code>app sync</code> | <code>app create</code> | <code>app diff</code> | <code>app history</code> | <code>app rollback</code> | <code>cluster add</code> | <code>proj windows add</code> | <code>account can-i</code> | <code>admin export</code></p></div>
+            <div class="info-card"><h5>🔤 CLI Pattern</h5><p><code>argocd &lt;resource&gt; &lt;action&gt; &lt;name&gt; [flags]</code>. Resources: app, proj, repo, cluster, account. Actions: list, get, create, delete, sync, set.</p></div>
+        </div>
+
+        <!-- A.1 -->
+        <div class="section-block" id="sa-1">
+            <h3>A.1 Application Commands (argocd app ...)</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Command</th><th>Description</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><code>argocd app list</code></td><td>List all applications</td><td><code>argocd app list --repo https://github.com/org/repo.git</code></td></tr>
+                    <tr><td><code>argocd app get &lt;name&gt;</code></td><td>Get application details</td><td><code>argocd app get anihpj-prod --show-params</code></td></tr>
+                    <tr><td><code>argocd app create &lt;name&gt;</code></td><td>Create a new application</td><td><code>argocd app create anihpj --repo ... --path ... --dest-server ... --dest-namespace ...</code></td></tr>
+                    <tr><td><code>argocd app sync &lt;name&gt;</code></td><td>Sync application to Git state</td><td><code>argocd app sync anihpj --prune --force</code></td></tr>
+                    <tr><td><code>argocd app diff &lt;name&gt;</code></td><td>Show differences between Git and live</td><td><code>argocd app diff anihpj-prod</code></td></tr>
+                    <tr><td><code>argocd app history &lt;name&gt;</code></td><td>Show deployment history</td><td><code>argocd app history anihpj-prod</code></td></tr>
+                    <tr><td><code>argocd app rollback &lt;name&gt; &lt;id&gt;</code></td><td>Rollback to a previous deployment</td><td><code>argocd app rollback anihpj-prod 3</code></td></tr>
+                    <tr><td><code>argocd app delete &lt;name&gt;</code></td><td>Delete an application</td><td><code>argocd app delete anihpj-dev --cascade</code></td></tr>
+                    <tr><td><code>argocd app wait &lt;name&gt;</code></td><td>Wait for app to become healthy/synced</td><td><code>argocd app wait anihpj --sync --health</code></td></tr>
+                    <tr><td><code>argocd app manifests &lt;name&gt;</code></td><td>Print rendered manifests</td><td><code>argocd app manifests anihpj --source live</code></td></tr>
+                    <tr><td><code>argocd app set &lt;name&gt;</code></td><td>Set app parameters</td><td><code>argocd app set anihpj --parameter image.tag=v2.0</code></td></tr>
+                    <tr><td><code>argocd app unset &lt;name&gt;</code></td><td>Unset app parameters</td><td><code>argocd app unset anihpj --parameter image.tag</code></td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- A.2 -->
+        <div class="section-block" id="sa-2">
+            <h3>A.2 Project Commands (argocd proj ...)</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Command</th><th>Description</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><code>argocd proj list</code></td><td>List all projects</td><td><code>argocd proj list -o yaml</code></td></tr>
+                    <tr><td><code>argocd proj create &lt;name&gt;</code></td><td>Create a project</td><td><code>argocd proj create anihpj-prod -f project.yaml</code></td></tr>
+                    <tr><td><code>argocd proj get &lt;name&gt;</code></td><td>Get project details</td><td><code>argocd proj get anihpj-prod</code></td></tr>
+                    <tr><td><code>argocd proj delete &lt;name&gt;</code></td><td>Delete a project</td><td><code>argocd proj delete anihpj-dev</code></td></tr>
+                    <tr><td><code>argocd proj windows list &lt;name&gt;</code></td><td>List sync windows</td><td><code>argocd proj windows list anihpj-prod</code></td></tr>
+                    <tr><td><code>argocd proj windows add &lt;name&gt;</code></td><td>Add a sync window</td><td><code>argocd proj windows add anihpj-prod --kind deny --schedule "0 8 * * 1-5" --duration 9h</code></td></tr>
+                    <tr><td><code>argocd proj windows delete &lt;name&gt;</code></td><td>Delete a sync window</td><td><code>argocd proj windows delete anihpj-prod 0</code></td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- A.3 -->
+        <div class="section-block" id="sa-3">
+            <h3>A.3 Repository & Cluster Commands</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Command</th><th>Description</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><code>argocd repo list</code></td><td>List configured repositories</td><td><code>argocd repo list --output url</code></td></tr>
+                    <tr><td><code>argocd repo add &lt;url&gt;</code></td><td>Add a repository</td><td><code>argocd repo add https://github.com/org/repo.git --username git --password token</code></td></tr>
+                    <tr><td><code>argocd repo rm &lt;url&gt;</code></td><td>Remove a repository</td><td><code>argocd repo rm https://github.com/org/repo.git</code></td></tr>
+                    <tr><td><code>argocd cluster list</code></td><td>List registered clusters</td><td><code>argocd cluster list</code></td></tr>
+                    <tr><td><code>argocd cluster add &lt;context&gt;</code></td><td>Add a cluster from kubeconfig</td><td><code>argocd cluster add staging --name staging</code></td></tr>
+                    <tr><td><code>argocd cluster rm &lt;name&gt;</code></td><td>Remove a cluster</td><td><code>argocd cluster rm staging</code></td></tr>
+                    <tr><td><code>argocd cluster rotate-auth</code></td><td>Rotate cluster auth token</td><td><code>argocd cluster rotate-auth staging</code></td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- A.4 -->
+        <div class="section-block" id="sa-4">
+            <h3>A.4 Account & Settings Commands</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Command</th><th>Description</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><code>argocd login &lt;server&gt;</code></td><td>Login to ArgoCD</td><td><code>argocd login argocd.example.com --sso</code></td></tr>
+                    <tr><td><code>argocd logout &lt;server&gt;</code></td><td>Logout from ArgoCD</td><td><code>argocd logout argocd.example.com</code></td></tr>
+                    <tr><td><code>argocd account list</code></td><td>List all accounts</td><td><code>argocd account list</code></td></tr>
+                    <tr><td><code>argocd account get</code></td><td>Get account details</td><td><code>argocd account get --account anihpj-dev</code></td></tr>
+                    <tr><td><code>argocd account update-password</code></td><td>Update password</td><td><code>argocd account update-password --account admin</code></td></tr>
+                    <tr><td><code>argocd account can-i</code></td><td>Check RBAC permissions</td><td><code>argocd account can-i sync applications --as dev-team</code></td></tr>
+                    <tr><td><code>argocd account generate-token</code></td><td>Generate auth token</td><td><code>argocd account generate-token --account cicd</code></td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- A.5 -->
+        <div class="section-block" id="sa-5">
+            <h3>A.5 Admin Commands</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Command</th><th>Description</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><code>argocd admin export</code></td><td>Export all ArgoCD data</td><td><code>argocd admin export > backup.yaml</code></td></tr>
+                    <tr><td><code>argocd admin import</code></td><td>Import ArgoCD data</td><td><code>argocd admin import backup.yaml</code></td></tr>
+                    <tr><td><code>argocd admin settings rbac validate</code></td><td>Validate RBAC policies</td><td><code>argocd admin settings rbac validate --policy-file policy.csv</code></td></tr>
+                    <tr><td><code>argocd admin notifications trigger</code></td><td>Manually trigger a notification</td><td><code>argocd admin notifications trigger on-sync-succeeded --app anihpj</code></td></tr>
+                    <tr><td><code>argocd admin dashboard</code></td><td>Start local dashboard (no auth)</td><td><code>argocd admin dashboard -n argocd</code></td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- A.6 -->
+        <div class="section-block" id="sa-6">
+            <h3>A.6 Notifications Commands</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Command</th><th>Description</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><code>argocd admin notifications trigger</code></td><td>Trigger notification manually</td><td><code>argocd admin notifications trigger on-sync-failed --app anihpj-prod</code></td></tr>
+                    <tr><td><code>argocd admin notifications template notify</code></td><td>Test a notification template</td><td><code>argocd admin notifications template notify app-sync-succeeded anihpj-prod</code></td></tr>
+                </tbody>
+            </table></div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--              APPENDIX B: ARGOCD YAML TEMPLATES                  -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-b">
+        <h2>📎 Appendix B: ArgoCD YAML Templates</h2>
+        <p>Ready-to-use YAML templates for every common ArgoCD resource. Copy, customize, and deploy.</p>
+
+        <!-- B.1 -->
+        <div class="section-block" id="sb-1">
+            <h3>B.1 Application — Basic (Plain YAML Directory)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: anihpj
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+    targetRevision: main
+    path: apps/anihpj/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: anihpj-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true</code></pre></div>
+        </div>
+
+        <!-- B.2 -->
+        <div class="section-block" id="sb-2">
+            <h3>B.2 Application — Helm (Chart Repository)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: postgresql
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: postgresql
+    targetRevision: 15.5.0
+    helm:
+      parameters:
+      - name: auth.database
+        value: anihpj
+      - name: auth.username
+        value: anihpj_user
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: anihpj-prod</code></pre></div>
+        </div>
+
+        <!-- B.3 -->
+        <div class="section-block" id="sb-3">
+            <h3>B.3 Application — Helm (from Git)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">source:
+  repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+  path: charts/anihpj
+  targetRevision: main
+  helm:
+    valueFiles:
+    - values.yaml
+    - values-prod.yaml
+    parameters:
+    - name: image.tag
+      value: "v1.2.3"</code></pre></div>
+        </div>
+
+        <!-- B.4 -->
+        <div class="section-block" id="sb-4">
+            <h3>B.4 Application — Kustomize</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">source:
+  repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+  path: apps/anihpj/overlays/prod
+  targetRevision: main
+  kustomize:
+    version: v5.4.0
+    images:
+    - anihpj:v1.2.3
+    commonLabels:
+      environment: production</code></pre></div>
+        </div>
+
+        <!-- B.5 -->
+        <div class="section-block" id="sb-5">
+            <h3>B.5 ApplicationSet — List Generator</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: anihpj
+spec:
+  generators:
+  - list:
+      elements:
+      - env: dev
+        namespace: anihpj-dev
+      - env: staging
+        namespace: anihpj-staging
+      - env: prod
+        namespace: anihpj-prod
+  template:
+    metadata:
+      name: 'anihpj-{{env}}'
+    spec:
+      source:
+        repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+        path: apps/anihpj/overlays/{{env}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'</code></pre></div>
+        </div>
+
+        <!-- B.6 -->
+        <div class="section-block" id="sb-6">
+            <h3>B.6 ApplicationSet — Git Directory Generator</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">generators:
+- git:
+    repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+    revision: main
+    directories:
+    - path: apps/*
+  template:
+    metadata:
+      name: '{{path.basename}}'
+    spec:
+      source:
+        repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+        path: '{{path}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{path.basename}}'</code></pre></div>
+        </div>
+
+        <!-- B.7 -->
+        <div class="section-block" id="sb-7">
+            <h3>B.7 ApplicationSet — Matrix Generator</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">generators:
+- matrix:
+    generators:
+    - list:
+        elements:
+        - app: anihpj
+        - app: redis
+    - list:
+        elements:
+        - env: dev
+        - env: staging
+        - env: prod
+# Result: 2 apps × 3 envs = 6 Applications</code></pre></div>
+        </div>
+
+        <!-- B.8 -->
+        <div class="section-block" id="sb-8">
+            <h3>B.8 AppProject — Full Template</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: anihpj-prod
+spec:
+  sourceRepos:
+  - https://github.com/Anihs-Canvas/anihpj-gitops.git
+  destinations:
+  - namespace: anihpj-prod
+    server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+  - group: ''
+    kind: Namespace
+  roles:
+  - name: developer
+    policies:
+    - p, proj:anihpj-prod:developer, applications, sync, anihpj-prod/*, allow
+  syncWindows:
+  - kind: deny
+    schedule: "0 8 * * 1-5"
+    duration: 9h
+    manualSync: true</code></pre></div>
+        </div>
+
+        <!-- B.9 -->
+        <div class="section-block" id="sb-9">
+            <h3>B.9 Cluster Secret — Declarative</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: v1
+kind: Secret
+metadata:
+  name: staging-cluster-secret
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+type: Opaque
+stringData:
+  name: staging
+  server: https://staging.example.com
+  config: |
+    {
+      "bearerToken": "eyJhbGciOi...",
+      "tlsClientConfig": {
+        "insecure": false,
+        "caData": "LS0tLS1CRUdJTi..."
+      }
+    }</code></pre></div>
+        </div>
+
+        <!-- B.10 -->
+        <div class="section-block" id="sb-10">
+            <h3>B.10 Repository Secret — Declarative</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: v1
+kind: Secret
+metadata:
+  name: private-repo
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  type: git
+  url: https://github.com/Anihs-Canvas/anihpj-gitops.git
+  username: git-user
+  password: ghp_xxxxxxxxxxxx</code></pre></div>
+        </div>
+
+        <!-- B.11 -->
+        <div class="section-block" id="sb-11">
+            <h3>B.11 RBAC policy.csv — Full Team Example</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml"># argocd-rbac-cm ConfigMap
+data:
+  policy.csv: |
+    p, role:admin, *, *, *, allow
+    p, role:anihpj-developer, applications, sync, anihpj-dev/*, allow
+    p, role:anihpj-developer, applications, get, anihpj-prod/*, allow
+    p, role:anihpj-developer, logs, get, anihpj-dev/*, allow
+    p, role:anihpj-ops, applications, sync, anihpj-prod/*, allow
+    p, role:anihpj-ops, repositories, create, *, allow
+    p, role:anihpj-viewer, applications, get, */*, allow
+
+    g, anihpj-developers, role:anihpj-developer
+    g, anihpj-ops, role:anihpj-ops
+    g, anihpj-viewers, role:anihpj-viewer
+
+  policy.default: role:readonly</code></pre></div>
+        </div>
+
+        <!-- B.12 -->
+        <div class="section-block" id="sb-12">
+            <h3>B.12 Argo Workflows — CI Pipeline</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: anihpj-ci-
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: pipeline
+    steps:
+    - - name: test
+        template: run-tests
+    - - name: build
+        template: build-image
+    - - name: deploy
+        template: update-gitops
+  - name: run-tests
+    container:
+      image: python:3.12
+      command: [python, manage.py, test]
+  - name: build-image
+    container:
+      image: docker:latest
+      args: ["build", "-t", "anihpj:latest", "."]
+  - name: update-gitops
+    container:
+      image: alpine/git
+      command: [sh, -c]
+      args: ["git clone ... && kustomize edit set image ... && git push"]</code></pre></div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--              APPENDIX C: COMMON ERRORS & SOLUTIONS              -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-c">
+        <h2>📎 Appendix C: Common Errors & Solutions</h2>
+        <p>Troubleshooting guide for the most frequent ArgoCD errors — what they mean, why they happen, and how to fix them.</p>
+
+        <div class="card-grid cols-3" style="margin-bottom:24px">
+            <div class="info-card highlight"><h5>🔍 First Step: Check Logs</h5><p><code>kubectl logs -n argocd deploy/argocd-application-controller</code> — most sync errors are logged here.</p></div>
+            <div class="info-card"><h5>📊 Check App Status</h5><p><code>argocd app get &lt;app&gt; --show-params</code> — see sync/health status and all parameters.</p></div>
+            <div class="info-card"><h5>🔄 Force Refresh</h5><p><code>argocd app get &lt;app&gt; --refresh hard</code> — forces ArgoCD to re-evaluate from Git immediately (bypasses 3-min poll).</p></div>
+        </div>
+
+        <!-- C.1 -->
+        <div class="section-block" id="sc-1">
+            <h3>C.1 Application Errors</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>OutOfSync (constant)</strong></td><td>External controller modifying resources (HPA, webhooks)</td><td>Add <code>ignoreDifferences</code> for the modified field</td></tr>
+                    <tr><td><strong>Unknown status</strong></td><td>Repository unreachable, auth failed, or app just created</td><td><code>argocd repo list</code> — check connectivity and credentials</td></tr>
+                    <tr><td><strong>Missing resources</strong></td><td>Resources defined in Git but not yet created in cluster</td><td>Wait for initial sync, or manual sync if auto-sync disabled</td></tr>
+                    <tr><td><strong>Degraded — "ProgressDeadlineExceeded"</strong></td><td>Deployment rollout timed out (pods stuck in Pending/CrashLoopBackOff)</td><td><code>kubectl describe deployment</code> in target namespace</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- C.2 -->
+        <div class="section-block" id="sc-2">
+            <h3>C.2 Repository Errors</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>"repo not found"</strong></td><td>Wrong URL, private repo without credentials</td><td><code>argocd repo add &lt;url&gt; --username git --password token</code></td></tr>
+                    <tr><td><strong>"authentication required"</strong></td><td>Token expired or wrong permissions</td><td>Regenerate token, update repo credentials</td></tr>
+                    <tr><td><strong>"path does not exist"</strong></td><td>Wrong branch or path in Application spec</td><td>Verify <code>targetRevision</code> (branch) and <code>path</code> in source</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- C.3 -->
+        <div class="section-block" id="sc-3">
+            <h3>C.3 Sync Errors</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>"hook failed"</strong></td><td>PreSync/PostSync hook Job failed</td><td><code>kubectl logs job/&lt;hook-job&gt;</code> — fix hook, retry sync</td></tr>
+                    <tr><td><strong>"field is immutable"</strong></td><td>Trying to change an immutable field (e.g., Deployment selector)</td><td>Use <code>--force</code> flag or <code>--replace</code> to delete + recreate</td></tr>
+                    <tr><td><strong>"resource already exists"</strong></td><td>Resource created outside ArgoCD, conflicting with Git</td><td>Delete resource manually or adopt it via ArgoCD labels</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- C.4 -->
+        <div class="section-block" id="sc-4">
+            <h3>C.4 RBAC Errors</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>"Permission Denied"</strong></td><td>User/role lacks required RBAC permissions</td><td><code>argocd account can-i &lt;action&gt; &lt;resource&gt; --as &lt;user&gt;</code></td></tr>
+                    <tr><td><strong>"policy not found"</strong></td><td>RBAC policy syntax error or missing <code>p,</code> prefix</td><td><code>argocd admin settings rbac validate --policy-file policy.csv</code></td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- C.5 -->
+        <div class="section-block" id="sc-5">
+            <h3>C.5 Helm / Kustomize Errors</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>"helm template failed"</strong></td><td>Invalid values.yaml or missing required values</td><td>Check <code>helm template</code> locally with same values</td></tr>
+                    <tr><td><strong>"kustomize build failed"</strong></td><td>Missing base, malformed patch, or unsupported version</td><td>Run <code>kustomize build</code> locally; pin version in spec if needed</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- C.6 -->
+        <div class="section-block" id="sc-6">
+            <h3>C.6 Cluster Connection Errors</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>"cluster not found"</strong></td><td>Missing <code>secret-type: cluster</code> label</td><td>Add label: <code>argocd.argoproj.io/secret-type: cluster</code></td></tr>
+                    <tr><td><strong>"connection refused"</strong></td><td>Network unreachable or TLS certificate issues</td><td>Check TLS config; add <code>insecure: true</code> only for testing</td></tr>
+                    <tr><td><strong>"unauthorized" (401)</strong></td><td>Bearer token expired or insufficient RBAC on spoke cluster</td><td><code>argocd cluster rotate-auth &lt;name&gt;</code> to refresh token</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--           APPENDIX D: ARGOCD TERMINOLOGY GLOSSARY               -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-d">
+        <h2>📎 Appendix D: ArgoCD Terminology Glossary</h2>
+        <p>Quick-reference definitions for all key ArgoCD, GitOps, and Argo ecosystem terms.</p>
+
+        <!-- D.1 -->
+        <div class="section-block">
+            <h3>D.1 Core ArgoCD Terms</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Application</strong></td><td>CRD that maps a Git source to a K8s destination. The fundamental unit in ArgoCD.</td></tr>
+                    <tr><td><strong>AppProject</strong></td><td>Logical grouping of Applications with RBAC, destination, and source restrictions.</td></tr>
+                    <tr><td><strong>ApplicationSet</strong></td><td>CRD that generates multiple Applications from a template + generator (List, Cluster, Git, etc).</td></tr>
+                    <tr><td><strong>Sync</strong></td><td>The process of making K8s match Git. Can be manual or automated.</td></tr>
+                    <tr><td><strong>Prune</strong></td><td>Deleting K8s resources that are no longer defined in Git.</td></tr>
+                    <tr><td><strong>Self-Heal</strong></td><td>Auto-correcting drift — reverting manual changes back to Git-defined state.</td></tr>
+                    <tr><td><strong>Drift</strong></td><td>Any difference between the live K8s state and the desired Git state.</td></tr>
+                    <tr><td><strong>Sync Wave</strong></td><td>Annotation-based ordering of resource creation during sync (lower numbers = first).</td></tr>
+                    <tr><td><strong>Sync Hook</strong></td><td>Job/Pod that runs at a specific point in the sync lifecycle (PreSync, Sync, PostSync, SyncFail).</td></tr>
+                    <tr><td><strong>Sync Window</strong></td><td>Time-based restriction on when auto-sync is allowed, defined at AppProject level.</td></tr>
+                    <tr><td><strong>Health Status</strong></td><td>Runtime assessment of resource health: Healthy, Progressing, Degraded, Suspended, Missing.</td></tr>
+                    <tr><td><strong>Repo Server</strong></td><td>ArgoCD component that clones Git repos, renders manifests (Helm/Kustomize/plain).</td></tr>
+                    <tr><td><strong>App Controller</strong></td><td>ArgoCD component that reconciles Applications — detects drift and executes syncs.</td></tr>
+                    <tr><td><strong>Dex</strong></td><td>OIDC identity broker bundled with ArgoCD for SSO with GitHub, Google, LDAP, etc.</td></tr>
+                    <tr><td><strong>argocd-cm</strong></td><td>ConfigMap for general ArgoCD settings (URL, Dex, OIDC, resource customizations).</td></tr>
+                    <tr><td><strong>argocd-rbac-cm</strong></td><td>ConfigMap for RBAC policies (policy.csv) and default role.</td></tr>
+                    <tr><td><strong>argocd-cmd-params-cm</strong></td><td>ConfigMap for ArgoCD component command-line flags.</td></tr>
+                    <tr><td><strong>argocd-notifications-cm</strong></td><td>ConfigMap for triggers, templates, services, and subscriptions.</td></tr>
+                    <tr><td><strong>Config Management Plugin (CMP)</strong></td><td>Custom plugin for rendering manifests from non-standard sources (SOPS, Jsonnet, etc).</td></tr>
+                    <tr><td><strong>OutOfSync</strong></td><td>Sync status indicating the live cluster state differs from Git. Requires a sync to resolve.</td></tr>
+                    <tr><td><strong>Orphaned Resource</strong></td><td>A K8s resource that exists in the cluster but is no longer defined in Git (prune candidate).</td></tr>
+                    <tr><td><strong>Resource Tree</strong></td><td>Hierarchical view in ArgoCD UI showing all resources in an Application and their health/sync status.</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- D.2 -->
+        <div class="section-block">
+            <h3>D.2 GitOps Terms</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>GitOps</strong></td><td>Operating model where Git is the single source of truth for declarative infrastructure and applications.</td></tr>
+                    <tr><td><strong>Pull Model</strong></td><td>In-cluster agent pulls desired state from Git and applies it. ArgoCD is pull-based.</td></tr>
+                    <tr><td><strong>Push Model</strong></td><td>External CI/CD tool pushes changes to the cluster. Jenkins/GitHub Actions are push-based.</td></tr>
+                    <tr><td><strong>Declarative</strong></td><td>Describing the DESIRED state (what you want), not the steps to achieve it. YAML is declarative.</td></tr>
+                    <tr><td><strong>Imperative</strong></td><td>Describing the STEPS to achieve a state. CLI commands like <code>kubectl run</code> are imperative.</td></tr>
+                    <tr><td><strong>Reconciliation Loop</strong></td><td>Continuous process of comparing desired vs actual state and correcting differences.</td></tr>
+                    <tr><td><strong>GitOps Repo</strong></td><td>Separate repository containing ONLY Kubernetes manifests and ArgoCD Application definitions — not app source code.</td></tr>
+                    <tr><td><strong>Config Drift</strong></td><td>Deviation between the desired state (Git) and the actual state (live cluster).</td></tr>
+                    <tr><td><strong>Single Source of Truth</strong></td><td>Git is the authoritative source. If it's not in Git, it shouldn't be in the cluster.</td></tr>
+                    <tr><td><strong>Sealed Secrets</strong></td><td>Bitnami tool for encrypting K8s Secrets so they can be safely committed to Git.</td></tr>
+                    <tr><td><strong>External Secrets Operator (ESO)</strong></td><td>Operator that fetches secrets from external providers (AWS, GCP, Azure, Vault) and creates K8s Secrets.</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- D.3 -->
+        <div class="section-block">
+            <h3>D.3 Argo Ecosystem Terms</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Argo Workflows</strong></td><td>Container-native workflow engine. Each step = a Pod. Used for CI/CD pipelines, ML, ETL.</td></tr>
+                    <tr><td><strong>Argo Rollouts</strong></td><td>Progressive delivery controller. Replaces Deployment for Blue-Green and Canary strategies.</td></tr>
+                    <tr><td><strong>Argo Events</strong></td><td>Event-driven automation framework. Triggers workflows or actions based on external events.</td></tr>
+                    <tr><td><strong>Rollout (CRD)</strong></td><td>Replaces Deployment. Supports Blue-Green (active/preview) and Canary (setWeight steps).</td></tr>
+                    <tr><td><strong>Workflow (CRD)</strong></td><td>Defines a workflow with templates. Supports DAG and Steps paradigms.</td></tr>
+                    <tr><td><strong>AnalysisTemplate</strong></td><td>Metric-driven health check during canary rollouts. Auto-rolls back on failure.</td></tr>
+                    <tr><td><strong>CNCF</strong></td><td>Cloud Native Computing Foundation. ArgoCD is a CNCF Graduated project.</td></tr>
+                    <tr><td><strong>argoproj.io/v1alpha1</strong></td><td>API group used by ALL Argo CRDs (Application, AppProject, ApplicationSet, Workflow, Rollout).</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--           APPENDIX E: COMPLETE ANIHJP ARGOCD MANIFESTS          -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-e">
+        <h2>📎 Appendix E: Complete anihpj ArgoCD Manifests</h2>
+        <p>Every manifest needed to deploy the anihpj Django project (jobpost app) with ArgoCD GitOps.</p>
+
+        <!-- E.1 -->
+        <div class="section-block" id="se-1">
+            <h3>E.1 GitOps Repository Structure</h3>
+            <div class="diagram-container"><div class="diagram-title">ANIHJP-GITOPS REPO LAYOUT</div><pre>
+anihpj-gitops/
+├── apps/
+│   └── anihpj/
+│       ├── base/
+│       │   ├── deployment.yaml
+│       │   ├── service.yaml
+│       │   ├── configmap.yaml
+│       │   └── kustomization.yaml
+│       └── overlays/
+│           ├── dev/
+│           │   ├── kustomization.yaml
+│           │   └── replica-count.yaml
+│           ├── staging/
+│           │   ├── kustomization.yaml
+│           │   └── replica-count.yaml
+│           └── prod/
+│               ├── kustomization.yaml
+│               ├── replica-count.yaml
+│               ├── resource-limits.yaml
+│               └── ingress.yaml
+├── bootstrap/
+│   └── root-app.yaml
+└── clusters/
+    └── production/
+        └── cluster-secret.yaml</pre></div>
+        </div>
+
+        <!-- E.2 -->
+        <div class="section-block" id="se-2">
+            <h3>E.2 Base Kubernetes Manifests</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml"># base/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anihpj
+  template:
+    metadata:
+      labels:
+        app: anihpj
+    spec:
+      containers:
+      - name: django
+        image: anihpj:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: django-settings
+        - secretRef:
+            name: db-credentials
+
+--- # base/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: anihpj
+spec:
+  selector:
+    app: anihpj
+  ports:
+  - port: 80
+    targetPort: 8000
+  type: ClusterIP
+
+--- # base/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: django-settings
+data:
+  DJANGO_DEBUG: "False"
+  ALLOWED_HOSTS: "*"
+  DB_ENGINE: django.db.backends.postgresql</code></pre></div>
+        </div>
+
+        <!-- E.3 -->
+        <div class="section-block" id="se-3">
+            <h3>E.3 Kustomize Overlays (dev, staging, prod)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml"># overlays/dev/kustomization.yaml
+resources: ["../../base"]
+patches: [{path: replica-count.yaml}]
+images: [{name: anihpj, newTag: latest}]
+commonLabels: {environment: development}
+configMapGenerator:
+- name: django-settings
+  behavior: merge
+  literals: [{DJANGO_DEBUG: "True"}]
+
+# overlays/prod/kustomization.yaml
+resources: ["../../base", ingress.yaml]
+patches: [{path: replica-count.yaml}, {path: resource-limits.yaml}]
+images: [{name: anihpj, newTag: v1.2.3}]
+commonLabels: {environment: production}
+configMapGenerator:
+- name: django-settings
+  behavior: merge
+  literals:
+  - DJANGO_DEBUG: "False"
+  - ALLOWED_HOSTS: "anihpj.com,www.anihpj.com"
+
+# overlays/prod/replica-count.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj
+spec:
+  replicas: 3
+
+# overlays/prod/resource-limits.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj
+spec:
+  template:
+    spec:
+      containers:
+      - name: django
+        resources:
+          limits: {cpu: "500m", memory: "512Mi"}
+          requests: {cpu: "250m", memory: "256Mi"}
+
+# overlays/staging/kustomization.yaml
+resources: ["../../base"]
+patches: [{path: replica-count.yaml}]
+images: [{name: anihpj, newTag: v1.2.3-rc1}]
+commonLabels: {environment: staging}
+
+# overlays/staging/replica-count.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj
+spec:
+  replicas: 2</code></pre></div>
+        </div>
+
+        <!-- E.4 -->
+        <div class="section-block" id="se-4">
+            <h3>E.4 ArgoCD Application YAML (Declarative)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: anihpj-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+    targetRevision: main
+    path: apps/anihpj/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: anihpj-prod
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true</code></pre></div>
+        </div>
+
+        <!-- E.5 -->
+        <div class="section-block" id="se-5">
+            <h3>E.5 ApplicationSet YAML (3 Environments)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: anihpj
+spec:
+  generators:
+  - list:
+      elements:
+      - {env: dev, namespace: anihpj-dev, replicas: "1"}
+      - {env: staging, namespace: anihpj-staging, replicas: "2"}
+      - {env: prod, namespace: anihpj-prod, replicas: "3"}
+  template:
+    metadata:
+      name: 'anihpj-{{env}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Anihs-Canvas/anihpj-gitops.git
+        path: apps/anihpj/overlays/{{env}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated: {prune: '{{env}}' != "prod", selfHeal: true}</code></pre></div>
+        </div>
+
+        <!-- E.6 -->
+        <div class="section-block" id="se-6">
+            <h3>E.6 AppProject YAML (RBAC + Restrictions)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: anihpj-prod
+spec:
+  sourceRepos: ["https://github.com/Anihs-Canvas/anihpj-gitops.git"]
+  destinations:
+  - {namespace: anihpj-prod, server: https://kubernetes.default.svc}
+  clusterResourceWhitelist:
+  - {group: '', kind: Namespace}
+  roles:
+  - name: developer
+    policies:
+    - p, proj:anihpj-prod:developer, applications, sync, anihpj-prod/*, allow</code></pre></div>
+        </div>
+
+        <!-- E.7 -->
+        <div class="section-block" id="se-7">
+            <h3>E.7 RBAC Configuration (policy.csv)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml">data:
+  policy.csv: |
+    p, role:admin, *, *, *, allow
+    p, role:anihpj-developer, applications, sync, anihpj-dev/*, allow
+    p, role:anihpj-developer, applications, get, anihpj-prod/*, allow
+    p, role:anihpj-ops, applications, sync, anihpj-prod/*, allow
+    g, anihpj-developers, role:anihpj-developer
+    g, anihpj-ops, role:anihpj-ops
+  policy.default: role:readonly</code></pre></div>
+        </div>
+
+        <!-- E.8 -->
+        <div class="section-block" id="se-8">
+            <h3>E.8 Notifications Configuration (Slack)</h3>
+            <div class="code-block-wrapper"><pre><code class="language-yaml"># argocd-notifications-cm
+data:
+  service.slack: |
+    token: $slack-token
+  template.app-sync-succeeded: |
+    message: "✅ {{.app.metadata.name}} synced to {{.app.status.sync.revision}}"
+  template.app-health-degraded: |
+    message: "🚨 {{.app.metadata.name}} is DEGRADED!"
+
+# Application annotation:
+notifications.argoproj.io/subscribe.on-sync-succeeded.slack: "#deployments"
+notifications.argoproj.io/subscribe.on-health-degraded.slack: "#oncall"</code></pre></div>
+        </div>
+
+        <!-- E.9 -->
+        <div class="section-block" id="se-9">
+            <h3>E.9 Dockerfile for anihpj</h3>
+            <div class="code-block-wrapper"><pre><code class="language-dockerfile">FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+RUN python manage.py collectstatic --noinput
+EXPOSE 8000
+CMD ["gunicorn", "anihpj.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]</code></pre></div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--           APPENDIX F: CAPA EXAM PREPARATION GUIDE               -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-f">
+        <h2>📎 Appendix F: CAPA Exam Preparation Guide</h2>
+        <p>Everything you need to know about the Certified Argo Project Associate exam — format, domains, study plan, and exam day strategy.</p>
+
+        <div class="card-grid cols-2" style="margin-bottom:24px">
+            <div class="info-card highlight"><h5>🔢 Key Numbers to Memorize</h5><p><strong>90 min, 60 Qs, 75% pass, $200, 2yr validity.</strong> 4 domains: 35% Concepts, 25% Admin, 20% App Mgmt, 20% Workflows. API group: <code>argoproj.io/v1alpha1</code>. 3-min default sync poll.</p></div>
+            <div class="info-card"><h5>⚠️ Top CAPA Exam Traps</h5><p><code>argocd</code> ≠ <code>argo</code> (different CLIs). <code>argocd-cm</code> ≠ <code>argocd-rbac-cm</code> ≠ <code>argocd-cmd-params-cm</code>. <code>helm template</code> NOT <code>helm install</code>. Sync ≠ Health.</p></div>
+        </div>
+
+        <!-- F.1 -->
+        <div class="section-block" id="sf-1">
+            <h3>F.1 Exam Format & Rules</h3>
+            <div class="card-grid cols-2">
+                <div class="info-card highlight"><h5>📋 Format</h5><p><strong>60 multiple-choice & multi-select questions</strong> in 90 minutes. Online-proctored. Pass score: <strong>75%</strong> (45/60 correct).</p></div>
+                <div class="info-card"><h5>💻 Environment</h5><p><strong>Open-book!</strong> You can reference <a href="https://argoproj.github.io">argoproj.github.io</a> during the exam. No local files or notes allowed.</p></div>
+                <div class="info-card"><h5>💰 Cost & Validity</h5><p>$200 USD. Valid for <strong>2 years</strong>. Renewal requires retaking the exam or earning continuing education credits.</p></div>
+                <div class="info-card"><h5>🏠 Setup</h5><p>Quiet room, cleared desk, webcam + microphone. Government-issued ID required. System check before exam.</p></div>
+            </div>
+        </div>
+
+        <!-- F.2 -->
+        <div class="section-block" id="sf-2">
+            <h3>F.2 CAPA Exam Domain Weights (Detailed)</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Domain</th><th>Weight</th><th>~Questions</th><th>This Guide's Coverage</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>ArgoCD Concepts</strong></td><td>35%</td><td>~21</td><td>Parts 1-3 (GitOps, Architecture, Components)</td></tr>
+                    <tr><td><strong>ArgoCD Administration</strong></td><td>25%</td><td>~15</td><td>Parts 6-7 (RBAC, SSO, Secrets, Multi-Cluster)</td></tr>
+                    <tr><td><strong>Application Management</strong></td><td>20%</td><td>~12</td><td>Parts 4-5 (Sync, Health, Helm, Kustomize, Notifications)</td></tr>
+                    <tr><td><strong>Argo Workflows</strong></td><td>20%</td><td>~12</td><td>Part 8 (Workflows, Rollouts, CAPA Prep)</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- F.3 -->
+        <div class="section-block" id="sf-3">
+            <h3>F.3 Recommended Study Resources</h3>
+            <div class="card-grid cols-2">
+                <div class="info-card highlight"><h5>📖 This Guide (argo.html)</h5><p>9 Parts, 25 Chapters, 250+ practice questions. Covers 100% of CAPA domains with hands-on examples.</p></div>
+                <div class="info-card"><h5>🌐 Official Docs</h5><p><a href="https://argo-cd.readthedocs.io">argo-cd.readthedocs.io</a> — the definitive reference. Bookmark: Core Concepts, User Guide, Operator Manual.</p></div>
+                <div class="info-card"><h5>🎯 CAPA Exam Page</h5><p><a href="https://training.linuxfoundation.org/certification/certified-argo-project-associate-capa/">Linux Foundation CAPA</a> — official curriculum, exam registration.</p></div>
+                <div class="info-card"><h5>💻 Practice Environment</h5><p>Set up a local K8s cluster (kind/minikube/k3d) + ArgoCD. Practice every command in Appendix A.</p></div>
+            </div>
+        </div>
+
+        <!-- F.4 -->
+        <div class="section-block" id="sf-4">
+            <h3>F.4 4-Week Study Plan</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Week</th><th>Focus</th><th>Coverage</th><th>Practice</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Week 1</strong></td><td>GitOps & ArgoCD Fundamentals</td><td>Parts 1-2 (Ch 1-5)</td><td>Install ArgoCD locally, create first app</td></tr>
+                    <tr><td><strong>Week 2</strong></td><td>Core Concepts & App Management</td><td>Parts 3-5 (Ch 6-14)</td><td>Sync, Helm, Kustomize, hooks, waves</td></tr>
+                    <tr><td><strong>Week 3</strong></td><td>Security, RBAC, Multi-Cluster</td><td>Parts 6-7 (Ch 15-19)</td><td>RBAC policies, SSO config, secrets</td></tr>
+                    <tr><td><strong>Week 4</strong></td><td>Workflows, Rollouts & Exam Prep</td><td>Parts 8-9 (Ch 20-25)</td><td>Workflows CI pipeline, practice exams</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- F.5 -->
+        <div class="section-block" id="sf-5">
+            <h3>F.5 CAPA Practice Exam Simulator</h3>
+            <p>Use the <strong>250+ practice questions</strong> throughout this guide (10 per chapter + 60 in Chapter 22). Simulate real exam conditions:</p>
+            <div class="code-block-wrapper"><pre><code class="language-text">1. Set a 90-minute timer
+2. Answer all 60 questions without pausing
+3. Only use argoproj.github.io as reference (open-book!)
+4. Flag questions you're unsure about — return at the end
+5. Target: 75% (45/60) correct
+6. Review wrong answers against the relevant chapter</code></pre></div>
+        </div>
+
+        <!-- F.6 -->
+        <div class="section-block" id="sf-6">
+            <h3>F.6 Exam Day Checklist</h3>
+            <div class="card-grid cols-2">
+                <div class="info-card highlight"><h5>✅ Before Exam</h5><p>Run system check. Clear desk. Have ID ready. Bookmark argoproj.github.io. Charge laptop. Test webcam/mic.</p></div>
+                <div class="info-card"><h5>⏱️ During Exam</h5><p>Read every question twice. Flag hard ones. Process of elimination. Watch for "NOT" and "EXCEPT" wording. 90 sec/question pace.</p></div>
+                <div class="info-card"><h5>🔍 Open-Book Strategy</h5><p>Search docs for exact command syntax. Don't read new concepts — only verify what you already know. Ctrl+F is your friend.</p></div>
+                <div class="info-card"><h5>❌ Avoid</h5><p>Don't spend >2 min on one question. Don't second-guess flagged answers. Don't leave any question unanswered — no penalty for guessing.</p></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--           APPENDIX G: COMPARISON TABLES                         -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-g">
+        <h2>📎 Appendix G: Comparison Tables</h2>
+        <p>How ArgoCD stacks up against other GitOps and CD tools — a CAPA favorite topic.</p>
+
+        <!-- G.1 -->
+        <div class="section-block">
+            <h3>G.1 ArgoCD vs FluxCD</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Feature</th><th>ArgoCD</th><th>FluxCD</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>UI</strong></td><td class="winner">Rich web UI + CLI</td><td>CLI-only (web UI via Weave GitOps)</td></tr>
+                    <tr><td><strong>Multi-Cluster</strong></td><td class="winner">Hub-and-spoke, one ArgoCD manages many clusters</td><td>One Flux instance per cluster</td></tr>
+                    <tr><td><strong>Sync Mechanism</strong></td><td>3-min poll (configurable) + webhooks</td><td class="winner">Continuous reconciliation (instant)</td></tr>
+                    <tr><td><strong>Helm Support</strong></td><td>Native (helm template)</td><td>Native (HelmRelease CRD)</td></tr>
+                    <tr><td><strong>Kustomize</strong></td><td>Native, auto-detect</td><td>Native</td></tr>
+                    <tr><td><strong>RBAC</strong></td><td class="winner">Built-in RBAC (policy.csv)</td><td>Uses K8s RBAC (no separate system)</td></tr>
+                    <tr><td><strong>CNCF Status</strong></td><td>Graduated</td><td>Graduated</td></tr>
+                    <tr><td><strong>Best For</strong></td><td>Enterprises needing UI, multi-cluster, SSO</td><td>Simplicity, GitOps purists, per-cluster approach</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- G.2 -->
+        <div class="section-block">
+            <h3>G.2 ArgoCD vs Jenkins X</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Feature</th><th>ArgoCD</th><th>Jenkins X</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Scope</strong></td><td>CD only (GitOps deployment)</td><td>Full CI/CD platform (CI + CD)</td></tr>
+                    <tr><td><strong>Model</strong></td><td>Pull (in-cluster agent)</td><td>Pull (uses Tekton for CI)</td></tr>
+                    <tr><td><strong>Complexity</strong></td><td class="winner">Focused — does one thing well</td><td>Complex — full platform with many components</td></tr>
+                    <tr><td><strong>Setup</strong></td><td class="winner">Simple — install CRDs + controllers</td><td>Heavier — needs Tekton, Chart Museum, etc</td></tr>
+                    <tr><td><strong>Best For</strong></td><td>Teams with existing CI, want GitOps CD</td><td>Teams wanting an all-in-one CI/CD platform</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- G.3 -->
+        <div class="section-block">
+            <h3>G.3 ArgoCD vs Spinnaker</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Feature</th><th>ArgoCD</th><th>Spinnaker</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Model</strong></td><td>Pull (GitOps)</td><td>Push (pipeline-driven)</td></tr>
+                    <tr><td><strong>Deployment Strategies</strong></td><td>Basic (via Rollouts CRD)</td><td class="winner">Advanced built-in (BG, Canary, Rolling)</td></tr>
+                    <tr><td><strong>Cloud Providers</strong></td><td>Any K8s cluster</td><td class="winner">Multi-cloud (AWS, GCP, Azure, K8s, VM)</td></tr>
+                    <tr><td><strong>Complexity</strong></td><td class="winner">Simple — lightweight</td><td>Complex — many microservices (Halyard)</td></tr>
+                    <tr><td><strong>GitOps Native</strong></td><td class="winner">Yes — designed for GitOps</td><td>No — pipeline-driven, not Git-centric</td></tr>
+                    <tr><td><strong>Best For</strong></td><td>K8s-only GitOps teams</td><td>Large enterprises with multi-cloud, legacy VMs</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- G.4 -->
+        <div class="section-block">
+            <h3>G.4 GitOps Tools Comparison Matrix</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Tool</th><th>Model</th><th>UI</th><th>Multi-Cluster</th><th>SSO</th><th>Best For</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>ArgoCD</strong></td><td>Pull</td><td>✅ Rich</td><td>✅ Hub-spoke</td><td>✅ Dex</td><td>Enterprise K8s GitOps</td></tr>
+                    <tr><td><strong>FluxCD</strong></td><td>Pull</td><td>⚠️ Limited</td><td>❌ Per-cluster</td><td>⚠️ Via OIDC</td><td>Simplicity, small teams</td></tr>
+                    <tr><td><strong>Jenkins X</strong></td><td>Pull</td><td>✅</td><td>⚠️ Limited</td><td>✅</td><td>Full CI/CD platform</td></tr>
+                    <tr><td><strong>Spinnaker</strong></td><td>Push</td><td>✅</td><td>✅ Multi-cloud</td><td>✅</td><td>Multi-cloud enterprises</td></tr>
+                    <tr><td><strong>Harness</strong></td><td>Push</td><td>✅</td><td>✅</td><td>✅</td><td>Commercial CD platform</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- G.5 Bonus -->
+        <div class="section-block">
+            <h3>G.5 Kubernetes Deployment vs Argo Rollouts</h3>
+            <div class="compare-table"><table>
+                <thead><tr><th>Feature</th><th>K8s Deployment</th><th>Argo Rollouts</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Strategy</strong></td><td>RollingUpdate only</td><td class="winner">Blue-Green + Canary</td></tr>
+                    <tr><td><strong>Traffic Control</strong></td><td>None</td><td class="winner">setWeight steps</td></tr>
+                    <tr><td><strong>Analysis</strong></td><td>None</td><td class="winner">AnalysisTemplate (Prometheus)</td></tr>
+                    <tr><td><strong>Auto-Rollback</strong></td><td>Manual kubectl only</td><td class="winner">Automatic on failure</td></tr>
+                    <tr><td><strong>Promote/Abort</strong></td><td>N/A</td><td class="winner">Manual via ArgoCD UI/CLI</td></tr>
+                </tbody>
+            </table></div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--         APPENDIX H: REFERENCE ARCHITECTURE DIAGRAMS             -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="chapter-section" id="appendix-h">
+        <h2>📎 Appendix H: Reference Architecture Diagrams</h2>
+        <p>High-level architecture diagrams for quick reference — perfect for CAPA exam review.</p>
+
+        <!-- H.1 -->
+        <div class="section-block">
+            <h3>H.1 Full ArgoCD Component Architecture</h3>
+            <div class="diagram-container"><div class="diagram-title">ARGOCD COMPONENTS — HOW THEY CONNECT</div><pre>
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         ☸️ KUBERNETES CLUSTER                            │
+│                                                                         │
+│  ┌──────────┐   ┌─────────────┐   ┌──────────┐   ┌──────────────────┐  │
+│  │ API      │   │ Application │   │ Repo     │   │ Notifications    │  │
+│  │ Server   │◀─▶│ Controller  │◀─▶│ Server   │   │ Controller       │  │
+│  │          │   │ (Leader     │   │          │   │                  │  │
+│  │ gRPC+REST│   │  Election)  │   │ git clone│   │ Slack/Email/etc  │  │
+│  └────┬─────┘   └──────┬──────┘   │ helm tmpl│   └──────────────────┘  │
+│       │                │          │ kustomize│                          │
+│       │                │          └────┬─────┘                          │
+│       │                │               │                                │
+│       ▼                ▼               ▼                                │
+│  ┌──────────────────────────────────────────────────────────────┐      │
+│  │                       REDIS (Cache)                           │      │
+│  │  • App state cache  • Sync status  • Repository cache        │      │
+│  └──────────────────────────────────────────────────────────────┘      │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────┐      │
+│  │                     TARGET KUBERNETES CLUSTERS                │      │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                    │      │
+│  │  │ Cluster 1│  │ Cluster 2│  │ Cluster N│  (Hub-and-Spoke)  │      │
+│  │  └──────────┘  └──────────┘  └──────────┘                    │      │
+│  └──────────────────────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+        </div>
+
+        <!-- H.2 -->
+        <div class="section-block">
+            <h3>H.2 Multi-Cluster Hub-and-Spoke</h3>
+            <div class="diagram-container"><div class="diagram-title">ONE ARGOCD → MANY CLUSTERS</div><pre>
+                    ┌──────────────────────┐
+                    │   ☸️ HUB (ArgoCD)    │
+                    │   argocd namespace   │
+                    └──────────┬───────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            │                  │                  │
+            ▼                  ▼                  ▼
+  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+  │ 🟢 DEV       │  │ 🟡 STAGING   │  │ 🔴 PROD      │
+  │ EKS us-east  │  │ GKE us-cent  │  │ AKS westeu   │
+  │              │  │              │  │              │
+  │ SA + CR +    │  │ SA + CR +    │  │ SA + CR +    │
+  │ CRB          │  │ CRB          │  │ CRB          │
+  └──────────────┘  └──────────────┘  └──────────────┘
+  No ArgoCD on spokes — just ServiceAccount + RBAC
+</pre></div>
+        </div>
+
+        <!-- H.3 -->
+        <div class="section-block">
+            <h3>H.3 App of Apps — 3-Layer Deployment</h3>
+            <div class="diagram-container"><div class="diagram-title">BOOTSTRAP A CLUSTER IN MINUTES</div><pre>
+  Layer 1: ROOT APP
+  ┌──────────────────────────────────────────────────────────┐
+  │  Application "root" → deploys everything below           │
+  └──────────────────────────┬───────────────────────────────┘
+                             │
+                             ▼
+  Layer 2: INFRASTRUCTURE
+  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+  │ Ingress  │ │Cert-     │ │Sealed    │ │External  │
+  │ Nginx    │ │Manager   │ │Secrets   │ │Secrets   │
+  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘
+       └──────────────┼──────────────┼─────────────┘
+                      │              │
+                      ▼              ▼
+  Layer 3: APPLICATIONS
+  ┌──────────────────────┐ ┌──────────────────────┐
+  │  anihpj (jobpost)    │ │  Monitoring Stack    │
+  │  Deployment+Service  │ │  Prometheus+Grafana  │
+  └──────────────────────┘ └──────────────────────┘
+</pre></div>
+        </div>
+
+        <!-- H.4 -->
+        <div class="section-block">
+            <h3>H.4 CI/CD Pipeline with GitOps</h3>
+            <div class="diagram-container"><div class="diagram-title">END-TO-END — SOURCE CODE TO PRODUCTION</div><pre>
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                                                          │
+│  CI (GitHub Actions)                  CD (ArgoCD)                        │
+│  ───────────────────                  ────────────                       │
+│                                                                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+│  │ Source   │─▶│ Build    │─▶│ Push     │─▶│ Update   │─▶│ ArgoCD   │  │
+│  │ Code     │  │ Image    │  │ Registry │  │ GitOps   │  │ Syncs    │  │
+│  │ (GitHub) │  │ (Docker) │  │ (GHCR)   │  │ Repo     │  │ to K8s   │  │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │
+│                                                                          │
+│  CI tools NEVER push to K8s — they only update Git.                     │
+│  ArgoCD is the ONLY thing that applies changes to the cluster.          │
+└──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+        </div>
+
+        <!-- H.5 -->
+        <div class="section-block">
+            <h3>H.5 Enterprise GitOps with Multi-Tenancy</h3>
+            <div class="diagram-container"><div class="diagram-title">SHARED ARGOCD — ISOLATED TEAMS</div><pre>
+┌──────────────────────────────────────────────────────────────────────────┐
+│                     ☸️ SHARED ARGOCD (Enterprise)                        │
+│                                                                          │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐       │
+│  │ AppProject:      │  │ AppProject:      │  │ AppProject:      │       │
+│  │ team-anihpj      │  │ team-redis       │  │ team-monitoring  │       │
+│  │                  │  │                  │  │                  │       │
+│  │ RBAC: anihpj-dev │  │ RBAC: redis-dev  │  │ RBAC: mon-ops    │       │
+│  │ NS: anihpj-*     │  │ NS: redis-*      │  │ NS: monitoring   │       │
+│  │ Repos: anihpj-*  │  │ Repos: redis-*   │  │ Repos: mon-*     │       │
+│  │                  │  │                  │  │                  │       │
+│  │ Apps:            │  │ Apps:            │  │ Apps:            │       │
+│  │ • anihpj-dev     │  │ • redis-dev      │  │ • prometheus     │       │
+│  │ • anihpj-staging │  │ • redis-staging  │  │ • grafana        │       │
+│  │ • anihpj-prod    │  │ • redis-prod     │  │ • alertmanager   │       │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘       │
+│                                                                          │
+│  Each team sees ONLY their AppProject. SSO groups → RBAC roles.         │
+│  OIDC group: anihpj-developers → role:anihpj-developer                  │
+└──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+        </div>
+
+        <!-- H.6 Bonus -->
+        <div class="section-block">
+            <h3>H.6 ArgoCD Sync Lifecycle — Complete Flow</h3>
+            <div class="diagram-container"><div class="diagram-title">FROM GIT TO KUBERNETES — THE FULL SYNC JOURNEY</div><pre>
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          ARGOCD SYNC LIFECYCLE                            │
+│                                                                          │
+│  ① DETECT       ② DIFF          ③ HOOKS         ④ APPLY      ⑤ HEALTH   │
+│  ────────       ────────        ────────        ────────     ────────   │
+│                                                                          │
+│  Git Poll      3-Way Diff      PreSync         kubectl       Monitor     │
+│  (3 min or      Git vs K8s     (DB backup,     apply         (Healthy/   │
+│   webhook)      vs Last        schema          (create/      Progressing/│
+│                 Applied        migrate)        update)       Degraded)   │
+│     │              │               │               │             │       │
+│     ▼              ▼               ▼               ▼             ▼       │
+│  ┌──────┐     ┌──────────┐    ┌──────────┐    ┌──────────┐  ┌────────┐  │
+│  │Change│────▶│OutOfSync │───▶│ PreSync  │───▶│ Syncing  │─▶│ Healthy│  │
+│  │Detect│     │ Status   │    │ Running  │    │ Resources│  │ Synced │  │
+│  └──────┘     └──────────┘    └──────────┘    └──────────┘  └────────┘  │
+│                                              If FAIL:                    │
+│                                              ┌──────────┐               │
+│                                              │ SyncFail │               │
+│                                              │ Cleanup  │               │
+│                                              └──────────┘               │
+│  PostSync: Smoke tests, Slack notifications after successful sync       │
+└──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
         </div>
     </section>
 
