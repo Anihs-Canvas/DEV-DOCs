@@ -5553,21 +5553,21 @@ kubectl get all -n anihpj</code></pre>
         </div>
     </div>
 
-    <!-- ═══════════════ S2: DB Pod CrashLoopBackOff ═══════════════ -->
+    <!-- ═══════════════ S2: Cross-Node VXLAN Tunnel Failure ═══════════════ -->
     <div class="scenario-block" id="sc-s2">
         <div class="sc-header">
             <div class="sc-badge">S2</div>
             <div class="sc-header-content">
                 <div class="sc-num">🧪 SCENARIO S2 — Category 1: Architecture</div>
-                <h4>DB Pod CrashLoopBackOff — Wrong Environment Variable Name</h4>
-                <div class="sc-desc"><strong>The Problem:</strong> You deploy the anihpj stack. The web and API pods come up fine, but the <strong>database pod keeps crashing</strong> with CrashLoopBackOff. The PostgreSQL container starts, logs an error, and exits immediately. Your job: find out why the DB pod won't stay Running and fix it.</div>
+                <h4>Debug Cross-Node Pod Communication — VXLAN Tunnel Blocked by Firewall</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You deployed anihpj across two nodes. Pods on the same node can communicate fine, but <strong>pods on different nodes cannot reach each other</strong>. Same-node web→api works. Cross-node web (node-1) → api (node-2) fails with timeout. Your job: find out why and fix it.</div>
             </div>
         </div>
         <div class="sc-body">
             <div class="sc-step">
                 <div class="sc-step-num deploy">1</div>
                 <div class="sc-step-content">
-                    <h4 class="deploy">📋 Deploy the YAML (contains the bug)</h4>
+                    <h4 class="deploy">📋 Deploy the YAML (spread across nodes)</h4>
                     <div class="code-block">
                         <div class="code-header">
                             <span class="code-lang">BASH — copy &amp; paste into Ubuntu terminal</span>
@@ -5575,7 +5575,7 @@ kubectl get all -n anihpj</code></pre>
                         </div>
                         <pre><code id="sc-s2-code" class="language-bash">cat > s2-deploy.yaml << 'EOF'
 <span class="token comment"># ============================================
-#  1. NAMESPACE
+#  1. NAMESPACE — isolate the anihpj app
 # ============================================</span>
 apiVersion: v1
 kind: Namespace
@@ -5583,84 +5583,64 @@ metadata:
   name: anihpj
 ---
 <span class="token comment"># ============================================
-#  2. DATABASE — PostgreSQL  ❌ BUG!
-#  POSTGRES_DATABASE is wrong — should be POSTGRES_DB
-#  Postgres will fail: "invalid value for parameter"
-# ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: anihpj-db
-  namespace: anihpj
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: anihpj
-      tier: db
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: db
-    spec:
-      containers:
-      - name: postgres
-        image: postgres:15-alpine
-        env:
-        - name: POSTGRES_DATABASE
-          value: jobpost
-        - name: POSTGRES_USER
-          value: anihpj
-        - name: POSTGRES_PASSWORD
-          value: secret123
-        ports:
-        - containerPort: 5432
----
-<span class="token comment"># ============================================
-#  3. DB SERVICE — internal ClusterIP  ✅ OK
+#  2. DEBUG POD — forced to node-1 (same node test)
 # ============================================</span>
 apiVersion: v1
-kind: Service
+kind: Pod
 metadata:
-  name: anihpj-db
+  name: debug-node1
   namespace: anihpj
 spec:
-  selector:
-    app: anihpj
-    tier: db
-  ports:
-  - port: 5432
-    targetPort: 5432
+  nodeName: <YOUR-NODE-1-NAME>
+  containers:
+  - name: debug
+    image: busybox
+    command: ["sleep", "3600"]
 ---
 <span class="token comment"># ============================================
-#  4. API — nginx REST backend  ✅ OK
+#  3. API POD — forced to node-2 (cross-node target)  ❌ BUG!
+#  This pod runs on node-2. The VXLAN tunnel between
+#  node-1 and node-2 is BLOCKED by iptables firewall.
+#  Same-node traffic works; cross-node will FAIL.
 # ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Pod
 metadata:
-  name: anihpj-api
+  name: api-node2
   namespace: anihpj
+  labels:
+    app: anihpj
+    tier: api
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: anihpj
-      tier: api
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: api
-    spec:
-      containers:
-      - name: api
-        image: nginx:alpine
-        ports:
-        - containerPort: 8080
+  nodeName: <YOUR-NODE-2-NAME>
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports:
+    - containerPort: 8080
 ---
 <span class="token comment"># ============================================
-#  5. API SERVICE  ✅ OK
+#  4. WEB POD — forced to node-1 (cross-node source)
+#  This pod on node-1 will try to reach api-node2
+#  on node-2 via VXLAN — but the tunnel is BLOCKED!
+# ============================================</span>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-node1
+  namespace: anihpj
+  labels:
+    app: anihpj
+    tier: web
+spec:
+  nodeName: <YOUR-NODE-1-NAME>
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+<span class="token comment"># ============================================
+#  5. API SERVICE — ClusterIP for cross-node access
 # ============================================</span>
 apiVersion: v1
 kind: Service
@@ -5674,32 +5654,6 @@ spec:
   ports:
   - port: 8080
     targetPort: 8080
----
-<span class="token comment"># ============================================
-#  6. WEB — nginx frontend  ✅ OK
-# ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: anihpj-web
-  namespace: anihpj
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: anihpj
-      tier: web
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: web
-    spec:
-      containers:
-      - name: web
-        image: nginx:alpine
-        ports:
-        - containerPort: 8000
 EOF
 kubectl apply -f s2-deploy.yaml</code></pre>
                     </div>
@@ -5709,39 +5663,44 @@ kubectl apply -f s2-deploy.yaml</code></pre>
                 <div class="sc-step-num">⚠</div>
                 <div class="sc-step-content">
                     <h4>⚠️ Observe the Error — Spot What's Broken</h4>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Check pods: <code>kubectl get pods -n anihpj</code> → DB pod is <strong>CrashLoopBackOff</strong> ❌</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>2.</strong> Check web and API: <code>kubectl get pods -n anihpj -l tier=web</code> → Running ✅</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Check DB logs: <code>kubectl logs -n anihpj &lt;db-pod&gt;</code> → Shows PostgreSQL error on startup ❌</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> Describe DB pod: <code>kubectl describe pod -n anihpj &lt;db-pod&gt;</code> → Restart count keeps increasing ❌</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>5.</strong> Check Cilium endpoints: <code>cilium endpoint list</code> → Only web and api have endpoints, DB endpoint keeps disappearing ✅</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Check pods: <code>kubectl get pods -n anihpj -o wide</code> → All pods Running, note which node each is on ✅</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>2.</strong> Same-node test (node-1 → node-1): <code>kubectl exec -n anihpj debug-node1 -- wget -qO- --timeout=3 http://&lt;web-node1-IP&gt;:8080</code> → Works! ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Cross-node test (node-1 → node-2): <code>kubectl exec -n anihpj web-node1 -- wget -qO- --timeout=3 http://&lt;api-node2-IP&gt;:8080</code> → <strong>TIMEOUT!</strong> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> Hubble cross-node flow: <code>hubble observe -n anihpj --from-pod web-node1 --to-pod api-node2</code> → <strong>DROPPED!</strong> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>5.</strong> Cilium endpoints exist: <code>cilium endpoint list</code> → Endpoints ready on both nodes ✅</span></div>
                 </div>
             </div>
             <div class="sc-step debug-find">
                 <div class="sc-step-num">🔍</div>
                 <div class="sc-step-content">
                     <h4>🔍 Debug — Find the Root Cause</h4>
-                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check DB logs:</strong> <code>kubectl logs -n anihpj &lt;db-pod&gt;</code><br><span class="li-finding discovery">→ "invalid value for parameter 'POSTGRES_DATABASE'"</span></span></div>
-                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check env vars in deployment:</strong> <code>kubectl describe deployment anihpj-db -n anihpj</code><br><span class="li-finding discovery">→ POSTGRES_DATABASE is set, but POSTGRES_DB is MISSING</span></span></div>
-                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Verify correct env name:</strong> The postgres:15-alpine image expects <code>POSTGRES_DB</code> — not <code>POSTGRES_DATABASE</code></span></div>
-                    <div class="lookat-item"><span class="li-num">4</span><span><strong>Compare:</strong> Deployment has <code>POSTGRES_DATABASE</code> but PostgreSQL needs <code>POSTGRES_DB</code></span></div>
-                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause identified:</strong> <span class="li-finding root-cause">Typo in env var name — "POSTGRES_DATABASE" instead of "POSTGRES_DB". PostgreSQL ignores unknown vars and fails because no database name is set.</span></span></div>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check VXLAN tunnel interface:</strong> <code>ip link show cilium_vxlan</code><br><span class="li-finding discovery">→ Interface is UP with correct MTU 1450</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check VXLAN port (UDP 8472):</strong> <code>nc -zuv &lt;node-2-IP&gt; 8472</code><br><span class="li-finding discovery">→ Connection REFUSED! Port blocked!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Check iptables rules:</strong> <code>iptables -L INPUT -n -v | grep 8472</code><br><span class="li-finding discovery">→ DROP rule on UDP port 8472!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">4</span><span><strong>Check if firewall blocks VXLAN:</strong> <code>iptables -L -n | grep -A2 "Chain INPUT"</code> → Rule dropping UDP 8472 exists</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause identified:</strong> <span class="li-finding root-cause">iptables DROP rule blocking UDP 8472 (VXLAN port) — tunnel can't form between nodes!</span></span></div>
                 </div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
                 <div class="sc-step-content">
-                    <h4 style="color: #3fb950;">🔧 Fix — Correct the Environment Variable Name</h4>
+                    <h4 style="color: #3fb950;">🔧 Fix — Allow VXLAN Through Firewall</h4>
                     <div class="code-block">
                         <div class="code-header">
-                            <span class="code-lang">BASH — patch the deployment</span>
+                            <span class="code-lang">BASH — open VXLAN port on ALL nodes</span>
                             <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s2-fix')">📋 Copy</button>
                         </div>
-                        <pre><code id="sc-s2-fix" class="language-bash"><span class="token comment"># Fix: Update the env var name from POSTGRES_DATABASE to POSTGRES_DB</span>
-kubectl set env deployment anihpj-db -n anihpj POSTGRES_DATABASE-
-kubectl set env deployment anihpj-db -n anihpj POSTGRES_DB=jobpost
+                        <pre><code id="sc-s2-fix" class="language-bash"><span class="token comment"># On EVERY node, allow VXLAN (UDP 8472) through iptables</span>
+iptables -I INPUT 1 -p udp --dport 8472 -j ACCEPT
 
-<span class="token comment"># Wait for rollout and verify</span>
-kubectl rollout status deployment anihpj-db -n anihpj</code></pre>
+<span class="token comment"># Verify the rule is now ACCEPT</span>
+iptables -L INPUT -n -v | grep 8472
+
+<span class="token comment"># Test VXLAN port is now open</span>
+nc -zuv &lt;node-2-IP&gt; 8472
+
+<span class="token comment"># Retest cross-node pod communication</span>
+kubectl exec -n anihpj web-node1 -- wget -qO- --timeout=3 http://&lt;api-node2-IP&gt;:8080</code></pre>
                     </div>
                 </div>
             </div>
@@ -5749,8 +5708,8 @@ kubectl rollout status deployment anihpj-db -n anihpj</code></pre>
                 <div class="sc-step-num answer">✓</div>
                 <div class="sc-step-content">
                     <div class="sc-resolution">
-                        <h4>✅ Verify — DB Pod Running, All 3 Tiers Healthy</h4>
-                        <p>After fixing the env var name, the DB pod starts successfully. PostgreSQL creates the <code>jobpost</code> database. All 3 pods are Running with Cilium endpoints. This teaches that Kubernetes won't catch typos in environment variables — the container runtime just passes them through, and the application fails at startup.</p>
+                        <h4>✅ Verify — Cross-Node Traffic Restored</h4>
+                        <p>After allowing UDP 8472 on all nodes, the VXLAN tunnel reforms. Cross-node pod communication works. Hubble shows <strong>FORWARDED</strong> flows between web-node1 and api-node2. The key lesson: Cilium's VXLAN tunnel requires UDP port 8472 to be open between ALL nodes in the cluster.</p>
                     </div>
                 </div>
             </div>
@@ -5758,45 +5717,52 @@ kubectl rollout status deployment anihpj-db -n anihpj</code></pre>
             <div class="sc-answer" id="sc-sa2">
                 <h5>🧠 Diagnostic Tenet (Thought Process)</h5>
                 <div class="tenet-flow">
-                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">Spot the CrashLoopBackOff pod</div></div>
-                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">Check pod logs for error messages</div></div>
-                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Inspect deployment env vars</div></div>
-                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Compare with expected config</div></div>
-                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Fix env var → verify pod Running</div></div>
+                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">Same-node works, cross-node fails → tunnel issue</div></div>
+                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">Check VXLAN interface is UP</div></div>
+                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Check UDP 8472 connectivity between nodes</div></div>
+                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Inspect iptables/firewall rules</div></div>
+                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Add ACCEPT rule → verify cross-node flows</div></div>
                 </div>
-                <p><strong>Tenet:</strong> When a pod is CrashLoopBackOff, the first command is always <code>kubectl logs</code>. The container's stderr/stdout will tell you exactly why it's failing. For database containers, environment variable typos are one of the most common causes — the container starts, tries to initialize, and exits because a required parameter is missing or misspelled.</p>
-                <h5>📟 Command Outputs — Error State</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -n anihpj
-<span class="output">NAME          READY   STATUS             RESTARTS   AGE
-anihpj-db-xx  0/1     CrashLoopBackOff   4          2m
-anihpj-api-x  1/1     Running            0          2m
-anihpj-web-x  1/1     Running            0          2m</span></div>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl logs -n anihpj anihpj-db-xx
-<span class="output">PostgreSQL Database directory appears to contain a database; Skipping initialization
-FATAL:  invalid value for parameter "POSTGRES_DATABASE"</span></div>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl describe deployment anihpj-db -n anihpj | grep -A5 Env
-<span class="output">Env:
-  POSTGRES_DATABASE:  jobpost    ← BUG: should be POSTGRES_DB
-  POSTGRES_USER:      anihpj
-  POSTGRES_PASSWORD:  secret123</span></div>
+                <p><strong>Tenet:</strong> When same-node pod communication works but cross-node fails, the first suspect is the <strong>encapsulation tunnel</strong> between nodes. Cilium uses VXLAN (UDP 8472) or Geneve (UDP 6081) by default. If a firewall rule blocks these UDP ports between nodes, the overlay network cannot encapsulate/decapsulate cross-node traffic. Always check: tunnel interface UP, UDP port open, MTU correct (1450 for VXLAN).</p>
+                <h5>📟 Command Outputs — Error State (BEFORE fix)</h5>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -n anihpj -o wide
+<span class="output">NAME           READY   STATUS    IP          NODE
+debug-node1    1/1     Running   10.0.1.50   node-1
+api-node2      1/1     Running   10.0.2.51   node-2
+web-node1      1/1     Running   10.0.1.52   node-1</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl exec -n anihpj web-node1 -- wget -qO- --timeout=3 http://10.0.2.51:8080
+<span class="output">wget: download timed out    ← Cross-node FAILS!</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> ip link show cilium_vxlan
+<span class="output">5: cilium_vxlan: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1450 qdisc noqueue state UNKNOWN</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> nc -zuv 10.0.0.2 8472
+<span class="output">nc: connect to 10.0.0.2 port 8472 (tcp) failed: Connection refused    ← BLOCKED!</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> iptables -L INPUT -n -v | grep 8472
+<span class="output">    0     0 DROP   udp  --  *      *       0.0.0.0/0   0.0.0.0/0   udp dpt:8472</span></div>
                 <h5>📟 Command Outputs — AFTER Fix</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -n anihpj
-<span class="output">NAME          READY   STATUS    RESTARTS   AGE
-anihpj-db-xx  1/1     Running   0          30s
-anihpj-api-x  1/1     Running   0          3m
-anihpj-web-x  1/1     Running   0          3m</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> nc -zuv 10.0.0.2 8472
+<span class="output">Connection to 10.0.0.2 8472 port [udp/*] succeeded!    ← OPEN!</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl exec -n anihpj web-node1 -- wget -qO- http://10.0.2.51:8080
+<span class="output">&lt;html&gt;...nginx welcome page...&lt;/html&gt;    ✅ Cross-node works!</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> hubble observe -n anihpj --from-pod web-node1 --to-pod api-node2
+<span class="output">TIMESTAMP          SOURCE                   DESTINATION            VERDICT
+12:02:01.123        anihpj/web-node1         anihpj/api-node2       FORWARDED</span></div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
                 <div class="sc-step-content">
-                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <h4 style="color: #8b949e;">🧹 Cleanup — Delete All Resources</h4>
                     <div class="code-block">
                         <div class="code-header">
                             <span class="code-lang">BASH — copy &amp; paste to clean up</span>
                             <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s2-cleanup')">📋 Copy</button>
                         </div>
-                        <pre><code id="sc-s2-cleanup" class="language-bash"><span class="token comment"># Delete the namespace</span>
+                        <pre><code id="sc-s2-cleanup" class="language-bash"><span class="token comment"># Delete the namespace — cascades everything inside</span>
 kubectl delete namespace anihpj
+
+<span class="token comment"># Remove the iptables rule we added (on each node)</span>
+iptables -D INPUT -p udp --dport 8472 -j ACCEPT
+
+<span class="token comment"># Verify cleanup</span>
 kubectl get all -n anihpj</code></pre>
                     </div>
                 </div>
@@ -5804,14 +5770,14 @@ kubectl get all -n anihpj</code></pre>
         </div>
     </div>
 
-    <!-- ═══════════════ S3: Service Endpoints Empty — Wrong Port Name ═══════════════ -->
+    <!-- ═══════════════ S3: DNS Resolution Blocked by CNP ═══════════════ -->
     <div class="scenario-block" id="sc-s3">
         <div class="sc-header">
             <div class="sc-badge">S3</div>
             <div class="sc-header-content">
                 <div class="sc-num">🧪 SCENARIO S3 — Category 1: Architecture</div>
-                <h4>Service Has No Endpoints — Wrong targetPort Name in Service Definition</h4>
-                <div class="sc-desc"><strong>The Problem:</strong> You deploy the anihpj stack. All pods are Running. Web can reach API by pod IP directly. But the API Service has <strong>no endpoints</strong> — and the service definition looks identical to S1 at first glance. Your job: find the subtle port naming bug.</div>
+                <h4>Debug DNS Resolution Failure — CiliumNetworkPolicy Blocking CoreDNS</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You deployed anihpj with a CiliumNetworkPolicy. Pods are Running and can reach each other by IP, but <strong>DNS resolution fails completely</strong> — <code>nslookup anihpj-api</code> returns nothing. Even external DNS like google.com fails. Your job: find out why and fix it.</div>
             </div>
         </div>
         <div class="sc-body">
@@ -5834,231 +5800,43 @@ metadata:
   name: anihpj
 ---
 <span class="token comment"># ============================================
-#  2. API — nginx with named port  ✅ OK
-# ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: anihpj-api
-  namespace: anihpj
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: anihpj
-      tier: api
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: api
-    spec:
-      containers:
-      - name: api
-        image: nginx:alpine
-        ports:
-        - name: http-api
-          containerPort: 8080
----
-<span class="token comment"># ============================================
-#  3. API SERVICE  ❌ BUG!
-#  targetPort: http-ap1 — typo! Should be http-api
-#  Service can't match the named port on the pod
+#  2. WEB POD — busybox for DNS testing
 # ============================================</span>
 apiVersion: v1
-kind: Service
+kind: Pod
 metadata:
-  name: anihpj-api
+  name: web-test
   namespace: anihpj
+  labels:
+    app: anihpj
+    tier: web
 spec:
-  selector:
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+<span class="token comment"># ============================================
+#  3. API POD — nginx backend
+# ============================================</span>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-svc
+  namespace: anihpj
+  labels:
     app: anihpj
     tier: api
-  ports:
-  - port: 8080
-    targetPort: http-ap1
----
-<span class="token comment"># ============================================
-#  4. WEB  ✅ OK
-# ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: anihpj-web
-  namespace: anihpj
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: anihpj
-      tier: web
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: web
-    spec:
-      containers:
-      - name: web
-        image: nginx:alpine
-        ports:
-        - containerPort: 8000
-EOF
-kubectl apply -f s3-deploy.yaml</code></pre>
-                    </div>
-                </div>
-            </div>
-            <div class="sc-step error-spot">
-                <div class="sc-step-num">⚠</div>
-                <div class="sc-step-content">
-                    <h4>⚠️ Observe the Error — Spot What's Broken</h4>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Check pods: <code>kubectl get pods -n anihpj</code> → All Running ✅</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>2.</strong> Check Cilium endpoints: <code>cilium endpoint list</code> → Endpoints exist for all pods ✅</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Check Service endpoints: <code>kubectl get endpoints -n anihpj anihpj-api</code> → <strong>&lt;none&gt;</strong> ❌</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> Test via Service DNS: <code>kubectl exec -n anihpj &lt;web-pod&gt; -- wget -qO- http://anihpj-api:8080</code> → <strong>FAILS!</strong> ❌</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>5.</strong> Direct pod-to-pod IP: <code>wget -qO- http://&lt;api-pod-ip&gt;:8080</code> → Works! Pod networking is fine ✅</span></div>
-                </div>
-            </div>
-            <div class="sc-step debug-find">
-                <div class="sc-step-num">🔍</div>
-                <div class="sc-step-content">
-                    <h4>🔍 Debug — Find the Root Cause</h4>
-                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Describe the Service:</strong> <code>kubectl describe svc -n anihpj anihpj-api</code><br><span class="li-finding discovery">→ targetPort: http-ap1 — this must match a named port on the pod</span></span></div>
-                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check pod's container ports:</strong> <code>kubectl get pod -n anihpj &lt;api-pod&gt; -o yaml | grep -A3 ports</code><br><span class="li-finding discovery">→ Pod has containerPort named "http-api" — NOT "http-ap1"</span></span></div>
-                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Understand the mismatch:</strong> When targetPort is a string (not a number), Kubernetes matches it to the pod's named port. "http-ap1" ≠ "http-api"</span></div>
-                    <div class="lookat-item"><span class="li-num">4</span><span><strong>Why endpoints are empty:</strong> kube-controller-manager can't resolve the named port → no Endpoints object created</span></div>
-                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause identified:</strong> <span class="li-finding root-cause">Typo in targetPort name — "http-ap1" instead of "http-api". Named port references must match EXACTLY.</span></span></div>
-                </div>
-            </div>
-            <div class="sc-step">
-                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
-                <div class="sc-step-content">
-                    <h4 style="color: #3fb950;">🔧 Fix — Patch the Service targetPort</h4>
-                    <div class="code-block">
-                        <div class="code-header">
-                            <span class="code-lang">BASH — patch the service</span>
-                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s3-fix')">📋 Copy</button>
-                        </div>
-                        <pre><code id="sc-s3-fix" class="language-bash"><span class="token comment"># Fix 1: Patch the service targetPort name</span>
-kubectl patch svc anihpj-api -n anihpj --type='json' -p='[{"op":"replace","path":"/spec/ports/0/targetPort","value":"http-api"}]'
-
-<span class="token comment"># OR: Use numeric port instead (simpler, no name matching needed)</span>
-<span class="token comment"># kubectl patch svc anihpj-api -n anihpj -p '{"spec":{"ports":[{"port":8080,"targetPort":8080}]}}'</span>
-
-<span class="token comment"># Verify endpoints populate</span>
-kubectl get endpoints -n anihpj anihpj-api</code></pre>
-                    </div>
-                </div>
-            </div>
-            <div class="sc-step">
-                <div class="sc-step-num answer">✓</div>
-                <div class="sc-step-content">
-                    <div class="sc-resolution">
-                        <h4>✅ Verify — Service Endpoints Populated, DNS Works</h4>
-                        <p>After fixing the targetPort name, the Service Endpoints object populates with the API pod IPs. Web can reach API via Service DNS. This teaches that <strong>named ports on Services must match named ports on Pods exactly</strong> — it's a common pitfall when copying YAML between environments.</p>
-                    </div>
-                </div>
-            </div>
-            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa3')">🔍 Show Full Answer &amp; Expected Outputs</button>
-            <div class="sc-answer" id="sc-sa3">
-                <h5>🧠 Diagnostic Tenet</h5>
-                <div class="tenet-flow">
-                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">IP works, Service fails → Service config issue</div></div>
-                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">Check endpoints → EMPTY</div></div>
-                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Check Service port definition</div></div>
-                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Compare with Pod's named ports</div></div>
-                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Fix mismatch → verify endpoints</div></div>
-                </div>
-                <p><strong>Tenet:</strong> Named port references on Services must match named ports on Pods character-for-character. When targetPort is a string, Kubernetes performs name-based matching. A single character typo results in an empty Endpoints object with no error message — the Service simply has no backends.</p>
-                <h5>📟 Error State</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl get endpoints -n anihpj
-<span class="output">NAME         ENDPOINTS   AGE
-anihpj-api   &lt;none&gt;      2m   ← EMPTY!</span></div>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl describe svc -n anihpj anihpj-api
-<span class="output">Port:  8080/TCP
-TargetPort:  http-ap1/TCP   ← BUG: should be http-api
-Endpoints:   &lt;none&gt;
-Selector:    app=anihpj,tier=api</span></div>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl get pod -n anihpj anihpj-api-xxx -o jsonpath='{.spec.containers[0].ports}'
-<span class="output">[{"containerPort":8080,"name":"http-api","protocol":"TCP"}]  ← Pod has "http-api"</span></div>
-                <h5>📟 AFTER Fix</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl get endpoints -n anihpj anihpj-api
-<span class="output">NAME         ENDPOINTS                       AGE
-anihpj-api   10.0.1.11:8080,10.0.2.12:8080   5s   ✅</span></div>
-            </div>
-            <div class="sc-step">
-                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
-                <div class="sc-step-content">
-                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
-                    <div class="code-block">
-                        <div class="code-header">
-                            <span class="code-lang">BASH — copy &amp; paste to clean up</span>
-                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s3-cleanup')">📋 Copy</button>
-                        </div>
-                        <pre><code id="sc-s3-cleanup" class="language-bash"><span class="token comment"># Delete the namespace</span>
-kubectl delete namespace anihpj
-kubectl get all -n anihpj</code></pre>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ═══════════════ S4: DNS Resolution Blocked ═══════════════ -->
-    <div class="scenario-block" id="sc-s4">
-        <div class="sc-header">
-            <div class="sc-badge">S4</div>
-            <div class="sc-header-content">
-                <div class="sc-num">🧪 SCENARIO S4 — Category 1: Architecture</div>
-                <h4>DNS Resolution Fails — Web Pod Can't Resolve anihpj-api Service Name</h4>
-                <div class="sc-desc"><strong>The Problem:</strong> All pods are Running. Pod-to-pod IP communication works. But when the web pod tries to reach <code>anihpj-api</code> (without FQDN), DNS resolution <strong>fails</strong>. Using the full FQDN <code>anihpj-api.anihpj.svc.cluster.local</code> also fails. Your job: debug why CoreDNS can't resolve the service name.</div>
-            </div>
-        </div>
-        <div class="sc-body">
-            <div class="sc-step">
-                <div class="sc-step-num deploy">1</div>
-                <div class="sc-step-content">
-                    <h4 class="deploy">📋 Deploy the YAML (CoreDNS blocked by policy)</h4>
-                    <div class="code-block">
-                        <div class="code-header">
-                            <span class="code-lang">BASH — copy &amp; paste into Ubuntu terminal</span>
-                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s4-code')">📋 Copy</button>
-                        </div>
-                        <pre><code id="sc-s4-code" class="language-bash">cat > s4-deploy.yaml << 'EOF'
-<span class="token comment"># ============================================
-#  1. NAMESPACE
-# ============================================</span>
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: anihpj
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports:
+    - containerPort: 8080
 ---
 <span class="token comment"># ============================================
-#  2. API DEPLOYMENT & SERVICE  ✅ OK
+#  4. API SERVICE — for DNS testing
 # ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: anihpj-api
-  namespace: anihpj
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: anihpj
-      tier: api
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: api
-    spec:
-      containers:
-      - name: api
-        image: nginx:alpine
-        ports:
-        - containerPort: 8080
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -6073,55 +5851,38 @@ spec:
     targetPort: 8080
 ---
 <span class="token comment"># ============================================
-#  3. WEB DEPLOYMENT  ✅ OK
+#  5. CILIUM NETWORK POLICY — ❌ BUG!
+#  Default deny with only web→api allowed on :8080.
+#  BUT no egress rule to kube-system for DNS (UDP 53)!
+#  All DNS queries from anihpj pods are DROPPED.
 # ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
 metadata:
-  name: anihpj-web
+  name: anihpj-policy
   namespace: anihpj
 spec:
-  replicas: 1
-  selector:
+  endpointSelector:
     matchLabels:
       app: anihpj
-      tier: web
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: web
-    spec:
-      containers:
-      - name: web
-        image: nginx:alpine
-        ports:
-        - containerPort: 8000
----
-<span class="token comment"># ============================================
-#  4. NETWORK POLICY  ❌ BUG!
-#  Allows same-namespace traffic BUT blocks egress
-#  to kube-system where CoreDNS runs!
-# ============================================</span>
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: anihpj-default-deny
-  namespace: anihpj
-spec:
-  podSelector: {}
-  policyTypes:
-  - Ingress
-  - Egress
   ingress:
-  - from:
-    - podSelector: {}
+  - fromEndpoints:
+    - matchLabels:
+        tier: web
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
   egress:
-  - to:
-    - podSelector: {}    ← Only allows egress to pods in THIS namespace!
-                         ← CoreDNS is in kube-system → BLOCKED!
+  - toEndpoints:
+    - matchLabels:
+        tier: api
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
 EOF
-kubectl apply -f s4-deploy.yaml</code></pre>
+kubectl apply -f s3-deploy.yaml</code></pre>
                     </div>
                 </div>
             </div>
@@ -6129,60 +5890,74 @@ kubectl apply -f s4-deploy.yaml</code></pre>
                 <div class="sc-step-num">⚠</div>
                 <div class="sc-step-content">
                     <h4>⚠️ Observe the Error — Spot What's Broken</h4>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Check pods: <code>kubectl get pods -n anihpj</code> → All Running ✅</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>2.</strong> Direct pod-to-pod IP: <code>wget -qO- http://&lt;api-ip&gt;:8080</code> → Works! ✅</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> DNS test: <code>kubectl exec -n anihpj &lt;web-pod&gt; -- nslookup anihpj-api</code> → <strong>TIMEOUT!</strong> ❌</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> DNS to external: <code>nslookup google.com</code> → <strong>Also fails!</strong> ❌</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>5.</strong> Check NetworkPolicy: <code>kubectl get networkpolicy -n anihpj</code> → anihpj-default-deny exists ✅</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Check pods: <code>kubectl get pods -n anihpj</code> → All pods Running ✅</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>2.</strong> Direct IP connectivity: <code>kubectl exec -n anihpj web-test -- wget -qO- http://&lt;api-svc-IP&gt;:8080</code> → Works! ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> DNS internal: <code>kubectl exec -n anihpj web-test -- nslookup anihpj-api.anihpj.svc.cluster.local</code> → <strong>TIMEOUT!</strong> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> DNS external: <code>kubectl exec -n anihpj web-test -- nslookup google.com</code> → <strong>TIMEOUT!</strong> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>5.</strong> CoreDNS pods are Running in kube-system ✅</span></div>
                 </div>
             </div>
             <div class="sc-step debug-find">
                 <div class="sc-step-num">🔍</div>
                 <div class="sc-step-content">
                     <h4>🔍 Debug — Find the Root Cause</h4>
-                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check NetworkPolicy rules:</strong> <code>kubectl describe networkpolicy -n anihpj</code><br><span class="li-finding discovery">→ Egress only allows traffic to pods in same namespace</span></span></div>
-                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Where is CoreDNS?</strong> <code>kubectl get pods -n kube-system -l k8s-app=kube-dns</code><br><span class="li-finding discovery">→ CoreDNS runs in kube-system namespace — NOT anihpj</span></span></div>
-                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Test DNS from pod without policy:</strong> Create a test pod in default namespace → DNS works</span></div>
-                    <div class="lookat-item"><span class="li-num">4</span><span><strong>Check Hubble for dropped DNS:</strong> <code>hubble observe -n anihpj --to-port 53 --verdict DROPPED</code></span></div>
-                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause identified:</strong> <span class="li-finding root-cause">NetworkPolicy allows egress only within same namespace. CoreDNS runs in kube-system. DNS UDP packets to port 53 are DROPPED.</span></span></div>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check CNP rules:</strong> <code>kubectl describe cnp -n anihpj anihpj-policy</code><br><span class="li-finding discovery">→ Egress only allows tier=api on :8080 — NO DNS egress!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Hubble DNS drop check:</strong> <code>hubble observe -n anihpj --to-port 53 --verdict DROPPED</code><br><span class="li-finding discovery">→ DNS packets to kube-system DROPPED!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Check CoreDNS identity:</strong> <code>cilium identity list | grep kube-dns</code><br><span class="li-finding discovery">→ CoreDNS has identity 16777217 (kube-dns)</span></span></div>
+                    <div class="lookat-item"><span class="li-num">4</span><span><strong>Verify DNS port:</strong> CoreDNS listens on UDP 53 in kube-system — no egress rule allows it</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause identified:</strong> <span class="li-finding root-cause">CNP egress blocks DNS (UDP 53) to kube-system — pods can't resolve any names!</span></span></div>
                 </div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
                 <div class="sc-step-content">
-                    <h4 style="color: #3fb950;">🔧 Fix — Add Egress Rule to kube-system for DNS</h4>
+                    <h4 style="color: #3fb950;">🔧 Fix — Add DNS Egress to CNP</h4>
                     <div class="code-block">
                         <div class="code-header">
-                            <span class="code-lang">BASH — patch or replace the NetworkPolicy</span>
-                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s4-fix')">📋 Copy</button>
+                            <span class="code-lang">BASH — patch the CNP to allow DNS</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s3-fix')">📋 Copy</button>
                         </div>
-                        <pre><code id="sc-s4-fix" class="language-bash"><span class="token comment"># Fix: Add DNS egress to kube-system namespace</span>
-cat > s4-fix-policy.yaml << 'EOF'
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+                        <pre><code id="sc-s3-fix" class="language-bash"><span class="token comment"># Fix: Add DNS egress rule to kube-system</span>
+kubectl apply -f - &lt;&lt; 'EOF'
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
 metadata:
-  name: anihpj-default-deny
+  name: anihpj-policy
   namespace: anihpj
 spec:
-  podSelector: {}
-  policyTypes:
-  - Ingress
-  - Egress
+  endpointSelector:
+    matchLabels:
+      app: anihpj
   ingress:
-  - from:
-    - podSelector: {}
+  - fromEndpoints:
+    - matchLabels:
+        tier: web
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
   egress:
-  - to:
-    - podSelector: {}
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-    ports:
-    - protocol: UDP
-      port: 53
+  - toEndpoints:
+    - matchLabels:
+        tier: api
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        io.kubernetes.pod.namespace: kube-system
+        k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
 EOF
-kubectl apply -f s4-fix-policy.yaml</code></pre>
+
+<span class="token comment"># Verifikasi DNS works now</span>
+kubectl exec -n anihpj web-test -- nslookup anihpj-api.anihpj.svc.cluster.local</code></pre>
                     </div>
                 </div>
             </div>
@@ -6191,31 +5966,37 @@ kubectl apply -f s4-fix-policy.yaml</code></pre>
                 <div class="sc-step-content">
                     <div class="sc-resolution">
                         <h4>✅ Verify — DNS Resolution Restored</h4>
-                        <p>After adding the egress rule to kube-system on UDP 53, DNS queries from the anihpj namespace reach CoreDNS. The web pod can resolve <code>anihpj-api</code>. This teaches that NetworkPolicies apply to ALL egress traffic — including DNS to kube-system — and namespace isolation requires explicit allow rules for external services.</p>
+                        <p>After adding DNS egress to kube-system/kube-dns on UDP+TCP 53, pods can now resolve internal and external DNS names. Hubble shows <strong>FORWARDED</strong> DNS flows. The key lesson: any CNP with restrictive egress MUST include an explicit DNS allow rule to kube-system.</p>
                     </div>
                 </div>
             </div>
-            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa4')">🔍 Show Full Answer &amp; Expected Outputs</button>
-            <div class="sc-answer" id="sc-sa4">
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa3')">🔍 Show Full Answer &amp; Expected Outputs</button>
+            <div class="sc-answer" id="sc-sa3">
                 <h5>🧠 Diagnostic Tenet</h5>
                 <div class="tenet-flow">
-                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">IP works, DNS fails → DNS path broken</div></div>
-                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">Check if ANY DNS works (internal + external)</div></div>
-                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Look for NetworkPolicies in namespace</div></div>
-                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Check CoreDNS location (kube-system)</div></div>
-                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Hubble verify DROPPED on port 53 → Fix</div></div>
+                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">IP works, DNS fails → policy or DNS issue</div></div>
+                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">Check CoreDNS is running in kube-system</div></div>
+                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Hubble filter for DROPPED on port 53</div></div>
+                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Inspect CNP egress rules — DNS missing!</div></div>
+                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Add DNS egress to kube-system/kube-dns</div></div>
                 </div>
-                <p><strong>Tenet:</strong> DNS is the #1 thing broken by over-restrictive NetworkPolicies. Pods need egress to kube-system on UDP 53 to reach CoreDNS. Hubble's <code>--verdict DROPPED</code> filter is the fastest way to confirm this.</p>
-                <h5>📟 Error State</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl exec -n anihpj anihpj-web-xxx -- nslookup anihpj-api
-<span class="output">;; connection timed out; no servers could be reached</span></div>
+                <p><strong>Tenet:</strong> DNS is the #1 thing people forget when writing network policies. Kubernetes DNS runs in kube-system as CoreDNS (k8s-app: kube-dns) on UDP 53. Any pod with a restrictive egress policy MUST have explicit DNS egress to kube-system. Without it, service discovery breaks for ALL services, internal and external.</p>
+                <h5>📟 Outputs — Error State</h5>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl exec -n anihpj web-test -- nslookup anihpj-api.anihpj.svc.cluster.local
+<span class="output">;; connection timed out; no servers could be reached    ← DNS BLOCKED!</span></div>
                 <div class="cmd-output"><span class="prompt">$</span> hubble observe -n anihpj --to-port 53 --verdict DROPPED
-<span class="output">TIMESTAMP    SOURCE                   DESTINATION          VERDICT
-12:00:01     anihpj/anihpj-web-xxx     kube-system/kube-dns  DROPPED</span></div>
-                <h5>📟 AFTER Fix</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl exec -n anihpj anihpj-web-xxx -- nslookup anihpj-api
-<span class="output">Name:   anihpj-api.anihpj.svc.cluster.local
-Address: 10.96.100.50   ✅ DNS works!</span></div>
+<span class="output">TIMESTAMP    SRC                    DST                    VERDICT
+12:01:00.123  anihpj/web-test:45678  kube-system/coredns   DROPPED</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl describe cnp -n anihpj anihpj-policy | grep -A5 Egress
+<span class="output">Egress:
+  toEndpoints tier=api → port 8080 TCP
+  (NO DNS RULE!)</span></div>
+                <h5>📟 Outputs — AFTER Fix</h5>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl exec -n anihpj web-test -- nslookup anihpj-api.anihpj.svc.cluster.local
+<span class="output">Server:    10.96.0.10
+Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local
+Name:      anihpj-api.anihpj.svc.cluster.local
+Address 1: 10.96.100.200    ✅ DNS works!</span></div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
@@ -6223,34 +6004,193 @@ Address: 10.96.100.50   ✅ DNS works!</span></div>
                     <h4 style="color: #8b949e;">🧹 Cleanup</h4>
                     <div class="code-block">
                         <div class="code-header">
-                            <span class="code-lang">BASH</span>
-                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s4-cleanup')">📋 Copy</button>
+                            <span class="code-lang">BASH — copy &amp; paste to clean up</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s3-cleanup')">📋 Copy</button>
                         </div>
-                        <pre><code id="sc-s4-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                        <pre><code id="sc-s3-cleanup" class="language-bash"><span class="token comment"># Delete namespace (removes all resources and CNPs)</span>
+kubectl delete namespace anihpj
+
+<span class="token comment"># Verify cleanup</span>
+kubectl get all,cnp -n anihpj</code></pre>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ═══════════════ S5: Pod Stuck in Init Phase ═══════════════ -->
-    <div class="scenario-block" id="sc-s5">
+    <!-- ═══════════════ S4: Agent Crash Loop ═══════════════ -->
+    <div class="scenario-block" id="sc-s4">
         <div class="sc-header">
-            <div class="sc-badge">S5</div>
+            <div class="sc-badge">S4</div>
             <div class="sc-header-content">
-                <div class="sc-num">🧪 SCENARIO S5 — Category 1: Architecture</div>
-                <h4>Pod Stuck in Init:Error — Init Container Fails Due to Missing ConfigMap</h4>
-                <div class="sc-desc"><strong>The Problem:</strong> The API deployment includes an init container that sources a database connection string from a ConfigMap. But the ConfigMap name is misspelled. The init container fails, keeping the main API container from starting. Your job: find why the pod is stuck and fix it.</div>
+                <div class="sc-num">🧪 SCENARIO S4 — Category 1: Architecture</div>
+                <h4>Debug Cilium Agent CrashLoopBackOff — Misconfigured ConfigMap</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> After editing the Cilium ConfigMap, the cilium-agent pod on one node enters <strong>CrashLoopBackOff</strong>. Pods on that node are stuck in ContainerCreating. Hubble shows no flows from that node. Your job: diagnose why the agent keeps crashing and fix it.</div>
             </div>
         </div>
         <div class="sc-body">
             <div class="sc-step">
                 <div class="sc-step-num deploy">1</div>
                 <div class="sc-step-content">
-                    <h4 class="deploy">📋 Deploy the YAML (ConfigMap name typo)</h4>
+                    <h4 class="deploy">📋 Simulate the Bug — Break the ConfigMap</h4>
                     <div class="code-block">
                         <div class="code-header">
-                            <span class="code-lang">BASH</span>
+                            <span class="code-lang">BASH — this simulates a misconfigured ConfigMap</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s4-code')">📋 Copy</button>
+                        </div>
+                        <pre><code id="sc-s4-code" class="language-bash"><span class="token comment"># ============================================
+#  SIMULATE: Edit cilium-config to inject an
+#  invalid value — tunnel: invalid_proto
+#  This causes the agent to crash on restart.
+# ============================================</span>
+
+<span class="token comment"># Step 1: Create test namespace and pod to observe the crash</span>
+cat > s4-test.yaml << 'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-web
+  namespace: anihpj
+  labels:
+    app: anihpj
+spec:
+  containers:
+  - name: web
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+EOF
+kubectl apply -f s4-test.yaml
+
+<span class="token comment"># Step 2: Simulate broken config by patching cilium-config</span>
+<span class="token comment"># ❌ BUG! tunnel: invalid_proto is NOT a valid tunnel protocol.</span>
+<span class="token comment"># Valid values are: vxlan, geneve, disabled</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"tunnel":"invalid_proto"}}'
+
+<span class="token comment"># Step 3: Restart cilium-agent on one node to trigger the crash</span>
+kubectl delete pod -n kube-system -l k8s-app=cilium</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe the Error</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Check agent status: <code>kubectl get pods -n kube-system -l k8s-app=cilium</code> → <strong>CrashLoopBackOff!</strong> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Pods on affected node: <code>kubectl get pods -n anihpj -o wide</code> → ContainerCreating (stuck) ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Agent logs: <code>kubectl logs -n kube-system &lt;cilium-pod&gt; --tail=20</code> → fatal error about "invalid_proto" ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>4.</strong> Other node agents still Running — only restarted agents crash ✅</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug — Find the Root Cause</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check agent logs:</strong> <code>kubectl logs -n kube-system &lt;crashing-agent&gt; --tail=30</code><br><span class="li-finding discovery">→ "invalid tunnel protocol: invalid_proto"</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Inspect ConfigMap:</strong> <code>kubectl get cm cilium-config -n kube-system -o yaml | grep tunnel</code><br><span class="li-finding discovery">→ tunnel: invalid_proto</span></span></div>
+                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Check valid values:</strong> <code>cilium config --help | grep tunnel</code> → vxlan, geneve, disabled</span></div>
+                    <div class="lookat-item"><span class="li-num">4</span><span><strong>Compare with working nodes:</strong> old agents still use cached config, new agents read broken ConfigMap</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">ConfigMap "tunnel: invalid_proto" is not a valid tunnel type — agent fails to start!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Restore Valid ConfigMap Value</h4>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">BASH — fix the ConfigMap</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s4-fix')">📋 Copy</button>
+                        </div>
+                        <pre><code id="sc-s4-fix" class="language-bash"><span class="token comment"># Fix: Restore tunnel to valid value (vxlan)</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"tunnel":"vxlan"}}'
+
+<span class="token comment"># Restart the crashing agents — they will now start successfully</span>
+kubectl delete pod -n kube-system -l k8s-app=cilium
+
+<span class="token comment"># Wait for agents to be Ready</span>
+kubectl rollout status daemonset cilium -n kube-system --timeout=120s
+
+<span class="token comment"># Verify pods in anihpj can now start</span>
+kubectl get pods -n anihpj -o wide</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution">
+                        <h4>✅ Verify — Agents Running, Pods Starting</h4>
+                        <p>After restoring <code>tunnel: vxlan</code> in the ConfigMap and restarting agents, all cilium-agents come back Healthy. Pods in anihpj transition from ContainerCreating to Running. The lesson: Cilium validates ConfigMap values at startup — an invalid value crashes the agent on restart.</p>
+                    </div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa4')">🔍 Show Full Answer &amp; Expected Outputs</button>
+            <div class="sc-answer" id="sc-sa4">
+                <h5>🧠 Diagnostic Tenet</h5>
+                <div class="tenet-flow">
+                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">Agent CrashLoop → check logs first</div></div>
+                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">Logs show config error → check ConfigMap</div></div>
+                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Identify invalid config value</div></div>
+                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Restore valid ConfigMap value</div></div>
+                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Restart agents → verify pods start</div></div>
+                </div>
+                <p><strong>Tenet:</strong> When cilium-agent crashes on startup, the ConfigMap is the first suspect. The agent reads cilium-config at startup and validates all values. A single typo can crash every agent that restarts. Always check agent logs first, then diff the ConfigMap against known-good values. The Cilium CLI <code>cilium config</code> shows all valid keys.</p>
+                <h5>📟 Outputs — Error State</h5>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -n kube-system -l k8s-app=cilium
+<span class="output">NAME           READY   STATUS             RESTARTS   AGE
+cilium-abcde   0/1     CrashLoopBackOff   5          3m</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl logs -n kube-system cilium-abcde --tail=5
+<span class="output">level=fatal msg="invalid tunnel protocol: invalid_proto" subsys=daemon</span></div>
+                <h5>📟 Outputs — AFTER Fix</h5>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -n kube-system -l k8s-app=cilium
+<span class="output">NAME           READY   STATUS    RESTARTS   AGE
+cilium-abcde   1/1     Running   0          30s    ✅</span></div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">BASH — restore original config</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s4-cleanup')">📋 Copy</button>
+                        </div>
+                        <pre><code id="sc-s4-cleanup" class="language-bash"><span class="token comment"># Delete test namespace</span>
+kubectl delete namespace anihpj
+
+<span class="token comment"># Ensure tunnel is restored to vxlan</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"tunnel":"vxlan"}}'
+kubectl delete pod -n kube-system -l k8s-app=cilium</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S5: IPAM Exhaustion ═══════════════ -->
+    <div class="scenario-block" id="sc-s5">
+        <div class="sc-header">
+            <div class="sc-badge">S5</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S5 — Category 1: Architecture</div>
+                <h4>Debug IPAM Exhaustion — Pods Stuck in ContainerCreating</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You try to deploy more pods in anihpj but new pods get stuck in <strong>ContainerCreating</strong> with "failed to allocate IP" errors. Existing pods work fine. Cilium status shows IPAM "255/256" — nearly full. Your job: diagnose and fix the IP address exhaustion.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy the YAML (triggers IP exhaustion)</h4>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">BASH — deploy pods until IPAM exhausts</span>
                             <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s5-code')">📋 Copy</button>
                         </div>
                         <pre><code id="sc-s5-code" class="language-bash">cat > s5-deploy.yaml << 'EOF'
@@ -6263,67 +6203,30 @@ metadata:
   name: anihpj
 ---
 <span class="token comment"># ============================================
-#  2. CONFIGMAP — DB connection config  ✅ OK
-# ============================================</span>
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: anihpj-db-config
-  namespace: anihpj
-data:
-  DB_HOST: "anihpj-db.anihpj.svc.cluster.local"
-  DB_PORT: "5432"
----
-<span class="token comment"># ============================================
-#  3. API DEPLOYMENT  ❌ BUG!
-#  Init container references "anihpj-db-confg" (typo!)
-#  Should be "anihpj-db-config"
+#  2. DEPLOYMENT — 300 replicas!  ❌ BUG!
+#  The default Cilium cluster pool IPAM uses
+#  a /24 CIDR (~256 IPs). 300 replicas will
+#  EXHAUST the pool — new pods fail to get IPs.
 # ============================================</span>
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: anihpj-api
+  name: anihpj-worker
   namespace: anihpj
 spec:
-  replicas: 1
+  replicas: 300
   selector:
     matchLabels:
       app: anihpj
-      tier: api
   template:
     metadata:
       labels:
         app: anihpj
-        tier: api
     spec:
-      initContainers:
-      - name: check-db
-        image: busybox
-        command: ['sh','-c','echo "DB at $DB_HOST:$DB_PORT"']
-        envFrom:
-        - configMapRef:
-            name: anihpj-db-confg
       containers:
-      - name: api
-        image: nginx:alpine
-        ports:
-        - containerPort: 8080
----
-<span class="token comment"># ============================================
-#  4. API SERVICE  ✅ OK
-# ============================================</span>
-apiVersion: v1
-kind: Service
-metadata:
-  name: anihpj-api
-  namespace: anihpj
-spec:
-  selector:
-    app: anihpj
-    tier: api
-  ports:
-  - port: 8080
-    targetPort: 8080
+      - name: worker
+        image: busybox
+        command: ["sleep", "3600"]
 EOF
 kubectl apply -f s5-deploy.yaml</code></pre>
                     </div>
@@ -6333,38 +6236,42 @@ kubectl apply -f s5-deploy.yaml</code></pre>
                 <div class="sc-step-num">⚠</div>
                 <div class="sc-step-content">
                     <h4>⚠️ Observe the Error</h4>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Check pods: <code>kubectl get pods -n anihpj</code> → API pod stuck at <strong>Init:Error</strong> ❌</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Describe pod: <code>kubectl describe pod -n anihpj &lt;api-pod&gt;</code> → "not found: configmap anihpj-db-confg" ❌</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>3.</strong> List ConfigMaps: <code>kubectl get configmaps -n anihpj</code> → anihpj-db-config exists ✅</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>4.</strong> Notice the naming: ConfigMap is <code>anihpj-db-config</code> but init container references <code>anihpj-db-confg</code> ✅</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>5.</strong> Root cause: <strong>typo in configMapRef name</strong> — "confg" vs "config" ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Many pods stuck: <code>kubectl get pods -n anihpj | grep -c ContainerCreating</code> → dozens stuck ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Describe stuck pod: <code>kubectl describe pod -n anihpj &lt;stuck-pod&gt;</code> → "failed to allocate IP" ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> IPAM status: <code>cilium status | grep IPAM</code> → 256/256 allocated ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>4.</strong> Cilium agent is healthy on all nodes ✅</span></div>
                 </div>
             </div>
             <div class="sc-step debug-find">
                 <div class="sc-step-num">🔍</div>
                 <div class="sc-step-content">
                     <h4>🔍 Debug — Find the Root Cause</h4>
-                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Get pod status:</strong> <code>kubectl get pods -n anihpj</code> → Init:Error</span></div>
-                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check init container logs:</strong> <code>kubectl logs -n anihpj &lt;api-pod&gt; -c check-db</code></span></div>
-                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Describe pod events:</strong> <code>kubectl describe pod -n anihpj &lt;api-pod&gt;</code><br><span class="li-finding discovery">→ ConfigMap "anihpj-db-confg" not found</span></span></div>
-                    <div class="lookat-item"><span class="li-num">4</span><span><strong>Verify ConfigMap name:</strong> <code>kubectl get cm -n anihpj</code> → anihpj-db-config</span></div>
-                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Typo in configMapRef — "anihpj-db-confg" instead of "anihpj-db-config". Kubernetes can't find the ConfigMap, init container fails, pod never starts.</span></span></div>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check IPAM mode:</strong> <code>cilium config | grep ipam</code><br><span class="li-finding discovery">→ cluster-pool with CIDR 10.0.0.0/24 (only 254 usable IPs)</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check IP usage:</strong> <code>cilium status --verbose | grep -A5 IPAM</code><br><span class="li-finding discovery">→ 256/256 allocated, 0 available</span></span></div>
+                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Count running pods:</strong> ~256 pods already have IPs, rest stuck</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">IPAM pool too small (/24 = ~256 IPs) — 300 replicas exhaust the entire CIDR!</span></span></div>
                 </div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
                 <div class="sc-step-content">
-                    <h4 style="color: #3fb950;">🔧 Fix — Patch the Deployment</h4>
+                    <h4 style="color: #3fb950;">🔧 Fix — Scale Down + Expand CIDR</h4>
                     <div class="code-block">
                         <div class="code-header">
-                            <span class="code-lang">BASH</span>
+                            <span class="code-lang">BASH — fix IPAM exhaustion</span>
                             <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s5-fix')">📋 Copy</button>
                         </div>
-                        <pre><code id="sc-s5-fix" class="language-bash"><span class="token comment"># Fix: Update the configMapRef name</span>
-kubectl patch deployment anihpj-api -n anihpj --type='json' -p='[{"op":"replace","path":"/spec/template/spec/initContainers/0/envFrom/0/configMapRef/name","value":"anihpj-db-config"}]'
+                        <pre><code id="sc-s5-fix" class="language-bash"><span class="token comment"># Step 1: Scale down to stop the bleeding</span>
+kubectl scale deployment anihpj-worker -n anihpj --replicas=10
 
-<span class="token comment"># Wait for rollout</span>
-kubectl rollout status deployment anihpj-api -n anihpj</code></pre>
+<span class="token comment"># Step 2: Clean up stuck pods</span>
+kubectl delete pods -n anihpj -l app=anihpj --field-selector=status.phase=Pending
+
+<span class="token comment"># Step 3: For production — migrate to a larger CIDR</span>
+<span class="token comment"># cilium install --set ipam.mode=cluster-pool --set ipam.operator.clusterPoolIPv4PodCIDRList="10.0.0.0/16"</span>
+
+<span class="token comment"># Verify IPAM now has free IPs</span>
+cilium status | grep IPAM</code></pre>
                     </div>
                 </div>
             </div>
@@ -6372,64 +6279,68 @@ kubectl rollout status deployment anihpj-api -n anihpj</code></pre>
                 <div class="sc-step-num answer">✓</div>
                 <div class="sc-step-content">
                     <div class="sc-resolution">
-                        <h4>✅ Verify — API Pod Running</h4>
-                        <p>After fixing the ConfigMap reference, the init container runs successfully and the main API container starts. This teaches that init containers have their own failure modes — they must complete before the main container starts, and any reference error (ConfigMap, Secret, image) blocks the entire pod.</p>
+                        <h4>✅ Verify — Pods Getting IPs Again</h4>
+                        <p>After scaling down and cleaning pending pods, IPAM has free IPs again. New pods deploy successfully. For production, plan your CIDR size: a /16 gives ~65K IPs. The lesson: always size your pod CIDR based on expected pod count × nodes, not just current usage.</p>
                     </div>
                 </div>
             </div>
-            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa5')">🔍 Show Full Answer</button>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa5')">🔍 Show Full Answer &amp; Expected Outputs</button>
             <div class="sc-answer" id="sc-sa5">
                 <h5>🧠 Diagnostic Tenet</h5>
                 <div class="tenet-flow">
-                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">Pod stuck in Init → init container problem</div></div>
-                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">kubectl describe pod → error message</div></div>
-                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Verify referenced resources exist</div></div>
-                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Compare names character-by-character</div></div>
-                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Fix reference → pod starts</div></div>
+                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">Pods stuck ContainerCreating → check events</div></div>
+                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">Events show IP allocation failure</div></div>
+                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Check IPAM status → exhausted</div></div>
+                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Scale down / expand CIDR</div></div>
+                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Verify new pods get IPs</div></div>
                 </div>
-                <p><strong>Tenet:</strong> Init containers are a common source of pod startup failures. <code>kubectl describe pod</code> shows the exact error. ConfigMap/Secret name typos are the most frequent cause — they prevent the init container from even starting.</p>
-                <h5>📟 Error State</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -n anihpj
-<span class="output">NAME          READY   STATUS      RESTARTS   AGE
-anihpj-api-x  0/1     Init:Error  0          2m</span></div>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod -n anihpj anihpj-api-x | tail -5
-<span class="output">Events:
-Warning  Failed   2m    kubelet  Error: configmap "anihpj-db-confg" not found</span></div>
-                <h5>📟 AFTER Fix</h5>
-                <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -n anihpj
-<span class="output">NAME          READY   STATUS    RESTARTS   AGE
-anihpj-api-x  1/1     Running   0          30s   ✅</span></div>
+                <p><strong>Tenet:</strong> IPAM exhaustion is a common scaling pain point. Cilium cluster-pool mode allocates a fixed CIDR at install time. If you exceed the pool, new pods can't get IPs and get stuck in ContainerCreating. Solutions: scale down, clean up zombie IPs with <code>cilium cleanup</code>, or reinstall with a larger CIDR. CCA tip: know the difference between cluster-pool, kubernetes, and ENI IPAM modes.</p>
+                <h5>📟 Outputs — Error State</h5>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod -n anihpj anihpj-worker-xxx | tail -5
+<span class="output">Warning  FailedCreatePodSandBox   failed to allocate IP: pool exhausted</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> cilium status | grep IPAM
+<span class="output">IPAM: 256/256 allocated, 0 available    ← EXHAUSTED!</span></div>
+                <h5>📟 Outputs — AFTER Fix</h5>
+                <div class="cmd-output"><span class="prompt">$</span> cilium status | grep IPAM
+<span class="output">IPAM: 10/256 allocated, 246 available    ✅</span></div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
                 <div class="sc-step-content">
                     <h4 style="color: #8b949e;">🧹 Cleanup</h4>
                     <div class="code-block">
-                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s5-cleanup')">📋 Copy</button></div>
-                        <pre><code id="sc-s5-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                        <div class="code-header">
+                            <span class="code-lang">BASH</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s5-cleanup')">📋 Copy</button>
+                        </div>
+                        <pre><code id="sc-s5-cleanup" class="language-bash">kubectl delete namespace anihpj
+kubectl get all -n anihpj</code></pre>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ═══════════════ S6: Pod Pending — CPU Request Too High ═══════════════ -->
+    <!-- ═══════════════ S6: Stale Identity After Restart ═══════════════ -->
     <div class="scenario-block" id="sc-s6">
         <div class="sc-header">
             <div class="sc-badge">S6</div>
             <div class="sc-header-content">
                 <div class="sc-num">🧪 SCENARIO S6 — Category 1: Architecture</div>
-                <h4>API Pod Stuck Pending — CPU Request Exceeds Node Capacity</h4>
-                <div class="sc-desc"><strong>The Problem:</strong> The API deployment specifies a CPU request of <code>100</code> (which means 100 CPUs, not 100m millicores). No node in the cluster has 100 CPUs, so the pod stays Pending forever. Your job: find why the pod can't schedule and fix the resource request.</div>
+                <h4>Debug Stale Identity — Pod Restart Breaks Policy Enforcement</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> anihpj-api pod restarts and gets a new IP. Web can reach the API by new IP, but a CiliumNetworkPolicy that references the old identity label is now <strong>blocking traffic</strong>. The policy was written for the old pod's identity. Your job: discover why the policy broke and fix it.</div>
             </div>
         </div>
         <div class="sc-body">
             <div class="sc-step">
                 <div class="sc-step-num deploy">1</div>
                 <div class="sc-step-content">
-                    <h4 class="deploy">📋 Deploy the YAML</h4>
+                    <h4 class="deploy">📋 Deploy with Identity-Based Policy</h4>
                     <div class="code-block">
-                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s6-code')">📋 Copy</button></div>
+                        <div class="code-header">
+                            <span class="code-lang">BASH — deploy and then trigger restart</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s6-code')">📋 Copy</button>
+                        </div>
                         <pre><code id="sc-s6-code" class="language-bash">cat > s6-deploy.yaml << 'EOF'
 <span class="token comment"># ============================================
 #  1. NAMESPACE
@@ -6440,53 +6351,65 @@ metadata:
   name: anihpj
 ---
 <span class="token comment"># ============================================
-#  2. API DEPLOYMENT  ❌ BUG!
-#  resources.requests.cpu: 100 → means 100 CPUs!
-#  Should be "100m" (100 millicores = 0.1 CPU)
-# ============================================</span>
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: anihpj-api
-  namespace: anihpj
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: anihpj
-      tier: api
-  template:
-    metadata:
-      labels:
-        app: anihpj
-        tier: api
-    spec:
-      containers:
-      - name: api
-        image: nginx:alpine
-        ports:
-        - containerPort: 8080
-        resources:
-          requests:
-            cpu: "100"
-            memory: "64Mi"
----
-<span class="token comment">#  3. API SERVICE  ✅ OK
+#  2. API POD
 # ============================================</span>
 apiVersion: v1
-kind: Service
+kind: Pod
 metadata:
   name: anihpj-api
   namespace: anihpj
-spec:
-  selector:
+  labels:
     app: anihpj
     tier: api
-  ports:
-  - port: 8080
-    targetPort: 8080
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports:
+    - containerPort: 8080
+---
+<span class="token comment"># ============================================
+#  3. WEB POD
+# ============================================</span>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-web
+  namespace: anihpj
+  labels:
+    app: anihpj
+    tier: web
+spec:
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+<span class="token comment"># ============================================
+#  4. CNP — allows web→api  ❌ BUG!
+#  Policy references endpointSelector tier=api.
+#  When the API pod restarts, its Cilium identity
+#  changes (new IP → new identity). Old identity
+#  is garbage-collected. Policy may briefly deny!
+# ============================================</span>
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: web-to-api
+  namespace: anihpj
+spec:
+  endpointSelector:
+    matchLabels:
+      tier: api
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        tier: web
 EOF
-kubectl apply -f s6-deploy.yaml</code></pre>
+kubectl apply -f s6-deploy.yaml
+
+<span class="token comment"># Now simulate the bug: delete the API pod to force restart</span>
+kubectl delete pod anihpj-api -n anihpj</code></pre>
                     </div>
                 </div>
             </div>
@@ -6494,33 +6417,39 @@ kubectl apply -f s6-deploy.yaml</code></pre>
                 <div class="sc-step-num">⚠</div>
                 <div class="sc-step-content">
                     <h4>⚠️ Observe the Error</h4>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Check pods: <code>kubectl get pods -n anihpj</code> → API pod <strong>Pending</strong> ❌</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Describe pod: <code>kubectl describe pod -n anihpj &lt;api-pod&gt;</code> → "0/2 nodes available: Insufficient cpu" ❌</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>3.</strong> Check node capacity: <code>kubectl describe node &lt;node&gt; | grep -A5 Capacity</code> → Shows ~4 CPUs available ✅</span></div>
-                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>4.</strong> Check pod requests: <code>kubectl get pod -n anihpj &lt;api-pod&gt; -o yaml | grep -A3 requests</code> → cpu: "100" ✅</span></div>
-                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>5.</strong> "100" means 100 CPUs, not 100m (0.1 CPU). You're asking for 100 entire CPUs! ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> API pod restarted with new IP: <code>kubectl get pods -n anihpj -o wide</code> → new IP assigned ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Web → API via new IP: <code>kubectl exec anihpj-web -n anihpj -- wget -qO- --timeout=3 http://&lt;NEW-IP&gt;:8080</code> → <strong>DENIED!</strong> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>3.</strong> Old IP no longer exists — pod has new IP and new Cilium identity ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> Hubble: <code>hubble observe -n anihpj --verdict DROPPED</code> → traffic DROPPED by policy ❌</span></div>
                 </div>
             </div>
             <div class="sc-step debug-find">
                 <div class="sc-step-num">🔍</div>
                 <div class="sc-step-content">
-                    <h4>🔍 Debug — Find the Root Cause</h4>
-                    <div class="lookat-item"><span class="li-num">1</span><span><strong>kubectl describe pod</strong> → events show "Insufficient cpu"</span></div>
-                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check the actual request:</strong> <code>kubectl get pod -n anihpj &lt;pod&gt; -o jsonpath='{.spec.containers[0].resources.requests}'</code><br><span class="li-finding discovery">→ {"cpu":"100"} — 100 CPUs, not 100m!</span></span></div>
-                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Kubernetes CPU units:</strong> "1" = 1 CPU core. "100m" = 0.1 CPU. "100" = 100 CPU cores.</span></div>
-                    <div class="lookat-item"><span class="li-num">4</span><span><strong>No node has 100 CPUs</strong> → pod will never schedule</span></div>
-                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Missing "m" suffix — "100" means 100 CPUs, "100m" means 100 millicores (0.1 CPU).</span></span></div>
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check identities:</strong> <code>cilium identity list | grep anihpj</code><br><span class="li-finding discovery">→ Old identity still exists, new identity also present</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check CEP:</strong> <code>kubectl get cep -n anihpj</code> → old CEP may still reference old identity</span></div>
+                    <div class="lookat-item"><span class="li-num">3</span><span><strong>Check policy:</strong> <code>cilium policy get</code> → policy still bound to old identity</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Pod restart created new identity — policy was bound to old identity during GC interval</span></span></div>
                 </div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
                 <div class="sc-step-content">
-                    <h4 style="color: #3fb950;">🔧 Fix — Correct the CPU Request</h4>
+                    <h4 style="color: #3fb950;">🔧 Fix — Force Identity Refresh</h4>
                     <div class="code-block">
-                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s6-fix')">📋 Copy</button></div>
-                        <pre><code id="sc-s6-fix" class="language-bash"><span class="token comment"># Fix: Change cpu request from "100" to "100m"</span>
-kubectl patch deployment anihpj-api -n anihpj --type='json' -p='[{"op":"replace","path":"/spec/template/spec/containers/0/resources/requests/cpu","value":"100m"}]'
-kubectl rollout status deployment anihpj-api -n anihpj</code></pre>
+                        <div class="code-header">
+                            <span class="code-lang">BASH</span>
+                            <button class="copy-btn" onclick="copyToClipboard(this, 'sc-s6-fix')">📋 Copy</button>
+                        </div>
+                        <pre><code id="sc-s6-fix" class="language-bash"><span class="token comment"># Fix: Delete stale CEP to force identity refresh</span>
+kubectl delete cep -n anihpj --all
+
+<span class="token comment"># Restart the web pod to force policy re-evaluation</span>
+kubectl delete pod anihpj-web -n anihpj
+
+<span class="token comment"># Verify new identity is used</span>
+cilium identity list | grep anihpj</code></pre>
                     </div>
                 </div>
             </div>
@@ -6528,30 +6457,1514 @@ kubectl rollout status deployment anihpj-api -n anihpj</code></pre>
                 <div class="sc-step-num answer">✓</div>
                 <div class="sc-step-content">
                     <div class="sc-resolution">
-                        <h4>✅ Verify — Pod Scheduled and Running</h4>
-                        <p>After changing to <code>100m</code>, the pod schedules immediately. This is a classic Kubernetes gotcha: CPU resources without the "m" suffix are in whole cores, not millicores. Always include the "m" suffix for fractional CPU requests.</p>
+                        <h4>✅ Verify — Policy Enforces on New Identity</h4>
+                        <p>After cleaning stale CEPs and restarting web pod, the CNP correctly allows web→api on the new identity. The lesson: Cilium identities are IP-based labels. When a pod restarts with a new IP, a new identity is created. Always use label-based selectors (not IPs) in policies.</p>
                     </div>
                 </div>
             </div>
             <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa6')">🔍 Show Full Answer</button>
             <div class="sc-answer" id="sc-sa6">
-                <h5>🧠 Diagnostic Tenet</h5>
-                <div class="tenet-flow">
-                    <div class="tenet-step"><div class="step-num">①</div><div class="step-label">Pod Pending → scheduling issue</div></div>
-                    <div class="tenet-step"><div class="step-num">②</div><div class="step-label">kubectl describe → events explain why</div></div>
-                    <div class="tenet-step"><div class="step-num">③</div><div class="step-label">Check resource requests vs node capacity</div></div>
-                    <div class="tenet-step"><div class="step-num">④</div><div class="step-label">Verify CPU unit (m suffix matters!)</div></div>
-                    <div class="tenet-step"><div class="step-num">⑤</div><div class="step-label">Fix request → pod schedules</div></div>
-                </div>
-                <p><strong>Tenet:</strong> Kubernetes CPU resource units: <code>1</code> = 1 CPU core, <code>100m</code> = 0.1 CPU. Missing the "m" suffix multiplies your request by 1000x. Always check <code>kubectl describe pod</code> events for scheduling failures.</p>
+                <h5>🧠 Tenet</h5>
+                <p><strong>Tenet:</strong> Cilium identities are derived from pod labels, not pod names. When a pod restarts, it gets a new IP but retains the same labels — so it should get the SAME identity. If a stale CEP or identity GC race occurs, policies bound to stale identities may deny traffic. Fix: delete stale CEPs or wait for GC interval (default 15 min).</p>
+                <h5>📟 Outputs</h5>
+                <div class="cmd-output"><span class="prompt">$</span> cilium identity list | grep anihpj
+<span class="output">16777220   app=anihpj,tier=api    ← OLD (stale)
+16777221   app=anihpj,tier=api    ← NEW (active)</span></div>
             </div>
             <div class="sc-step">
                 <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
                 <div class="sc-step-content">
                     <h4 style="color: #8b949e;">🧹 Cleanup</h4>
-                    <div class="code-block">
-                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s6-cleanup')">📋 Copy</button></div>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s6-cleanup')">📋 Copy</button></div>
                         <pre><code id="sc-s6-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S7: Endpoint Creation Failure ═══════════════ -->
+    <div class="scenario-block" id="sc-s7">
+        <div class="sc-header">
+            <div class="sc-badge">S7</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S7 — Category 1: Architecture</div>
+                <h4>Debug Endpoint Creation Failure — CNI Conflist Missing</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> After reinstalling Cilium via Helm, new pods on one node get stuck in <strong>ContainerCreating</strong>. The kubelet can't call the Cilium CNI plugin. Existing pods work fine. Your job: diagnose why the CNI isn't responding and fix it.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Simulate the Bug</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — simulate missing CNI conflist</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s7-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s7-code" class="language-bash">cat > s7-deploy.yaml << 'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod
+  namespace: anihpj
+spec:
+  containers:
+  - name: nginx
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+EOF
+kubectl apply -f s7-deploy.yaml
+
+<span class="token comment"># ❌ BUG! Simulate missing CNI conflist on node-1:</span>
+<span class="token comment"># mv /etc/cni/net.d/05-cilium.conflist /etc/cni/net.d/05-cilium.conflist.bak</span>
+<span class="token comment"># The kubelet can't find Cilium CNI → new pods fail</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe the Error</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Pod stuck: <code>kubectl get pods -n anihpj</code> → ContainerCreating (stuck) ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Describe pod: <code>kubectl describe pod test-pod -n anihpj</code> → "CNI plugin not initialized" ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Check CNI config: <code>ls /etc/cni/net.d/</code> → 05-cilium.conflist MISSING ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check kubelet logs:</strong> <code>journalctl -u kubelet | grep -i cni</code><br><span class="li-finding discovery">→ "no network config found in /etc/cni/net.d"</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check Cilium agent:</strong> <code>kubectl get pods -n kube-system -l k8s-app=cilium</code> → Running but CNI conflist deleted</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">05-cilium.conflist deleted — kubelet can't invoke Cilium CNI plugin!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Restore CNI Conflist</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s7-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s7-fix" class="language-bash"><span class="token comment"># Fix: Restart Cilium agent to regenerate CNI conflist</span>
+kubectl delete pod -n kube-system -l k8s-app=cilium --field-selector spec.nodeName=&lt;affected-node&gt;
+
+<span class="token comment"># Or manually restore from backup</span>
+<span class="token comment"># mv /etc/cni/net.d/05-cilium.conflist.bak /etc/cni/net.d/05-cilium.conflist</span>
+
+<span class="token comment"># Delete stuck pod and recreate</span>
+kubectl delete pod test-pod -n anihpj
+kubectl apply -f s7-deploy.yaml</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution">
+                        <h4>✅ Verify — Pod Starts Successfully</h4>
+                        <p>After restoring the CNI conflist (via agent restart), the kubelet can invoke Cilium CNI to set up pod networking. New pods come up Running with IPs assigned. The lesson: Cilium agent generates <code>05-cilium.conflist</code> at startup — if deleted, restart the agent to regenerate it.</p>
+                    </div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa7')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa7">
+                <h5>🧠 Tenet</h5>
+                <p><strong>Tenet:</strong> The Cilium CNI conflist at <code>/etc/cni/net.d/05-cilium.conflist</code> is the bridge between kubelet and Cilium. If this file is missing or corrupt, kubelet can't call the CNI plugin and new pods get stuck in ContainerCreating. Restart the agent to regenerate it, or check <code>cilium status</code> for CNI readiness.</p>
+                <div class="cmd-output"><span class="prompt">$</span> ls /etc/cni/net.d/
+<span class="output">ls: cannot access '/etc/cni/net.d/': No such file or directory    ← MISSING!</span></div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s7-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s7-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S8: WireGuard Not Encrypting ═══════════════ -->
+    <div class="scenario-block" id="sc-s8">
+        <div class="sc-header">
+            <div class="sc-badge">S8</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S8 — Category 1: Architecture</div>
+                <h4>Debug WireGuard — Traffic NOT Encrypted Despite Config</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You enabled WireGuard encryption in Cilium, but <strong>traffic between nodes is still unencrypted</strong>. Hubble shows flows but <code>cilium encrypt status</code> shows no encrypted connections. Your job: find out why encryption isn't working and fix it.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy with WireGuard Config</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — deploy test pods</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s8-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s8-code" class="language-bash">cat > s8-deploy.yaml << 'EOF'
+<span class="token comment"># ============================================
+#  1. NAMESPACE
+# ============================================</span>
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+<span class="token comment"># ============================================
+#  2. TEST PODS — to test encryption
+# ============================================</span>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-pod
+  namespace: anihpj
+  labels:
+    app: anihpj
+    tier: web
+spec:
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-pod
+  namespace: anihpj
+  labels:
+    app: anihpj
+    tier: api
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports:
+    - containerPort: 8080
+EOF
+kubectl apply -f s8-deploy.yaml
+
+<span class="token comment"># ❌ BUG! WireGuard is enabled in ConfigMap but:</span>
+<span class="token comment"># 1. wireguard kernel module NOT loaded on some nodes</span>
+<span class="token comment"># 2. ConfigMap says enable-wireguard:true but agent ignores it</span>
+<span class="token comment"># Check: cilium config | grep wireguard → "true" but...</span>
+<span class="token comment"># Check: lsmod | grep wireguard → NOTHING!</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe the Error</h4>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Config says enabled: <code>cilium config | grep wireguard</code> → enable-wireguard: true ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Encrypt status: <code>cilium encrypt status</code> → "0/2 nodes have WireGuard enabled" ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Kernel module: <code>lsmod | grep wireguard</code> → NOTHING (module not loaded!) ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> Hubble shows flows but no encryption indicator ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check kernel support:</strong> <code>uname -r &amp;&amp; modprobe wireguard</code><br><span class="li-finding discovery">→ wireguard module not available in this kernel!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check agent logs:</strong> <code>kubectl logs -n kube-system -l k8s-app=cilium | grep -i wireguard</code><br><span class="li-finding discovery">→ "WireGuard not supported on this kernel version"</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Kernel too old (no WireGuard module) — encryption enabled in config but not functional!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Upgrade Kernel or Disable WireGuard</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s8-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s8-fix" class="language-bash"><span class="token comment"># Option 1: Upgrade kernel to 5.6+ (recommended for WireGuard)</span>
+<span class="token comment"># apt-get install linux-image-5.15.0-generic &amp;&amp; reboot</span>
+
+<span class="token comment"># Option 2: Disable WireGuard if kernel doesn't support it</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"enable-wireguard":"false"}}'
+kubectl delete pod -n kube-system -l k8s-app=cilium
+
+<span class="token comment"># Verify encryption status</span>
+cilium encrypt status</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution">
+                        <h4>✅ Verify — Encryption Status Clear</h4>
+                        <p>Either WireGuard is functional after kernel upgrade, or encryption is properly disabled. The lesson: WireGuard requires Linux kernel 5.6+. Always check <code>cilium encrypt status</code> after enabling encryption to verify it's actually working on all nodes.</p>
+                    </div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa8')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa8">
+                <h5>🧠 Tenet</h5>
+                <p><strong>Tenet:</strong> WireGuard encryption requires kernel 5.6+ or the wireguard-dkms module. Enabling it in Cilium ConfigMap doesn't guarantee it works — the agent silently falls back to unencrypted if the kernel module is missing. Always verify with <code>cilium encrypt status</code>.</p>
+                <div class="cmd-output"><span class="prompt">$</span> lsmod | grep wireguard
+<span class="output">(no output)    ← WireGuard kernel module NOT loaded!</span></div>
+                <div class="cmd-output"><span class="prompt">$</span> cilium encrypt status
+<span class="output">0/2 nodes have WireGuard enabled    ← Encryption NOT working!</span></div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s8-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s8-cleanup" class="language-bash">kubectl delete namespace anihpj
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"enable-wireguard":"false"}}'</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S9: Host Firewall Lockout ═══════════════ -->
+    <div class="scenario-block" id="sc-s9">
+        <div class="sc-header">
+            <div class="sc-badge">S9</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S9 — Category 1: Architecture</div>
+                <h4>Debug Host Firewall Lockout — CCNP Blocks SSH to Nodes</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You applied a CiliumClusterwideNetworkPolicy (CCNP) to protect host-level access. Now <strong>SSH to ALL nodes is blocked</strong>. You can't SSH into any worker node. kubectl still works (goes through API server). Your job: recover access and fix the CCNP.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Apply the Broken CCNP</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — this CCNP will LOCK YOU OUT!</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s9-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s9-code" class="language-bash">cat > s9-ccnp.yaml << 'EOF'
+<span class="token comment"># ============================================
+#  CCNP — Host Firewall  ❌ BUG!
+#  Default deny on ALL host traffic.
+#  No SSH (22), no kubelet (10250), no Cilium
+#  health checks allowed → COMPLETE LOCKOUT!
+# ============================================</span>
+apiVersion: "cilium.io/v2"
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: host-firewall-lockout
+spec:
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/os: linux
+  ingress:
+  - fromEntities:
+    - cluster
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "6443"
+        protocol: TCP
+EOF
+kubectl apply -f s9-ccnp.yaml</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe the Error</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> SSH to any node: <code>ssh worker-1</code> → Connection TIMEOUT ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> NodePort services unreachable from external ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>3.</strong> kubectl still works (API server on :6443 allowed) ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>4.</strong> <code>cilium-health status</code> → nodes unreachable ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check CCNP:</strong> <code>kubectl get ccnp</code> → host-firewall-lockout exists<br><span class="li-finding discovery">→ No SSH rule! Only :6443 allowed from world</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check per-node rules:</strong> <code>kubectl debug node/worker-1 -it --image=alpine -- cilium-dbg bpf policy get --host</code> → default DENY on host</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">CCNP default-deny with no SSH/kubelet/health rules — host-level access completely blocked!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Delete the CCNP via kubectl</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — delete the CCNP (still works via API)</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s9-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s9-fix" class="language-bash"><span class="token comment"># kubectl still works because :6443 was allowed</span>
+kubectl delete ccnp host-firewall-lockout
+
+<span class="token comment"># Verify host firewall rules are removed</span>
+cilium-dbg bpf policy get --host
+
+<span class="token comment"># For production: add explicit SSH allow BEFORE deny-all</span>
+<span class="token comment"># - fromEntities: world  → toPorts: 22/TCP</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution">
+                        <h4>✅ Verify — SSH Restored</h4>
+                        <p>After deleting the CCNP, host firewall rules are removed and SSH access is restored. The lesson: always test CCNP on a single non-critical node first, and always include explicit allows for SSH (22), kubelet (10250), and Cilium health checks BEFORE any deny rules.</p>
+                    </div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa9')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa9">
+                <h5>🧠 Tenet</h5>
+                <p><strong>Tenet:</strong> CCNP with <code>nodeSelector</code> applies host-level firewall rules via eBPF. A misconfigured CCNP can lock you out of ALL nodes. The safety net: kubectl goes through the API server (:6443), so you can still delete the CCNP via kubectl even when SSH is down. Always include SSH allow rules.</p>
+                <div class="cmd-output"><span class="prompt">$</span> kubectl get ccnp
+<span class="output">NAME                    AGE
+host-firewall-lockout   5m    ← THIS is blocking SSH!</span></div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s9-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s9-cleanup" class="language-bash">kubectl delete ccnp host-firewall-lockout --ignore-not-found</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S10: Hubble Not Showing Flows ═══════════════ -->
+    <div class="scenario-block" id="sc-s10">
+        <div class="sc-header">
+            <div class="sc-badge">S10</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S10 — Category 1: Architecture</div>
+                <h4>Debug Hubble — No Flows Visible Despite Traffic</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> Pods are communicating but <strong>Hubble shows zero flows</strong>. <code>hubble observe</code> returns nothing even though you can see traffic with tcpdump. Your job: find out why Hubble is blind and fix it.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy Test Pods</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s10-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s10-code" class="language-bash">cat > s10-deploy.yaml << 'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: anihpj
+  labels:
+    app: anihpj
+    tier: web
+spec:
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api
+  namespace: anihpj
+  labels:
+    app: anihpj
+    tier: api
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports:
+    - containerPort: 8080
+EOF
+kubectl apply -f s10-deploy.yaml
+
+<span class="token comment"># ❌ BUG! Hubble is DISABLED in Cilium ConfigMap:</span>
+<span class="token comment"># kubectl get cm cilium-config -n kube-system -o yaml | grep hubble</span>
+<span class="token comment"># → enable-hubble: "false"</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe the Error</h4>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Traffic works: <code>kubectl exec web -n anihpj -- wget -qO- http://&lt;api-IP&gt;:8080</code> → Works ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Hubble observe: <code>hubble observe -n anihpj</code> → <strong>NO FLOWS!</strong> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Hubble status: <code>cilium status | grep Hubble</code> → Disabled ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check Hubble config:</strong> <code>cilium config | grep -i hubble</code><br><span class="li-finding discovery">→ enable-hubble: false</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check Hubble pod:</strong> <code>kubectl get pods -n kube-system -l k8s-app=hubble-relay</code> → Not found</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Hubble disabled in ConfigMap — agent not exporting flow logs!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Enable Hubble</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s10-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s10-fix" class="language-bash"><span class="token comment"># Enable Hubble in ConfigMap</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"enable-hubble":"true"}}'
+
+<span class="token comment"># Restart agents to pick up the change</span>
+kubectl delete pod -n kube-system -l k8s-app=cilium
+
+<span class="token comment"># Install Hubble relay (if needed)</span>
+cilium hubble enable
+
+<span class="token comment"># Verify Hubble is now working</span>
+hubble observe -n anihpj --follow</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution">
+                        <h4>✅ Verify — Flows Visible</h4>
+                        <p>After enabling Hubble and restarting agents, <code>hubble observe</code> shows all flows including FORWARDED and DROPPED verdicts. The lesson: Hubble must be explicitly enabled — it's off by default in some installation methods. Check <code>cilium status</code> for the Hubble section.</p>
+                    </div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa10')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa10">
+                <h5>🧠 Tenet</h5>
+                <p>Hubble depends on the Cilium agent exporting flow logs via gRPC. If Hubble is disabled in ConfigMap, the agent doesn't expose the Hubble socket and no flows are recorded. Check <code>cilium status</code> — the Hubble section must show "OK" for each component.</p>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s10-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s10-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S11: Mixed OS Nodes ═══════════════ -->
+    <div class="scenario-block" id="sc-s11">
+        <div class="sc-header">
+            <div class="sc-badge">S11</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S11 — Category 1: Architecture</div>
+                <h4>Debug Cross-Node Failure — Mixed Kernel Versions Breaking eBPF</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> Your cluster has Ubuntu 20.04 (kernel 5.4) and Ubuntu 22.04 (kernel 5.15) nodes. anihpj pods on node-1 (5.4) cannot communicate with pods on node-2 (5.15). Same-node works on both. Your job: diagnose the kernel mismatch issue.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy Across Nodes</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s11-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s11-code" class="language-bash">cat > s11-deploy.yaml << 'EOF'
+<span class="token comment"># ============================================
+#  1. NAMESPACE
+# ============================================</span>
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+<span class="token comment"># ============================================
+#  2. WEB POD — forced to node-1 (kernel 5.4)
+# ============================================</span>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-node1
+  namespace: anihpj
+  labels: {app: anihpj, tier: web}
+spec:
+  nodeName: &lt;NODE-1-NAME&gt;
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+<span class="token comment"># ============================================
+#  3. API POD — forced to node-2 (kernel 5.15)  ❌ BUG!
+#  Node-1 kernel 5.4 lacks some eBPF features
+#  that node-2 kernel 5.15 has. Cross-node
+#  VXLAN encapsulation may behave differently.
+# ============================================</span>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-node2
+  namespace: anihpj
+  labels: {app: anihpj, tier: api}
+spec:
+  nodeName: &lt;NODE-2-NAME&gt;
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports: [{containerPort: 8080}]
+EOF
+kubectl apply -f s11-deploy.yaml</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe the Error</h4>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Both pods Running on respective nodes ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Cross-node: <code>kubectl exec web-node1 -n anihpj -- wget -qO- --timeout=3 http://&lt;api-IP&gt;:8080</code> → TIMEOUT ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>3.</strong> Same-node tests pass on both nodes ✅</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check kernels:</strong> <code>kubectl get nodes -o wide</code> &amp; <code>uname -r</code> on each<br><span class="li-finding discovery">→ node-1: 5.4.0, node-2: 5.15.0</span></span></div>
+                    <div class="lookat-item"><span class="li-num">2</span><span><strong>Check Cilium status:</strong> <code>cilium status</code> on node-1 → warnings about kernel compatibility</span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Kernel 5.4 lacks full eBPF support — VXLAN encapsulation incompatible with 5.15!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Upgrade or Use Direct Routing</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s11-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s11-fix" class="language-bash"><span class="token comment"># Fix 1: Upgrade kernel on node-1 to 5.10+</span>
+<span class="token comment"># apt-get install linux-image-5.15.0-generic &amp;&amp; reboot</span>
+
+<span class="token comment"># Fix 2: Switch to direct routing (no encapsulation)</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"tunnel":"disabled","routing-mode":"native"}}'
+kubectl delete pod -n kube-system -l k8s-app=cilium</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>After kernel upgrade or switching to native routing, cross-node communication works. Cilium requires kernel 5.10+ for full eBPF feature parity. Always check <code>cilium status</code> for kernel warnings.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa11')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa11">
+                <h5>🧠 Tenet</h5>
+                <p>Cilium requires Linux kernel 5.10+ for full functionality. Mixed kernel versions can cause subtle compatibility issues with eBPF programs. Always standardize on a single kernel version across all nodes.</p>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s11-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s11-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S12: Operator Down ═══════════════ -->
+    <div class="scenario-block" id="sc-s12">
+        <div class="sc-header">
+            <div class="sc-badge">S12</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S12 — Category 1: Architecture</div>
+                <h4>Debug Cilium Operator Down — IPAM Stops Allocating</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> New pods can't get IPs. Existing pods work fine. <code>cilium status</code> shows "Operator: Down". The Cilium operator deployment has 0 replicas. Your job: restore the operator and verify IPAM works again.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy Test Pods</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — simulate operator down</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s12-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s12-code" class="language-bash">cat > s12-deploy.yaml << 'EOF'
+<span class="token comment"># ============================================
+#  NAMESPACE + TEST POD
+# ============================================</span>
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+<span class="token comment"># ❌ BUG! Cilium operator is scaled to 0.</span>
+<span class="token comment"># Operator manages IPAM allocation — without it,</span>
+<span class="token comment"># new pods can't get IPs from the cluster pool.</span>
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-test
+  namespace: anihpj
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: anihpj
+  template:
+    metadata:
+      labels:
+        app: anihpj
+    spec:
+      containers:
+      - name: test
+        image: busybox
+        command: ["sleep", "3600"]
+EOF
+kubectl apply -f s12-deploy.yaml
+
+<span class="token comment"># Simulate: scale operator to 0</span>
+<span class="token comment"># kubectl scale deployment cilium-operator -n kube-system --replicas=0</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Pods stuck ContainerCreating: <code>kubectl get pods -n anihpj</code> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> <code>cilium status</code> → Operator: Down ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> <code>kubectl get deploy cilium-operator -n kube-system</code> → 0/0 ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check operator:</strong> <code>kubectl get deploy -n kube-system cilium-operator</code><br><span class="li-finding discovery">→ 0/0 replicas — operator is DOWN!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Operator scaled to 0 — IPAM, CRD sync, and identity GC are all stopped!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Restore Operator</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s12-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s12-fix" class="language-bash"><span class="token comment"># Scale operator back to 1</span>
+kubectl scale deployment cilium-operator -n kube-system --replicas=1
+
+<span class="token comment"># Wait for operator to be ready</span>
+kubectl rollout status deployment cilium-operator -n kube-system
+
+<span class="token comment"># Verify IPAM is working again</span>
+cilium status | grep -E "Operator|IPAM"</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>Operator back to 1/1. IPAM allocates IPs again. New pods start successfully. The Cilium operator is critical — without it, IPAM, CRD synchronization, and identity GC all stop.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa12')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa12">
+                <h5>🧠 Tenet</h5>
+                <p>The Cilium operator manages cluster-wide tasks: IPAM (cluster-pool mode), CRD synchronization, and identity garbage collection. If the operator is down, IPAM stops allocating IPs and new pods fail. Always run at least 1 operator replica (2 for HA).</p>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s12-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s12-cleanup" class="language-bash">kubectl delete namespace anihpj
+kubectl scale deployment cilium-operator -n kube-system --replicas=1</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S13: TLS Cert SAN Mismatch ═══════════════ -->
+    <div class="scenario-block" id="sc-s13">
+        <div class="sc-header">
+            <div class="sc-badge">S13</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S13 — Category 1: Architecture</div>
+                <h4>Debug TLS Handshake Failure — Certificate SAN Mismatch</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You configured mutual TLS for anihpj-api using a Kubernetes TLS Secret. But clients get <strong>"x509: certificate is valid for X, not Y"</strong> errors. The cert was issued for the wrong hostname. Your job: diagnose the SAN mismatch and fix the certificate.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy with Wrong Certificate</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — create TLS secret with wrong SAN</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s13-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s13-code" class="language-bash">cat > s13-deploy.yaml << 'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+EOF
+kubectl apply -f s13-deploy.yaml
+
+<span class="token comment"># ❌ BUG! Generate cert with WRONG CN/SAN — "wrong-host" instead of "anihpj-api.anihpj.svc"</span>
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout tls.key -out tls.crt \
+  -subj "/CN=wrong-host" \
+  -addext "subjectAltName=DNS:wrong-host"
+
+kubectl create secret tls anihpj-tls -n anihpj --cert=tls.crt --key=tls.key</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Verify cert: <code>kubectl get secret anihpj-tls -n anihpj -o jsonpath="{.data.tls\.crt}" | base64 -d | openssl x509 -text | grep -A1 "Subject Alternative"</code><br>→ DNS: wrong-host ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Client connecting to <code>anihpj-api.anihpj.svc</code> gets cert error — SAN doesn't match service DNS ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Inspect cert:</strong> <code>openssl x509 -in tls.crt -text -noout | grep -A2 "Subject Alternative"</code><br><span class="li-finding discovery">→ DNS: wrong-host — should be anihpj-api.anihpj.svc!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">TLS cert SAN doesn't match the Service DNS name — x509 hostname verification fails!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Regenerate with Correct SAN</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s13-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s13-fix" class="language-bash"><span class="token comment"># Fix: Generate cert with correct SANs</span>
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout tls.key -out tls.crt \
+  -subj "/CN=anihpj-api.anihpj.svc" \
+  -addext "subjectAltName=DNS:anihpj-api.anihpj.svc,DNS:anihpj-api.anihpj.svc.cluster.local,DNS:*.anihpj.svc"
+
+<span class="token comment"># Replace the secret</span>
+kubectl delete secret anihpj-tls -n anihpj
+kubectl create secret tls anihpj-tls -n anihpj --cert=tls.crt --key=tls.key</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>Certificate now has correct SANs matching the Service DNS name. TLS handshake succeeds. Always include both short and FQDN forms in SANs: <code>svc-name.namespace.svc</code> and <code>svc-name.namespace.svc.cluster.local</code>.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa13')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa13"><h5>🧠 Tenet</h5><p>TLS certificates in Kubernetes must have SANs matching the Service DNS name used by clients. Common mistakes: using bare pod IPs, wrong namespace in FQDN, or forgetting the <code>.svc.cluster.local</code> suffix. Always verify with <code>openssl x509 -text</code>.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s13-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s13-cleanup" class="language-bash">kubectl delete namespace anihpj
+rm -f tls.key tls.crt</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S14: Identity GC Bug ═══════════════ -->
+    <div class="scenario-block" id="sc-s14">
+        <div class="sc-header">
+            <div class="sc-badge">S14</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S14 — Category 1: Architecture</div>
+                <h4>Debug Identity Garbage Collection — Policies Randomly Stop Working</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> CiliumNetworkPolicies that worked yesterday suddenly stop enforcing today. Traffic that should be DENIED is now ALLOWED. Hubble shows identities being garbage-collected too aggressively. Your job: diagnose the identity GC issue and fix it.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy with Policy</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s14-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s14-code" class="language-bash">cat > s14-deploy.yaml << 'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: anihpj
+  labels: {app: anihpj, tier: web}
+spec:
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api
+  namespace: anihpj
+  labels: {app: anihpj, tier: api}
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports: [{containerPort: 8080}]
+---
+<span class="token comment"># ❌ BUG! identity-gc-interval set to 30s (default is 15m).</span>
+<span class="token comment"># Identities are garbage-collected too quickly.</span>
+<span class="token comment"># If a pod briefly disappears (restart, reschedule),</span>
+<span class="token comment"># its identity is GC'd before the pod comes back.</span>
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: web-to-api
+  namespace: anihpj
+spec:
+  endpointSelector:
+    matchLabels:
+      tier: api
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        tier: web
+EOF
+kubectl apply -f s14-deploy.yaml</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Delete + recreate api pod → web can now reach api WITHOUT policy enforcement ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> <code>cilium config | grep identity-gc</code> → interval: 30s (too short!) ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check GC config:</strong> <code>cilium config | grep -i gc</code><br><span class="li-finding discovery">→ identity-gc-interval: 30s (default is 15m!)</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Identity GC interval too short — identities recycled before pods recover from restart!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Restore Default GC Interval</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s14-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s14-fix" class="language-bash">kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"identity-gc-interval":"15m0s"}}'
+kubectl delete pod -n kube-system -l k8s-app=cilium
+<span class="token comment"># Wait, then reapply policy and test — enforcement is restored</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>With 15-minute GC interval, identities persist through pod restarts. Policy enforcement is consistent. Never set identity GC below 5 minutes in production.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa14')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa14"><h5>🧠 Tenet</h5><p>Identity GC removes unused identities to free memory. Setting it too low causes identities to be recycled while pods are still temporarily absent (during restart/reschedule). Default is 15 minutes — do not reduce below 5 minutes without careful testing.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s14-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s14-cleanup" class="language-bash">kubectl delete namespace anihpj
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"identity-gc-interval":"15m0s"}}'</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S15: API Server RBAC ═══════════════ -->
+    <div class="scenario-block" id="sc-s15">
+        <div class="sc-header">
+            <div class="sc-badge">S15</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S15 — Category 1: Architecture</div>
+                <h4>Debug API Server Unreachable — Cilium ServiceAccount RBAC Broken</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> <code>cilium status</code> shows "Kubernetes: Disabled". Cilium agent can't connect to the API server. Pod networking works (data plane is fine) but no new policies are being synced. Your job: diagnose the RBAC issue and restore the connection.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Simulate Broken RBAC</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — this simulates RBAC breakage</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s15-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s15-code" class="language-bash"><span class="token comment"># ❌ BUG! Simulate: delete the Cilium ClusterRoleBinding</span>
+<span class="token comment"># This severs the agent's access to the API server.</span>
+<span class="token comment"># kubectl delete clusterrolebinding cilium</span>
+
+<span class="token comment"># Check status — agent can't reach API server</span>
+cilium status</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> <code>cilium status</code> → Kubernetes: Disabled ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Agent logs: <code>kubectl logs -n kube-system -l k8s-app=cilium | grep -i unauthorized</code> → 403 errors ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>3.</strong> Pod networking still works (data plane is separate) ✅</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check RBAC:</strong> <code>kubectl get clusterrolebinding cilium</code><br><span class="li-finding discovery">→ NOT FOUND!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">ClusterRoleBinding deleted — Cilium agent ServiceAccount has no API access!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Recreate RBAC</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s15-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s15-fix" class="language-bash"><span class="token comment"># Reinstall Cilium to recreate RBAC resources</span>
+cilium install
+
+<span class="token comment"># Or manually recreate ClusterRoleBinding</span>
+kubectl create clusterrolebinding cilium --clusterrole=cilium --serviceaccount=kube-system:cilium
+kubectl delete pod -n kube-system -l k8s-app=cilium</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p><code>cilium status</code> shows "Kubernetes: OK". Agent reconnects to API server. New policies sync correctly. The Cilium agent needs RBAC permissions to watch CRDs, Nodes, and Endpoints.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa15')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa15"><h5>🧠 Tenet</h5><p>The Cilium agent runs with a ServiceAccount that needs ClusterRole permissions. If RBAC is broken, the agent can't sync policies from the API server, but existing data plane rules continue working. Check <code>cilium status</code> — if "Kubernetes: Disabled", check RBAC first.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s15-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s15-cleanup" class="language-bash">kubectl get clusterrolebinding cilium --no-headers 2>/dev/null || cilium install</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S16: MTU Blackhole ═══════════════ -->
+    <div class="scenario-block" id="sc-s16">
+        <div class="sc-header">
+            <div class="sc-badge">S16</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S16 — Category 1: Architecture</div>
+                <h4>Debug MTU Blackhole — Large Packets Silently Dropped</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> Small HTTP requests between anihpj pods work fine, but large payloads (file uploads, large API responses) <strong>hang and timeout</strong>. TCP handshake succeeds but data transfer fails. Your job: diagnose the MTU mismatch causing packet drops.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy Test Pods</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — deploy and test with large payload</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s16-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s16-code" class="language-bash">cat > s16-deploy.yaml << 'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: anihpj
+  labels: {app: anihpj, tier: web}
+spec:
+  containers:
+  - name: web
+    image: busybox
+    command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api
+  namespace: anihpj
+  labels: {app: anihpj, tier: api}
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports: [{containerPort: 8080}]
+EOF
+kubectl apply -f s16-deploy.yaml
+
+<span class="token comment"># ❌ BUG! MTU misconfigured — VXLAN tunnel has MTU 1500</span>
+<span class="token comment"># but underlying interface has MTU 1500. VXLAN overhead</span>
+<span class="token comment"># (50 bytes) means effective MTU should be 1450, not 1500.</span>
+<span class="token comment"># Packets > 1450 bytes are silently dropped!</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>1.</strong> Small request works: <code>wget -qO- http://&lt;api-IP&gt;:8080/</code> → OK ✅</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Large payload: <code>dd if=/dev/zero bs=2000 count=1 | nc &lt;api-IP&gt; 8080</code> → HANGS ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> Ping with large size: <code>ping -M do -s 1472 &lt;api-IP&gt;</code> → FAILS ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check MTU:</strong> <code>ip link show cilium_vxlan | grep mtu</code><br><span class="li-finding discovery">→ mtu 1500 — should be 1450 for VXLAN!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">VXLAN MTU 1500 causes fragmentation — packets > 1450 bytes silently dropped!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Correct MTU</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s16-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s16-fix" class="language-bash">kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"mtu":"1450"}}'
+kubectl delete pod -n kube-system -l k8s-app=cilium
+ping -M do -s 1472 &lt;api-IP&gt;  <span class="token comment"># Should now work with MTU 1450</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>With correct MTU 1450, large packets flow without fragmentation. VXLAN adds 50 bytes overhead — always set tunnel MTU 50 less than physical interface MTU. Cilium auto-detects MTU but manual overrides can break it.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa16')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa16"><h5>🧠 Tenet</h5><p>MTU issues are hard to debug because TCP handshakes succeed but data transfer fails. Always test with <code>ping -M do -s &lt;size&gt;</code> to find the path MTU. For VXLAN: MTU should be 1450 (1500 - 50 overhead). For Geneve: 1450 (1500 - 50). For WireGuard + VXLAN: 1400.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s16-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s16-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S17: Health Endpoint Failure ═══════════════ -->
+    <div class="scenario-block" id="sc-s17">
+        <div class="sc-header">
+            <div class="sc-badge">S17</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S17 — Category 1: Architecture</div>
+                <h4>Debug Health Endpoint — cilium-health Failing on One Node</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> <code>cilium-health status</code> shows one node as "unhealthy". All other nodes are fine. Pods on the unhealthy node still work but cross-node traffic from that node is intermittent. Your job: diagnose why the health endpoint is failing on that specific node.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Observe the Health Failure</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s17-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s17-code" class="language-bash"><span class="token comment"># Check health status across all nodes</span>
+cilium-health status
+
+<span class="token comment"># ❌ BUG! node-3 shows "unhealthy" — health ICMP probe failing.</span>
+<span class="token comment"># Health endpoint runs as a pod on each node (cilium-health).</span>
+<span class="token comment"># If IPTables or CNP blocks ICMP between health pods,</span>
+<span class="token comment"># the node is marked unhealthy even if data plane works.</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> <code>cilium-health status</code> → node-3: unreachable ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> <code>kubectl get pods -n kube-system -l k8s-app=cilium-health</code> → health pod on node-3 CrashLoopBackOff ❌</span></div>
+                    <div class="lookat-item"><span class="li-check pass">✓</span><span><strong>3.</strong> Regular pods on node-3 still work ✅</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check health pod logs:</strong> <code>kubectl logs -n kube-system &lt;health-pod&gt;</code><br><span class="li-finding discovery">→ ICMP probes failing — iptables blocking ICMP!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">iptables blocking ICMP between cilium-health pods — health checks fail!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s17-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s17-fix" class="language-bash"><span class="token comment"># Allow ICMP between all nodes for health checks</span>
+iptables -I INPUT 1 -p icmp -j ACCEPT
+iptables -I OUTPUT 1 -p icmp -j ACCEPT
+
+<span class="token comment"># Restart health pod</span>
+kubectl delete pod -n kube-system -l k8s-app=cilium-health
+cilium-health status</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>Health endpoints all report OK. ICMP is required for cilium-health connectivity checks between nodes. The health endpoint is critical for Cilium's node-to-node reachability monitoring.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa17')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa17"><h5>🧠 Tenet</h5><p>Cilium health endpoints run as a DaemonSet (cilium-health) and probe each other via ICMP. If ICMP is blocked by firewall or CNP, nodes appear unhealthy even if the data plane works. Always allow ICMP between all cluster nodes.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s17-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s17-cleanup" class="language-bash">iptables -D INPUT -p icmp -j ACCEPT
+iptables -D OUTPUT -p icmp -j ACCEPT</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S18: ConfigMap Restart Required ═══════════════ -->
+    <div class="scenario-block" id="sc-s18">
+        <div class="sc-header">
+            <div class="sc-badge">S18</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S18 — Category 1: Architecture</div>
+                <h4>Debug Stale Config — ConfigMap Changed but Agent Ignores It</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You changed a value in cilium-config ConfigMap, but the agent still uses the OLD value. <code>cilium config</code> shows the new value, but behavior reflects the old one. Your job: understand why the change didn't take effect and fix it.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Simulate Stale Config</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — change config, agent ignores it</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s18-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s18-code" class="language-bash"><span class="token comment"># ❌ BUG! Changed ConfigMap but forgot to restart agents.</span>
+<span class="token comment"># Some config values are read at startup only —</span>
+<span class="token comment"># changing them in the ConfigMap has NO effect until restart.</span>
+
+<span class="token comment"># Change log level from info to debug</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"debug":"true"}}'
+
+<span class="token comment"># Check — agent still logging at info level!</span>
+kubectl logs -n kube-system -l k8s-app=cilium --tail=5</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> ConfigMap shows <code>debug: true</code> but agent logs at info level ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> <code>cilium config | grep debug</code> → shows true, but behavior unchanged ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check agent uptime:</strong> agent hasn't restarted since ConfigMap change<br><span class="li-finding discovery">→ Static config values require agent restart!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">ConfigMap changes for static values require agent restart — dynamic values update live!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Restart Agents</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s18-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s18-fix" class="language-bash"><span class="token comment"># Restart agents to pick up new ConfigMap values</span>
+kubectl delete pod -n kube-system -l k8s-app=cilium
+
+<span class="token comment"># Verify agent now logging at debug level</span>
+kubectl logs -n kube-system -l k8s-app=cilium --tail=5 | grep -i debug</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>After restart, agent uses new debug log level. Remember: tunnel protocol, IPAM mode, encryption settings are startup-only. Policy enforcement modes, log levels (some) are dynamic. When in doubt, restart the agents.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa18')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa18"><h5>🧠 Tenet</h5><p>Not all ConfigMap values are hot-reloaded. Static values (tunnel, IPAM mode, encryption) require agent restart. Dynamic values (policy enforcement, some log settings) update live. Check the Cilium docs or test with a single agent first.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s18-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s18-cleanup" class="language-bash">kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"debug":"false"}}'
+kubectl delete pod -n kube-system -l k8s-app=cilium</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S19: NodePort KPR ═══════════════ -->
+    <div class="scenario-block" id="sc-s19">
+        <div class="sc-header">
+            <div class="sc-badge">S19</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S19 — Category 1: Architecture</div>
+                <h4>Debug NodePort Not Working — KPR Mode Mismatch</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> You created a NodePort Service for anihpj-web, but external clients <strong>cannot reach it</strong> on &lt;node-ip&gt;:30080. Cilium KPR (kube-proxy replacement) is enabled but the NodePort BPF program isn't handling traffic. Your job: diagnose and fix NodePort access.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Deploy with NodePort</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s19-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s19-code" class="language-bash">cat > s19-deploy.yaml << 'EOF'
+<span class="token comment"># ============================================
+#  1. NAMESPACE + WEB POD
+# ============================================</span>
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: anihpj
+  labels: {app: anihpj, tier: web}
+spec:
+  containers:
+  - name: web
+    image: nginx:alpine
+    ports: [{containerPort: 80}]
+---
+<span class="token comment"># ============================================
+#  2. NODEPORT SERVICE  ❌ BUG!
+#  KPR mode is "disabled" — NodePort handled by
+#  kube-proxy not Cilium BPF. If kube-proxy is
+#  removed per Cilium docs, NodePort breaks!
+# ============================================</span>
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-np
+  namespace: anihpj
+spec:
+  type: NodePort
+  selector:
+    app: anihpj
+    tier: web
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30080
+EOF
+kubectl apply -f s19-deploy.yaml</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> External: <code>curl http://&lt;node-ip&gt;:30080</code> → Connection refused ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> <code>cilium status | grep KPR</code> → KubeProxyReplacement: Disabled ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check KPR mode:</strong> <code>cilium status</code><br><span class="li-finding discovery">→ KubeProxyReplacement: Disabled — NodePort requires KPR Strict!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">KPR disabled — NodePort needs Cilium BPF NodePort (Strict mode) or kube-proxy!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Enable KPR Strict</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s19-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s19-fix" class="language-bash"><span class="token comment"># Enable KPR Strict mode for full kube-proxy replacement</span>
+cilium upgrade --set kubeProxyReplacement=strict
+
+<span class="token comment"># Or patch ConfigMap + restart agents</span>
+kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"kube-proxy-replacement":"strict"}}'
+kubectl delete pod -n kube-system -l k8s-app=cilium
+
+<span class="token comment"># Verify KPR is now Strict</span>
+cilium status | grep KubeProxyReplacement</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p><code>curl http://&lt;node-ip&gt;:30080</code> returns nginx welcome page. KPR Strict mode handles NodePort via BPF. The lesson: if you remove kube-proxy, you MUST enable Cilium KPR Strict to handle NodePort, ClusterIP, and ExternalIPs.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa19')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa19"><h5>🧠 Tenet</h5><p>Cilium's kube-proxy replacement (KPR) has two modes: Probe (partial) and Strict (full replacement). Strict mode handles NodePort, ExternalIPs, and HostPort via BPF. If KPR is disabled or in Probe mode, you MUST keep kube-proxy running for NodePort services.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s19-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s19-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ S20: CIDR Overlap ═══════════════ -->
+    <div class="scenario-block" id="sc-s20">
+        <div class="sc-header">
+            <div class="sc-badge">S20</div>
+            <div class="sc-header-content">
+                <div class="sc-num">🧪 SCENARIO S20 — Category 1: Architecture</div>
+                <h4>Debug Pod CIDR Overlap — Pods Get Conflicting IPs After Expansion</h4>
+                <div class="sc-desc"><strong>The Problem:</strong> After adding new nodes to the cluster, some new pods get IPs that <strong>conflict with existing pods</strong> on other nodes. Traffic routes to the wrong pod. Cilium endpoints flap. Your job: diagnose the CIDR overlap and fix it.</div>
+            </div>
+        </div>
+        <div class="sc-body">
+            <div class="sc-step">
+                <div class="sc-step-num deploy">1</div>
+                <div class="sc-step-content">
+                    <h4 class="deploy">📋 Simulate CIDR Overlap</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH — simulate overlapping pod CIDRs</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s20-code')">📋 Copy</button></div>
+                        <pre><code id="sc-s20-code" class="language-bash">cat > s20-deploy.yaml << 'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app
+  namespace: anihpj
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: anihpj
+  template:
+    metadata:
+      labels:
+        app: anihpj
+    spec:
+      containers:
+      - name: test
+        image: busybox
+        command: ["sleep", "3600"]
+EOF
+kubectl apply -f s20-deploy.yaml
+
+<span class="token comment"># ❌ BUG! New node added with overlapping PodCIDR.</span>
+<span class="token comment"># node-3 has PodCIDR 10.0.1.0/24 but node-1 already</span>
+<span class="token comment"># uses 10.0.1.0/24. Pods on both nodes get same IPs!</span></code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step error-spot">
+                <div class="sc-step-num">⚠</div>
+                <div class="sc-step-content">
+                    <h4>⚠️ Observe</h4>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>1.</strong> Pods on different nodes have SAME IP: <code>kubectl get pods -n anihpj -o wide</code> ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>2.</strong> Traffic to that IP goes to wrong pod (intermittent) ❌</span></div>
+                    <div class="lookat-item"><span class="li-check fail">✗</span><span><strong>3.</strong> <code>kubectl get nodes -o json | jq '.items[].spec.podCIDR'</code> → OVERLAPPING! ❌</span></div>
+                </div>
+            </div>
+            <div class="sc-step debug-find">
+                <div class="sc-step-num">🔍</div>
+                <div class="sc-step-content">
+                    <h4>🔍 Debug</h4>
+                    <div class="lookat-item"><span class="li-num">1</span><span><strong>Check node CIDRs:</strong> <code>kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.podCIDR}{"\n"}{end}'</code><br><span class="li-finding discovery">→ node-1: 10.0.1.0/24, node-3: 10.0.1.0/24 — CONFLICT!</span></span></div>
+                    <div class="lookat-item"><span class="li-num">5</span><span><strong>Root cause:</strong> <span class="li-finding root-cause">Manual PodCIDR assignment caused overlap — Cilium can't distinguish which node owns the IP!</span></span></div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #d2991d, #3fb950);">🔧</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #3fb950;">🔧 Fix — Reassign Unique CIDR</h4>
+                    <div class="code-block">
+                        <div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s20-fix')">📋 Copy</button></div>
+                        <pre><code id="sc-s20-fix" class="language-bash"><span class="token comment"># Drain the conflicting node</span>
+kubectl drain node-3 --ignore-daemonsets --delete-emptydir-data
+
+<span class="token comment"># Assign unique PodCIDR</span>
+kubectl patch node node-3 -p '{"spec":{"podCIDR":"10.0.3.0/24"}}'
+
+<span class="token comment"># Uncordon and verify</span>
+kubectl uncordon node-3
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.podCIDR}{"\n"}{end}'</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div class="sc-step">
+                <div class="sc-step-num answer">✓</div>
+                <div class="sc-step-content">
+                    <div class="sc-resolution"><h4>✅ Verify</h4><p>All nodes now have unique PodCIDRs. New pods get unique IPs across the cluster. The lesson: never manually assign overlapping PodCIDRs. Use the node IPAM controller or Cilium cluster-pool mode to auto-allocate unique CIDRs.</p></div>
+                </div>
+            </div>
+            <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('sc-sa20')">🔍 Show Full Answer</button>
+            <div class="sc-answer" id="sc-sa20"><h5>🧠 Tenet</h5><p>Pod CIDR overlap is catastrophic — traffic routes to the wrong pod, endpoints flap, and connectivity becomes intermittent. Always use a proper IPAM mode (cluster-pool, kubernetes, or cloud-specific) that guarantees unique per-node CIDRs. Never manually assign podCIDR on nodes.</p></div>
+            <div class="sc-step">
+                <div class="sc-step-num" style="background: linear-gradient(135deg, #6e7681, #8b949e);">🧹</div>
+                <div class="sc-step-content">
+                    <h4 style="color: #8b949e;">🧹 Cleanup</h4>
+                    <div class="code-block"><div class="code-header"><span class="code-lang">BASH</span><button class="copy-btn" onclick="copyToClipboard(this, 'sc-s20-cleanup')">📋 Copy</button></div>
+                        <pre><code id="sc-s20-cleanup" class="language-bash">kubectl delete namespace anihpj</code></pre>
                     </div>
                 </div>
             </div>
