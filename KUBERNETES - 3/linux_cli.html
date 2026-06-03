@@ -6175,6 +6175,822 @@ chattr -R +i /lpj/k8s/base/     # Recursive immutable</code></pre>
                 </div>
             </article>
 
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PROCESS MANAGEMENT -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <section class="section" id="process-management">
+            <h2>⚙️ Process Management</h2>
+            <div class="section-intro">
+                <p>Commands for viewing, controlling, and signaling running processes. Essential for monitoring server health, killing stuck processes, managing background jobs, and ensuring the <strong>anihpj/jobpost</strong> application runs reliably on production servers.</p>
+            </div>
+
+            <!-- ==================== ps ==================== -->
+            <article class="api-block" id="ps">
+                <h3>ps</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-get">MONITOR</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">Core</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Report a snapshot of current processes — the universal process inspection tool</p>
+                <div class="api-description">
+                    <p><code class="inline">ps</code> shows running processes with their PID, CPU usage, memory, state, and command line. The BSD syntax (<code>ps aux</code>) is the most common for a full system overview; the standard syntax (<code>ps -ef</code>) is also widely used.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">ps [OPTIONS]
+
+# Common patterns:
+ps aux                          # All processes, user format (BSD)
+ps -ef                          # All processes, full format (standard)
+ps aux --sort=-%mem | head -10  # Top 10 by memory
+ps -u anihpj                    # Processes for user anihpj
+ps -eo pid,ppid,cmd,%cpu,%mem --sort=-%cpu | head  # Custom columns</code></pre>
+
+                <h4>Parameters</h4>
+                <table class="param-table">
+                    <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>a</code></td><td>Show processes for all users (BSD)</td></tr>
+                        <tr><td><code>u</code></td><td>User-oriented format (BSD)</td></tr>
+                        <tr><td><code>x</code></td><td>Show processes without controlling terminal (BSD)</td></tr>
+                        <tr><td><code>-e</code></td><td>Select all processes (standard)</td></tr>
+                        <tr><td><code>-f</code></td><td>Full format listing (standard)</td></tr>
+                        <tr><td><code>-o FORMAT</code></td><td>User-defined columns: <code>pid,user,%cpu,%mem,cmd</code></td></tr>
+                        <tr><td><code>--sort=COL</code></td><td>Sort by column: <code>--sort=-%mem</code> (descending)</td></tr>
+                        <tr><td><code>-u USER</code></td><td>Show processes for USER</td></tr>
+                        <tr><td><code>-p PID</code></td><td>Select by PID</td></tr>
+                        <tr><td><code>-C CMD</code></td><td>Select by command name</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>📁 Context: anihpj/jobpost — Process Inspection</h4>
+                <pre><code class="language-bash"># Carol checks what's running on prod-api-01:
+carol@prod-api-01:~$ ps aux | grep -E "gunicorn|celery|nginx"
+anihpj   12345  2.3  4.1 523456 123456 ?  S  08:00  12:34 gunicorn: master
+anihpj   12346  1.8  3.8 512345 114200 ?  S  08:00  10:12 gunicorn: worker
+anihpj   12347  0.5  2.1 234567  63000 ?  S  08:00   2:45 celery -A jobpost worker
+root     12348  0.1  0.3  45678   9000 ?  Ss 08:00   0:34 nginx: master</code></pre>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Full System Process Overview</h5>
+                    <p><strong>Scenario:</strong> Carol runs ps aux to see everything running on the server.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">ps aux | head -5</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">USER       PID %CPU %MEM    VSZ   RSS TTY STAT START   TIME COMMAND
+root         1  0.0  0.1 225396  9120 ?   Ss   Jan01   0:45 /sbin/init
+root      1234  0.0  0.2 345678 12340 ?   Ssl  Jan01  12:34 /usr/bin/dockerd
+anihpj   12345  2.3  4.1 523456 123456 ?  S   08:00  12:34 gunicorn: master
+anihpj   12346  1.8  3.8 512345 114200 ?  S   08:00  10:12 gunicorn: worker</div>
+                    <p class="output-note"><strong>What happened:</strong> Every process on the system is listed. Key columns: PID (process ID), %CPU (CPU usage), %MEM (memory usage), STAT (process state: S=sleeping, R=running), TIME (total CPU time used). The anihpj user runs two gunicorn processes.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Find Process by Name</h5>
+                    <p><strong>Scenario:</strong> Alice checks if the Celery worker is running after a deployment.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">ps aux | grep "[c]elery"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">anihpj   12347  0.5  2.1 234567  63000 ?  S  08:00  2:45 celery -A jobpost worker</div>
+                    <p class="output-note"><strong>What happened:</strong> The bracket trick <code>[c]elery</code> prevents grep from matching itself — the regex matches "celery" but grep's own process line shows <code>[c]elery</code> which doesn't match. Single result confirms celery is running.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Sort by Memory — Find Memory Hogs</h5>
+                    <p><strong>Scenario:</strong> Dave investigates why the server is swapping — finds the top memory consumers.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">ps aux --sort=-%mem | head -6</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">anihpj   12345  2.3 12.1 523456 363000 ?  S  08:00  12:34 gunicorn: master
+anihpj   12346  1.8 10.8 512345 324000 ?  S  08:00  10:12 gunicorn: worker
+postgres  3456  0.2  8.5 987654 255000 ?  S  Jan02  45:12 postgres: writer
+anihpj   12347  0.5  6.1 234567 183000 ?  S  08:00   2:45 celery worker
+redis     2345  0.1  3.2 123456  96000 ?  Ssl Jan02  12:34 redis-server</div>
+                    <p class="output-note"><strong>What happened:</strong> Gunicorn master uses 12.1% of RAM — the biggest consumer. PostgreSQL writer (8.5%) and Celery (6.1%) follow. The <code>--sort=-%mem</code> (descending) puts the hungriest processes at the top. This is the first step in memory troubleshooting.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Custom Column Output</h5>
+                    <p><strong>Scenario:</strong> Carol needs only specific columns for a monitoring dashboard script.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">ps -eo pid,ppid,user,%cpu,%mem,cmd --sort=-%cpu | head -5</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">  PID  PPID USER     %CPU %MEM CMD
+12345  1234 anihpj    2.3 12.1 gunicorn: master
+12346  1234 anihpj    1.8 10.8 gunicorn: worker
+ 3456     1 postgres  0.2  8.5 postgres: writer</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>-eo</code> specified exact columns: PID, parent PID, user, CPU%, memory%, and command. This is script-friendly output — no header parsing needed when you control the format. Use <code>-o</code> for any combination of ps fields.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Show Process Tree</h5>
+                    <p><strong>Scenario:</strong> Carol wants to see the parent-child relationships of all gunicorn workers.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">ps auxf | grep -A10 gunicorn</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">anihpj   12345  2.3 12.1 523456 363000 ?  S  08:00  12:34 gunicorn: master
+\_ anihpj 12346  1.8 10.8 512345 324000 ?  S  08:00  10:12  \_ gunicorn: worker [1]
+\_ anihpj 12347  1.7 10.2 511234 306000 ?  S  08:00   9:45  \_ gunicorn: worker [2]
+\_ anihpj 12348  1.6  9.8 509876 294000 ?  S  08:00   8:23  \_ gunicorn: worker [3]</div>
+                    <p class="output-note"><strong>What happened:</strong> The <code>f</code> (forest) option shows the process hierarchy as a tree. The gunicorn master (PID 12345) spawned 3 worker children, indented with <code>\_</code>. This confirms the master-worker architecture and shows exactly how many workers are active.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> <code>ps aux</code> is BSD syntax (no dash before options). <code>ps -ef</code> is standard syntax. Know both. Key states: S=sleeping, R=running, Z=zombie, T=stopped. The bracket trick <code>grep [p]rocess</code> excludes grep itself. <code>ps -eo</code> with custom format is script-friendly.
+                </div>
+            </article>
+
+            <!-- ==================== top ==================== -->
+            <article class="api-block" id="top">
+                <h3>top</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-get">MONITOR</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">Interactive</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Dynamic real-time view of running processes — the live system monitor</p>
+                <div class="api-description">
+                    <p><code class="inline">top</code> displays a continuously updating view of system processes, CPU usage, memory, and load average. It's interactive — press keys to sort, filter, and kill processes. The go-to tool for live performance monitoring during incidents.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">top [OPTIONS]
+
+# Common patterns:
+top                             # Start interactive monitor
+top -u anihpj                   # Show only anihpj's processes
+top -d 2                        # Update every 2 seconds (default ~3)
+top -b -n 5 > snapshot.txt     # Batch mode: 5 iterations to file
+top -p 12345,12346              # Monitor specific PIDs</code></pre>
+
+                <h4>Interactive Keys</h4>
+                <table class="param-table">
+                    <thead><tr><th>Key</th><th>Action</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>P</code></td><td>Sort by CPU usage</td></tr>
+                        <tr><td><code>M</code></td><td>Sort by memory usage</td></tr>
+                        <tr><td><code>k</code></td><td>Kill a process (prompts for PID + signal)</td></tr>
+                        <tr><td><code>r</code></td><td>Renice a process (change priority)</td></tr>
+                        <tr><td><code>u</code></td><td>Filter by user</td></tr>
+                        <tr><td><code>1</code></td><td>Toggle individual CPU core display</td></tr>
+                        <tr><td><code>c</code></td><td>Toggle full command line</td></tr>
+                        <tr><td><code>q</code></td><td>Quit</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>📁 Context: anihpj/jobpost — Live Monitoring</h4>
+                <pre><code class="language-bash"># Carol monitors prod-api-01 during a traffic spike:
+carol@prod-api-01:~$ top
+top - 14:30:01 up 45 days,  3:22,  2 users,  load average: 2.15, 1.80, 1.45
+Tasks: 156 total,   2 running, 154 sleeping,   0 stopped,   0 zombie
+%Cpu(s): 45.2 us, 12.3 sy,  0.0 ni, 40.1 id,  2.1 wa,  0.3 hi,  0.0 si
+MiB Mem :  16000.0 total,   3200.0 free,   8400.0 used,   4400.0 buff/cache
+MiB Swap:   4096.0 total,   3800.0 free,    296.0 used.   6200.0 avail Mem
+
+  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+12345 anihpj    20   0  523456 363000   8900 S  25.0  12.1  15:34.21 gunicorn</code></pre>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Batch Mode Snapshot for Scripting</h5>
+                    <p><strong>Scenario:</strong> Carol captures a top snapshot for a monitoring report every hour.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">top -b -n 1 | head -10</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">top - 14:30:01 up 45 days,  3:22,  2 users,  load average: 2.15, 1.80, 1.45
+Tasks: 156 total,   2 running, 154 sleeping
+%Cpu(s): 45.2 us, 12.3 sy, 40.1 id
+MiB Mem :  16000.0 total,   3200.0 free,   8400.0 used</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>-b</code> (batch) + <code>-n 1</code> (one iteration) captured a non-interactive snapshot. 45.2% CPU in user space (us), 12.3% system (sy), 40.1% idle. Load average of 2.15 means ~2 processes waiting for CPU — normal for a 4-core system.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Filter by User</h5>
+                    <p><strong>Scenario:</strong> Alice monitors only the anihpj user's processes during a deployment.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">top -u anihpj -d 2 -n 3</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output"># top refreshes every 2 seconds, showing only anihpj processes
+# Press q to quit early, or wait for 3 iterations</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>-u anihpj</code> filtered to one user, <code>-d 2</code> set 2-second refresh, <code>-n 3</code> ran 3 iterations. This isolates the application user's processes from system noise — perfect for focused deployment monitoring.</p>
+                </div>
+
+
+                <div class="example">
+                    <h5>Example 3: Monitor Specific PIDs</h5>
+                    <p><strong>Scenario:</strong> Dave tracks only the gunicorn master and PostgreSQL writer to correlate their CPU usage.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">top -p 12345,3456 -d 1</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+12345 anihpj    20   0  523456 363000   8900 S  12.5  12.1  15:34.21 gunicorn: master
+ 3456 postgres  20   0  987654 255000   4500 S   3.2   8.5  45:12.45 postgres: writer</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>-p</code> limits top to specific PIDs. Dave sees gunicorn at 12.5% CPU while PostgreSQL writer is at 3.2%. This is ideal for focused monitoring — no noise from 150+ other processes. Perfect for correlating app behavior with database activity.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Save Multi-Sample Report to File</h5>
+                    <p><strong>Scenario:</strong> Carol needs a 5-sample CPU/memory report for a post-incident review.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">top -b -n 5 -d 2 > /lpj/ops/logs/top_snapshot_$(date +%H%M).txt && echo "Report saved"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Report saved
+# File /lpj/ops/logs/top_snapshot_1430.txt contains 5 snapshots at 2-second intervals
+# Each snapshot has full system summary + process table</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>-b -n 5 -d 2</code> captured 5 batch snapshots at 2-second intervals (10 seconds total coverage). The output file shows how processes changed over time — useful for spotting CPU spikes, memory leaks, or processes that appear/disappear.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Sort by Memory and Highlight Changes</h5>
+                    <p><strong>Scenario:</strong> Alice suspects a memory leak in Celery — watches memory column for creeping values.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">top -o %MEM</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output"># top opens with processes sorted by memory usage (highest first)
+# Alice presses 'c' to toggle full command line
+# She watches celery's %MEM column over 5 minutes: 6.1% → 6.4% → 6.8% → 7.2%
+# Confirmed: slow memory leak in celery worker</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>-o %MEM</code> starts top sorted by memory (alternative to pressing <code>M</code>). Alice pressed <code>c</code> to see full command lines, then watched celery's %MEM creep up over 5 minutes — confirming a memory leak that would eventually OOM the worker.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> <code>top</code> is interactive. Key keys: <code>M</code> (sort memory), <code>P</code> (sort CPU), <code>k</code> (kill), <code>r</code> (renice), <code>1</code> (per-core CPU). Load average: numbers < CPU cores = OK, numbers > CPU cores = overload. <code>top -b -n 1</code> for scripting. <code>htop</code> is a nicer alternative with color and mouse support.
+                </div>
+            </article>
+
+            <!-- ==================== kill ==================== -->
+            <article class="api-block" id="kill">
+                <h3>kill</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-delete">SIGNAL</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">Core</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Send a signal to a process — graceful termination or force kill</p>
+                <div class="api-description">
+                    <p><code class="inline">kill</code> sends signals to processes by PID. Despite the name, it sends ANY signal — <code>SIGTERM</code> (15) for graceful shutdown, <code>SIGKILL</code> (9) for force-kill, <code>SIGHUP</code> (1) to reload config. Use <code>kill -l</code> to list all signals.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">kill [OPTIONS] PID...
+
+# Common patterns:
+kill 1234                       # SIGTERM — graceful shutdown
+kill -9 1234                    # SIGKILL — force kill
+kill -HUP 1234                  # SIGHUP — reload config
+kill -l                         # List all signal names</code></pre>
+
+                <h4>Signal Cheat Sheet</h4>
+                <table class="param-table">
+                    <thead><tr><th>Signal</th><th>Number</th><th>Action</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>SIGHUP</code></td><td>1</td><td>Hangup — reload configuration (daemons)</td></tr>
+                        <tr><td><code>SIGINT</code></td><td>2</td><td>Interrupt — same as Ctrl+C</td></tr>
+                        <tr><td><code>SIGKILL</code></td><td>9</td><td>Force kill — cannot be caught or ignored</td></tr>
+                        <tr><td><code>SIGTERM</code></td><td>15</td><td>Graceful termination (default)</td></tr>
+                        <tr><td><code>SIGSTOP</code></td><td>19</td><td>Pause process — cannot be caught</td></tr>
+                        <tr><td><code>SIGCONT</code></td><td>18</td><td>Resume paused process</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Graceful Shutdown</h5>
+                    <p><strong>Scenario:</strong> Carol gracefully stops the gunicorn master during a rolling update.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">kill 12345 && sleep 2 && ps -p 12345 >/dev/null 2>&1 && echo "Still running" || echo "Stopped"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Stopped</div>
+                    <p class="output-note"><strong>What happened:</strong> SIGTERM (default) told gunicorn to shut down gracefully — finish current requests, close connections, then exit. After 2 seconds, <code>ps -p</code> confirmed the process is gone. Always try SIGTERM first before SIGKILL.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Force Kill a Stuck Process</h5>
+                    <p><strong>Scenario:</strong> The Celery worker is hung and won't respond to SIGTERM — SIGKILL is the last resort.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">kill -9 12347 && ps -p 12347 >/dev/null 2>&1 && echo "Still alive!" || echo "Force-killed"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Force-killed</div>
+                    <p class="output-note"><strong>What happened:</strong> SIGKILL (9) cannot be caught or ignored — the kernel immediately terminates the process. No cleanup, no closing files, no saving state. Only use <code>-9</code> when SIGTERM fails. It's the equivalent of pulling the power cord.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Reload Nginx Configuration</h5>
+                    <p><strong>Scenario:</strong> Carol applies new nginx config without dropping connections.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">kill -HUP $(pgrep nginx) && echo "Nginx reloaded"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Nginx reloaded</div>
+                    <p class="output-note"><strong>What happened:</strong> SIGHUP (1) tells nginx to re-read its configuration WITHOUT stopping. <code>pgrep nginx</code> found the nginx PID. Connections are not dropped — users won't notice. This is the standard zero-downtime config reload pattern.</p>
+                </div>
+
+
+                <div class="example">
+                    <h5>Example 4: Send SIGINT (Ctrl+C Equivalent)</h5>
+                    <p><strong>Scenario:</strong> Alice starts a Django dev server and needs to stop it from another SSH session.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">kill -INT $(pgrep -f "manage.py runserver") && echo "Dev server interrupted"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Dev server interrupted</div>
+                    <p class="output-note"><strong>What happened:</strong> SIGINT (2) is the same signal sent by Ctrl+C. The Django dev server caught it, ran its cleanup handlers (closing DB connections, saving state), and exited cleanly. This is more polite than SIGTERM for interactive programs that expect keyboard interrupts.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Pause and Resume a Process</h5>
+                    <p><strong>Scenario:</strong> Dave temporarily pauses a CPU-heavy batch job to run an urgent query, then resumes it.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash"># Pause the batch job:
+kill -STOP $(pgrep -f "batch_process") && echo "Batch paused"
+# Run the urgent query...
+# Resume the batch job:
+kill -CONT $(pgrep -f "batch_process") && echo "Batch resumed"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Batch paused
+# ... urgent query runs with full CPU ...
+Batch resumed</div>
+                    <p class="output-note"><strong>What happened:</strong> SIGSTOP (19) freezes a process instantly — it stops consuming CPU entirely but stays in memory. SIGCONT (18) unfreezes it. Unlike kill, SIGSTOP doesn't terminate — it's like pausing a video. The batch job resumed right where it was, with no data loss.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> Signal hierarchy: SIGTERM (15) first → SIGKILL (9) as last resort. SIGKILL cannot be caught — no cleanup. SIGHUP (1) reloads configs for daemons. SIGSTOP (19) pauses, SIGCONT (18) resumes. <code>kill -l</code> lists all signals. <code>kill -9 -1</code> kills ALL processes you own — never use this.
+                </div>
+            </article>
+
+            <!-- ==================== pkill / killall ==================== -->
+            <article class="api-block" id="pkill">
+                <h3>pkill / killall</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-delete">SIGNAL</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Signal processes by name — kill without looking up PIDs</p>
+                <div class="api-description">
+                    <p><code class="inline">pkill</code> and <code class="inline">killall</code> send signals to processes by NAME instead of PID. <code class="inline">pkill</code> matches patterns (regex); <code class="inline">killall</code> matches exact names. Both are faster than <code>ps | grep | kill</code>.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">pkill [OPTIONS] PATTERN
+killall [OPTIONS] NAME
+
+# Common patterns:
+pkill -f "celery -A jobpost"       # Match full command line
+pkill -u anihpj nginx              # Kill nginx processes owned by anihpj
+killall -HUP nginx                 # Reload all nginx processes</code></pre>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Kill All Celery Workers by Name</h5>
+                    <p><strong>Scenario:</strong> Carol needs to restart all celery workers — pkill by name is faster than finding PIDs.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">pkill -f "celery" && echo "All celery workers signaled"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">All celery workers signaled</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>pkill -f</code> matched "celery" in the full command line, sending SIGTERM to all matching processes. No <code>ps | grep | awk | kill</code> pipeline needed. Warning: <code>pkill</code> without <code>-f</code> only matches the process name (15 chars max).</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Reload All Nginx Workers</h5>
+                    <p><strong>Scenario:</strong> Alice sends SIGHUP to all nginx processes after updating the config.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo killall -HUP nginx && echo "Nginx reloaded gracefully"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Nginx reloaded gracefully</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>killall -HUP</code> sent SIGHUP to every nginx process (master + workers). All reloaded the new config without dropping connections. <code>killall</code> requires exact name match — safer than pkill for precise targeting.</p>
+                </div>
+
+
+                <div class="example">
+                    <h5>Example 3: Preview Before Killing with pgrep</h5>
+                    <p><strong>Scenario:</strong> Carol wants to verify which processes pkill would target before sending the signal.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">pgrep -af celery && echo "--- Above processes would be killed ---"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">12347 celery -A jobpost worker --loglevel=info
+12348 celery -A jobpost beat --loglevel=info
+--- Above processes would be killed ---</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>pgrep -af</code> shows both PID AND full command for matching processes. This is the safety check before <code>pkill</code> — always preview the kill list. Carol confirms only the two celery processes would be affected, not other processes with "celery" in their path.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Kill Processes Older Than X Seconds</h5>
+                    <p><strong>Scenario:</strong> Alice needs to kill any celery worker that has been running for more than 24 hours as part of a forced restart script.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">pkill -o celery && echo "Oldest celery killed" || echo "No match"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Oldest celery killed</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>pkill -o</code> (oldest) kills only the oldest matching process — the longest-running celery worker. The opposite is <code>pkill -n</code> (newest). This is useful for rolling restarts: kill the oldest worker, let a new one spawn, repeat.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Kill by User and Signal Combination</h5>
+                    <p><strong>Scenario:</strong> Dave needs to forcefully terminate all anihpj-owned redis connections after a config change.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo pkill -9 -u anihpj redis && echo "All anihpj redis connections force-killed"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">All anihpj redis connections force-killed</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>pkill -9 -u anihpj redis</code> combines three filters: SIGKILL signal, only anihpj's processes, and only processes matching "redis". This precision prevents killing system redis processes owned by root. Compound filters make pkill far safer than a blind <code>killall</code>.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> <code>pkill</code> matches patterns (partial/regex), <code>killall</code> matches exact names. <code>pkill -f</code> matches full command line. <code>pkill -u USER</code> restricts to a user. Both accept signal flags: <code>-HUP</code>, <code>-9</code>, etc. Use <code>pgrep</code> first to preview which processes would be matched.
+                </div>
+            </article>
+
+            <!-- ==================== nice / renice ==================== -->
+            <article class="api-block" id="nice">
+                <h3>nice / renice</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-put">PRIORITY</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Set or change process scheduling priority — control CPU allocation</p>
+                <div class="api-description">
+                    <p><code class="inline">nice</code> launches a process with modified priority. <code class="inline">renice</code> changes priority of a running process. Priority ranges from -20 (highest) to 19 (lowest). Only root can set negative (higher) priorities. The niceness value is visible in <code>top</code> and <code>ps</code> in the NI column.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">nice -n PRIORITY COMMAND
+renice PRIORITY -p PID
+
+# Common patterns:
+nice -n 10 tar -czf backup.tar.gz /lpj/    # Low-priority backup
+renice 5 -p 12345                           # Reduce gunicorn priority
+sudo renice -5 -p 12345                     # Boost gunicorn priority (root only)</code></pre>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Run Backup at Low Priority</h5>
+                    <p><strong>Scenario:</strong> Dave runs a database backup but doesn't want it to compete with production traffic.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">nice -n 19 pg_dump anihpj > /lpj/ops/backups/db_$(date +%Y%m%d).sql && echo "Backup complete"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Backup complete</div>
+                    <p class="output-note"><strong>What happened:</strong> The backup ran at the lowest possible priority (nice 19). It yields CPU to any other process — production gunicorn workers get priority. The backup takes longer but doesn't affect response times.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Lower Priority of a CPU-Hungry Process</h5>
+                    <p><strong>Scenario:</strong> Alice's data migration is consuming too much CPU — renice it to minimize impact.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">renice 15 -p $(pgrep -f "manage.py migrate") && ps -o pid,ni,cmd -p $(pgrep -f "manage.py migrate")</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">12350 (process ID) old priority 0, new priority 15
+  PID  NI CMD
+12350  15 python manage.py migrate</div>
+                    <p class="output-note"><strong>What happened:</strong> The migration's priority was lowered from 0 (default) to 15. It now yields CPU to more important processes. The NI column in <code>ps</code> confirms the new value. Regular users can only increase niceness (lower priority).</p>
+                </div>
+
+
+                <div class="example">
+                    <h5>Example 3: Boost Priority of Critical Service (Root Only)</h5>
+                    <p><strong>Scenario:</strong> Carol temporarily boosts gunicorn's CPU priority during a Black Friday sale to handle extra traffic.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo renice -10 -p $(pgrep -f "gunicorn: master") && ps -o pid,ni,cmd -p $(pgrep -f "gunicorn: master")</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">12345 (process ID) old priority 0, new priority -10
+  PID  NI CMD
+12345 -10 gunicorn: master [anihpj]</div>
+                    <p class="output-note"><strong>What happened:</strong> Only root can set negative nice values (higher priority). The gunicorn master now gets CPU ahead of most other processes. During sales events, this ensures web requests get CPU priority over batch jobs. Revert with <code>renice 0 -p 12345</code> after the event.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Check Current Nice Value</h5>
+                    <p><strong>Scenario:</strong> Alice wants to verify the niceness of all gunicorn and celery processes at a glance.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">ps -eo pid,ni,comm | grep -E "gunicorn|celery"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">12345 -10 gunicorn
+12346   0 gunicorn
+12347   0 gunicorn
+12348   0 gunicorn
+12349  15 celery</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>ps -eo pid,ni,comm</code> shows PID, nice value, and command name. Only the gunicorn master was reniced (-10); workers inherited default (0). The celery worker is at 15 (low priority). Child processes don't automatically inherit the parent's nice value after <code>renice</code>.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Run a Maintenance Script with Low I/O Priority Too</h5>
+                    <p><strong>Scenario:</strong> Dave runs a filesystem scan that should yield both CPU AND I/O to production workloads.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">ionice -c 2 -n 7 nice -n 19 find /lpj/ -type f -mtime +30 -ls > /lpj/ops/logs/old_files.txt && echo "Scan done"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Scan done</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>ionice -c 2 -n 7</code> (best-effort, lowest I/O priority) combined with <code>nice -n 19</code> (lowest CPU priority) ensures the find command yields both CPU and disk I/O to production services. This is the polite way to run maintenance — gunicorn responses are unaffected even during heavy disk scanning.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> Nice values: -20 (highest priority) to 19 (lowest). Default is 0. Only root can go negative (higher priority). Regular users can only increase niceness (lower priority). <code>renice</code> changes a running process; <code>nice</code> launches a new one. The NI column in <code>top</code>/<code>ps</code> shows current niceness.
+                </div>
+            </article>
+
+            <!-- ==================== bg / fg / jobs ==================== -->
+            <article class="api-block" id="bg-fg">
+                <h3>bg / fg / jobs</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-put">JOB CONTROL</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">Shell Builtin</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Manage background and foreground jobs — multitask in a single terminal</p>
+                <div class="api-description">
+                    <p>Shell job control lets you pause (<code>Ctrl+Z</code>), background (<code>bg</code>), foreground (<code>fg</code>), and list (<code>jobs</code>) processes running in your terminal session. Essential for long-running tasks like database dumps and file transfers.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">Ctrl+Z          # Suspend current foreground job
+bg %1           # Resume job 1 in the background
+fg %1           # Bring job 1 to the foreground
+jobs            # List all background/stopped jobs
+kill %1         # Kill job 1</code></pre>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Background a Long-Running Task</h5>
+                    <p><strong>Scenario:</strong> Carol starts a database dump but wants her terminal back while it runs.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">pg_dump anihpj > /lpj/ops/backups/db.sql &amp; jobs</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">[1]+  Running                 pg_dump anihpj > /lpj/ops/backups/db.sql &amp;</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>&amp;</code> at the end of a command runs it in the background immediately. <code>jobs</code> confirmed job [1] is running. Carol's terminal is free for other commands while the dump runs.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Suspend and Resume</h5>
+                    <p><strong>Scenario:</strong> Alice is editing a file but needs to quickly check something else — suspend, check, resume.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash"># Press Ctrl+Z to suspend the current task
+# Run your quick command
+# Type fg to resume</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">[1]+  Stopped                 vim /lpj/k8s/base/secrets.yaml
+# ... run other commands ...
+vim /lpj/k8s/base/secrets.yaml    # fg brings vim back exactly where you left it</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>Ctrl+Z</code> suspended vim (state: Stopped). Alice ran her quick check, then <code>fg</code> resumed vim exactly where she left off. This is faster than saving, quitting, and reopening.</p>
+                </div>
+
+
+                <div class="example">
+                    <h5>Example 3: Run Multiple Background Jobs and Track Them</h5>
+                    <p><strong>Scenario:</strong> Carol runs three long tasks simultaneously — backup, log rotation, and a DB vacuum — tracking each.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">pg_dump anihpj > /lpj/ops/backups/db.sql &amp;
+gzip /lpj/ops/logs/*.log &amp;
+vacuumdb -U anihpj anihpj &amp;
+jobs -l</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">[1]  12501 Running    pg_dump anihpj > /lpj/ops/backups/db.sql &amp;
+[2]  12502 Running    gzip /lpj/ops/logs/*.log &amp;
+[3]  12503 Running    vacuumdb -U anihpj anihpj &amp;
+# jobs -l shows all three with PIDs</div>
+                    <p class="output-note"><strong>What happened:</strong> Each <code>&amp;</code> launched a new background job. <code>jobs -l</code> (long format) lists all three with their PIDs. Carol can now <code>fg %2</code> to check on the gzip, or <code>kill %3</code> to cancel the vacuum. Parallel task management without multiple terminals.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Foreground a Background Job to Interact With It</h5>
+                    <p><strong>Scenario:</strong> Alice started a Django management command in the background but it prompts for confirmation — she brings it to foreground.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">python manage.py flush --no-input &amp;
+# ... some time later ...
+jobs
+fg %1</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">[1]+  Stopped(SIGTTIN)  python manage.py flush --no-input
+# fg %1 brings it back, Alice sees the prompt:
+You have requested a flush of the database. This will IRREVERSIBLY DESTROY all data.
+Are you sure you want to do this? [y/N]</div>
+                    <p class="output-note"><strong>What happened:</strong> Background processes can't read from the terminal — when flush tried to prompt, it received SIGTTIN and stopped. <code>fg %1</code> brought it to the foreground where Alice can answer the prompt. Always check <code>jobs</code> first to see which jobs are stopped vs. running.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Use jobs for Shell Script Job Tracking</h5>
+                    <p><strong>Scenario:</strong> Carol writes a deployment script that runs pre-deployment checks in parallel, waits for all to finish.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash"># In deploy.sh:
+python manage.py check --deploy &amp;
+pg_isready -h localhost &amp;
+curl -sf http://localhost:8080/health &amp;
+wait  # Wait for ALL background jobs to finish
+echo "All checks passed — proceeding with deployment"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">All checks passed — proceeding with deployment</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>wait</code> (without arguments) blocks until ALL background jobs complete. If any job fails, <code>wait</code> returns its exit code. This is a simple parallelism pattern — run 3 independent checks at once instead of sequentially, saving ~66% time.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> <code>Ctrl+Z</code> = suspend, <code>bg</code> = background, <code>fg</code> = foreground, <code>jobs</code> = list. <code>%1</code> refers to job number 1. Command <code>&amp;</code> runs in background immediately. All are shell builtins — use <code>help bg</code>, <code>help fg</code>, <code>help jobs</code>.
+                </div>
+            </article>
+
+            <!-- ==================== nohup / disown ==================== -->
+            <article class="api-block" id="nohup">
+                <h3>nohup / disown</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-put">PERSIST</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Protect processes from SIGHUP — keep them running after you log out</p>
+                <div class="api-description">
+                    <p>When you close a terminal, the shell sends SIGHUP to all child processes, killing them. <code class="inline">nohup</code> immunizes a command against SIGHUP at launch time. <code class="inline">disown</code> removes an already-running job from the shell's job table so it survives logout.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">nohup COMMAND &amp;                  # Launch immune to hangup
+disown %1                        # Remove job 1 from shell's job table
+disown -h %1                     # Don't send SIGHUP but keep in job table</code></pre>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Run a Long Migration That Survives Logout</h5>
+                    <p><strong>Scenario:</strong> Alice needs to run a 2-hour database migration but might lose her SSH connection.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">nohup python manage.py migrate > /lpj/ops/logs/migration.log 2>&amp;1 &amp;</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">[1] 12500
+nohup: ignoring input and appending output to 'nohup.out'</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>nohup</code> launched the migration immune to SIGHUP. Even if Alice's SSH disconnects, the migration continues. Output is redirected to <code>migration.log</code> for later review. <code>&amp;</code> runs it in the background.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Disown an Already-Running Job</h5>
+                    <p><strong>Scenario:</strong> Carol started a long backup in the foreground, backgrounded it, but forgot nohup. She disown's it.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash"># Started: pg_dump anihpj > backup.sql
+# Ctrl+Z to suspend, then: bg
+# Now disown it:
+disown %1 && jobs</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output"># jobs returns nothing — the backup is detached from the shell
+# It will continue running even if Carol logs out</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>disown</code> removed the backup from the shell's job table. It's still running — just no longer tied to Carol's terminal session. Use this when you forget <code>nohup</code> before starting a long task.</p>
+                </div>
+
+
+                <div class="example">
+                    <h5>Example 3: Start a Background Server That Survives Everything</h5>
+                    <p><strong>Scenario:</strong> Alice starts a development Celery worker that must keep running even if her terminal crashes.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">nohup celery -A jobpost worker --loglevel=info > /lpj/ops/logs/celery_dev.log 2>&amp;1 &amp; disown</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">[1] 12510</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>nohup</code> + <code>disown</code> double-protection: nohup makes it immune to SIGHUP, disown removes it from the shell's job table entirely. Even if Alice's terminal window crashes or she force-closes it, the celery worker continues. Output goes to <code>celery_dev.log</code>.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Check nohup Output in Real Time</h5>
+                    <p><strong>Scenario:</strong> Dave started a long-running migration with nohup and wants to check progress without disturbing it.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">nohup python manage.py migrate > /lpj/ops/logs/migration.log 2>&amp;1 &amp;
+# Later, check progress:
+tail -f /lpj/ops/logs/migration.log</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Applying contenttypes.0001_initial... OK
+Applying auth.0001_initial... OK
+Applying jobpost.0001_initial... OK
+Applying jobpost.0002_add_indexes... OK
+# tail -f shows live progress, Ctrl+C to stop watching (migration continues)</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>tail -f</code> follows the log file in real time, showing migration progress. Pressing Ctrl+C stops tail but NOT the migration — it's protected by nohup and continues. This is the standard pattern for monitoring long-running headless processes.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: nohup vs screen/tmux — When to Use Each</h5>
+                    <p><strong>Scenario:</strong> Carol decides whether to use nohup or tmux for a critical 4-hour database repair.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash"># Option A: nohup — fire and forget, check logs later
+nohup pg_restore -d anihpj /lpj/ops/backups/db_full.dump > /lpj/ops/logs/restore.log 2>&amp;1 &amp;
+
+# Option B: tmux — reattach later to interact
+tmux new -s db_repair
+pg_restore -d anihpj /lpj/ops/backups/db_full.dump  # Can interact if prompts appear
+# Ctrl+B, D to detach; tmux attach -t db_repair to return</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output"># nohup: Output goes to restore.log — check with tail -f
+# tmux: Can reattach and see full scrollback, answer prompts, Ctrl+C if needed</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>nohup</code> is simpler: one command, no sessions to manage, check logs later. <code>tmux</code>/<code>screen</code> is better for interactive tasks where you might need to answer prompts or monitor visually. Use nohup for fully automated scripts; use tmux for anything that might need human intervention.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> <code>nohup</code> protects a NEW process; <code>disown</code> protects an EXISTING job. <code>nohup</code> output goes to <code>nohup.out</code> unless redirected. <code>disown -h</code> removes SIGHUP but keeps the job visible. Both are shell builtins.
+                </div>
+            </article>
+
+            <!-- ==================== pgrep / pidof / watch ==================== -->
+            <article class="api-block" id="pgrep">
+                <h3>pgrep / pidof / watch</h3>
+                <div class="api-meta">
+                    <span class="method-badge method-get">FIND</span>
+                    <span class="tag">Process Management</span>
+                    <span class="tag">LFCS Domain 2</span>
+                </div>
+                <p class="api-subtitle">Find processes by name and run commands periodically — essential monitoring tools</p>
+                <div class="api-description">
+                    <p><code class="inline">pgrep</code> finds PIDs by name pattern. <code class="inline">pidof</code> finds the PID of an exact program name. <code class="inline">watch</code> runs a command repeatedly at intervals — like a mini-monitoring dashboard in your terminal.</p>
+                </div>
+
+                <h4 class="syntax-header">Syntax</h4>
+                <pre><code class="language-bash">pgrep [OPTIONS] PATTERN
+pidof PROGRAM
+watch [OPTIONS] COMMAND
+
+# Common patterns:
+pgrep -f "gunicorn"                 # Find PIDs matching gunicorn in full command
+pidof nginx                         # Find PID of nginx
+watch -n 2 "ps aux | grep celery"   # Monitor celery every 2 seconds
+watch -d df -h                      # Watch disk usage, highlight changes</code></pre>
+
+                <h4>Examples</h4>
+
+                <div class="example">
+                    <h5>Example 1: Find All Gunicorn PIDs</h5>
+                    <p><strong>Scenario:</strong> Carol needs all gunicorn PIDs for monitoring without parsing ps output.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">pgrep -f gunicorn</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">12345
+12346
+12347
+12348</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>pgrep -f</code> matched "gunicorn" in the full command line. Four PIDs: 1 master + 3 workers. This is script-friendly — pipe to <code>kill</code>, <code>renice</code>, or <code>ps -p</code> for further processing.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Watch Process Count During Deployment</h5>
+                    <p><strong>Scenario:</strong> Alice watches the gunicorn worker count during a rolling update to ensure zero downtime.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">watch -n 1 -d "pgrep -f gunicorn | wc -l"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Every 1.0s: pgrep -f gunicorn | wc -l
+
+4
+# During rolling update, this fluctuates: 4 → 5 → 4 → 5 → 4
+# Work count stays at 4 — zero downtime confirmed</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>watch -n 1</code> refreshed every second showing the worker count. <code>-d</code> highlighted changes. During the rolling update, the count briefly went to 5 (new + old workers) then back to 4 — confirming seamless transition.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Quick PID Lookup with pidof</h5>
+                    <p><strong>Scenario:</strong> Carol needs the nginx PID quickly for a script.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">pidof nginx</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">12350 12349 12348</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>pidof</code> returned all nginx PIDs: 12348 (master), 12349 and 12350 (workers). Simpler than <code>pgrep</code> for exact program names. Use in scripts: <code>kill -HUP $(pidof nginx)</code>.</p>
+                </div>
+
+
+                <div class="example">
+                    <h5>Example 4: Count Processes Per User</h5>
+                    <p><strong>Scenario:</strong> Carol audits which users have the most processes on the production server.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">for user in anihpj root postgres redis; do echo -n "$user: "; pgrep -cu $user; done</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">anihpj: 12
+root: 89
+postgres: 5
+redis: 2</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>pgrep -c</code> returns a count instead of PIDs. <code>-u USER</code> filters by owner. The loop iterates through each user. Carol sees anihpj has 12 processes (gunicorn workers + celery), root has 89 (system daemons), postgres has 5, redis has 2. Great for quick capacity audits.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Watch Memory Usage of Critical Processes with Highlighting</h5>
+                    <p><strong>Scenario:</strong> Dave monitors memory of gunicorn and celery side-by-side during a stress test, with changes highlighted.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">watch -n 2 -d "ps -eo pid,%mem,comm --sort=-%mem | head -8"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Every 2.0s: ps -eo pid,%mem,comm --sort=-%mem | head -8
+
+  PID %MEM COMMAND
+12345 12.3 gunicorn           ← highlights flash when %MEM changes
+12346 10.8 gunicorn
+ 3456  8.5 postgres
+12347  7.2 celery             ← climbed from 6.8% — highlighted by -d
+12348  6.9 gunicorn
+ 2345  3.2 redis-server
+12349  1.5 celery
+    1  0.1 systemd</div>
+                    <p class="output-note"><strong>What happened:</strong> <code>watch -d</code> highlights values that change between refreshes. Dave spots celery climbing from 6.8% to 7.2% memory — the highlight draws attention. Combine <code>watch</code> with any pipeline for a live dashboard. <code>Ctrl+C</code> exits when done.</p>
+                </div>
+
+                <div class="success">
+                    <strong>💡 LFCS Exam Tip:</strong> <code>pgrep -f</code> matches full command line; <code>pgrep</code> without <code>-f</code> matches only process name (15 chars). <code>pidof</code> requires exact program name. <code>watch -d</code> highlights differences between refreshes. <code>watch -n SECS</code> sets interval. <code>Ctrl+C</code> exits watch.
+                </div>
+            </article>
+
         </section>
     </main>
 
