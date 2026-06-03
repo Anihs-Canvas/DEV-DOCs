@@ -1,0 +1,11 @@
+import re
+c=open('cilium-test-prep.html','rb').read()
+s84=c.find(b'id="sc-s84"')
+append=c.find(b'id="appendices"', s84)
+s85=c.find(b'id="sc-s85"')
+blocks=re.findall(rb'id="sc-s(\d+)"',c)
+nums=sorted(int(b) for b in blocks)
+print(f'Scenarios: {len(nums)} (S{nums[0]}-S{nums[-1]})')
+print(f'S84: byte {s84}, Appendices: byte {append}')
+print(f'S85 exists: {s85>0}')
+print(f'Insertion gap: {append - s84} bytes')

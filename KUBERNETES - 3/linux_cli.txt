@@ -1,0 +1,4255 @@
+GENERIC DIRECTORY SKELETON
+-------------------------------------------------------------------------------
+This document uses the real-world "anihpj" project as the reference
+environment. All examples, paths, and context use this directory structure.
+The anihpj project deploys the "jobpost" application — a Django-based job
+board platform running on Kubernetes with Cilium for networking and security.
+
+PROJECT ROOT: /lpj
+─────────────────────────────────────────────────────────────────
+lpj/
+│
+├── 📁 anihpj/                          # Django project root
+│   ├── 📄 __init__.py
+│   ├── 📄 settings.py                  # Django settings (DB, apps, middleware)
+│   ├── 📄 urls.py                      # Root URL routing
+│   ├── 📄 wsgi.py                      # WSGI entry for Gunicorn
+│   ├── 📄 asgi.py                      # ASGI entry
+│   └── 📄 celery.py                    # Celery config (background tasks)
+│
+├── 📁 jobpost/                         # Main Django app
+│   ├── 📄 __init__.py
+│   ├── 📄 models.py                    # Job, Company, Application models
+│   ├── 📄 views.py                     # View logic (web + API)
+│   ├── 📄 urls.py                      # App URL routing
+│   ├── 📄 serializers.py               # DRF serializers for API
+│   ├── 📄 admin.py                     # Django admin registration
+│   ├── 📄 tests.py                     # Unit and integration tests
+│   ├── 📄 tasks.py                     # Celery background tasks
+│   ├── 📄 permissions.py               # Custom DRF permissions
+│   ├── 📁 templates/
+│   │   └── 📁 jobpost/
+│   │       ├── 📄 base.html            # Base template
+│   │       ├── 📄 job_list.html        # Job listing page
+│   │       ├── 📄 job_detail.html      # Single job view
+│   │       └── 📄 apply.html           # Job application form
+│   ├── 📁 static/
+│   │   └── 📁 jobpost/
+│   │       ├── 📄 style.css
+│   │       └── 📄 main.js
+│   └── 📁 migrations/
+│       └── 📄 0001_initial.py
+│
+├── 📁 api/                             # REST API app
+│   ├── 📄 __init__.py
+│   ├── 📄 views.py                     # APIView classes
+│   ├── 📄 urls.py                      # /api/v1/ routes
+│   └── 📄 serializers.py               # API-specific serializers
+│
+├── 📄 Dockerfile                       # Multi-stage production build
+├── 📄 Dockerfile.dev                   # Development build
+├── 📄 docker-compose.yml               # Local dev with PostgreSQL + Redis
+├── 📄 requirements.txt                 # Python dependencies
+├── 📄 manage.py                        # Django management CLI
+│
+├── 📁 k8s/                             # Kubernetes manifests
+│   ├── 📁 base/
+│   │   ├── 📄 namespace.yaml
+│   │   ├── 📄 web-deployment.yaml
+│   │   ├── 📄 api-deployment.yaml
+│   │   ├── 📄 db-statefulset.yaml
+│   │   ├── 📄 web-service.yaml
+│   │   ├── 📄 api-service.yaml
+│   │   ├── 📄 db-service.yaml
+│   │   ├── 📄 configmap.yaml
+│   │   └── 📄 secrets.yaml
+│   ├── 📁 cilium/
+│   │   ├── 📄 cnp-baseline.yaml        # L3/L4 baseline policies
+│   │   ├── 📄 cnp-l7.yaml              # L7 HTTP rules
+│   │   ├── 📄 cnp-dns.yaml             # DNS policies
+│   │   ├── 📄 ccnp-host-firewall.yaml  # Host firewall CCNP
+│   │   └── 📄 cidrgroup-vpn.yaml       # CIDRGroup for VPN ranges
+│   ├── 📁 ingress/
+│   │   ├── 📄 ingress.yaml             # Cilium Ingress
+│   │   └── 📄 gateway.yaml             # Gateway API
+│   └── 📁 monitoring/
+│       ├── 📄 servicemonitor.yaml
+│       └── 📄 grafana-dashboard.yaml
+│
+├── 📁 ops/                             # Operations artifacts (logs, systemd, backups, cron)
+│   ├── 📁 logs/                        # grep / sed / awk / tail -f practice
+│   │   ├── 📄 app.log
+│   │   ├── 📄 error.log
+│   │   └── 📄 access.log
+│   ├── 📁 systemd/                     # systemctl / journalctl practice
+│   │   ├── 📄 jobpost.service
+│   │   └── 📄 celery.service
+│   ├── 📁 backups/                     # tar / gzip / rsync targets
+│   └── 📁 cron/                        # crontab practice
+│       └── 📄 anihpj-crontab
+│
+└── 📁 scripts/
+    ├── 📄 cilium-setup.sh              # Cilium installation + verification
+    ├── 📄 connectivity-test.sh         # End-to-end connectivity checks
+    └── 📄 deploy.sh                    # Full deployment script
+
+
+USERS & GROUPS (anihpj organization):
+─────────────────────────────────────
+  Groups:
+    developers    — Application developers (jobpost, api)
+    ops           — Operations / DevOps / SRE engineers
+    dba           — Database administrators
+    auditors      — Security & compliance auditors
+
+  Users:
+    alice         — Senior Django developer (groups: developers, docker)
+    bob           — API developer (groups: developers)
+    carol         — DevOps lead (groups: developers, ops, docker, sudo)
+    dave          — Database admin (groups: dba)
+    eve           — Security auditor (groups: auditors)
+    jenkins       — CI/CD pipeline user (groups: docker)
+    www-data      — Nginx/Apache service user
+    anihpj        — Application runtime user (no login shell, owns /lpj)
+
+SERVERS (anihpj infrastructure):
+─────────────────────────────────
+  prod-web-01    — Production web server (192.168.10.10)
+  prod-web-02    — Production web server (192.168.10.11)
+  prod-api-01    — Production API server (192.168.10.20)
+  prod-db-01     — Production PostgreSQL (192.168.10.30)
+  prod-redis-01  — Production Redis cache (192.168.10.35)
+  prod-worker-01 — Production Celery worker (192.168.10.40)
+  staging-01     — Staging server (192.168.20.10)
+  dev-01         — Development server (192.168.30.10)
+  backup-nas     — Backup NAS storage (192.168.50.10)
+  monitoring-01  — Prometheus + Grafana monitoring (192.168.10.50)
+  ci-runner-01   — GitHub Actions self-hosted runner (192.168.10.60)
+
+LFCS EXAM COVERAGE
+-------------------------------------------------------------------------------
+This document covers all LFCS (Linux Foundation Certified System Administrator)
+exam domains with hands-on examples using the anihpj/jobpost environment.
+
+Domain 1: Essential Commands (25%)
+  - File navigation: ls, cd, pwd, find, locate
+  - File operations: cp, mv, rm, mkdir, touch, ln
+  - Text processing: grep, sed, awk, cut, sort, uniq, wc
+  - I/O redirection: >, >>, <, <<, |, 2>, &>
+  - Archiving: tar, gzip, bzip2, xz, zip
+
+Domain 2: Operation of Running Systems (20%)
+  - Process management: ps, top, kill, nice, bg, fg
+  - System monitoring: free, df, du, uptime, vmstat, iostat
+  - systemd: systemctl, journalctl, systemd-analyze
+  - Boot process: GRUB, kernel parameters, initramfs
+  - Scheduled tasks: cron, crontab, at, systemd timers
+
+Domain 3: User & Group Management (10%)
+  - User commands: useradd, usermod, userdel, passwd
+  - Group commands: groupadd, groupmod, groupdel
+  - Permissions: chmod, chown, chgrp, umask, ACLs, SUID/SGID
+  - Account config: /etc/passwd, /etc/shadow, /etc/group, /etc/skel
+
+Domain 4: Networking (12%)
+  - Network config: ip, ifconfig, nmcli, /etc/hosts, /etc/resolv.conf
+  - Diagnostics: ping, traceroute, netstat, ss, dig, nslookup
+  - Firewall: iptables, firewalld, ufw
+  - Remote access: ssh, scp, rsync
+  - File transfer: curl, wget
+
+Domain 5: Service Configuration (20%)
+  - Web servers: Nginx, Apache (install, configure, virtual hosts)
+  - Database: PostgreSQL/MySQL (install, configure, backup)
+  - DNS: /etc/hosts, /etc/resolv.conf, systemd-resolved
+  - NTP: chronyd, timedatectl
+  - Logging: rsyslog, journalctl, logrotate
+
+Domain 6: Storage Management (13%)
+  - Disk partitioning: fdisk, parted, gdisk (GPT)
+  - Filesystems: mkfs.ext4, mkfs.xfs, mount, umount, /etc/fstab
+  - LVM: pvcreate, vgcreate, lvcreate, lvextend, resize2fs
+  - RAID: mdadm (software RAID concepts)
+  - Swap: mkswap, swapon, swapoff
+  - Filesystem check: fsck, xfs_repair
+
+FILE SYSTEM NAVIGATION
+cd
+pwd
+tree
+find
+locate
+which
+whereis
+type
+dirs
+pushd
+popd
+
+FILE OPERATIONS
+touch
+mkdir
+cp
+mv
+rm
+rmdir
+ln
+stat
+file
+basename
+dirname
+realpath
+readlink
+shred
+
+FILE VIEWING & EDITING
+cat
+less
+more
+head
+tail
+nl
+tac
+rev
+xxd
+hexdump
+
+FILE PERMISSIONS
+chmod
+chown
+chgrp
+umask
+getfacl
+setfacl
+lsattr
+chattr
+
+PROCESS MANAGEMENT
+ps
+top
+htop
+kill
+pkill
+killall
+nice
+renice
+bg
+fg
+jobs
+nohup
+disown
+pgrep
+pidof
+watch
+
+SYSTEM INFORMATION
+uname
+hostname
+uptime
+who
+w
+last
+dmesg
+lsb_release
+free
+df
+du
+lscpu
+lspci
+lsusb
+lsblk
+fdisk
+mount
+lsmod
+modinfo
+sysctl
+
+NETWORKING
+ping
+curl
+wget
+ssh
+scp
+rsync
+netstat
+ss
+ip
+ifconfig
+nslookup
+dig
+host
+traceroute
+nc
+nmap
+tcpdump
+iptraf
+route
+arp
+iwconfig
+
+USER & GROUP MANAGEMENT
+useradd
+usermod
+userdel
+passwd
+groupadd
+groupmod
+groupdel
+id
+whoami
+su
+sudo
+chage
+lastlog
+newgrp
+groups
+
+PACKAGE MANAGEMENT
+apt
+apt-get
+apt-cache
+yum
+dnf
+pacman
+snap
+flatpak
+dpkg
+rpm
+pip
+npm
+
+ARCHIVE & COMPRESSION
+tar
+gzip
+gunzip
+zip
+unzip
+bzip2
+bunzip2
+xz
+unxz
+zcat
+zless
+zgrep
+
+TEXT PROCESSING
+grep
+egrep
+fgrep
+sed
+awk
+cut
+sort
+uniq
+tr
+paste
+join
+split
+comm
+fmt
+pr
+
+SHELL & SCRIPTING
+echo
+printf
+export
+alias
+source
+env
+set
+unset
+history
+type
+read
+test
+sleep
+date
+tee
+seq
+expr
+xargs
+eval
+exec
+
+DISK & STORAGE
+dd
+fsck
+mkfs
+blkid
+parted
+lsblk
+fdisk
+mount
+umount
+losetup
+swapon
+swapoff
+sync
+iotop
+iostat
+
+LOG & MONITORING
+journalctl
+tail -f
+multitail
+lsof
+strace
+ltrace
+vmstat
+sar
+iostat
+mpstat
+netstat
+dstat
+perf
+timeout
+script
+
+SERVICE MANAGEMENT
+systemctl
+service
+chkconfig
+update-rc.d
+journalctl
+systemd-analyze
+systemd-cgls
+systemd-cgtop
+loginctl
+timedatectl
+hostnamectl
+localectl
+
+SECURITY & ENCRYPTION
+gpg
+openssl
+ssh-keygen
+ssh-agent
+ssh-add
+chroot
+iptables
+ufw
+firewalld
+fail2ban-client
+selinuxenabled
+getenforce
+setenforce
+semanage
+restorecon
+
+BOOT & KERNEL MANAGEMENT
+grub-mkconfig
+grub-install
+lsmod
+modprobe
+modinfo
+rmmod
+insmod
+depmod
+dracut
+update-initramfs
+
+LVM MANAGEMENT
+pvcreate
+pvdisplay
+pvs
+vgcreate
+vgdisplay
+vgs
+lvcreate
+lvdisplay
+lvs
+lvextend
+lvreduce
+lvremove
+vgremove
+pvremove
+
+FIREWALL MANAGEMENT
+iptables
+firewall-cmd
+ufw
+
+SCHEDULED TASKS
+crontab
+at
+atq
+atrm
+
+SYSTEM RESCUE & RECOVERY
+systemctl rescue
+systemctl emergency
+fsck
+xfs_repair
+
+SELINUX & APPARMOR
+getenforce
+setenforce
+sestatus
+chcon
+restorecon
+semanage
+getsebool
+setsebool
+aa-status
+aa-complain
+aa-enforce
+
+-------------------------------------------------------------------------------
+FILE SYSTEM NAVIGATION
+Commands for browsing directories, locating files, and understanding the
+filesystem layout. These are the most-used commands in daily Linux work.
+
+ls
+List directory contents — files, folders, permissions, sizes, and timestamps.
+The most frequently used command in any Linux session.
+
+Usage
+  ls [OPTIONS]... [FILE]...
+
+Examples
+  # List files in current directory
+  ls
+
+  # List all files including hidden (dotfiles)
+  ls -la
+
+  # List files sorted by modification time (newest first)
+  ls -lt
+
+  # List with human-readable sizes
+  ls -lh
+
+  # List recursively with subdirectories
+  ls -lR
+
+  # List only directories
+  ls -d */
+
+  # List files sorted by size (largest first)
+  ls -lS
+
+  # List with colorized output
+  ls --color=auto
+
+  # List inode numbers
+  ls -li
+
+  # List one file per line
+  ls -1
+
+Flags
+  -a, --all                  Do not ignore entries starting with .
+  -l                         Long format (permissions, owner, size, date)
+  -h, --human-readable       Print sizes in human readable format (e.g., 1K, 234M, 2G)
+  -t                         Sort by modification time, newest first
+  -r, --reverse              Reverse order while sorting
+  -R, --recursive            List subdirectories recursively
+  -S                         Sort by file size, largest first
+  -i, --inode                Print the index number of each file
+  -d, --directory            List directories themselves, not their contents
+  -1                         List one file per line
+  --color[=WHEN]             Colorize output: always, never, auto
+  -F, --classify             Append indicator (one of */=>@|) to entries
+
+cd
+Change the current working directory. Navigates the filesystem tree.
+The cd command is a shell built-in, not an external binary.
+
+Usage
+  cd [DIRECTORY]
+
+Examples
+  # Go to home directory
+  cd ~
+
+  # Go to previous directory
+  cd -
+
+  # Go to parent directory
+  cd ..
+
+  # Go to a specific absolute path
+  cd /var/log/nginx
+
+  # Go to a specific relative path
+  cd ../../anihpj/jobpost
+
+  # Go to the home directory of user 'anihpj'
+  cd ~anihpj
+
+  # Go to the directory you were in before the last cd
+  cd -
+
+  # CDPATH: search paths for cd (export CDPATH=.:~:/var)
+  cd nginx
+
+Notes
+  cd is a shell builtin — no man page exists. Use `help cd` in bash.
+  CDPATH environment variable defines search paths for cd.
+  OLDPWD stores the previous directory (used by `cd -`).
+
+pwd
+Print Working Directory — displays the absolute path of the current directory.
+Essential for scripts to know their execution context.
+
+Usage
+  pwd [-LP]
+
+Examples
+  # Print current directory
+  pwd
+
+  # Print physical directory (resolve symlinks)
+  pwd -P
+
+  # Print logical directory (preserve symlinks)
+  pwd -L
+
+  # Store in a variable for scripts
+  SCRIPT_DIR=$(pwd)
+
+  # Print current directory and list contents
+  echo "Currently in: $(pwd)" && ls -l
+
+Flags
+  -L, --logical   Use PWD from environment, even if it contains symlinks
+  -P, --physical  Avoid all symlinks and print the physical path
+
+tree
+Display directory structure as a tree. Shows nested subdirectories and files
+in a visual hierarchy. May need installation: `apt install tree` / `brew install tree`.
+
+Usage
+  tree [OPTIONS] [DIRECTORY]
+
+Examples
+  # Show directory tree
+  tree
+
+  # Show only directories
+  tree -d
+
+  # Limit depth to 2 levels
+  tree -L 2
+
+  # Show with file sizes
+  tree -h
+
+  # Show hidden files too
+  tree -a
+
+  # Show only directories matching pattern
+  tree -d -P "jobpost*"
+
+  # Output as JSON for programmatic use
+  tree -J
+
+  # Show permissions and owner
+  tree -pug
+
+Flags
+  -a            All files (including hidden)
+  -d            Directories only
+  -L level      Max display depth
+  -h            Human-readable file sizes
+  -P pattern    List only files matching pattern
+  -I pattern    Do not list files matching pattern
+  -J            JSON output
+  -p            Print file permissions
+  -u            Print file owner
+  -g            Print file group
+  -s            Print file size in bytes
+  -F            Append / = * @ | indicators
+
+find
+Search for files and directories in a directory hierarchy. Powerful filtering
+by name, type, size, modification time, permissions, and more.
+
+Usage
+  find [PATH...] [EXPRESSION]
+
+Examples
+  # Find all .py files in /home/anihpj/jobpost
+  find /home/anihpj/jobpost -name "*.py"
+
+  # Find files modified in the last 7 days
+  find . -type f -mtime -7
+
+  # Find files larger than 100MB
+  find / -type f -size +100M 2>/dev/null
+
+  # Find and delete all .log files older than 30 days
+  find /var/log -name "*.log" -mtime +30 -delete
+
+  # Find empty directories and remove them
+  find . -type d -empty -delete
+
+  # Find files owned by user 'anihpj'
+  find /home -user anihpj -type f
+
+  # Find files with 777 permissions
+  find /var/www -type f -perm 0777
+
+  # Find and execute a command on each result
+  find . -name "*.pyc" -exec rm {} \;
+
+  # Find files modified between two dates
+  find . -newermt "2026-01-01" ! -newermt "2026-06-01" -type f
+
+  # Find all directories named "templates"
+  find /home/anihpj -type d -name "templates"
+
+Flags / Expressions
+  -name PATTERN          File name (case sensitive, supports wildcards)
+  -iname PATTERN         File name (case insensitive)
+  -type TYPE             File type: f (file), d (directory), l (symlink)
+  -size [+-]N[ckMG]      File size: +100M (more than 100MB), -10k (less than 10KB)
+  -mtime [+-]N           Modified N*24 hours ago: -7 (last 7 days), +30 (older than 30)
+  -atime [+-]N           Accessed N*24 hours ago
+  -ctime [+-]N           Status changed N*24 hours ago
+  -mmin [+-]N            Modified N minutes ago
+  -user NAME             Owned by user NAME
+  -group NAME            Owned by group NAME
+  -perm MODE             Permission bits exactly MODE: /MODE (any bit), -MODE (all bits)
+  -empty                 File/directory is empty
+  -newer FILE            Modified more recently than FILE
+  -maxdepth N            Descend at most N directory levels
+  -mindepth N            Descend at least N directory levels
+  -exec CMD {} \;        Execute CMD on each matched file
+  -delete                Delete matched files (use with caution)
+  -print0                Print with null delimiter (for xargs -0)
+
+locate
+Find files by name using a pre-built database. Much faster than find but
+depends on updatedb running regularly. `apt install mlocate`.
+
+Usage
+  locate [OPTIONS] PATTERN
+
+Examples
+  # Find all Python files on the system
+  locate "*.py"
+
+  # Case-insensitive search
+  locate -i "anihpj"
+
+  # Limit results to 20
+  locate -l 20 "jobpost"
+
+  # Show count of matching entries
+  locate -c "*.log"
+
+  # Search only existing files (ignore deleted ones)
+  locate -e "settings.py"
+
+  # Update the locate database (requires root)
+  sudo updatedb
+
+Flags
+  -i            Case-insensitive search
+  -l, --limit N Limit output to N entries
+  -c, --count   Print number of matches instead of filenames
+  -e, --existing Print only entries that exist at the moment locate is run
+  -r, --regexp  Search with basic regex
+  --regex        Search with extended regex
+
+which
+Show the full path of shell commands. Determines which executable would
+run if a command is typed. Shell built-in in most shells.
+
+Usage
+  which [OPTIONS] PROGRAM...
+
+Examples
+  # Find location of python3
+  which python3
+
+  # Show all matching executables in PATH
+  which -a python
+
+  # Find location of multiple commands
+  which python node npm docker
+
+  # Show only if executable (no aliases/shell builtins)
+  which node
+
+Flags
+  -a, --all    Print all matching executables in PATH, not just the first
+
+whereis
+Locate the binary, source, and manual page files for a command.
+Searches standard Linux directories, not PATH.
+
+Usage
+  whereis [OPTIONS] COMMAND
+
+Examples
+  # Find binary, source, and man for nginx
+  whereis nginx
+
+  # Show only the binary path
+  whereis -b python3
+
+  # Show only manual pages
+  whereis -m ls
+
+  # Locate multiple commands
+  whereis python node docker
+
+Flags
+  -b            Search only for binaries
+  -m            Search only for manual sections
+  -s            Search only for sources
+  -B DIRS       Limit binary search to DIRS
+  -M DIRS       Limit manual search to DIRS
+  -S DIRS       Limit source search to DIRS
+
+-------------------------------------------------------------------------------
+FILE OPERATIONS
+Commands for creating, copying, moving, deleting, and linking files and
+directories. Core file manipulation tasks used throughout any workflow.
+
+touch
+Create empty files or update file timestamps. Commonly used to create
+placeholder files or trigger file watchers in development workflows.
+
+Usage
+  touch [OPTIONS] FILE...
+
+Examples
+  # Create an empty file
+  touch newfile.txt
+
+  # Create multiple files at once
+  touch index.html style.css app.js
+
+  # Update the modification time of an existing file
+  touch existing_file.txt
+
+  # Set a specific timestamp (e.g., Jan 1, 2026)
+  touch -t 202601010000 myfile.txt
+
+  # Create a file without changing it if it already exists
+  touch myapp.log
+
+  # Create a sequence of files
+  touch jobpost_{1..10}.txt
+
+Flags
+  -a                     Change only the access time
+  -m                     Change only the modification time
+  -c, --no-create        Do not create any files
+  -d, --date=STRING      Parse STRING and use it instead of current time
+  -t STAMP               Use [[CC]YY]MMDDhhmm[.ss] instead of current time
+  -r, --reference=FILE   Use this file's times instead of current time
+
+mkdir
+Make directories — create one or more new folders. Essential for organizing
+project structures, creating temporary workspaces, and setting up deployments.
+
+Usage
+  mkdir [OPTIONS] DIRECTORY...
+
+Examples
+  # Create a single directory
+  mkdir new_project
+
+  # Create nested directories (parent directories too)
+  mkdir -p /home/anihpj/jobpost/static/css
+
+  # Create directory with specific permissions
+  mkdir -m 755 public_assets
+
+  # Create multiple directories at once
+  mkdir src tests docs config
+
+  # Create a directory and print what was created
+  mkdir -v /tmp/anihpj_backup
+
+  # Create a directory structure for a Django project
+  mkdir -p ~/anihpj/{jobpost/app,jobpost/templates,static/{css,js,img}}
+
+Flags
+  -p, --parents     Make parent directories as needed; no error if existing
+  -m, --mode=MODE   Set file mode (permissions) as with chmod
+  -v, --verbose     Print a message for each created directory
+
+cp
+Copy files and directories. One of the most fundamental file operations.
+Creates duplicates of files, preserving or changing attributes.
+
+Usage
+  cp [OPTIONS] SOURCE... DEST
+
+Examples
+  # Copy a single file
+  cp file.txt backup.txt
+
+  # Copy a file to a directory
+  cp app.py /home/anihpj/jobpost/
+
+  # Copy recursively (directories and contents)
+  cp -r /var/www/html /backup/html_backup
+
+  # Copy preserving all attributes (mode, ownership, timestamps)
+  cp -a source_dir/ dest_dir/
+
+  # Copy with progress and verbose output
+  cp -rv large_folder/ /mnt/backup/
+
+  # Copy only when source is newer
+  cp -u src/*.py dest/
+
+  # Interactive copy (prompt before overwrite)
+  cp -i important.txt backup/
+
+  # Copy multiple files to a directory
+  cp file1.txt file2.txt file3.txt /target/dir/
+
+Flags
+  -a, --archive           Archive mode: preserve all attributes, recurse
+  -r, -R, --recursive     Copy directories recursively
+  -u, --update            Copy only when SOURCE is newer or missing
+  -v, --verbose           Explain what is being done
+  -i, --interactive       Prompt before overwrite
+  -f, --force             Force copy (remove existing dest if cannot open)
+  -p                      Preserve mode, ownership, timestamps
+  -l, --link              Hard link files instead of copying
+  -s, --symbolic-link     Make symbolic links instead of copying
+  -n, --no-clobber        Do not overwrite an existing file
+  --parents               Use full source path under destination
+
+mv
+Move (rename) files and directories. Used for reorganizing files, renaming,
+and relocating content between directories.
+
+Usage
+  mv [OPTIONS] SOURCE... DEST
+
+Examples
+  # Rename a file
+  mv oldname.txt newname.txt
+
+  # Move a file to a directory
+  mv document.txt /home/anihpj/docs/
+
+  # Move multiple files to a directory
+  mv *.log /var/log/archive/
+
+  # Interactive move (prompt before overwrite)
+  mv -i draft.txt final.txt
+
+  # Move only when source is newer
+  mv -u updated_file.txt /backup/
+
+  # Move directory and rename
+  mv /tmp/build_output /home/anihpj/deploy/
+
+  # Verbose — print each move action
+  mv -v *.csv /processed/
+
+Flags
+  -f, --force      Do not prompt before overwriting
+  -i, --interactive Prompt before overwrite
+  -n, --no-clobber Do not overwrite an existing file
+  -u, --update     Move only when SOURCE is newer or dest is missing
+  -v, --verbose    Explain what is being done
+  -t, --target-directory=DIRECTORY  Move all SOURCEs into DIRECTORY
+
+rm
+Remove files or directories. Permanent deletion — use with caution.
+Once deleted, files do not go to a trash bin.
+
+Usage
+  rm [OPTIONS] FILE...
+
+Examples
+  # Remove a single file
+  rm old_file.txt
+
+  # Remove multiple files
+  rm file1.txt file2.txt file3.txt
+
+  # Remove directory and all contents (recursive force)
+  rm -rf old_project/
+
+  # Remove with confirmation for each file
+  rm -i *.log
+
+  # Remove all .pyc files recursively
+  find . -name "*.pyc" -exec rm {} \;
+
+  # Remove empty directory
+  rmdir empty_folder/
+
+  # Verbose removal — print each file being deleted
+  rm -v *.tmp
+
+  # Dry-run safe removal (use find first)
+  find . -name "*.tmp" -type f
+
+Flags
+  -f, --force           Ignore nonexistent files, never prompt
+  -i                    Prompt before every removal
+  -I                    Prompt once before removing more than 3 files or recursive
+  -r, -R, --recursive   Remove directories and their contents recursively
+  -d, --dir             Remove empty directories
+  -v, --verbose         Explain what is being done
+  --one-file-system     When recursive, skip directories on different filesystems
+
+rmdir
+Remove empty directories only. Safe alternative to rm -rf for directories
+that must be empty. Fails if directory contains files.
+
+Usage
+  rmdir [OPTIONS] DIRECTORY...
+
+Examples
+  # Remove an empty directory
+  rmdir empty_folder
+
+  # Remove nested empty directories
+  rmdir -p parent/child/grandchild
+
+  # Verbose output
+  rmdir -v old_temp
+
+Flags
+  -p, --parents   Remove DIRECTORY and its ancestors (if empty)
+  -v, --verbose   Print a message for each removed directory
+  --ignore-fail-on-non-empty  Ignore each failure solely because a dir is non-empty
+
+ln
+Create links between files. Hard links share the same inode; symbolic links
+(symlinks) are pointers to another file path.
+
+Usage
+  ln [OPTIONS] TARGET [LINK_NAME]
+
+Examples
+  # Create a symbolic link
+  ln -s /var/www/html /home/anihpj/www
+
+  # Create a hard link
+  ln /etc/nginx/nginx.conf /backup/nginx.conf
+
+  # Create a symlink to a file in current directory
+  ln -s ../shared/config.json config.json
+
+  # Force creation (overwrite existing)
+  ln -sf /new/path/app /usr/local/bin/app
+
+  # Show what links exist for a file
+  ls -l *.so
+
+  # Create symlinks for Django static files
+  ln -s /home/anihpj/jobpost/static /var/www/static
+
+Flags
+  -s, --symbolic        Create symbolic links instead of hard links
+  -f, --force           Remove existing destination files
+  -n, --no-dereference  Treat LINK_NAME as normal file if it is a symlink to dir
+  -v, --verbose         Print name of each linked file
+  -r, --relative        Create symbolic links relative to link location
+
+-------------------------------------------------------------------------------
+FILE VIEWING & EDITING
+Commands for reading, searching, and displaying file contents without
+opening a full editor. Used constantly for configuration inspection,
+log analysis, and debugging.
+
+cat
+Concatenate and display file contents. The simplest and most common way
+to view an entire file. Also used to combine multiple files.
+
+Usage
+  cat [OPTIONS] [FILE...]
+
+Examples
+  # Display a file
+  cat app.py
+
+  # Display multiple files concatenated
+  cat header.txt body.txt footer.txt > full.html
+
+  # Number all output lines
+  cat -n settings.py
+
+  # Show non-printing characters (tabs as ^I, line ends as $)
+  cat -A config.ini
+
+  # Create a file by typing (Ctrl+D to save)
+  cat > newfile.txt
+
+  # Append to a file
+  cat extra_content.txt >> main.txt
+
+  # Display file with line numbers for code review
+  cat -n views.py | head -50
+
+  # Pass file content to a command via pipe
+  cat urls.txt | xargs curl -O
+
+Flags
+  -n, --number             Number all output lines
+  -b, --number-nonblank    Number nonempty output lines, overrides -n
+  -s, --squeeze-blank      Suppress repeated empty output lines
+  -A, --show-all           Show all non-printing characters (equivalent to -vET)
+  -E, --show-ends          Display $ at end of each line
+  -T, --show-tabs          Display TAB characters as ^I
+  -v, --show-nonprinting   Use ^ and M- notation (except LFD and TAB)
+
+less
+View file contents one page at a time with backward navigation.
+More powerful than 'more'. Essential for log file analysis and config review.
+
+Usage
+  less [OPTIONS] FILE
+
+Examples
+  # View a file with pagination
+  less /var/log/syslog
+
+  # View with line numbers
+  less -N app.py
+
+  # Search forward for "ERROR" (press /ERROR then Enter)
+  less /var/log/nginx/error.log
+
+  # Follow mode — like tail -f (press F)
+  less /var/log/jobpost/app.log
+
+  # Open multiple files, navigate with :n and :p
+  less file1.log file2.log file3.log
+
+  # View command output through less
+  ps aux | less
+
+Navigation Keys (inside less)
+  Space / f       Forward one page
+  b               Backward one page
+  g               Go to beginning
+  G               Go to end
+  /pattern        Search forward
+  ?pattern        Search backward
+  n               Next match
+  N               Previous match
+  F               Follow mode (like tail -f)
+  q               Quit
+  :n              Next file
+  :p              Previous file
+  =               Show file info (line numbers, percentage)
+
+Flags
+  -N              Show line numbers
+  -S              Chop long lines (don't wrap)
+  -F              Quit if entire file fits on first screen
+  -R              Interpret ANSI color escape sequences
+  -i              Ignore case in searches
+  -M              Show more verbose prompt
+  +F              Start in follow mode
+  +/PATTERN       Start at first occurrence of PATTERN
+
+head
+Output the first part of files. Default 10 lines. Used for quickly
+checking the beginning of log files, CSVs, or configuration files.
+
+Usage
+  head [OPTIONS] [FILE...]
+
+Examples
+  # Show first 10 lines (default)
+  head app.log
+
+  # Show first 50 lines
+  head -n 50 /var/log/syslog
+
+  # Show first 1KB of a file
+  head -c 1024 large_file.bin
+
+  # Show first lines of all .py files in a directory
+  head -n 5 *.py
+
+  # Show top of a CSV to see headers
+  head -n 1 data_export.csv
+
+  # Quiet mode — no filename headers
+  head -q -n 3 *.txt
+
+Flags
+  -n, --lines=[-]NUM     Print the first NUM lines (default 10)
+  -c, --bytes=[-]NUM     Print the first NUM bytes
+  -q, --quiet            Never print file name headers
+  -v, --verbose          Always print file name headers
+  -z, --zero-terminated  Line delimiter is NUL, not newline
+
+tail
+Output the last part of files. Default 10 lines. Indispensable for
+real-time log monitoring with the -f (follow) flag.
+
+Usage
+  tail [OPTIONS] [FILE...]
+
+Examples
+  # Show last 10 lines (default)
+  tail app.log
+
+  # Show last 100 lines
+  tail -n 100 /var/log/nginx/access.log
+
+  # Follow a log file in real time (most common use)
+  tail -f /var/log/jobpost/app.log
+
+  # Follow and retry if file becomes inaccessible
+  tail -F /var/log/jobpost/app.log
+
+  # Show lines starting from line 50
+  tail -n +50 file.txt
+
+  # Monitor multiple log files simultaneously
+  tail -f /var/log/nginx/access.log /var/log/nginx/error.log
+
+  # Tail the last 50 bytes of a binary file
+  tail -c 50 data.bin
+
+Flags
+  -n, --lines=[+]NUM     Output the last NUM lines (default 10)
+  -c, --bytes=[+]NUM     Output the last NUM bytes
+  -f, --follow           Output appended data as the file grows
+  -F                     Same as --follow=name --retry (follow by name)
+  --retry                Keep trying to open a file if it is inaccessible
+  -q, --quiet            Never print file name headers
+  -v, --verbose          Always print file name headers
+
+-------------------------------------------------------------------------------
+PROCESS MANAGEMENT
+Commands for viewing, controlling, and signaling running processes.
+Essential for monitoring server health, killing stuck processes,
+and managing background jobs.
+
+ps
+Report a snapshot of current processes. Shows PID, CPU, memory, and
+process state. The universal process inspection tool.
+
+Usage
+  ps [OPTIONS]
+
+Examples
+  # Show all running processes
+  ps aux
+
+  # Show processes for a specific user
+  ps -u anihpj
+
+  # Show process tree (parent-child relationships)
+  ps auxf
+
+  # Show processes sorted by memory usage
+  ps aux --sort=-%mem | head -10
+
+  # Show processes sorted by CPU usage
+  ps aux --sort=-%cpu | head -10
+
+  # Find process by name
+  ps aux | grep nginx
+
+  # Show full command lines (not truncated)
+  ps auxww
+
+  # Show custom columns
+  ps -eo pid,ppid,user,%cpu,%mem,cmd --sort=-%cpu | head
+
+  # Show processes in a specific container
+  ps aux | grep "jobpost"
+
+  # Count running Apache workers
+  ps aux | grep apache | wc -l
+
+Flags
+  a           Show processes for all users (BSD style)
+  u           User-oriented format (BSD style)
+  x           Show processes without controlling terminal (BSD style)
+  -e          Select all processes (standard syntax)
+  -f          Full format listing (standard syntax)
+  -o FORMAT   User-defined format (e.g., -o pid,user,%cpu,cmd)
+  --sort      Sort by column (e.g., --sort=-%mem)
+  -u USER     Show processes for USER
+  -p PID      Select by PID
+  -C CMD      Select by command name
+  -H          Show process hierarchy (tree)
+
+top
+Display dynamic real-time view of running processes. Interactive process
+monitor showing CPU, memory, load average, and per-process stats.
+The go-to tool for live system performance monitoring.
+
+Usage
+  top [OPTIONS]
+
+Examples
+  # Start top
+  top
+
+  # Show processes for user 'anihpj' only
+  top -u anihpj
+
+  # Update every 2 seconds
+  top -d 2
+
+  # Batch mode (5 iterations, output to file)
+  top -b -n 5 > top_snapshot.txt
+
+  # Sort by memory (press M inside top) or CPU (press P)
+  top
+
+  # Show specific PIDs
+  top -p 1234,5678
+
+Interactive Keys (inside top)
+  1       Toggle individual CPU core display
+  P       Sort by CPU usage
+  M       Sort by memory usage
+  T       Sort by running time
+  k       Kill a process (prompts for PID and signal)
+  r       Renice a process
+  c       Toggle full command line
+  q       Quit
+  u       Filter by user
+  V       Forest view (parent-child relationships)
+  z       Toggle color/monochrome
+  d       Change update interval (in seconds)
+
+Flags
+  -d SECONDS    Update interval (default ~3 seconds)
+  -u USER       Show only USER's processes
+  -p PID        Monitor specific PIDs (comma-separated)
+  -b            Batch mode (non-interactive, for scripting)
+  -n NUM        Number of iterations in batch mode
+  -H            Show threads as processes
+  -c            Toggle command line/program name
+  -o FIELD      Sort by FIELD (e.g., -o %MEM)
+
+kill
+Send a signal to a process. Despite the name, kill sends any signal —
+SIGTERM (15) by default for graceful termination, or SIGKILL (9) to
+force-kill a stuck process.
+
+Usage
+  kill [OPTIONS] PID...
+
+Examples
+  # Gracefully terminate a process
+  kill 1234
+
+  # Force kill (SIGKILL — cannot be caught or ignored)
+  kill -9 1234
+
+  # Reload configuration (SIGHUP — common for daemons)
+  kill -HUP 1234
+
+  # List all available signal names
+  kill -l
+
+  # Kill by job number (shell job control)
+  kill %1
+
+  # Send signal by name
+  kill -SIGTERM 5678
+
+  # Kill all processes matching a name
+  killall -15 nginx
+
+Signals Cheat Sheet
+  SIGHUP  (1)   Hangup — reload configuration (daemons)
+  SIGINT  (2)   Interrupt — same as Ctrl+C
+  SIGKILL (9)   Kill — force quit (cannot be caught)
+  SIGTERM (15)  Terminate — graceful shutdown (default)
+  SIGSTOP (19)  Stop process (cannot be caught)
+  SIGCONT (18)  Continue paused process
+  SIGUSR1 (10)  User-defined signal 1
+  SIGUSR2 (12)  User-defined signal 2
+
+Flags
+  -l, --list              List signal names
+  -s, --signal SIGNAL     Specify signal name or number
+  -L, --table             List signal names and numbers in a table
+
+-------------------------------------------------------------------------------
+SYSTEM INFORMATION
+Commands for inspecting system state: OS version, uptime, memory, disk space,
+hardware info, and kernel messages. Used for troubleshooting, capacity planning,
+and configuration verification.
+
+uname
+Print system information — kernel name, hostname, kernel release,
+kernel version, machine hardware name, and OS.
+
+Usage
+  uname [OPTIONS]
+
+Examples
+  # Print kernel name
+  uname
+
+  # Print all system information
+  uname -a
+
+  # Print kernel release
+  uname -r
+
+  # Print machine hardware name (e.g., x86_64)
+  uname -m
+
+  # Print OS name (e.g., GNU/Linux)
+  uname -o
+
+  # One-liner: kernel version + architecture
+  echo "Kernel: $(uname -r), Arch: $(uname -m)"
+
+Flags
+  -a, --all                Print all information
+  -s, --kernel-name        Print kernel name
+  -n, --nodename           Print network node hostname
+  -r, --kernel-release     Print kernel release
+  -v, --kernel-version     Print kernel version
+  -m, --machine            Print machine hardware name
+  -p, --processor          Print processor type
+  -i, --hardware-platform  Print hardware platform
+  -o, --operating-system   Print operating system
+
+hostname
+Show or set the system hostname. Useful for identifying which server
+you're working on in multi-server environments.
+
+Usage
+  hostname [OPTIONS]
+
+Examples
+  # Show the current hostname
+  hostname
+
+  # Show the fully qualified domain name (FQDN)
+  hostname -f
+
+  # Show the IP address(es) of the host
+  hostname -I
+
+  # Show the DNS domain name
+  hostname -d
+
+  # Show all available hostname info
+  hostnamectl status
+
+Flags
+  -a, --alias       Alias name
+  -d, --domain      DNS domain name
+  -f, --fqdn, --long  Fully qualified domain name
+  -i, --ip-address  IP address(es) of the host
+  -I, --all-ip-addresses  All IP addresses
+  -s, --short       Short hostname
+
+uptime
+Show how long the system has been running. Also displays current time,
+number of logged-in users, and load average for 1, 5, and 15 minutes.
+
+Usage
+  uptime [OPTIONS]
+
+Examples
+  # Show uptime
+  uptime
+
+  # Show only the uptime duration (since when)
+  uptime -s
+
+  # Pretty-print uptime
+  uptime -p
+
+Output Interpretation
+  14:30:01 up 45 days, 3:22, 3 users, load average: 0.15, 0.10, 0.08
+  # 0.15 = 1-min load avg, 0.10 = 5-min, 0.08 = 15-min
+  # Load < CPU cores = normal; Load > CPU cores = overload
+
+Flags
+  -p, --pretty   Show uptime in pretty format
+  -s, --since    Show system up since (YYYY-MM-DD HH:MM:SS)
+
+free
+Display amount of free and used memory in the system. Shows total RAM,
+swap, buffers, and cache. Essential for memory troubleshooting.
+
+Usage
+  free [OPTIONS]
+
+Examples
+  # Show memory in human-readable format
+  free -h
+
+  # Show in megabytes
+  free -m
+
+  # Show in gigabytes
+  free -g
+
+  # Continuous display (every 2 seconds)
+  free -h -s 2
+
+  # Show wide output with more columns
+  free -hw
+
+  # Show a single snapshot and exit
+  free -h -c 1
+
+Flags
+  -h, --human         Human-readable output
+  -m                  Show output in megabytes
+  -g                  Show output in gigabytes
+  -s, --seconds SEC   Repeat every SEC seconds
+  -c, --count COUNT   Repeat COUNT times only
+  -w, --wide          Wide output mode
+  -t, --total         Show a line with totals
+
+df
+Report file system disk space usage. Shows total, used, and available
+space for all mounted filesystems.
+
+Usage
+  df [OPTIONS] [FILE...]
+
+Examples
+  # Show all filesystems in human-readable format
+  df -h
+
+  # Show inode usage instead of block usage
+  df -i
+
+  # Show only local filesystems (exclude NFS, etc.)
+  df -hl
+
+  # Show filesystem type
+  df -T
+
+  # Check disk space for a specific mount
+  df -h /var/log
+
+  # Exclude tmpfs and dev filesystems
+  df -h -x tmpfs -x devtmpfs
+
+  # Show only specific filesystem types
+  df -t ext4 -t xfs
+
+Flags
+  -h, --human-readable   Print sizes in human readable format
+  -i, --inodes           List inode info instead of block usage
+  -l, --local            Limit listing to local filesystems
+  -T, --print-type       Print filesystem type
+  -t, --type=TYPE        Limit listing to TYPE filesystems
+  -x, --exclude-type=TYPE  Exclude TYPE filesystems
+  --total                Produce a grand total
+
+du
+Estimate file space usage — summarize disk usage of files/directories.
+Used to find what's consuming disk space.
+
+Usage
+  du [OPTIONS] [FILE...]
+
+Examples
+  # Show usage of current directory (summary)
+  du -sh .
+
+  # Show usage of each subdirectory (sorted largest first)
+  du -sh * | sort -rh | head -10
+
+  # Show usage with depth limit of 2
+  du -h --max-depth=2 /var/log
+
+  # Show total for a specific directory
+  du -sh /home/anihpj/jobpost/
+
+  # Find the 10 largest files in home directory
+  find /home/anihpj -type f -exec du -h {} + | sort -rh | head -10
+
+  # Show only totals for all subdirectories (depth 1)
+  du -h -d 1 /var
+
+Flags
+  -h, --human-readable   Print sizes in human readable format
+  -s, --summarize        Display only a total for each argument
+  -d, --max-depth=N      Print total for directories only N levels deep
+  -c, --total            Produce a grand total
+  --time                 Show time of last modification
+  --exclude=PATTERN      Exclude files matching PATTERN
+  -a, --all              Write counts for all files, not just directories
+  -L, --dereference      Dereference all symbolic links
+
+-------------------------------------------------------------------------------
+NETWORKING
+Commands for network diagnostics, data transfer, remote access, and
+service connectivity testing. Used daily for debugging connectivity,
+downloading files, and managing remote servers.
+
+ping
+Send ICMP ECHO_REQUEST to network hosts. Tests reachability, latency,
+and packet loss. The universal network connectivity test.
+
+Usage
+  ping [OPTIONS] DESTINATION
+
+Examples
+  # Ping a host continuously (Ctrl+C to stop)
+  ping google.com
+
+  # Send exactly 5 pings
+  ping -c 5 anihpj.com
+
+  # Ping with specific interval (0.5 seconds)
+  ping -i 0.5 192.168.1.1
+
+  # Ping with specific packet size (1000 bytes)
+  ping -s 1000 10.0.0.1
+
+  # Flood ping (requires root — for stress testing)
+  sudo ping -f localhost
+
+  # Audible ping (beep on response)
+  ping -a 8.8.8.8
+
+  # Ping and show timestamp
+  ping -D 8.8.8.8
+
+  # Timeout after 10 seconds
+  ping -w 10 10.0.0.1
+
+Flags
+  -c COUNT        Stop after sending COUNT packets
+  -i INTERVAL     Wait INTERVAL seconds between pings (default 1)
+  -s PACKETSIZE   Send PACKETSIZE bytes of data
+  -t TTL          Set Time To Live
+  -w DEADLINE     Timeout after DEADLINE seconds
+  -W TIMEOUT      Time to wait for a response in seconds
+  -f              Flood ping (root only)
+  -D              Print timestamp before each line
+  -q              Quiet output — only summary
+
+curl
+Transfer data from or to a server using various protocols (HTTP, HTTPS,
+FTP, SFTP, etc.). The swiss army knife for API testing, file downloads,
+and web debugging.
+
+Usage
+  curl [OPTIONS] URL
+
+Examples
+  # GET request (default)
+  curl https://api.anihpj.com/health
+
+  # GET with custom headers
+  curl -H "Authorization: Bearer TOKEN" https://api.anihpj.com/v1/users
+
+  # POST JSON data
+  curl -X POST https://api.anihpj.com/jobpost/create \
+    -H "Content-Type: application/json" \
+    -d '{"title":"DevOps Engineer","location":"Remote"}'
+
+  # Download a file (save with original name)
+  curl -O https://releases.anihpj.com/jobpost-latest.tar.gz
+
+  # Download with custom filename
+  curl -o jobpost.tar.gz https://releases.anihpj.com/jobpost-latest.tar.gz
+
+  # Follow redirects
+  curl -L https://bit.ly/anihpj-download
+
+  # Silent mode (no progress bar)
+  curl -s https://api.anihpj.com/status
+
+  # Show response headers only
+  curl -I https://anihpj.com
+
+  # Include response headers with body
+  curl -i https://api.anihpj.com/health
+
+  # Send file as request body
+  curl -X POST -d @data.json https://api.anihpj.com/import
+
+  # Verbose output for debugging
+  curl -v https://anihpj.com
+
+  # Test API response time
+  curl -w "\nTime: %{time_total}s\n" -o /dev/null -s https://api.anihpj.com
+
+Flags
+  -X, --request METHOD   HTTP method (GET, POST, PUT, DELETE, etc.)
+  -H, --header LINE      Custom header (can repeat)
+  -d, --data DATA        Send data in request body
+  -o, --output FILE      Write output to FILE
+  -O, --remote-name      Write output to file named as remote file
+  -L, --location         Follow redirects
+  -s, --silent           Silent mode (no progress/error messages)
+  -v, --verbose          Verbose output
+  -i, --include          Include response headers in output
+  -I, --head             Fetch headers only
+  -k, --insecure         Allow insecure TLS connections
+  -u, --user USER:PASS   Server user and password
+  -w, --write-out FORMAT Use output FORMAT after completion
+  -F, --form CONTENT     HTTP multipart POST (file upload)
+  --connect-timeout SEC  Max time for connection
+
+wget
+Non-interactive network downloader. Excellent for recursive downloads,
+mirroring websites, and reliable large-file downloads with retry.
+
+Usage
+  wget [OPTIONS] URL
+
+Examples
+  # Download a single file
+  wget https://example.com/file.tar.gz
+
+  # Download with custom output filename
+  wget -O jobpost.tar.gz https://example.com/release.tar.gz
+
+  # Continue a partially downloaded file
+  wget -c https://example.com/large_file.iso
+
+  # Download in background
+  wget -b https://example.com/huge_file.tar.gz
+
+  # Mirror an entire website
+  wget --mirror --convert-links --adjust-extension --page-requisites --no-parent https://docs.anihpj.com
+
+  # Limit download speed to 500KB/s
+  wget --limit-rate=500k https://example.com/file.tar.gz
+
+  # Retry on failure (10 times, 60 sec between retries)
+  wget --tries=10 --waitretry=60 https://unstable-server.com/file
+
+  # Download list of URLs from a file
+  wget -i urls.txt
+
+  # Download with authentication
+  wget --user=anihpj --password=secret https://private.anihpj.com/data
+
+Flags
+  -O FILE                Write to FILE instead of remote name
+  -c, --continue         Resume a partial download
+  -b, --background       Go to background after startup
+  -i, --input-file=FILE  Read URLs from FILE
+  --limit-rate=AMOUNT    Limit download speed (e.g., 500k, 2m)
+  -t, --tries=NUMBER     Set number of retries
+  --waitretry=SECONDS    Wait between retries
+  --mirror               Mirror site (equivalent to -r -N -l inf --no-remove-listing)
+  -r, --recursive        Recursive download
+  -l, --level=NUMBER     Maximum recursion depth
+  --user=USER            HTTP authentication username
+  --password=PASS        HTTP authentication password
+  -q, --quiet            Quiet (no output)
+  -nv, --no-verbose      Less verbose
+
+ssh
+OpenSSH remote login client. Securely connects to remote servers,
+executes commands remotely, and creates encrypted tunnels.
+The backbone of remote Linux administration.
+
+Usage
+  ssh [OPTIONS] [USER@]HOST [COMMAND]
+
+Examples
+  # Connect to a remote server
+  ssh anihpj@app-server.anihpj.com
+
+  # Connect with a specific port
+  ssh -p 2222 anihpj@staging.anihpj.com
+
+  # Connect with a specific identity file (private key)
+  ssh -i ~/.ssh/anihpj_key anihpj@10.0.1.50
+
+  # Execute a command remotely and exit
+  ssh anihpj@app-server "systemctl status jobpost"
+
+  # Execute multiple commands
+  ssh anihpj@app-server "cd /opt/jobpost && git pull && docker-compose restart"
+
+  # Copy a public key to remote server (passwordless SSH setup)
+  ssh-copy-id anihpj@app-server.anihpj.com
+
+  # Create an SSH tunnel (port forwarding)
+  ssh -L 5432:localhost:5432 anihpj@db-server.anihpj.com
+
+  # Run remote command and capture output locally
+  ssh anihpj@prod-server "cat /etc/nginx/nginx.conf" > nginx_backup.conf
+
+  # Force pseudo-terminal allocation
+  ssh -t anihpj@server "htop"
+
+  # Disable host key checking (temporary, for new hosts)
+  ssh -o StrictHostKeyChecking=no anihpj@new-server
+
+Flags
+  -p PORT                 Port to connect to on remote host
+  -i IDENTITY_FILE        Identity (private key) for public key auth
+  -l USER                 Login name
+  -v, -vv, -vvv           Verbose (more v = more detail — great for debugging)
+  -t                      Force pseudo-terminal allocation
+  -T                      Disable pseudo-terminal allocation
+  -N                      Do not execute a remote command (for tunnels)
+  -f                      Background ssh after password entry
+  -L [BIND:]PORT:HOST:PORT  Local port forwarding (tunnel)
+  -R [BIND:]PORT:HOST:PORT  Remote port forwarding
+  -D [BIND:]PORT            Dynamic SOCKS proxy
+  -A                      Enable agent forwarding
+  -X                      Enable X11 forwarding
+  -C                      Compress all data
+  -o OPTION               Pass a config option (e.g., -o StrictHostKeyChecking=no)
+
+rsync
+Fast, versatile remote (and local) file-copying tool. Uses delta-transfer
+algorithm to only transfer changed parts of files. Perfect for backups,
+deployments, and syncing directories.
+
+Usage
+  rsync [OPTIONS] SOURCE... DEST
+
+Examples
+  # Sync local directory to remote server
+  rsync -avz /home/anihpj/jobpost/ anihpj@server:/opt/jobpost/
+
+  # Sync from remote to local (backup)
+  rsync -avz anihpj@server:/var/log /backup/logs/
+
+  # Dry run — see what would be transferred
+  rsync -avzn /source/ /dest/
+
+  # Delete files on dest that don't exist on source (mirror)
+  rsync -avz --delete /source/ /dest/
+
+  # Show progress during transfer
+  rsync -avzh --progress large_file.tar.gz user@host:/backup/
+
+  # Exclude specific files/patterns
+  rsync -avz --exclude="*.pyc" --exclude="__pycache__/" /src/ /dest/
+
+  # Set bandwidth limit (KBps)
+  rsync -avz --bwlimit=1000 /source/ user@host:/dest/
+
+  # Resume partial transfer
+  rsync -avz --partial /source/ /dest/
+
+  # Compress during transfer
+  rsync -avz /source/ user@host:/dest/
+
+Flags
+  -a, --archive      Archive mode: preserve permissions, timestamps, symlinks, recurse
+  -v, --verbose      Verbose output
+  -z, --compress     Compress file data during transfer
+  -r, --recursive    Recurse into directories
+  -n, --dry-run      Show what would be transferred without doing it
+  -P                 Equivalent to --partial --progress
+  --progress         Show progress during transfer
+  --delete            Delete extraneous files from dest dirs
+  --exclude=PATTERN   Exclude files matching PATTERN
+  --bwlimit=RATE     Limit I/O bandwidth (KBytes/sec)
+  -h, --human-readable  Output numbers in human-readable format
+  -u, --update       Skip files that are newer on receiver
+  --partial          Keep partially transferred files
+  -e, --rsh=COMMAND   Specify remote shell (e.g., -e "ssh -p 2222")
+
+-------------------------------------------------------------------------------
+TEXT PROCESSING
+Commands for searching, filtering, transforming, and analyzing text files
+and streams. The core toolkit for log analysis, data wrangling, and
+shell scripting.
+
+grep
+Global Regular Expression Print — the most powerful text search tool in
+Linux and arguably the most-used command in any SRE/Platform Engineer's
+toolkit. Searches plain-text files and streams for lines matching a
+regular expression pattern.
+
+USED BY SREs DAILY FOR:
+  - Parsing application logs for errors during incidents
+  - Filtering ps/top output to find specific processes
+  - Auditing configuration files for security settings
+  - Searching codebases for deprecated function calls
+  - Extracting metrics from log files (p99 latency, error rates)
+  - Validating if a change was applied (grep config files)
+  - Chaining with pipes to build complex data pipelines
+
+Usage
+  grep [OPTIONS] PATTERN [FILE...]
+  command | grep [OPTIONS] PATTERN
+
+REGEX PATTERN REFERENCE (grep -E / egrep):
+  ^pattern       Line starts with pattern
+  pattern$       Line ends with pattern
+  ^$             Empty line
+  .              Any single character
+  a|b|c          a OR b OR c
+  [abc]          Any character in set
+  [^abc]         Any character NOT in set
+  [a-z]          Range (lowercase letters)
+  [0-9]          Range (digits)
+  a*             Zero or more of a
+  a+             One or more of a (ERE only)
+  a?             Zero or one of a (ERE only)
+  a{3}           Exactly 3 of a (ERE only)
+  a{2,5}         2 to 5 of a (ERE only)
+  \d             Digit (PCRE: grep -P)
+  \w             Word character (PCRE)
+  \s             Whitespace (PCRE)
+  \b             Word boundary (PCRE)
+
+Examples
+  # ── BASIC SEARCH ──────────────────────────────────────
+  # Search for an exact string
+  grep "ERROR" /lpj/jobpost/views.py
+
+  # Case-insensitive search (most common flag)
+  grep -i "error" app.log
+
+  # Show line numbers (essential for editors)
+  grep -n "def handle" /lpj/jobpost/views.py
+
+  # Search multiple files at once
+  grep "TODO" /lpj/jobpost/**/*.py
+
+  # ── CONTEXT LINES (CRITICAL FOR LOG ANALYSIS) ─────────
+  # Show 3 lines before each match
+  grep -B 3 "Exception" /lpj/jobpost/tests.py
+
+  # Show 3 lines after each match
+  grep -A 3 "Exception" /lpj/jobpost/tests.py
+
+  # Show 3 lines before AND after (context window)
+  grep -C 3 "Exception" /lpj/jobpost/tests.py
+
+  # ── INVERT MATCH ──────────────────────────────────────
+  # Exclude DEBUG lines from log view
+  grep -v "DEBUG" /lpj/jobpost/views.py
+
+  # Show only non-empty lines
+  grep -v "^$" config.ini
+
+  # Exclude comments and blank lines
+  grep -v "^#" /lpj/k8s/ingress/ingress.yaml | grep -v "^$"
+
+  # ── COUNTING ──────────────────────────────────────────
+  # Count ERROR occurrences (SRE: "how many errors today?")
+  grep -c "ERROR" /lpj/jobpost/views.py
+
+  # Count lines NOT matching (SRE: "how many non-200 responses?")
+  grep -vc "200" /lpj/k8s/ingress/ingress.yaml
+
+  # ── RECURSIVE SEARCH ──────────────────────────────────
+  # Search ALL files under a directory
+  grep -r "anihpj\.com" /lpj/k8s/
+
+  # Show only filenames with matches (no content)
+  grep -rl "TODO" /lpj/
+
+  # Search specific file types only
+  grep -r --include="*.py" "import os" /lpj/jobpost/
+
+  # ── REGEX PATTERNS ────────────────────────────────────
+  # Extended regex: match ERROR or WARN or CRITICAL
+  grep -E "ERROR|WARN|CRITICAL" /lpj/jobpost/views.py
+
+  # Lines starting with a timestamp
+  grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2}" app.log
+
+  # Find all IP addresses in a log file
+  grep -oE "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" access.log
+
+  # Find lines ending with a semicolon (Python ain't one of them)
+  grep ";$" /lpj/jobpost/static/**/*.js
+
+  # ── PIPE CHAINS (SRE BREAD & BUTTER) ─────────────────
+  # Top 5 IPs hitting the server (classic SRE one-liner)
+  grep -oE "^[0-9.]+" /lpj/k8s/ingress/ingress.yaml | sort | uniq -c | sort -rn | head -5
+
+  # Find all unique error types
+  grep -oP "Exception: \K\w+" /lpj/jobpost/tests.py | sort | uniq -c | sort -rn
+
+  # Check if a process is running
+  ps aux | grep "[n]ginx"    # The [n] trick excludes grep itself!
+
+  # Check disk usage for specific mount
+  df -h | grep "/lpj"
+
+  # ── BINARY & SPECIAL FILES ────────────────────────────
+  # Search binary files without "Binary file matches" messages
+  grep -a "password" /tmp/core.dump
+
+  # Search compressed log archives
+  zgrep "ERROR" /lpj/jobpost/views.py.*.gz
+
+  # ── FIXED STRINGS (NO REGEX) ─────────────────────────
+  # Search for literal string containing regex special chars
+  grep -F "[ERROR]" app.log       # Searches for literal [ERROR], not character class
+  fgrep "[ERROR]" app.log         # Same as grep -F
+
+  # ── WORD & LINE MATCHING ──────────────────────────────
+  # Match complete word only (not substrings)
+  grep -w "error" app.log    # Matches "error" but not "errors" or "terror"
+
+  # Match entire line exactly
+  grep -x "ERROR: Database connection failed" app.log
+
+  # ── OUTPUT FORMATTING ─────────────────────────────────
+  # Print only the matched text (not the whole line)
+  grep -o "ERROR" app.log | sort | uniq -c
+
+  # Print filename before each match (default with multiple files)
+  grep -H "pattern" /lpj/*/tests.py
+
+  # Suppress filename prefix
+  grep -h "pattern" /lpj/*/tests.py
+
+  # ── SCRIPTING ─────────────────────────────────────────
+  # Silent mode — just return exit code (0=found, 1=not found)
+  if grep -q "healthy" /tmp/health.txt; then
+      echo "Service is healthy"
+  else
+      echo "Service is DOWN!"
+  fi
+
+Flags
+  -i              Case-insensitive matching
+  -v              Invert match (show non-matching lines)
+  -r, -R          Recursive directory search
+  -n              Print line numbers
+  -l              Print only filenames with matches
+  -c              Print only count of matching lines
+  -w              Match whole words only
+  -x              Match whole lines only
+  -E              Extended regex (ERE — same as egrep)
+  -F              Fixed strings (no regex — same as fgrep)
+  -P              Perl-compatible regex (PCRE)
+  -A NUM          Print NUM lines of trailing context (After)
+  -B NUM          Print NUM lines of leading context (Before)
+  -C NUM          Print NUM lines of output context (Center)
+  -o              Print only the matched part (not the whole line)
+  -q              Quiet — no output, just exit status (for scripts)
+  -s              Suppress error messages about nonexistent files
+  -H              Print filename with each match (default when multiple files)
+  -h              Suppress filename prefix in output
+  --color[=auto]  Highlight matching text
+  -m NUM          Stop after NUM matches
+  --include=GLOB  Search only files matching GLOB pattern
+  --exclude=GLOB  Skip files matching GLOB pattern
+  -a              Process binary files as text
+  -L              Print only filenames WITHOUT matches
+
+COMMON SRE grep PATTERNS CHEAT SHEET:
+  grep -i error app.log                    # Find all errors (case-insensitive)
+  grep -c "500" access.log                 # Count HTTP 500s
+  grep -oP "duration=\K[0-9.]+" app.log    # Extract latency values
+  grep -C 5 "panic" app.log                # Panic message + surrounding context
+  grep -rl "deprecated" .                  # Find all files mentioning deprecated
+  grep -v "^#\|^$" config.conf             # Show config without comments/blanks
+  ps aux | grep "[n]ginx"                  # Check if nginx is running
+  grep "^[^#]" /etc/ssh/sshd_config        # Show active sshd config lines
+  history | grep "docker"                  # Find recent docker commands
+  grep -r "TODO\|FIXME\|HACK" /lpj/   # Find all tech debt markers
+
+egrep (grep -E)
+Extended grep — equivalent to grep -E. Supports | (OR), +, ?, {}, ()
+without backslash escaping. Preferred for readable regex.
+
+  egrep "ERROR|WARN|FATAL" app.log         # Multiple patterns
+  egrep "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" access.log  # IPs
+  egrep "user=(alice|bob|carol)" app.log   # Group matching
+
+fgrep (grep -F)
+Fixed-string grep — treats PATTERN as literal text. No regex interpretation.
+MUCH faster for simple string matching.
+
+  fgrep "[CRITICAL]" app.log     # Searches for literal "[CRITICAL]"
+  fgrep "*.py" file.txt          # Searches for literal "*.py", not glob
+
+sed
+Stream editor for filtering and transforming text. Performs find-and-replace,
+deletion, insertion, and extraction on text streams without opening an editor.
+Ideal for inline file editing in scripts and CI/CD pipelines.
+
+Usage
+  sed [OPTIONS] SCRIPT [FILE...]
+
+Examples
+  # Replace first occurrence of "old" with "new" on each line
+  sed 's/old/new/' file.txt
+
+  # Replace ALL occurrences on each line (global)
+  sed 's/old/new/g' file.txt
+
+  # In-place edit (modify file directly)
+  sed -i 's/localhost/anihpj.com/g' config.ini
+
+  # Delete lines matching pattern
+  sed '/DEBUG/d' app.log
+
+  # Delete blank lines
+  sed '/^$/d' file.txt
+
+  # Print only lines 10 through 20
+  sed -n '10,20p' file.txt
+
+  # Insert a line before line 5
+  sed '5i\# New configuration setting' config.ini
+
+  # Append a line after line 5
+  sed '5a\# End of section' config.ini
+
+  # Replace only on lines matching a pattern
+  sed '/production/s/localhost/prod.anihpj.com/' config.ini
+
+  # Extract specific field (like cut)
+  sed 's/.*name=\([^ ]*\).*/\1/' log.txt
+
+  # Multiple substitutions
+  sed -e 's/foo/bar/g' -e 's/baz/qux/g' file.txt
+
+Flags
+  -n              Suppress automatic printing (use with p command)
+  -e SCRIPT       Add SCRIPT to commands to execute
+  -f SCRIPTFILE   Add contents of SCRIPTFILE to commands
+  -i[SUFFIX]      Edit files in-place (with optional backup suffix)
+  -E, -r          Extended regular expressions (ERE)
+  -z              Separate lines by NUL characters
+
+awk
+Pattern scanning and processing language. Powerful for column-based data
+extraction, calculations, and report generation. Processes text line by
+line, splitting each into fields.
+
+Usage
+  awk [OPTIONS] 'PROGRAM' [FILE...]
+
+Examples
+  # Print specific columns (space/tab separated)
+  awk '{print $1, $3}' data.txt
+
+  # Print using custom field separator (colon for /etc/passwd)
+  awk -F: '{print $1, $7}' /etc/passwd
+
+  # Print lines where column 3 > 1000
+  awk '$3 > 1000 {print $1, $3}' /etc/passwd
+
+  # Sum values in column 2
+  awk '{sum += $2} END {print "Total:", sum}' data.csv
+
+  # Calculate average
+  awk '{sum += $3; count++} END {print "Average:", sum/count}' stats.txt
+
+  # Print lines matching a pattern
+  awk '/ERROR/ {print $0}' app.log
+
+  # Print with formatting
+  awk '{printf "%-20s %10d\n", $1, $2}' report.txt
+
+  # Conditional processing
+  awk '{if ($3 > 100) print $1, "HIGH"; else print $1, "LOW"}' data.txt
+
+  # Count unique values in column 1
+  awk '{count[$1]++} END {for (val in count) print val, count[val]}' log.txt
+
+  # Process tab-separated values (TSV)
+  awk -F'\t' '{print $2, $4}' data.tsv
+
+  # Use comma as field separator for CSV
+  awk -F',' '{print $1, $3}' data.csv
+
+Built-in Variables
+  $0          Entire current line
+  $1, $2, ... Fields (columns)
+  NF          Number of fields in current line
+  NR          Current line number
+  FS          Field separator (input)
+  OFS         Output field separator
+  RS          Record separator (input)
+  ORS         Output record separator
+  FILENAME    Current input filename
+
+Flags
+  -F SEP        Set field separator
+  -v VAR=VAL    Assign variable before program runs
+  -f FILE       Read program from FILE
+
+sort
+Sort lines of text files. Sorts alphabetically by default; can sort
+numerically, by column, reverse order, and handle unique values.
+
+Usage
+  sort [OPTIONS] [FILE...]
+
+Examples
+  # Sort alphabetically
+  sort names.txt
+
+  # Sort numerically
+  sort -n numbers.txt
+
+  # Sort in reverse order
+  sort -r data.txt
+
+  # Sort by column 2 numerically
+  sort -k2 -n data.txt
+
+  # Sort and remove duplicates
+  sort -u emails.txt
+
+  # Sort human-readable sizes (1K, 2M, 3G)
+  sort -h sizes.txt
+
+  # Sort by month name
+  sort -M months.txt
+
+  # Sort by column with custom separator
+  sort -t: -k3 -n /etc/passwd
+
+  # Random sort (shuffle)
+  sort -R file.txt
+
+  # Sort with unique check
+  sort file.txt | uniq -c | sort -rn
+
+  # Sort version numbers
+  sort -V versions.txt
+
+Flags
+  -n            Sort numerically
+  -r            Reverse order
+  -u            Unique only (remove duplicates)
+  -k POS        Sort by key POS (e.g., -k2 for column 2)
+  -t SEP        Field separator (default: whitespace)
+  -h            Human-readable numeric sort (1K, 2M, 3G)
+  -M            Month sort (JAN < ... < DEC)
+  -V            Version sort
+  -R            Random sort (shuffle)
+  -c            Check if already sorted
+  -o FILE       Write result to FILE (can be same as input)
+  -f            Case-insensitive
+
+uniq
+Report or omit repeated lines. Filters adjacent duplicate lines —
+typically used with sort for complete deduplication.
+
+Usage
+  uniq [OPTIONS] [INPUT [OUTPUT]]
+
+Examples
+  # Remove adjacent duplicate lines
+  uniq file.txt
+
+  # Count occurrences of each line
+  uniq -c access.log
+
+  # Show only duplicate lines
+  uniq -d data.txt
+
+  # Show only unique (non-duplicate) lines
+  uniq -u data.txt
+
+  # Count and sort by frequency (most common first)
+  sort file.txt | uniq -c | sort -rn
+
+  # Find unique IPs from access log
+  awk '{print $1}' access.log | sort | uniq
+
+  # Count unique IPs
+  awk '{print $1}' access.log | sort -u | wc -l
+
+  # Skip first N fields before comparing
+  uniq -f 2 data.txt
+
+Flags
+  -c            Prefix lines with count of occurrences
+  -d            Print only duplicate (repeated) lines
+  -u            Print only unique (non-repeating) lines
+  -i            Ignore case
+  -f N          Skip first N fields
+  -s N          Skip first N characters
+  -w N          Compare no more than N characters
+
+-------------------------------------------------------------------------------
+SHELL & SCRIPTING
+Built-in commands and essential utilities for writing shell scripts,
+automating tasks, and managing environment variables. These are the
+building blocks of DevOps automation.
+
+echo
+Display a line of text. The simplest way to output to stdout. Used
+constantly in scripts for messages, variable display, and piping.
+
+Usage
+  echo [OPTIONS] [STRING...]
+
+Examples
+  # Print a simple string
+  echo "Hello, anihpj!"
+
+  # Print with variable expansion
+  echo "Current user: $USER"
+
+  # Print without trailing newline
+  echo -n "Processing..."
+
+  # Enable interpretation of backslash escapes
+  echo -e "Line1\nLine2\nLine3"
+
+  # Print to stderr
+  echo "Error: file not found" >&2
+
+  # Print command output
+  echo "Today is $(date)"
+
+  # Print with color (ANSI codes)
+  echo -e "\033[0;32mSUCCESS\033[0m: Deployment complete"
+
+  # Append to file
+  echo "$(date): Job started" >> jobpost.log
+
+Flags
+  -n            Do not output trailing newline
+  -e            Enable interpretation of backslash escapes
+  -E            Disable interpretation of backslash escapes (default)
+
+Backslash Escapes (with -e)
+  \n      Newline
+  \t      Horizontal tab
+  \\      Backslash
+  \"      Double quote
+  \033    Escape character (for ANSI colors)
+
+export
+Set environment variables and mark them for export to child processes.
+Essential for configuring runtime environments in scripts.
+
+Usage
+  export [NAME[=VALUE] ...]
+
+Examples
+  # Set and export an environment variable
+  export APP_ENV=production
+
+  # Export an existing variable
+  APP_NAME="jobpost"
+  export APP_NAME
+
+  # Set multiple variables
+  export DB_HOST=localhost DB_PORT=5432 DB_NAME=anihpj
+
+  # Add to PATH
+  export PATH="$HOME/bin:$PATH"
+
+  # Show all exported variables
+  export -p
+
+  # Set and export in one line for a single command
+  DEBUG=true ./manage.py runserver
+
+  # Export for Django settings
+  export DJANGO_SETTINGS_MODULE=anihpj.settings.production
+  export SECRET_KEY=$(cat /etc/secrets/django_secret)
+
+Flags
+  -p            Display all exported variables
+  -n            Remove export property from NAME
+  -f            Mark shell functions for export
+
+alias
+Create shorthand for frequently used commands. Simplifies complex
+command sequences into short memorable names. Define in ~/.bashrc
+or ~/.bash_aliases for persistence.
+
+Usage
+  alias [NAME[=VALUE] ...]
+
+Examples
+  # Create a simple alias
+  alias ll='ls -la'
+
+  # Docker shortcut for anihpj
+  alias jobpost-up='docker-compose -f ~/anihpj/docker-compose.yml up -d'
+
+  # Git shortcuts
+  alias gs='git status'
+  alias gp='git push'
+  alias gl='git log --oneline --graph --decorate'
+
+  # Kubernetes shortcuts
+  alias k='kubectl'
+  alias kgp='kubectl get pods'
+  alias kga='kubectl get all'
+
+  # Show all defined aliases
+  alias
+
+  # Remove an alias
+  unalias gs
+
+  # Navigation shortcuts
+  alias jobpost='cd ~/anihpj/jobpost'
+  alias logs='cd /var/log/nginx'
+
+  # Safety aliases
+  alias rm='rm -i'
+  alias cp='cp -i'
+  alias mv='mv -i'
+
+Notes
+  Aliases are shell-specific — define in ~/.bashrc for bash, ~/.zshrc for zsh
+  To make permanent: echo "alias ll='ls -la'" >> ~/.bashrc && source ~/.bashrc
+  Use functions for aliases that need arguments (aliases don't support $1, $2)
+
+-------------------------------------------------------------------------------
+DISK & STORAGE
+Commands for disk operations: partitioning, formatting, mounting,
+and performance monitoring. Used for storage setup and troubleshooting.
+
+dd
+Convert and copy a file — low-level data copying. Used for creating disk
+images, cloning drives, creating bootable USB sticks, and benchmarking.
+EXTREME CAUTION: incorrect usage can destroy data.
+
+Usage
+  dd [OPERANDS]
+
+Examples
+  # Create a bootable USB from ISO
+  sudo dd if=ubuntu.iso of=/dev/sdb bs=4M status=progress
+
+  # Clone entire disk to another disk
+  sudo dd if=/dev/sda of=/dev/sdb bs=64K conv=noerror,sync status=progress
+
+  # Create a disk image of a partition
+  sudo dd if=/dev/sda1 of=/backup/sda1.img bs=4M
+
+  # Wipe a disk with zeros (secure erase)
+  sudo dd if=/dev/zero of=/dev/sdb bs=1M status=progress
+
+  # Wipe a disk with random data (more secure)
+  sudo dd if=/dev/urandom of=/dev/sdb bs=1M status=progress
+
+  # Generate a test file of specific size (1GB)
+  dd if=/dev/zero of=testfile bs=1M count=1024
+
+  # Backup MBR (first 512 bytes of disk)
+  sudo dd if=/dev/sda of=mbr_backup bs=512 count=1
+
+  # Benchmark write speed
+  dd if=/dev/zero of=test bs=1M count=1024 conv=fdatasync
+
+Operands
+  if=FILE         Read from FILE (input file)
+  of=FILE         Write to FILE (output file)
+  bs=BYTES        Block size (e.g., bs=4M)
+  count=N         Copy only N input blocks
+  status=LEVEL    Level of info: none, noxfer, progress
+  conv=CONVS      Convert file: noerror, sync, fdatasync, notrunc
+  skip=N          Skip N blocks at start of input
+  seek=N          Skip N blocks at start of output
+
+mount
+Mount a filesystem. Attaches storage devices, network shares, or
+disk images to the directory tree. Shows current mounts when run
+without arguments.
+
+Usage
+  mount [OPTIONS] [DEVICE] [MOUNTPOINT]
+
+Examples
+  # Show all mounted filesystems
+  mount
+
+  # Mount a device
+  sudo mount /dev/sdb1 /mnt/data
+
+  # Mount with specific filesystem type
+  sudo mount -t ext4 /dev/sdb1 /mnt/data
+
+  # Mount ISO file
+  sudo mount -o loop ubuntu.iso /mnt/iso
+
+  # Mount NFS share
+  sudo mount -t nfs 192.168.1.100:/exports/data /mnt/nfs
+
+  # Mount with read-only
+  sudo mount -o ro,noexec /dev/sdc1 /mnt/readonly
+
+  # Remount with different options
+  sudo mount -o remount,rw /mnt/readonly
+
+  # Unmount
+  sudo umount /mnt/data
+
+  # Force unmount (when busy)
+  sudo umount -f /mnt/data
+
+  # Lazy unmount (defer until not busy)
+  sudo umount -l /mnt/data
+
+Flags
+  -t TYPE           Filesystem type (ext4, xfs, ntfs, nfs, etc.)
+  -o OPTIONS        Mount options: ro, rw, noexec, nosuid, loop, remount
+  -a                Mount all filesystems in /etc/fstab
+  -L LABEL          Mount by filesystem label
+  -U UUID           Mount by filesystem UUID
+
+-------------------------------------------------------------------------------
+SERVICE MANAGEMENT
+Commands for managing system services and the init system (systemd).
+Critical for controlling application daemons, checking service health,
+and troubleshooting startup issues.
+
+systemctl
+Control the systemd system and service manager. Used to start, stop,
+restart, enable, and check the status of services. The primary service
+management tool on modern Linux distributions.
+
+Usage
+  systemctl [OPTIONS] COMMAND [UNIT...]
+
+Examples
+  # Start a service
+  sudo systemctl start nginx
+
+  # Stop a service
+  sudo systemctl stop nginx
+
+  # Restart a service
+  sudo systemctl restart nginx
+
+  # Reload configuration without restarting
+  sudo systemctl reload nginx
+
+  # Check service status
+  systemctl status nginx
+
+  # Enable service to start at boot
+  sudo systemctl enable nginx
+
+  # Disable service from starting at boot
+  sudo systemctl disable nginx
+
+  # Check if a service is active
+  systemctl is-active nginx
+
+  # Check if a service is enabled at boot
+  systemctl is-enabled nginx
+
+  # List all active services
+  systemctl list-units --type=service --state=running
+
+  # List all services (including inactive)
+  systemctl list-units --type=service --all
+
+  # View recent log entries for a service
+  journalctl -u nginx -n 50
+
+  # Follow service logs in real time
+  journalctl -u jobpost -f
+
+  # Mask a service (prevent it from being started)
+  sudo systemctl mask bad-service
+
+  # Unmask a service
+  sudo systemctl unmask bad-service
+
+  # Reload systemd (after editing unit files)
+  sudo systemctl daemon-reload
+
+  # Show service dependencies
+  systemctl list-dependencies nginx
+
+  # Edit a unit file
+  sudo systemctl edit --full jobpost.service
+
+Commands (systemctl COMMAND)
+  start UNIT           Start a unit
+  stop UNIT            Stop a unit
+  restart UNIT         Restart a unit
+  reload UNIT          Reload configuration
+  enable UNIT          Enable unit to start at boot
+  disable UNIT         Disable unit from starting at boot
+  status UNIT          Show runtime status
+  is-active UNIT       Check if unit is running
+  is-enabled UNIT      Check if unit is enabled
+  mask UNIT            Mask unit (prevent start)
+  unmask UNIT          Unmask unit
+  daemon-reload        Reload systemd manager configuration
+  list-units           List loaded units
+  list-dependencies    Show unit dependency tree
+  show UNIT            Show properties of a unit
+
+journalctl
+Query and display messages from the systemd journal. Centralized log
+viewer for everything from kernel messages to service logs.
+
+Usage
+  journalctl [OPTIONS] [MATCHES]
+
+Examples
+  # Show all logs (newest first)
+  journalctl
+
+  # Show logs for a specific service
+  journalctl -u nginx
+
+  # Follow logs in real time
+  journalctl -f
+
+  # Show logs since yesterday
+  journalctl --since yesterday
+
+  # Show logs from the current boot only
+  journalctl -b
+
+  # Show logs from previous boot
+  journalctl -b -1
+
+  # Show kernel messages only
+  journalctl -k
+
+  # Show logs with priority ERROR and above
+  journalctl -p err
+
+  # Show last 100 lines
+  journalctl -n 100
+
+  # Show logs in JSON format
+  journalctl -u jobpost -o json
+
+  # Show logs for a specific time range
+  journalctl --since "2026-06-01 08:00:00" --until "2026-06-01 12:00:00"
+
+  # Show logs by process ID
+  journalctl _PID=12345
+
+  # Show disk usage of journal
+  journalctl --disk-usage
+
+Flags
+  -u UNIT           Show logs for specific unit
+  -f, --follow      Follow (tail) in real time
+  -b [ID]           Boot ID (current boot if omitted, -1 for previous)
+  -k, --dmesg       Kernel messages only
+  -p PRIORITY       Filter by priority: emerg, alert, crit, err, warning, notice, info, debug
+  -n LINES          Show last LINES
+  -r, --reverse     Newest entries first
+  --since TIME      Entries since TIME (e.g., "2026-06-01", "yesterday", "1 hour ago")
+  --until TIME      Entries until TIME
+  -o FORMAT         Output format: short, json, json-pretty, cat, verbose
+  --disk-usage      Show disk space used by the journal
+  --vacuum-size=SIZE  Reduce journal disk usage to SIZE
+
+-------------------------------------------------------------------------------
+SECURITY & ENCRYPTION
+Commands for encryption, key management, SSH authentication, and
+firewall configuration. Used for securing communications, managing
+access, and protecting sensitive data.
+
+gpg
+GNU Privacy Guard — encryption and signing tool. Used to encrypt files,
+sign commits/tags in Git, and verify package integrity. Essential for
+secure development workflows.
+
+Usage
+  gpg [OPTIONS] [FILE...]
+
+Examples
+  # Generate a new GPG key pair
+  gpg --full-generate-key
+
+  # List all keys
+  gpg --list-keys
+
+  # List secret keys
+  gpg --list-secret-keys
+
+  # Encrypt a file for a recipient
+  gpg --encrypt --recipient anihpj@anihpj.com secrets.txt
+
+  # Decrypt a file
+  gpg --decrypt secrets.txt.gpg > secrets.txt
+
+  # Sign a file
+  gpg --sign release.tar.gz
+
+  # Verify a signature
+  gpg --verify release.tar.gz.sig
+
+  # Export public key
+  gpg --export -a "anihpj" > anihpj-public.key
+
+  # Import a public key
+  gpg --import someone-public.key
+
+  # Create a detached signature
+  gpg --detach-sign release.tar.gz
+
+  # Symmetric encryption (password-based)
+  gpg --symmetric file.txt
+
+  # Configure Git to use GPG key for signing
+  git config --global user.signingkey YOUR_KEY_ID
+
+Flags
+  -a, --armor               ASCII armored output
+  --encrypt                  Encrypt data
+  --decrypt                  Decrypt data
+  --sign                     Sign data
+  --detach-sign              Create detached signature
+  --verify                   Verify signature
+  --recipient NAME           Recipient for encryption
+  --full-generate-key        Generate a new key pair
+  --list-keys                List public keys
+  --list-secret-keys         List private keys
+  --export                   Export keys
+  --import                   Import keys
+  --delete-key               Remove public key
+  --delete-secret-key        Remove private key
+  --symmetric                Encrypt with password (not public key)
+
+openssl
+OpenSSL command-line tool for cryptography, SSL/TLS, certificate
+management, and hashing. Used heavily for certificate generation,
+debugging TLS connections, and secure data handling.
+
+Usage
+  openssl COMMAND [OPTIONS]
+
+Examples
+  # Generate a private key (RSA 2048-bit)
+  openssl genrsa -out anihpj.key 2048
+
+  # Generate a Certificate Signing Request (CSR)
+  openssl req -new -key anihpj.key -out anihpj.csr
+
+  # Generate a self-signed certificate
+  openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+
+  # View certificate details
+  openssl x509 -in cert.pem -text -noout
+
+  # Check certificate expiration date
+  openssl x509 -in cert.pem -noout -enddate
+
+  # Connect to a server and show certificate chain
+  openssl s_client -connect anihpj.com:443 -showcerts
+
+  # Test TLS 1.2 connection
+  openssl s_client -connect anihpj.com:443 -tls1_2
+
+  # Generate a random password
+  openssl rand -base64 32
+
+  # Create a hash (SHA256)
+  openssl dgst -sha256 file.txt
+
+  # Encrypt a file with a password
+  openssl enc -aes-256-cbc -salt -in secrets.txt -out secrets.enc
+
+  # Decrypt a file
+  openssl enc -d -aes-256-cbc -in secrets.enc -out secrets.txt
+
+  # Convert certificate formats (PEM to DER)
+  openssl x509 -in cert.pem -outform der -out cert.der
+
+Common Subcommands
+  genrsa        Generate RSA private key
+  req           PKCS#10 X.509 CSR management
+  x509          X.509 certificate data management
+  s_client      SSL/TLS client (test connections)
+  s_server      SSL/TLS server (test)
+  dgst          Message digest (hash)
+  enc           Symmetric cipher routines (encrypt/decrypt)
+  rand          Generate pseudo-random bytes
+  pkcs12        PKCS#12 file management (.pfx/.p12)
+  rsa           RSA key management
+  dhparam       DH parameter management
+
+ssh-keygen
+Generate, manage, and convert SSH authentication keys. Creates key
+pairs for passwordless SSH login and Git authentication. The first
+step in setting up secure remote access.
+
+Usage
+  ssh-keygen [OPTIONS]
+
+Examples
+  # Generate an Ed25519 key (modern, recommended)
+  ssh-keygen -t ed25519 -C "anihpj@anihpj.com"
+
+  # Generate an RSA 4096-bit key (legacy compatible)
+  ssh-keygen -t rsa -b 4096 -C "anihpj@anihpj.com"
+
+  # Generate a key with custom filename
+  ssh-keygen -t ed25519 -f ~/.ssh/anihpj_deploy_key -C "deploy@anihpj"
+
+  # Generate a key without passphrase (CI/CD)
+  ssh-keygen -t ed25519 -f ~/.ssh/ci_key -N "" -C "ci@anihpj"
+
+  # Change passphrase of existing key
+  ssh-keygen -p -f ~/.ssh/id_ed25519
+
+  # Show fingerprint of a key
+  ssh-keygen -lf ~/.ssh/id_ed25519.pub
+
+  # Convert key to PEM format
+  ssh-keygen -p -m PEM -f ~/.ssh/id_rsa
+
+  # Generate key and copy to remote server
+  ssh-keygen -t ed25519 && ssh-copy-id anihpj@server.anihpj.com
+
+Flags
+  -t TYPE           Key type: ed25519 (recommended), rsa, ecdsa
+  -b BITS           Key bits: 2048, 4096 for RSA; 256, 384, 521 for ECDSA
+  -C COMMENT        Comment (typically email)
+  -f FILENAME       Output key filename
+  -N PASSPHRASE     New passphrase ("" for none)
+  -p                Change passphrase
+  -l                Show fingerprint
+  -R HOSTNAME       Remove host from known_hosts
+  -F HOSTNAME       Find host in known_hosts
+
+-------------------------------------------------------------------------------
+PACKAGE MANAGEMENT
+Commands for installing, updating, and removing software packages.
+The specific tool depends on your distribution (Debian/Ubuntu = apt,
+RHEL/CentOS = yum/dnf, Arch = pacman).
+
+apt
+Advanced Package Tool — package management for Debian/Ubuntu. Installs,
+updates, and removes software with automatic dependency resolution.
+
+Usage
+  apt [OPTIONS] COMMAND [PACKAGE...]
+
+Examples
+  # Update package index
+  sudo apt update
+
+  # Upgrade all installed packages
+  sudo apt upgrade -y
+
+  # Install a package
+  sudo apt install nginx
+
+  # Install multiple packages
+  sudo apt install python3 python3-pip python3-venv
+
+  # Remove a package (keep configs)
+  sudo apt remove nginx
+
+  # Remove a package including configs
+  sudo apt purge nginx
+
+  # Remove unneeded dependencies
+  sudo apt autoremove
+
+  # Search for a package
+  apt search nginx
+
+  # Show package info
+  apt show nginx
+
+  # List installed packages
+  apt list --installed
+
+  # Full distribution upgrade
+  sudo apt full-upgrade
+
+  # Clean package cache
+  sudo apt clean
+
+  # Check for broken dependencies
+  sudo apt --fix-broken install
+
+Flags
+  -y, --yes           Assume yes to prompts
+  -q, --quiet         Quiet mode
+  --no-install-recommends  Do not install recommended packages
+  --fix-broken        Fix broken dependencies
+
+dpkg
+Debian package manager — low-level tool for .deb package files.
+Used for installing local .deb files, listing installed packages,
+and querying package information.
+
+Usage
+  dpkg [OPTIONS] ACTION
+
+Examples
+  # Install a local .deb file
+  sudo dpkg -i package.deb
+
+  # Remove a package (keep configs)
+  sudo dpkg -r nginx
+
+  # Purge a package (remove configs too)
+  sudo dpkg -P nginx
+
+  # List all installed packages
+  dpkg -l
+
+  # List files installed by a package
+  dpkg -L nginx
+
+  # Find which package owns a file
+  dpkg -S /etc/nginx/nginx.conf
+
+  # Check package status
+  dpkg -s nginx
+
+  # List contents of a .deb file
+  dpkg -c package.deb
+
+  # Show info about a .deb file
+  dpkg -I package.deb
+
+Flags / Actions
+  -i, --install DEB-FILE      Install a .deb package
+  -r, --remove PACKAGE        Remove package (keep configs)
+  -P, --purge PACKAGE         Purge package (remove configs)
+  -l, --list [PATTERN]        List installed packages
+  -L, --listfiles PACKAGE     List files owned by package
+  -S, --search PATTERN        Find package owning a file
+  -s, --status PACKAGE        Show package status
+  -c, --contents DEB-FILE     List contents of .deb file
+  -I, --info DEB-FILE         Show info about .deb file
+  --configure -a              Configure all unpacked packages
+  --get-selections            Show package selections
+
+-------------------------------------------------------------------------------
+ARCHIVE & COMPRESSION
+Commands for creating and extracting compressed archives. tar is the
+universal archive tool; gzip, bzip2, and xz provide compression.
+
+tar
+Tape ARchiver — create, extract, and manipulate archive files. The
+universal tool for bundling directories and files, often combined with
+compression (gzip, bzip2, xz).
+
+Usage
+  tar [OPTIONS] [ARCHIVE] [FILE...]
+
+Examples
+  # Create a tar.gz archive
+  tar -czf backup.tar.gz /home/anihpj/jobpost/
+
+  # Create a tar.bz2 archive (better compression)
+  tar -cjf backup.tar.bz2 /home/anihpj/
+
+  # Create a tar.xz archive (best compression)
+  tar -cJf backup.tar.xz /var/log/
+
+  # Extract a tar.gz archive
+  tar -xzf backup.tar.gz
+
+  # Extract to a specific directory
+  tar -xzf backup.tar.gz -C /tmp/restore/
+
+  # List contents without extracting
+  tar -tzf backup.tar.gz
+
+  # Create archive excluding certain files
+  tar -czf project.tar.gz --exclude="*.pyc" --exclude="__pycache__" /src/
+
+  # Create archive with verbose output
+  tar -czvf logs.tar.gz /var/log/jobpost/
+
+  # Extract a single file from archive
+  tar -xzf backup.tar.gz path/to/specific/file.txt
+
+  # Append file to existing tar
+  tar -rf archive.tar new_file.txt
+
+  # Compare archive with filesystem
+  tar -df backup.tar.gz
+
+Flags
+  -c              Create new archive
+  -x              Extract from archive
+  -t              List archive contents
+  -f ARCHIVE      Use archive file (required for file-based operations)
+  -z              Filter through gzip (.tar.gz, .tgz)
+  -j              Filter through bzip2 (.tar.bz2, .tbz2)
+  -J              Filter through xz (.tar.xz)
+  -v              Verbose — list files processed
+  -C DIR          Change to DIR before operation
+  --exclude=PAT   Exclude files matching PATTERN
+  --strip-components=N  Strip N leading components on extraction
+
+gzip / gunzip
+Compress or decompress files using Lempel-Ziv coding (LZ77). Each file
+is replaced by a compressed version with .gz extension.
+
+Usage
+  gzip [OPTIONS] [FILE...]
+  gunzip [OPTIONS] [FILE...]
+
+Examples
+  # Compress a file (original is replaced)
+  gzip large_file.log
+
+  # Compress keeping the original
+  gzip -k large_file.log
+
+  # Decompress
+  gunzip large_file.log.gz
+
+  # Decompress keeping the original
+  gunzip -k large_file.log.gz
+
+  # Compress with best compression (slowest)
+  gzip -9 large_file.log
+
+  # Compress with fastest compression
+  gzip -1 large_file.log
+
+  # View compressed file without decompressing
+  zcat large_file.log.gz
+  zless large_file.log.gz
+
+  # Search inside compressed file
+  zgrep "ERROR" large_file.log.gz
+
+  # Compress all .log files in a directory
+  gzip /var/log/jobpost/*.log
+
+Flags
+  -1 ... -9      Compression level: 1 (fastest) to 9 (best)
+  -k             Keep (don't delete) original file
+  -f             Force overwrite of output file
+  -v             Verbose — show compression ratio
+  -r             Recursive (directories)
+  -t             Test compressed file integrity
+
+-------------------------------------------------------------------------------
+BOOT & KERNEL MANAGEMENT
+Commands for managing the Linux boot process, kernel modules, GRUB
+configuration, and initramfs. Critical LFCS Domain 2 topics.
+
+grub-mkconfig / update-grub
+Generate GRUB bootloader configuration. Scans for installed kernels
+and OSes, then writes /boot/grub/grub.cfg. Called as update-grub on
+Debian/Ubuntu, grub2-mkconfig on RHEL/CentOS.
+
+Usage
+  sudo grub-mkconfig -o /boot/grub/grub.cfg
+  sudo update-grub       # Debian/Ubuntu shortcut
+
+Examples
+  # Regenerate GRUB config after kernel update
+  sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+  # On Debian/Ubuntu
+  sudo update-grub
+
+  # On RHEL/CentOS/Fedora (BIOS)
+  sudo grub2-mkconfig -o /boot/grub2/grub.cfg
+
+  # On RHEL/CentOS/Fedora (UEFI)
+  sudo grub2-mkconfig -o /boot/efi/EFI/centos/grub.cfg
+
+GRUB Configuration Files
+  /etc/default/grub               Main GRUB settings (kernel params, timeout)
+  /boot/grub/grub.cfg (BIOS)     Generated config — DO NOT EDIT directly
+  /boot/grub2/grub.cfg (RHEL)    Same on RHEL systems
+  /etc/grub.d/                    Script snippets that build grub.cfg
+
+Key GRUB Settings (/etc/default/grub):
+  GRUB_TIMEOUT=5                  Seconds to show boot menu
+  GRUB_CMDLINE_LINUX="..."        Kernel command-line parameters
+  GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
+  GRUB_DISABLE_RECOVERY="true"    Hide recovery mode entries
+
+grub-install
+Install GRUB bootloader to a device. Required when setting up a new
+disk or repairing a corrupted bootloader.
+
+Usage
+  sudo grub-install [OPTIONS] DEVICE
+
+Examples
+  # Install GRUB to MBR of /dev/sda (BIOS)
+  sudo grub-install /dev/sda
+
+  # Install GRUB for UEFI
+  sudo grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+
+  # Reinstall GRUB after disk replacement
+  sudo grub-install /dev/sda && sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+Flags
+  --target=PLATFORM    Platform: x86_64-efi, i386-pc
+  --efi-directory=DIR  EFI system partition mount point
+  --bootloader-id=NAME Identifier for UEFI boot menu
+  --recheck            Recheck device map
+  --force              Force installation
+
+Kernel Parameters (Boot-Time)
+Modify kernel behavior at boot. Set in GRUB_CMDLINE_LINUX in /etc/default/grub
+or appended at the GRUB menu by pressing 'e' on the kernel entry.
+
+Common Kernel Parameters:
+  init=/bin/bash                  Boot directly to bash (rescue/root reset)
+  systemd.unit=rescue.target      Boot to rescue mode
+  systemd.unit=emergency.target   Boot to emergency mode
+  single                          Single-user mode (legacy)
+  quiet                           Suppress most kernel messages
+  splash                          Show splash screen
+  nomodeset                       Disable kernel mode setting (GPU issues)
+  enforcing=0                     Boot with SELinux permissive
+  selinux=0                       Disable SELinux
+  apparmor=0                      Disable AppArmor
+  rd.break                        Interrupt boot at initramfs (debugging)
+
+lsmod
+List currently loaded kernel modules. Reads /proc/modules.
+
+Usage
+  lsmod
+
+Examples
+  # List all loaded modules
+  lsmod
+
+  # Count loaded modules
+  lsmod | wc -l
+
+  # Check if a specific module is loaded
+  lsmod | grep nf_conntrack
+
+  # Show module dependencies
+  lsmod | grep ext4
+
+modprobe
+Add or remove kernel modules with automatic dependency resolution.
+Reads module dependencies from /lib/modules/$(uname -r)/modules.dep.
+
+Usage
+  sudo modprobe [OPTIONS] MODULE
+
+Examples
+  # Load a module
+  sudo modprobe nf_conntrack
+
+  # Remove a module (and unused dependencies)
+  sudo modprobe -r nf_conntrack
+
+  # Load module with parameters
+  sudo modprobe bonding max_bonds=2
+
+  # Show module info without loading
+  modprobe --show-depends ext4
+
+  # Force module removal (dangerous)
+  sudo modprobe -r -f module_name
+
+Flags
+  -r, --remove            Remove module
+  -f, --force             Force operation (dangerous)
+  -v, --verbose           Verbose output
+  --show-depends          Show dependencies without loading
+  -n, --dry-run           Show what would be done
+
+modinfo
+Display information about a kernel module. Shows description, author,
+license, parameters, and dependencies.
+
+Usage
+  modinfo MODULE
+
+Examples
+  # Show module details
+  modinfo ext4
+
+  # Show only module parameters
+  modinfo -p bonding
+
+  # Show module filename
+  modinfo -n ext4
+
+  # Show module author
+  modinfo -a ext4
+
+Flags
+  -p, --parameters    Show modifiable parameters
+  -n, --filename      Show module filename
+  -a, --author        Show module author
+  -d, --description   Show module description
+  -l, --license       Show module license
+
+rmmod
+Simple module removal without dependency handling. Use modprobe -r
+for dependency-aware removal (preferred).
+
+Usage
+  sudo rmmod MODULE
+
+insmod
+Simple module insertion without dependency resolution. Use modprobe
+for dependency-aware loading (preferred).
+
+Usage
+  sudo insmod /path/to/module.ko
+
+depmod
+Generate module dependency lists for modprobe. Run after installing
+new kernel modules manually.
+
+Usage
+  sudo depmod -a
+
+dracut / mkinitcpio
+Generate initramfs (initial RAM filesystem). The initramfs contains
+drivers and tools needed to mount the root filesystem at boot.
+
+Usage (dracut — RHEL/Fedora):
+  sudo dracut [OPTIONS] [OUTPUT] [KERNEL_VERSION]
+
+Examples
+  # Regenerate initramfs for current kernel
+  sudo dracut --force
+
+  # Generate for a specific kernel
+  sudo dracut --force /boot/initramfs-5.15.0-91-generic.img 5.15.0-91-generic
+
+  # On Debian/Ubuntu
+  sudo update-initramfs -u
+
+  # On Debian/Ubuntu for all kernels
+  sudo update-initramfs -u -k all
+
+Flags (dracut)
+  --force            Overwrite existing initramfs
+  --kver VERSION     Kernel version
+  --no-hostonly      Include all drivers (not just host-specific)
+  -v, --verbose      Verbose output
+
+uname (kernel info)
+Already covered in SYSTEM INFORMATION, but critical for boot/kernel:
+  uname -r    # Current kernel version
+  uname -a    # All kernel info
+
+-------------------------------------------------------------------------------
+LVM (LOGICAL VOLUME MANAGER)
+LVM provides flexible disk management by abstracting physical storage
+into logical volumes that can be resized, snapshotted, and moved
+across physical disks. ESSENTIAL for LFCS Domain 6 (Storage).
+
+LVM Architecture (Three Layers):
+────────────────────────────────
+  Physical Volumes (PV)  →  /dev/sda1, /dev/sdb1  (actual partitions)
+  Volume Groups (VG)     →  vg_anihpj  (pool of PVs)
+  Logical Volumes (LV)   →  lv_root, lv_data, lv_logs  (usable volumes)
+
+LVM Cheat Sheet:
+────────────────
+  Create:   PV → VG → LV → mkfs → mount → /etc/fstab
+  Extend:   lvextend → resize2fs/xfs_growfs
+  Reduce:   umount → fsck → resize2fs → lvreduce → mount (XFS CANNOT reduce)
+  Remove:   umount → lvremove → vgremove → pvremove
+
+pvcreate
+Initialize physical volumes for LVM. Marks a disk or partition as
+usable by LVM, writing metadata to the device.
+
+Usage
+  sudo pvcreate [OPTIONS] DEVICE...
+
+Examples
+  # Initialize a partition for LVM
+  sudo pvcreate /dev/sdb1
+
+  # Initialize multiple partitions
+  sudo pvcreate /dev/sdb1 /dev/sdc1
+
+  # Force creation (overwrite existing data)
+  sudo pvcreate -ff /dev/sdb1
+
+pvdisplay / pvs
+Display physical volume details. pvs gives compact output.
+
+Usage
+  sudo pvdisplay [DEVICE]
+  sudo pvs
+
+Examples
+  # Show all PVs
+  sudo pvs
+
+  # Show detailed info for a specific PV
+  sudo pvdisplay /dev/sdb1
+
+  # Show PVs with specific columns
+  sudo pvs -o pv_name,pv_size,pv_free
+
+vgcreate
+Create a volume group from one or more physical volumes.
+
+Usage
+  sudo vgcreate [OPTIONS] VG_NAME PV...
+
+Examples
+  # Create VG from one PV
+  sudo vgcreate vg_anihpj /dev/sdb1
+
+  # Create VG from multiple PVs (pooled storage)
+  sudo vgcreate vg_data /dev/sdb1 /dev/sdc1
+
+  # Create VG with specific extent size
+  sudo vgcreate -s 16M vg_data /dev/sdb1
+
+Flags
+  -s, --physicalextentsize SIZE   Extent size (default 4M)
+
+vgdisplay / vgs
+Display volume group details.
+
+Usage
+  sudo vgdisplay [VG_NAME]
+  sudo vgs
+
+Examples
+  # Show all VGs
+  sudo vgs
+
+  # Show detailed VG info
+  sudo vgdisplay vg_anihpj
+
+lvcreate
+Create a logical volume within a volume group.
+
+Usage
+  sudo lvcreate [OPTIONS] -n LV_NAME VG_NAME
+
+Examples
+  # Create a 10GB logical volume
+  sudo lvcreate -L 10G -n lv_data vg_anihpj
+
+  # Create using all free space
+  sudo lvcreate -l 100%FREE -n lv_backup vg_anihpj
+
+  # Create a thin-provisioned volume
+  sudo lvcreate -L 100G --thinpool thin_pool vg_anihpj
+
+  # Create with specific name in /dev/mapper
+  sudo lvcreate -L 5G -n lv_logs vg_anihpj
+
+  # Create a linear (non-striped) volume
+  sudo lvcreate -L 20G -n lv_jobpost vg_anihpj
+
+Flags
+  -L, --size SIZE        Logical volume size (e.g., 10G, 500M)
+  -l, --extents NUM      Size in extents or %FREE, %VG
+  -n, --name NAME        Logical volume name
+  --type TYPE            linear (default), striped, mirror, thin-pool
+
+lvdisplay / lvs
+Display logical volume details.
+
+Usage
+  sudo lvdisplay [LV_PATH]
+  sudo lvs
+
+Examples
+  # Show all LVs
+  sudo lvs
+
+  # Show detailed info for a specific LV
+  sudo lvdisplay /dev/vg_anihpj/lv_data
+
+lvextend
+Extend a logical volume. After extending, you must also grow
+the filesystem (resize2fs for ext4, xfs_growfs for XFS).
+
+Usage
+  sudo lvextend [OPTIONS] LV_PATH
+
+Examples
+  # Extend LV by 5GB
+  sudo lvextend -L +5G /dev/vg_anihpj/lv_data
+
+  # Extend LV to exactly 20GB
+  sudo lvextend -L 20G /dev/vg_anihpj/lv_data
+
+  # Extend using 100% of free VG space
+  sudo lvextend -l +100%FREE /dev/vg_anihpj/lv_data
+
+  # Extend AND resize filesystem in one command
+  sudo lvextend -r -L +5G /dev/vg_anihpj/lv_data
+
+  # Resize ext4 after extending
+  sudo resize2fs /dev/vg_anihpj/lv_data
+
+  # Resize XFS after extending (must be MOUNTED)
+  sudo xfs_growfs /data
+
+Flags
+  -L, --size [+]SIZE     New size (+ to add)
+  -l, --extents [+]NUM   Size in extents
+  -r, --resizefs         Resize filesystem after extending
+
+lvreduce
+Reduce a logical volume. EXT4 can be reduced (unmount first);
+XFS CANNOT be reduced. Must unmount and fsck first.
+
+Usage
+  sudo lvreduce [OPTIONS] LV_PATH
+
+Examples
+  # Reduce ext4 LV (must unmount and fsck first!)
+  sudo umount /data
+  sudo e2fsck -f /dev/vg_anihpj/lv_data
+  sudo resize2fs /dev/vg_anihpj/lv_data 10G
+  sudo lvreduce -L 10G /dev/vg_anihpj/lv_data
+  sudo mount /data
+
+  # Reduce with confirmation
+  sudo lvreduce -L -5G /dev/vg_anihpj/lv_data
+
+Flags
+  -L, --size [-]SIZE     New size (- to subtract)
+  -r, --resizefs         Resize filesystem first
+
+lvremove
+Remove a logical volume. Destroys all data on the LV.
+
+Usage
+  sudo lvremove LV_PATH
+
+Examples
+  # Remove an LV
+  sudo lvremove /dev/vg_anihpj/lv_old
+
+  # Force removal without confirmation
+  sudo lvremove -f /dev/vg_anihpj/lv_old
+
+vgremove
+Remove a volume group (must have no LVs first).
+
+Usage
+  sudo vgremove VG_NAME
+
+pvremove
+Remove LVM metadata from physical volume.
+
+Usage
+  sudo pvremove DEVICE
+
+LVM Snapshots
+Create a point-in-time copy of a logical volume. Useful for backups
+and safe testing without affecting the original data.
+
+Usage
+  sudo lvcreate -L SIZE -s -n SNAP_NAME ORIGINAL_LV
+
+Examples
+  # Create a 2GB snapshot of lv_data
+  sudo lvcreate -L 2G -s -n lv_data_snap /dev/vg_anihpj/lv_data
+
+  # Mount the snapshot (read-only recommended)
+  sudo mount -o ro /dev/vg_anihpj/lv_data_snap /mnt/snap
+
+  # Merge snapshot back (restore original to snapshot state)
+  sudo lvconvert --merge /dev/vg_anihpj/lv_data_snap
+
+  # Remove snapshot after use
+  sudo lvremove /dev/vg_anihpj/lv_data_snap
+
+LVM Full Workflow Example (LFCS scenario):
+──────────────────────────────────────────
+  # 1. Create partition for LVM
+  sudo fdisk /dev/sdb  # Create partition, set type to 8E (Linux LVM)
+
+  # 2. Initialize physical volume
+  sudo pvcreate /dev/sdb1
+
+  # 3. Create volume group
+  sudo vgcreate vg_anihpj /dev/sdb1
+
+  # 4. Create logical volumes
+  sudo lvcreate -L 20G -n lv_root vg_anihpj
+  sudo lvcreate -L 50G -n lv_apps vg_anihpj
+  sudo lvcreate -L 10G -n lv_logs vg_anihpj
+
+  # 5. Format filesystems
+  sudo mkfs.ext4 /dev/vg_anihpj/lv_root
+  sudo mkfs.xfs /dev/vg_anihpj/lv_apps
+  sudo mkfs.ext4 /dev/vg_anihpj/lv_logs
+
+  # 6. Mount and add to /etc/fstab
+  echo "/dev/vg_anihpj/lv_apps /lpj/apps xfs defaults 0 2" | sudo tee -a /etc/fstab
+  sudo mount /lpj/apps
+
+-------------------------------------------------------------------------------
+FIREWALL MANAGEMENT
+Commands for configuring Linux firewalls. iptables is the low-level
+kernel firewall; firewalld and ufw are higher-level frontends.
+CRITICAL for LFCS Domain 4 (Networking).
+
+iptables
+Administration tool for IPv4 packet filtering and NAT. The fundamental
+Linux firewall — rules are organized into tables (filter, nat, mangle)
+and chains (INPUT, OUTPUT, FORWARD).
+
+Usage
+  sudo iptables [OPTIONS] [CHAIN] [RULE]
+
+Examples
+  # List all rules (with line numbers)
+  sudo iptables -L -n -v --line-numbers
+
+  # Allow SSH (port 22) from a specific IP
+  sudo iptables -A INPUT -p tcp --dport 22 -s 192.168.10.0/24 -j ACCEPT
+
+  # Allow HTTP and HTTPS
+  sudo iptables -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
+
+  # Block an IP address
+  sudo iptables -A INPUT -s 192.168.1.100 -j DROP
+
+  # Allow established connections
+  sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+  # Allow loopback
+  sudo iptables -A INPUT -i lo -j ACCEPT
+
+  # Default policy: drop all incoming
+  sudo iptables -P INPUT DROP
+
+  # Delete a rule by line number
+  sudo iptables -D INPUT 3
+
+  # Insert rule at specific position
+  sudo iptables -I INPUT 1 -p tcp --dport 8080 -j ACCEPT
+
+  # Save rules (Debian/Ubuntu)
+  sudo iptables-save > /etc/iptables/rules.v4
+
+  # Restore rules
+  sudo iptables-restore < /etc/iptables/rules.v4
+
+Chains (default):
+  INPUT      — Incoming traffic to the local system
+  OUTPUT     — Outgoing traffic from the local system
+  FORWARD    — Traffic routed through the system
+
+Common -j Targets:
+  ACCEPT     — Allow the packet
+  DROP       — Silently discard the packet
+  REJECT     — Discard and send error response
+  LOG        — Log the packet
+  RETURN     — Return to parent chain
+
+Common Match Extensions:
+  -p tcp|udp|icmp                     Protocol
+  --dport PORT                        Destination port
+  --sport PORT                        Source port
+  -m multiport --dports 80,443,8080   Multiple ports
+  -m conntrack --ctstate STATE        Connection state
+  -m limit --limit 5/min              Rate limiting
+  -s IP/MASK                          Source address
+  -d IP/MASK                          Destination address
+  -i eth0                             Input interface
+  -o eth1                             Output interface
+
+Flags
+  -A CHAIN          Append rule to CHAIN
+  -I CHAIN [NUM]    Insert rule at position NUM
+  -D CHAIN NUM      Delete rule at NUM
+  -F [CHAIN]        Flush all rules in CHAIN
+  -P CHAIN TARGET   Set default policy for CHAIN
+  -L [CHAIN]        List rules
+  -n                Numeric output (no DNS resolution)
+  -v                Verbose output
+  --line-numbers    Show rule line numbers
+
+firewalld (firewall-cmd)
+Dynamic firewall manager for RHEL/CentOS/Fedora. Uses zones to define
+trust levels. Preferred over direct iptables on modern RHEL systems.
+
+Usage
+  sudo firewall-cmd [OPTIONS]
+
+Examples
+  # Show current zone and rules
+  sudo firewall-cmd --list-all
+
+  # Show all zones
+  sudo firewall-cmd --list-all-zones
+
+  # Add HTTP service permanently
+  sudo firewall-cmd --permanent --add-service=http
+
+  # Add custom port
+  sudo firewall-cmd --permanent --add-port=8080/tcp
+
+  # Add rich rule (allow from subnet)
+  sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.10.0/24" port port=22 protocol=tcp accept'
+
+  # Reload to apply permanent changes
+  sudo firewall-cmd --reload
+
+  # Check if service is allowed
+  sudo firewall-cmd --query-service=http
+
+  # Remove a port
+  sudo firewall-cmd --permanent --remove-port=8080/tcp
+
+  # Change default zone
+  sudo firewall-cmd --set-default-zone=internal
+
+  # Get default zone
+  sudo firewall-cmd --get-default-zone
+
+Zones (increasing trust):
+  drop      — All incoming dropped, only outgoing allowed
+  block     — Incoming rejected with ICMP message
+  public    — Untrusted networks (default)
+  external  — NAT-enabled for router use
+  internal  — Moderately trusted (internal network)
+  work      — Trusted work network
+  home      — Trusted home network
+  trusted   — All connections accepted
+
+Flags
+  --permanent               Make change persistent (requires --reload)
+  --reload                  Apply permanent changes
+  --add-service=SERVICE     Allow service by name
+  --add-port=PORT/PROTO     Allow port
+  --remove-service=SERVICE  Remove service
+  --remove-port=PORT/PROTO  Remove port
+  --list-all                List all rules in current zone
+  --get-default-zone        Show default zone
+  --set-default-zone=ZONE   Change default zone
+
+ufw (Uncomplicated Firewall)
+Simple firewall for Debian/Ubuntu. Frontend for iptables designed
+to be easy to use. Perfect for quick server setup.
+
+Usage
+  sudo ufw [OPTIONS] [RULE]
+
+Examples
+  # Enable firewall
+  sudo ufw enable
+
+  # Disable firewall
+  sudo ufw disable
+
+  # Check status
+  sudo ufw status verbose
+
+  # Allow SSH
+  sudo ufw allow 22/tcp
+
+  # Allow HTTP and HTTPS
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+
+  # Allow from specific subnet
+  sudo ufw allow from 192.168.10.0/24 to any port 22
+
+  # Deny from specific IP
+  sudo ufw deny from 203.0.113.100
+
+  # Delete a rule
+  sudo ufw delete allow 80/tcp
+
+  # Set default policies
+  sudo ufw default deny incoming
+  sudo ufw default allow outgoing
+
+  # Enable logging
+  sudo ufw logging on
+
+  # Show rule numbers
+  sudo ufw status numbered
+
+  # Delete by number
+  sudo ufw delete 3
+
+  # Reset to default (removes all rules)
+  sudo ufw reset
+
+-------------------------------------------------------------------------------
+SCHEDULED TASKS (CRON & AT)
+Commands for automating recurring and one-time tasks. cron handles
+scheduled jobs; at runs a job once at a specific time. systemd timers
+are the modern alternative. CRITICAL for LFCS Domain 2.
+
+crontab
+Schedule periodic tasks. Each user has their own crontab. System-wide
+cron jobs live in /etc/crontab and /etc/cron.* directories.
+
+Usage
+  crontab [OPTIONS] [FILE]
+
+Crontab Syntax (per line):
+  *     *     *     *     *     command_to_run
+  ┬     ┬     ┬     ┬     ┬
+  │     │     │     │     └── Day of week (0-7, Sun=0/7)
+  │     │     │     └──────── Month (1-12)
+  │     │     └────────────── Day of month (1-31)
+  │     └──────────────────── Hour (0-23)
+  └────────────────────────── Minute (0-59)
+
+Special characters:
+  *        Every unit (e.g., every minute, every hour)
+  5        At exactly unit 5
+  */5      Every 5 units
+  1-5      Range: 1,2,3,4,5
+  1,3,5    List: units 1, 3, and 5
+
+Examples
+  # Edit your crontab (opens in default editor)
+  crontab -e
+
+  # List your crontab entries
+  crontab -l
+
+  # Remove your crontab
+  crontab -r
+
+  # Edit another user's crontab (root only)
+  sudo crontab -u carol -e
+
+  # Install crontab from a file
+  crontab mycron.txt
+
+Crontab Examples (in crontab editor):
+  ###########################################################
+  # anihpj crontab for user carol
+  ###########################################################
+
+  # Database backup every day at 2:30 AM
+  30 2 * * * /lpj/scripts/backup.sh >> /var/log/backup.log 2>&1
+
+  # Health check every 5 minutes
+  */5 * * * * /lpj/scripts/health-check.sh
+
+  # Log cleanup every Sunday at 3 AM
+  0 3 * * 0 /lpj/scripts/cleanup.sh
+
+  # Rotate application logs daily at midnight
+  0 0 * * * /usr/sbin/logrotate /lpj/k8s/base/configmap.yaml
+
+  # Sync time every 6 hours
+  0 */6 * * * /usr/sbin/ntpdate -s pool.ntp.org
+
+  # Reboot notification (run on reboot)
+  @reboot echo "$(date): Server $(hostname) rebooted" | mail -s "Reboot Alert" carol@anihpj.com
+
+  # Run on the 1st and 15th at 8 AM
+  0 8 1,15 * * /lpj/scripts/biweekly-report.sh
+
+Special time shortcuts:
+  @reboot      Run once at boot
+  @yearly      Run once a year (0 0 1 1 *)
+  @annually    Same as @yearly
+  @monthly     Run once a month (0 0 1 * *)
+  @weekly      Run once a week (0 0 * * 0)
+  @daily       Run once a day (0 0 * * *)
+  @midnight    Same as @daily
+  @hourly      Run once an hour (0 * * * *)
+
+/etc/cron* directories (system-wide, no user column needed):
+  /etc/crontab              System-wide crontab (includes user field)
+  /etc/cron.d/              Drop-in cron files (same format as /etc/crontab)
+  /etc/cron.daily/          Scripts run daily (configured in /etc/crontab)
+  /etc/cron.hourly/         Scripts run hourly
+  /etc/cron.weekly/         Scripts run weekly
+  /etc/cron.monthly/        Scripts run monthly
+
+Example /etc/cron.d/anihpj:
+  # System-wide cron for anihpj (requires user field!)
+  SHELL=/bin/bash
+  PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+  MAILTO=carol@anihpj.com
+
+  # Minute Hour  Day  Month  DayOfWeek  User   Command
+  0      2     *    *      *          root   /lpj/scripts/backup.sh
+
+Flags (crontab)
+  -e        Edit current crontab
+  -l        List current crontab
+  -r        Remove current crontab
+  -u USER   Operate on USER's crontab (root only)
+  -i        Prompt before removing crontab
+
+at
+Schedule a one-time task to run at a specific time. Unlike cron which
+repeats, at runs exactly once. Uses atd service.
+
+Usage
+  at [OPTIONS] TIME
+
+Examples
+  # Schedule a command at a specific time
+  echo "/lpj/scripts/deploy.sh" | at 2:30 AM
+
+  # Interactive mode (Ctrl+D to finish)
+  at 11:00 PM
+  at> /lpj/scripts/backup.sh
+  at> /usr/bin/mail -s "Backup Done" carol@anihpj.com
+  at> Ctrl+D
+
+  # Schedule to run in 30 minutes
+  echo "systemctl restart jobpost" | at now + 30 minutes
+
+  # Schedule for tomorrow
+  at tomorrow <<< "/lpj/scripts/cleanup.sh"
+
+  # Schedule for next week
+  at next week <<< "apt update && apt upgrade -y"
+
+  # List pending at jobs
+  atq
+
+  # Remove a pending at job (by job number)
+  atrm 3
+
+  # Read commands from file
+  at -f /lpj/scripts/maintenance.sh midnight
+
+Time formats accepted by at:
+  now + 5 minutes          10:00 AM
+  now + 2 hours            noon
+  now + 1 day              midnight
+  now + 2 weeks            tomorrow
+  now + 1 month            next week
+  2:30 PM                  next monday
+  14:30                    2026-12-31
+
+Flags
+  -f FILE          Read job from FILE
+  -l               List pending jobs (same as atq)
+  -d JOBNUM        Delete job JOBNUM (same as atrm)
+  -m               Mail user when job completes
+  -v               Show time the job will be executed
+
+at.allow / at.deny:
+  /etc/at.allow   — Users allowed to use at (if exists, ONLY these users)
+  /etc/at.deny    — Users denied from using at
+
+systemd Timers
+Modern alternative to cron. Timer units trigger service units on schedule.
+More precise, integrates with journald, and supports monotonic timers.
+
+Timer unit example (/etc/systemd/system/backup.timer):
+  [Unit]
+  Description=Daily backup timer for anihpj
+  Requires=backup.service
+
+  [Timer]
+  OnCalendar=daily
+  OnCalendar=02:30
+  Persistent=true          # Run missed jobs after boot
+  RandomizedDelaySec=300   # Random delay up to 5 min (avoid thundering herd)
+
+  [Install]
+  WantedBy=timers.target
+
+Service unit (/etc/systemd/system/backup.service):
+  [Unit]
+  Description=anihpj backup service
+
+  [Service]
+  Type=oneshot
+  ExecStart=/lpj/scripts/backup.sh
+  User=root
+
+systemd Timer Commands:
+  # List all timers
+  systemctl list-timers
+
+  # Enable timer to start at boot
+  sudo systemctl enable backup.timer
+
+  # Start timer now
+  sudo systemctl start backup.timer
+
+  # Check timer status
+  systemctl status backup.timer
+
+OnCalendar formats:
+  daily             Every day at 00:00
+  hourly            Every hour
+  weekly            Every Monday at 00:00
+  monthly           First day of month at 00:00
+  *:0/15            Every 15 minutes
+  Mon,Fri 09:00     Mondays and Fridays at 9 AM
+  *-*-01 03:00      1st of every month at 3 AM
+
+-------------------------------------------------------------------------------
+SYSTEM RESCUE & RECOVERY
+Commands and procedures for recovering a broken Linux system.
+Includes booting into rescue mode, resetting forgotten passwords,
+and repairing corrupted filesystems. CRITICAL for LFCS scenarios.
+
+systemd Targets (Runlevels)
+Understanding boot targets is fundamental for LFCS. systemd uses targets
+instead of the legacy SysV runlevels.
+
+systemd Target       Legacy Runlevel    Description
+─────────────────────────────────────────────────────────
+poweroff.target      runlevel 0         Shut down the system
+rescue.target        runlevel 1         Single-user mode (root, minimal)
+multi-user.target    runlevel 3         Multi-user, no GUI (server default)
+graphical.target     runlevel 5         Multi-user with GUI (desktop default)
+reboot.target        runlevel 6         Reboot the system
+emergency.target     N/A               Emergency shell (absolute minimum)
+
+systemctl Target Commands:
+  # Show current target
+  systemctl get-default
+
+  # Set default boot target (server)
+  sudo systemctl set-default multi-user.target
+
+  # Set default boot target (desktop)
+  sudo systemctl set-default graphical.target
+
+  # Switch to rescue mode immediately
+  sudo systemctl isolate rescue.target
+
+  # Switch to emergency mode
+  sudo systemctl isolate emergency.target
+
+  # List all active targets
+  systemctl list-units --type=target
+
+  # Check which target booted
+  systemctl list-units --type=target --state=active | grep ".target"
+
+Rescue Mode (rescue.target):
+  - Mounts local filesystems
+  - Starts minimal services
+  - No network (by default)
+  - Single-user root shell
+  - Used for system repair
+
+Emergency Mode (emergency.target):
+  - Mounts only root filesystem (read-only)
+  - No services at all
+  - Minimal shell
+  - Used when rescue mode fails
+
+Forgotten Root Password Recovery:
+──────────────────────────────────
+Step 1: Reboot and interrupt GRUB
+  - At GRUB menu: select kernel, press 'e' to edit
+
+Step 2: Edit kernel command line
+  - Find line starting with "linux" or "linux16"
+  - Add at end: rd.break     (RHEL/CentOS)
+    OR
+  - Add at end: init=/bin/bash  (Debian/Ubuntu)
+  - Press Ctrl+X or F10 to boot
+
+Step 3: Remount root read-write
+  # For rd.break (RHEL):
+  mount -o remount,rw /sysroot
+  chroot /sysroot
+
+  # For init=/bin/bash (Debian):
+  mount -o remount,rw /
+
+Step 4: Change password
+  passwd root
+  # Enter new password twice
+
+Step 5: SELinux relabel (RHEL only)
+  touch /.autorelabel
+
+Step 6: Reboot
+  # For rd.break:
+  exit       # Exit chroot
+  exit       # Exit emergency shell (system reboots)
+
+  # For init=/bin/bash:
+  exec /sbin/init   # Continue normal boot
+  # OR
+  reboot -f         # Force reboot
+
+Alternative: Boot from Live CD/USB
+  1. Boot from installation media
+  2. Select "Troubleshooting" → "Rescue a system"
+  3. Choose "1" to mount existing installation at /mnt/sysimage
+  4. chroot /mnt/sysimage
+  5. passwd root
+  6. exit && reboot
+
+fsck (File System Check)
+Check and repair Linux filesystems. Must be run on unmounted filesystems
+or in read-only mode. EXTREME CAUTION: running on mounted filesystem can
+cause severe corruption.
+
+Usage
+  sudo fsck [OPTIONS] DEVICE
+
+Examples
+  # Check a filesystem (will prompt for fixes)
+  sudo fsck /dev/sda1
+
+  # Automatically repair (use with caution)
+  sudo fsck -y /dev/vg_anihpj/lv_data
+
+  # Force check even if filesystem seems clean
+  sudo fsck -f /dev/sda1
+
+  # Check without making changes (dry-run)
+  sudo fsck -N /dev/sda1
+
+  # Check all filesystems in /etc/fstab
+  sudo fsck -A
+
+  # Check XFS filesystem (use xfs_repair)
+  sudo xfs_repair /dev/vg_anihpj/lv_apps
+
+  # Check ext4 filesystem
+  sudo fsck.ext4 -f /dev/sda1
+
+  # Force fsck on next reboot
+  sudo touch /forcefsck
+
+Flags
+  -y              Assume yes to all questions
+  -n              Assume no to all questions (just report)
+  -f              Force check even if marked clean
+  -N              Dry run — show what would be done
+  -A              Check all filesystems in /etc/fstab
+  -t TYPE         Specify filesystem type (ext4, xfs, etc.)
+  -C              Show progress bar
+
+xfs_repair
+Check and repair XFS filesystems. XFS uses its own repair tool
+(not fsck). Must be run on UNMOUNTED filesystem.
+
+Usage
+  sudo xfs_repair [OPTIONS] DEVICE
+
+Examples
+  # Check XFS filesystem (read-only scan)
+  sudo xfs_repair -n /dev/vg_anihpj/lv_apps
+
+  # Repair XFS filesystem
+  sudo xfs_repair /dev/vg_anihpj/lv_apps
+
+  # Repair with verbose output
+  sudo xfs_repair -v /dev/vg_anihpj/lv_apps
+
+Flags
+  -n              No modify — scan and report only
+  -v              Verbose output
+  -d              Dangerous — repair read-only mounted fs (use with EXTREME CAUTION)
+
+-------------------------------------------------------------------------------
+SELINUX & APPARMOR
+Mandatory Access Control (MAC) systems that add an additional security
+layer beyond standard Linux permissions. SELinux (RHEL/CentOS) and
+AppArmor (Ubuntu/Debian) are LFCS exam topics.
+
+SELinux (Security-Enhanced Linux)
+Developed by NSA, default on RHEL/CentOS/Fedora. Enforces mandatory
+access controls through security contexts and policy rules.
+
+SELinux Modes:
+  Enforcing    — Policies enforced, violations blocked and logged (default)
+  Permissive   — Policies NOT enforced, violations only logged (debugging)
+  Disabled     — SELinux turned off completely
+
+getenforce
+Show current SELinux mode.
+
+Usage
+  getenforce
+
+Output: Enforcing | Permissive | Disabled
+
+setenforce
+Change SELinux mode (temporary, resets on reboot). Use 1 for Enforcing,
+0 for Permissive. Cannot switch from Disabled without reboot.
+
+Usage
+  sudo setenforce [0|1]
+
+Examples
+  # Switch to permissive (for debugging)
+  sudo setenforce 0
+
+  # Switch back to enforcing
+  sudo setenforce 1
+
+sestatus
+Display detailed SELinux status.
+
+Usage
+  sestatus [OPTIONS]
+
+Examples
+  # Show full SELinux status
+  sestatus
+
+  # Show only current mode
+  sestatus | grep "Current mode"
+
+ls -Z
+Show SELinux context of files and directories.
+
+Examples
+  # Show SELinux contexts of files
+  ls -Z /var/www/html
+
+  # Show context of a process
+  ps auxZ | grep nginx
+
+SELinux Context Format:
+  system_u:object_r:httpd_sys_content_t:s0
+  └─user──┘└─role─┘└──────type───────┘└level┘
+  The TYPE field is most important for troubleshooting.
+
+chcon
+Change SELinux context of a file (temporary — reset by relabel).
+
+Usage
+  sudo chcon [OPTIONS] CONTEXT FILE...
+
+Examples
+  # Set context for web content
+  sudo chcon -t httpd_sys_content_t /var/www/anihpj/
+
+  # Set context recursively
+  sudo chcon -R -t httpd_sys_content_t /var/www/anihpj/
+
+  # Reference context from another file
+  sudo chcon --reference=/var/www/html /var/www/anihpj
+
+Flags
+  -t TYPE         Set type field
+  -u USER         Set user field
+  -r ROLE         Set role field
+  -R              Recursive
+  --reference=FILE  Copy context from FILE
+
+restorecon
+Restore default SELinux contexts (based on policy). The PREFERRED way
+to fix SELinux context issues — context changes survive relabels.
+
+Usage
+  sudo restorecon [OPTIONS] FILE...
+
+Examples
+  # Restore default context
+  sudo restorecon /var/www/anihpj/index.html
+
+  # Restore recursively
+  sudo restorecon -R /var/www/anihpj/
+
+  # Show what would be changed (dry-run)
+  sudo restorecon -n -v /var/www/anihpj/
+
+  # Restore after creating new web content
+  sudo cp -r /tmp/site /var/www/anihpj/
+  sudo restorecon -R /var/www/anihpj/
+
+Flags
+  -R              Recursive
+  -v              Verbose — show changes
+  -n              Dry-run — don't change anything
+
+semanage
+Manage SELinux policy — add port contexts, file context mappings,
+and booleans. More powerful than chcon; changes survive relabels.
+
+Examples
+  # Allow Apache to listen on port 8080
+  sudo semanage port -a -t http_port_t -p tcp 8080
+
+  # Add file context mapping (persistent)
+  sudo semanage fcontext -a -t httpd_sys_content_t "/var/www/anihpj(/.*)?"
+
+  # Apply the new file context
+  sudo restorecon -R /var/www/anihpj/
+
+  # List SELinux booleans
+  sudo semanage boolean -l
+
+  # List port mappings
+  sudo semanage port -l | grep http
+
+getsebool / setsebool
+View and modify SELinux boolean settings (on/off toggles for policies).
+
+Examples
+  # List all booleans
+  sudo getsebool -a
+
+  # Check a specific boolean
+  sudo getsebool httpd_enable_cgi
+
+  # Enable a boolean (temporary)
+  sudo setsebool httpd_enable_cgi on
+
+  # Enable a boolean permanently
+  sudo setsebool -P httpd_enable_cgi on
+
+Common SELinux Booleans (LFCS):
+  httpd_can_network_connect     Allow Apache to make network connections
+  httpd_enable_cgi              Allow Apache CGI scripts
+  httpd_read_user_content       Allow Apache to read user home dirs
+  named_write_master_zones      Allow BIND to write zone files
+  nfs_export_all_rw             Allow NFS read-write exports
+
+SELinux Troubleshooting Workflow:
+  1. Check audit log: sudo ausearch -m avc -ts recent
+  2. Check if SELinux is blocking: sudo cat /var/log/audit/audit.log | grep denied
+  3. Check contexts: ls -Z /path/to/file
+  4. Temporarily set permissive: sudo setenforce 0
+  5. Test if the issue is resolved
+  6. If resolved, find the fix (restorecon, semanage, setsebool)
+  7. Return to enforcing: sudo setenforce 1
+
+SELinux Config File (/etc/selinux/config):
+  SELINUX=enforcing    # enforcing | permissive | disabled
+  SELINUXTYPE=targeted # targeted | minimum | mls
+
+AppArmor (Ubuntu/Debian)
+Similar to SELinux — mandatory access control using per-application
+profiles instead of file-system-wide contexts.
+
+Key AppArmor Commands:
+  # Check AppArmor status
+  sudo aa-status
+
+  # List loaded profiles
+  sudo aa-status --verbose
+
+  # Set profile to complain mode (log only, don't enforce)
+  sudo aa-complain /usr/sbin/nginx
+
+  # Set profile to enforce mode
+  sudo aa-enforce /usr/sbin/nginx
+
+  # Disable a profile
+  sudo aa-disable /usr/sbin/nginx
+
+  # Reload all profiles
+  sudo systemctl reload apparmor
+
+  # Check for AppArmor denials in logs
+  sudo grep apparmor /var/log/syslog
+  sudo dmesg | grep apparmor
+
+AppArmor profiles location:
+  /etc/apparmor.d/              Profile definitions
+
+Common AppArmor Modes:
+  enforce   — Policy enforced, violations blocked
+  complain  — Policy NOT enforced, violations logged (debugging)
+  disabled  — Profile not loaded
