@@ -4,7 +4,8 @@ File: cka_test_prep.html
 TOC File: cka_test_prep_toc.txt
 Purpose: Comprehensive CKA exam test preparation — Pass the CKA & Beyond
 Based on: Official Linux Foundation CKA Exam Domains (5 categories)
-Project: anihpj/jobpost (Django job posting application on AWS)
+Project: anihpj/jobpost (Django job posting application)
+Clusters: 6-cluster local lab (kubeadm + 4 kind + minikube) from 0. CONTEXT
 Target Audience: Novice → Professional → Beyond (all levels)
     • Novices: Foundational concepts, analogies, first-principles explanations
     • Intermediate: Deep dives, troubleshooting patterns, production scenarios
@@ -542,162 +543,740 @@ CATEGORY 5: SERVICES & NETWORKING (20 Issues: SN1-SN20)
 ═══════════════════════════════════════════════════════════════════════
 PART 3: 100 HANDS-ON LAB SCENARIOS (S1-S100)
 ═══════════════════════════════════════════════════════════════════════
-Each scenario follows the cilium-test-prep.html design:
-  📋 Deploy — YAML with a BUG you must find and fix
-  🔍 Investigate — commands to diagnose the problem
-  🐛 The Bug — what's wrong and why it happens (spoiler: hidden until you click)
-  🔧 Fix — copy-paste commands to resolve the issue
-  ✅ Verify — commands to confirm the fix worked
-  🧹 Cleanup — delete resources created during the lab
-  📋 Copy button on ALL code blocks for direct kubeadm execution
+🎯 6-CLUSTER LAB ENVIRONMENT (from 0. CONTEXT):
+  1) kubeadm (node "anih") — Production-grade, SSH access, etcd, control plane
+  2) kind-cka-lab — Dedicated CKA exam practice cluster
+  3) kind-cl1 — Multi-cluster lab 1
+  4) kind-cl2 — Multi-cluster lab 2
+  5) kind-cl3 — Multi-cluster lab 3
+  6) minikube — Quick dev/test experiments
+  ⚡ Switch: ksw → choose 1-6 → verify with kubectl config current-context
+
+📋 Each scenario follows this structure:
+  FILE STRUCTURE — All YAML files you'll create
+  DEPLOY — Copy-paste YAML with an INTENTIONAL BUG
+  OBSERVE — Symptoms you should see in your cluster
+  DEBUG — Diagnostic commands to find the root cause
+  FULL ANSWER — Tenet flow + BEFORE/AFTER command outputs
+  FIX — Copy-paste commands to resolve the issue
+  VERIFY — Confirmation the fix worked
+  CLEANUP — Delete all resources to reset for next scenario
+  🖥️ CLUSTER — Which of your 6 clusters to use (ksw → number)
 
 ───────────────────────────────────────────────────────────────────────
 CATEGORY 1: STORAGE (10 Scenarios: S1-S10)
 ───────────────────────────────────────────────────────────────────────
+Goal: Master PV, PVC, StorageClass, accessModes, ConfigMap, Secret,
+      emptyDir, hostPath, fsGroup, ResourceQuota — all locally on kubeadm/kind.
 
-  S1:  Deploy PostgreSQL for anihpj — Debug Pending PVC
-       Create a PV/PVC for the jobpost database. The PVC stays Pending.
-       Bug: StorageClass name typo. Learn: dynamic provisioning flow.
+  S1:  🖥️ kubeadm — StorageClass Name Typo → PVC Stuck Pending
+       Story: New DevOps engineer deploys PostgreSQL StatefulSet for anihpj/jobpost.
+       The PVC references storageClassName "fast-ssd" but the actual StorageClass is
+       "fast-ssd-sc". PVC stays Pending forever. Database pod can't start — job board DOWN.
+       Bug: storageClassName: "fast-ssd" ← typo (should be "fast-ssd-sc")
+       Learn: StorageClass naming, PVC binding, kubectl describe pvc, Events debugging
+       Workload: StatefulSet (PostgreSQL 15 Alpine) + hostPath PV
 
-  S2:  RWO vs RWX — Two API Pods, One Volume
-       Deploy two anihpj-api pods. Only one can mount the shared volume.
-       Bug: EBS only supports RWO, need EFS for RWX. Learn: accessModes.
+  S2:  🖥️ kind-cka-lab — RWO Blocks Second API Pod → ReadWriteOnce vs ReadWriteMany
+       Story: anihpj-api needs high availability — 2 replicas across 2 nodes. But the
+       session volume uses ReadWriteOnce (RWO). First pod starts on node-1, second pod
+       on node-2 can't mount the same volume. API is a single point of failure.
+       Bug: accessModes: [ReadWriteOnce] — only ONE node can mount
+       Learn: RWO vs ROX vs RWX accessModes, podAffinity workaround, Multi-Attach errors
+       Workload: Deployment (nginx:alpine × 2 replicas) + hostPath PV
 
-  S3:  Expand PVC for Growing Database
-       Jobpost DB running low on space. Resize the PVC from 5Gi to 20Gi.
-       Bug: StorageClass has allowVolumeExpansion: false. Learn: volume expansion.
+  S3:  🖥️ kubeadm — Database Running Out of Space → PVC Won't Expand
+       Story: anihpj launched 6 months ago with a 5Gi database. Now 50,000 job listings
+       and 200,000 applications have filled it to 92%. You patch the PVC to 20Gi but
+       nothing happens. StorageClass has allowVolumeExpansion: false.
+       Bug: allowVolumeExpansion: false in StorageClass — blocks PVC resize
+       Learn: Volume expansion, kubectl patch pvc, allowVolumeExpansion, FileSystemResizePending
+       Workload: StatefulSet (PostgreSQL 15 Alpine) + hostPath PV + StorageClass
 
-  S4:  ConfigMap as Volume — Mount nginx Config
-       Mount a custom nginx config into the anihpj-web pod.
-       Bug: subPath used, changes to ConfigMap not reflected. Learn: subPath behavior.
+  S4:  🖥️ kind-cka-lab — ConfigMap Updated but Pod Still Serves Old Config → subPath Bug
+       Story: You update the nginx config in a ConfigMap from VERSION-1 to VERSION-2.
+       But the anihpj-web pod still returns "VERSION-1". The ConfigMap IS updated in
+       etcd, but the pod's mounted file hasn't changed. subPath mounts are STATIC snapshots.
+       Bug: volumeMount uses subPath: default.conf — blocks auto-refresh
+       Learn: ConfigMap as volume, subPath behavior (static), directory mount (dynamic)
+       Workload: Deployment (nginx:alpine) + ConfigMap
 
-  S5:  emptyDir vs Persistent — Data After Pod Restart
-       Deploy Redis on emptyDir. Kill the pod. Data is gone.
-       Bug: emptyDir is ephemeral. Learn: when to use each volume type.
+  S5:  🖥️ minikube — Pod Restarts, All Cached Data Gone → emptyDir Is Ephemeral
+       Story: Redis cache for anihpj stores session tokens and cached job listings in
+       an emptyDir volume. The pod gets evicted due to node pressure. When it restarts,
+       all cached data is GONE. Users are logged out, job searches are slow.
+       Bug: emptyDir: {} — data tied to pod lifecycle, NOT node or PV
+       Learn: emptyDir vs hostPath vs PV lifecycle, when to use each volume type
+       Workload: Deployment (redis:7-alpine) + emptyDir → migrate to PVC
 
-  S6:  Secret as Environment Variable — Database Password
-       Inject PostgreSQL password via Secret into anihpj-api pods.
-       Bug: Secret referenced but not created. Learn: Secret consumption patterns.
+  S6:  🖥️ kind-cka-lab — API Can't Connect to Database → Secret Never Created
+       Story: anihpj-api references DB_PASSWORD from a Secret named "anihpj-db-credentials"
+       via secretKeyRef. The Deployment is applied, but the Secret was never created.
+       The env var is EMPTY. PostgreSQL rejects the connection — CrashLoopBackOff.
+       Bug: Secret referenced in Deployment but not created → empty env var
+       Learn: kubectl create secret generic, secretKeyRef, envFrom, base64 encoding
+       Workload: Deployment (busybox:1.36 simulating Django) + Secret
 
-  S7:  CSI Driver Missing — EBS Provisioning Fails
-       Deploy anihpj with StorageClass using ebs.csi.aws.com provisioner.
-       Bug: AWS EBS CSI driver not installed. Learn: CSI architecture.
+  S7:  🖥️ kubeadm — PVC Requests 20Gi but Largest PV Is Only 5Gi → Capacity Mismatch
+       Story: The anihpj team provisions a 5Gi PV for testing. Later, the production
+       PVC requests 20Gi. The 5Gi PV exists and is Available, but it's too small.
+       Kubernetes PV binding is ALL-OR-NOTHING — capacity must match or exceed.
+       Bug: PV capacity: 5Gi < PVC request: 20Gi — no PV satisfies the PVC
+       Learn: PV capacity matching, all-or-nothing binding, kubectl get pv --sort-by
+       Workload: StatefulSet (PostgreSQL 15 Alpine) + hostPath PV (5Gi → 20Gi)
 
-  S8:  Volume Mount Permission Denied — fsGroup
-       Pod can't write to mounted PV. Events show "permission denied".
-       Bug: Container runs as non-root, volume owned by root. Learn: fsGroup + securityContext.
+  S8:  🖥️ kubeadm — PostgreSQL Can't Write to Data Directory → Volume Owned by Root
+       Story: The anihpj-db pod starts but PostgreSQL crashes immediately. Logs show
+       "Permission denied" on /var/lib/postgresql/data. The hostPath volume is owned
+       by root:root (UID 0), but PostgreSQL runs as user "postgres" (UID 999).
+       Bug: Missing securityContext.fsGroup: 999 — volume owned by root, not postgres
+       Learn: fsGroup, securityContext, runAsUser, volume permissions, pod security
+       Workload: StatefulSet (PostgreSQL 15 Alpine) + hostPath PV + securityContext
 
-  S9:  hostPath Volume — Pod Rescheduled, Data Lost
-       Pod uses hostPath to store data. Pod evicted to another node.
-       Bug: hostPath data is node-specific. Learn: hostPath limitations.
+  S9:  🖥️ minikube — Pod Rescheduled to Different Node → hostPath Data Lost
+       Story: Redis runs on node-1 using hostPath at /data/redis. The node fails.
+       Kubernetes reschedules the pod to node-2. The pod starts but /data/redis on
+       node-2 is EMPTY. All user session data and cached listings are GONE.
+       Bug: hostPath ties data to a SPECIFIC NODE — reschedule = data loss
+       Learn: hostPath limitations, node-specific storage, when to use hostPath vs PV
+       Workload: Deployment (redis:7-alpine) + hostPath → migrate to PVC
 
-  S10: ResourceQuota — PVC Limit Exceeded
-        Namespace has a ResourceQuota limiting PVC count to 2.
-        Bug: Attempt to create 3rd PVC fails. Learn: ResourceQuota enforcement.
+  S10: 🖥️ kind-cka-lab — Third PVC Fails → ResourceQuota Limits PVC Count to 2
+       Story: The anihpj namespace has PostgreSQL and Redis PVCs already. A third PVC
+       for file uploads is created but kubectl returns "exceeded quota". The namespace
+       has a ResourceQuota limiting persistentvolumeclaims count to 2.
+       Bug: ResourceQuota spec.hard["persistentvolumeclaims"]: "2" — blocks 3rd PVC
+       Learn: ResourceQuota, kubectl describe quota, namespace resource limits
+       Workload: PVCs only + ResourceQuota + namespace
 
 
 ───────────────────────────────────────────────────────────────────────
 CATEGORY 2: TROUBLESHOOTING (30 Scenarios: S11-S40)
 ───────────────────────────────────────────────────────────────────────
+Goal: Master the CKA troubleshooting workflow — Observe → Diagnose → Fix → Verify.
+      These scenarios simulate REAL production incidents you'll face on the exam.
 
-  S11: Node NotReady — Debug kubelet (systemctl, journalctl)
-  S12: MemoryPressure — Evict Pods & Troubleshoot OOM
-  S13: DiskPressure — Clean Images, Logs, and EmptyDirs
-  S14: etcd Quorum Lost — Snapshot & Disaster Recovery
-  S15: API Server Unreachable — Network Debug with tcpdump
-  S16: ImagePullBackOff — Private Registry Auth with imagePullSecrets
-  S17: CrashLoopBackOff — anihpj-api Missing Database Connection
-  S18: OOMKilled — Set Memory Limits for Java/Django App
-  S19: Init Container Failure — Wait for Database to Be Ready
-  S20: Pod Stuck Terminating — Remove Finalizer Blocking Deletion
-  S21: Liveness Probe Misconfigured — Premature Pod Kill on Startup
-  S22: Readiness Probe Failing — anihpj-api /health Returns 500
-  S23: Startup Probe — Give anihpj-api 120s to Boot Before Liveness
-  S24: Exec Probe — livenessProbe with Wrong Shell Command
-  S25: HTTP Probe Wrong Path — /healthz vs /health
-  S26: Missing Container Logs — anihpj Writing to File, Not stdout
-  S27: metrics-server Not Reporting — Debug kubelet Summary API
-  S28: kubectl exec Timeout — Debug API Server to Kubelet Connection
-  S29: Event Rate Limiting — Missing Events During Pod Failure
-  S30: Audit Log — Track Who Deleted the anihpj Namespace
+  S11: 🖥️ kubeadm — 3 AM PagerDuty: Node anih Shows NotReady → Kubelet Crashed
+       Story: Monitoring alerts fire. kubectl get nodes shows "anih" as NotReady.
+       Pods on the node are Unknown. You SSH in and find kubelet service is dead.
+       Bug: sudo systemctl stop kubelet — kubelet service not running
+       Learn: systemctl status/start kubelet, journalctl -u kubelet, node conditions
+       Diagnostic: kubectl describe node → SSH → systemctl → journalctl → restart
+
+  S12: 🖥️ kubeadm — API Pods Keep Dying with OOMKilled (Exit Code 137) → Memory Limit Too Low
+       Story: anihpj-api Deployment keeps restarting. kubectl describe shows OOMKilled.
+       The container memory limit is 50Mi but the Django app needs 200MB+. Kernel OOM
+       killer sends SIGKILL. The API is in CrashLoopBackOff.
+       Bug: resources.limits.memory: "50Mi" ← too low for Django (needs ≥256Mi)
+       Learn: OOMKilled diagnosis, exit code 137, QoS classes, kubectl top, memory limits
+       Diagnostic: kubectl describe pod → check Last State → kubectl top → adjust limit
+
+  S13: 🖥️ kubeadm — DiskPressure: Node Disk 90% Full → Pods Being Evicted
+       Story: Node "anih" shows DiskPressure=True. Container images, old logs, and temp
+       files have filled /var. Kubelet's eviction threshold (85%) triggered. Pods are
+       evicted. New pods can't schedule.
+       Bug: /tmp filled with 25GB dummy file + accumulated container images/logs
+       Learn: DiskPressure condition, df -h, du -sh, crictl rmi --prune, journalctl vacuum
+       Diagnostic: kubectl describe node → df -h → du -sh /var/* → clean up
+
+  S14: 🖥️ kubeadm — Someone Ran kubectl delete ns anihpj --force! → etcd Restore Drill
+       Story: A junior admin accidentally deleted the anihpj namespace. The entire job
+       board application is GONE — 50,000 jobs, 10,000 users, all deleted from etcd.
+       But you took an etcd snapshot 10 minutes ago. Time for disaster recovery.
+       Bug: Namespace force-deleted (simulated disaster) — must restore from etcd snapshot
+       Learn: etcdctl snapshot save/restore/status, static pod manifests, full cluster recovery
+       Diagnostic: Verify snapshot integrity → stop API server → restore etcd → restart
+
+  S15: 🖥️ kind-cka-lab — ImagePullBackOff: Private Registry Without Credentials
+       Story: The anihpj API image is in a private registry. The Deployment references
+       private-registry.example.com/anihpj/api:v2.0 but has no imagePullSecrets.
+       Kubernetes gets 401 Unauthorized trying to pull the image.
+       Bug: No imagePullSecrets for private container registry → ImagePullBackOff
+       Learn: kubectl create secret docker-registry, imagePullSecrets, ErrImagePull
+       Diagnostic: kubectl describe pod → Events → check imagePullSecrets → create secret
+
+  S16: 🖥️ kind-cka-lab — CrashLoopBackOff: API Missing DATABASE_URL Environment Variable
+       Story: anihpj-api pod starts and immediately crashes. Logs show "FATAL: DATABASE_URL
+       is not set!" The app cannot connect to PostgreSQL without the connection string.
+       The Deployment YAML has no DATABASE_URL env var defined.
+       Bug: Missing DATABASE_URL environment variable → app exits with code 1
+       Learn: CrashLoopBackOff, kubectl logs, kubectl logs --previous, kubectl set env
+       Diagnostic: kubectl logs → kubectl logs --previous → check env vars → set env
+
+  S17: 🖥️ kind-cka-lab — Pod Stuck at Init:0/1 → Init Container Looking for Wrong DB Host
+       Story: anihpj-api uses an init container that waits for PostgreSQL to be ready
+       before starting Django. But the init container does nslookup for "wrong-db-host"
+       instead of "anihpj-db". It loops forever. The main container never starts.
+       Bug: Init container DNS check uses wrong hostname "wrong-db-host" → never completes
+       Learn: Init containers, kubectl logs -c <init-container>, pod phases
+       Diagnostic: kubectl logs -c wait-for-db → DNS failure → fix hostname
+
+  S18: 🖥️ kind-cka-lab — Pod Stuck Terminating for 10+ Minutes → Orphaned Finalizer
+       Story: You delete a pod but it stays in Terminating state forever. kubectl delete
+       hangs. The pod has a custom finalizer that no controller processes. Kubernetes
+       won't remove the pod from etcd until ALL finalizers are cleared.
+       Bug: metadata.finalizers: [custom-protection.example.com/finalizer] ← no controller
+       Learn: Finalizers, kubectl patch pod, force delete, deletionTimestamp
+       Diagnostic: kubectl get pod -o yaml | grep finalizers → patch to remove
+
+  S19: 🖥️ kind-cka-lab — Healthy Pod Killed by Liveness Probe → Probe Too Aggressive
+       Story: anihpj-api pod keeps restarting despite being healthy. The Django app takes
+       30 seconds to start, but the liveness probe fires at 3s, 5s, 9s, 11s... all fail.
+       After 2 failures, kubelet kills the pod. Infinite restart loop.
+       Bug: livenessProbe.initialDelaySeconds: 3 + failureThreshold: 2 ← too aggressive
+       Learn: Liveness vs readiness vs startup probes, probe timing, failureThreshold
+       Diagnostic: kubectl describe pod → Liveness probe failed → adjust initialDelay
+
+  S20: 🖥️ kind-cka-lab — Service Has No Endpoints → Readiness Probe Path Returns 404
+       Story: anihpj-api pod is Running 1/1 but READY shows 0/1. The Service endpoints
+       are empty — no traffic reaches the pod. The readiness probe is checking /healthz
+       but the app exposes health at / (root). Probe gets 404 every time.
+       Bug: readinessProbe.httpGet.path: /healthz ← returns 404, app only has /
+       Learn: Readiness probe, Service endpoints, kubectl get endpoints, probe debugging
+       Diagnostic: kubectl get endpoints → kubectl describe pod → check readiness path
+
+  S21: 🖥️ kind-cka-lab — Slow-Starting App Killed Before Boot → Need startupProbe
+       Story: Django takes 45 seconds to start (database migrations, cache warmup).
+       The liveness probe starts checking at 15s — way too early. Kubernetes kills the
+       pod before Django finishes booting. The fix: add a startupProbe.
+       Bug: No startupProbe defined for slow-starting application
+       Learn: startupProbe pattern, when to use vs liveness, failureThreshold for startup
+       Diagnostic: kubectl logs → app still booting → liveness killing it → add startupProbe
+
+  S22: 🖥️ kind-cka-lab — Exec Probe Fails → Wrong Shell in Distroless Container
+       Story: A liveness probe uses exec.command: ["/bin/bash","-c","health-check.sh"].
+       But the container is distroless (no bash, no shell). The probe always fails.
+       Kubernetes thinks the app is dead and restarts it continuously.
+       Bug: exec.command: ["/bin/bash"...] ← distroless container has no bash
+       Learn: Exec probe requirements, distroless images, shell availability
+       Diagnostic: kubectl describe pod → exec probe error → no bash → use ["/bin/sh"...]
+
+  S23: 🖥️ kind-cka-lab — HTTP Probe Wrong Port → Probe Checks Port 8080, App on 80
+       Story: The readiness probe is configured with port: 8080 but nginx listens on
+       port 80. The probe gets "connection refused" and the pod is never marked Ready.
+       The Service has no endpoints. All traffic is blocked.
+       Bug: readinessProbe.httpGet.port: 8080 ← app listens on port 80
+       Learn: Probe port configuration, containerPort vs probe port
+       Diagnostic: kubectl exec → wget localhost:80 (works), probe port:8080 (fails)
+
+  S24: 🖥️ kind-cka-lab — Missing Container Logs → App Writing to File, Not stdout/stderr
+       Story: kubectl logs shows NOTHING from the anihpj-api container. The app is
+       writing logs to /var/log/app.log instead of stdout. Kubernetes can only capture
+       stdout/stderr. Debugging is impossible without seeing the logs.
+       Bug: Application writes to file instead of stdout → kubectl logs returns empty
+       Learn: 12-Factor App logging, stdout vs file, kubectl logs, sidecar logging pattern
+       Diagnostic: kubectl logs → empty → kubectl exec cat /var/log/app.log → logs are there!
+
+  S25: 🖥️ kind-cka-lab — kubectl exec Timeout When Pod Has Many Containers
+       Story: A pod has 3 containers. You run kubectl exec without -c flag. You get
+       "error: container not specified". You need to specify which container to exec into.
+       Bug: Multi-container pod — kubectl exec requires -c <container-name>
+       Learn: Multi-container pods, kubectl exec -c, kubectl logs -c, --all-containers
+       Diagnostic: kubectl get pod -o yaml → 3 containers → exec with -c flag
+
+  S26: 🖥️ kubeadm — metrics-server Not Reporting → kubectl top Returns Error
+       Story: kubectl top pods shows "error: metrics not available yet". The metrics-server
+       is not installed or not running. HPA can't scale, resource monitoring is blind.
+       Bug: metrics-server not deployed in kube-system → no resource metrics API
+       Learn: metrics-server, kubectl top, kubelet Summary API, resource metrics pipeline
+       Diagnostic: kubectl top pods → error → kubectl get pods -n kube-system | grep metrics
+
+  S27: 🖥️ kubeadm — kubectl exec Timeout → API Server to Kubelet Connection Blocked
+       Story: kubectl exec hangs and eventually times out. kubectl logs also fails.
+       The API server can't reach the kubelet on port 10250. A firewall or network
+       issue is blocking the connection.
+       Bug: Port 10250 (kubelet API) blocked between control plane and worker node
+       Learn: API server → kubelet communication, kubectl exec flow, nodePort 10250
+       Diagnostic: kubectl exec timeout → check kubelet port → network connectivity
+
+  S28: 🖥️ kind-cka-lab — Event Rate Limiting → kubectl get events Shows Gaps
+       Story: A pod is crashing but kubectl get events shows only partial events.
+       Kubernetes rate-limits events to prevent overwhelming etcd. Critical events
+       are being dropped. You need to use kubectl describe for the FULL picture.
+       Bug: Event rate limiting drops events → rely on kubectl describe, not get events
+       Learn: Event rate limiting, kubectl describe vs kubectl get events, --show-events
+       Diagnostic: kubectl get events → gaps → kubectl describe pod → full event history
+
+  S29: 🖥️ kubeadm — DNS Resolution Fails → CoreDNS Pods CrashLoopBackOff
+       Story: Internal DNS is completely broken. pods can't resolve Service names.
+       anihpj-web can't reach anihpj-api. CoreDNS pods show CrashLoopBackOff.
+       The Corefile ConfigMap has a syntax error.
+       Bug: CoreDNS ConfigMap (Corefile) has invalid syntax → CoreDNS pods crash
+       Learn: CoreDNS architecture, Corefile ConfigMap, kubectl logs -n kube-system, DNS debugging
+       Diagnostic: nslookup fails → kubectl logs coredns → ConfigMap error → fix syntax
+
+  S30: 🖥️ kubeadm — Service Has No Endpoints → Selector Labels Don't Match Pod
+       Story: kubectl get svc shows the Service, but kubectl get endpoints shows
+       <none>. The Service selector says app: anihpj-api but the pod labels are
+       app: anihpj-api-v2. A simple label mismatch = no traffic routing.
+       Bug: Service selector {app: anihpj-api} ≠ Pod labels {app: anihpj-api-v2}
+       Learn: Service selectors, Endpoints, label matching, kubectl get endpoints
+       Diagnostic: kubectl get endpoints → none → check selector vs pod labels → fix
+
+  S31: 🖥️ kind-cl1 — NodePort Service Not Accessible Externally → Firewall Blocking 30000-32767
+       Story: You expose anihpj-web via NodePort 30080. But curl http://node-ip:30080
+       times out. The NodePort range (30000-32767) is blocked by the node's firewall.
+       Bug: NodePort 30080 blocked by firewall/iptables on the node
+       Learn: NodePort range, firewall rules, externalTrafficPolicy
+       Diagnostic: curl timeout → check firewall → open port 30080 → accessible
+
+  S32: 🖥️ kind-cl1 — NetworkPolicy Blocks Legitimate Traffic → Overly Restrictive Rules
+       Story: After applying a NetworkPolicy to secure anihpj, the web pod can no longer
+       reach the API pod. The policy allows ingress only from a specific IP block that
+       doesn't include the web pod's IP. The job board is broken.
+       Bug: NetworkPolicy ipBlock doesn't include pod CIDR → legitimate traffic denied
+       Learn: NetworkPolicy ingress/egress rules, podSelector, namespaceSelector, ipBlock
+       Diagnostic: Test connectivity → fails → kubectl describe netpol → fix ipBlock
+
+  S33: 🖥️ kind-cl1 — Default-Deny NetworkPolicy → Locked Out of DNS
+       Story: You apply a default-deny-all egress policy to secure the anihpj namespace.
+       Now pods can't resolve DNS! The policy blocks UDP port 53 to CoreDNS. Pods can't
+       reach anything — including the API server.
+       Bug: Default-deny egress blocks DNS (UDP 53) → pods can't resolve any names
+       Learn: Egress NetworkPolicy, DNS access, allow CoreDNS explicitly
+       Diagnostic: nslookup fails → kubectl describe netpol → add egress rule for DNS
+
+  S34: 🖥️ kind-cl2 — Ingress Returns 502 Bad Gateway → Backend Service Has No Endpoints
+       Story: You create an Ingress for anihpj-web. curl http://anihpj.local returns
+       502 Bad Gateway. The Ingress controller can reach the Service, but the Service
+       has no healthy endpoints. The backend pod's readiness probe is failing.
+       Bug: Backend pod not Ready → Service has no endpoints → Ingress returns 502
+       Learn: Ingress → Service → Endpoints → Pod chain, 502/503/504 debugging
+       Diagnostic: curl 502 → kubectl describe ingress → check backend → kubectl get endpoints
+
+  S35: 🖥️ kind-cl2 — Ingress TLS Certificate Error → Wrong Secret Format
+       Story: You configure TLS for anihpj-web Ingress. curl https://anihpj.local returns
+       SSL certificate error. The TLS Secret was created with the wrong type or format.
+       Bug: TLS Secret not type: kubernetes.io/tls → Ingress can't use it
+       Learn: TLS in Ingress, kubernetes.io/tls Secret type, cert-manager basics
+       Diagnostic: curl SSL error → kubectl describe ingress → check TLS secret → fix type
+
+  S36: 🖥️ kubeadm — kube-proxy Not Routing → Service ClusterIP Unreachable
+       Story: Pods can reach each other directly, but Service ClusterIPs are unreachable.
+       kube-proxy pods show errors. The kube-proxy ConfigMap has a wrong mode setting.
+       Bug: kube-proxy ConfigMap mode set incorrectly → iptables rules not created
+       Learn: kube-proxy modes (iptables/IPVS/nftables), kube-proxy ConfigMap, service routing
+       Diagnostic: curl ClusterIP fails → check kube-proxy pods → check ConfigMap → fix mode
+
+  S37: 🖥️ kubeadm — CNI Plugin Crash → Pod Network Broken Across Nodes
+       Story: Pods on the same node can communicate, but cross-node pod communication
+       is broken. The CNI plugin (Calico/Flannel) pods are crashing. New pods get stuck
+       in ContainerCreating because the CNI can't allocate IPs.
+       Bug: CNI plugin pods CrashLoopBackOff → cross-node networking broken
+       Learn: CNI architecture, /etc/cni/net.d/, pod networking model, CNI troubleshooting
+       Diagnostic: Cross-node ping fails → check CNI pods → check CNI config → restart
+
+  S38: 🖥️ kubeadm — etcd Backend Storage Full → Cluster Read-Only
+       Story: etcd database has grown to fill its storage. The cluster becomes read-only.
+       kubectl apply returns errors. No new resources can be created. etcd needs compaction
+       and defragmentation to reclaim space.
+       Bug: etcd database too large → exceeded storage quota → cluster read-only
+       Learn: etcd compaction, defragmentation, storage quotas, etcdctl compaction/defrag
+       Diagnostic: kubectl apply fails → etcdctl endpoint status → compact → defrag
+
+  S39: 🖥️ kubeadm — kubeadm Certificate Expired → kubectl Returns x509 Error
+       Story: kubectl suddenly returns "x509: certificate has expired". The kubeadm
+       certificates (1 year validity) have expired. The cluster is still running but
+       you can't manage it. You need to renew the certificates.
+       Bug: kubeadm certificates expired (1 year default) → kubectl auth broken
+       Learn: kubeadm certs check-expiration, kubeadm certs renew, certificate lifecycle
+       Diagnostic: kubectl x509 error → kubeadm certs check-expiration → renew all
+
+  S40: 🖥️ kubeadm — Control Plane Static Pod Crash → API Server Down
+       Story: The API server is DOWN. kubectl returns "connection refused". The
+       kube-apiserver static pod manifest in /etc/kubernetes/manifests/ has been
+       corrupted. The kubelet can't start the API server. The cluster is brain-dead.
+       Bug: /etc/kubernetes/manifests/kube-apiserver.yaml corrupted → API server down
+       Learn: Static pods, /etc/kubernetes/manifests/, control plane recovery, kubelet behavior
+       Diagnostic: kubectl fails → check static pod manifest → fix YAML → kubelet restarts it
 
 
 ───────────────────────────────────────────────────────────────────────
 CATEGORY 3: WORKLOADS & SCHEDULING (15 Scenarios: S41-S55)
 ───────────────────────────────────────────────────────────────────────
+Goal: Master Deployments, rollouts, ConfigMaps, Secrets, scheduling,
+      autoscaling, and pod disruption budgets.
 
-  S41: Rolling Update Stuck — maxSurge=0 + maxUnavailable=0
-  S42: Rollback to Previous Revision — kubectl rollout undo
-  S43: Blue-Green Deployment — Switch anihpj-web Service Between Stacks
-  S44: Canary Release — 10% Traffic to anihpj-api v2
-  S45: Deployment Paused — Resume & Debug Rollout Status
-  S46: Pod Stuck Pending — All Nodes Have Insufficient CPU
-  S47: nodeSelector — anihpj-api Must Run on SSD Nodes Only
-  S48: Pod Anti-Affinity — Spread anihpj-web Across AWS AZs
-  S49: Taint/Toleration — Dedicate a Node for anihpj-db
-  S50: Topology Spread — Distribute anihpj-api Evenly Across Zones
-  S51: ConfigMap Hot-Reload — Rolling Restart After Config Change
-  S52: Secret Rotation — Update DB Password Without Downtime
-  S53: HPA — Auto-Scale anihpj-api Based on CPU (Target 50%)
-  S54: PodDisruptionBudget — Ensure at Least 2 API Pods During Drain
-  S55: Resource Quota — Prevent anihpj-dev From Consuming All Cluster CPU
+  S41: 🖥️ kind-cka-lab — Rolling Update Stuck → maxSurge=0 + maxUnavailable=0
+       Bug: Deployment strategy has impossible values — no pods can be created or removed
+       Story: You update the anihpj-api image to v3. The rollout stalls at 0%. The
+       Deployment's rollingUpdate config has maxSurge: 0 AND maxUnavailable: 0 —
+       mathematically impossible to replace any pod. The rollout is deadlocked.
+       Learn: Rolling update strategy, maxSurge, maxUnavailable, kubectl rollout status
+
+  S42: 🖥️ kind-cka-lab — Rollback to Previous Version → kubectl rollout undo
+       Bug: v3 of anihpj-api has a critical bug. Must rollback to v2 immediately.
+       Story: The latest deployment broke the job board — users see blank pages. You
+       need to rollback to the last working revision using kubectl rollout undo.
+       Learn: kubectl rollout history, kubectl rollout undo --to-revision, revision tracking
+
+  S43: 🖥️ kind-cl1/cl2 — Blue-Green Deployment → Switch Service Between Two Stacks
+       Bug: Need zero-downtime deployment. Deploy v2 alongside v1, then switch Service.
+       Story: anihpj-web v1 (blue) is live. Deploy v2 (green) with all new pods.
+       Verify v2 works, then switch the Service selector from v1 to v2. Instant rollback
+       by switching back. Zero downtime achieved.
+       Learn: Blue-green pattern, Service selector switching, multi-version coexistence
+
+  S44: 🖥️ kind-cl1/cl2 — Canary Release → 10% Traffic to anihpj-api v2
+       Bug: Need to test v2 with real users before full rollout. Split traffic 90/10.
+       Story: Deploy v2 of anihpj-api with 1 replica alongside v1 with 9 replicas.
+       The Service load balances across all 10 pods. v2 gets ~10% of traffic. Monitor
+       errors. If good, scale v2 up. If bad, delete v2.
+       Learn: Canary pattern, traffic splitting via replicas, gradual rollout
+
+  S45: 🖥️ kind-cka-lab — Deployment Paused → Forgotten kubectl rollout pause
+       Bug: Someone ran kubectl rollout pause and forgot to resume. Changes not applied.
+       Story: You edit the Deployment 3 times but nothing changes. The Deployment is
+       paused. kubectl rollout pause was run for maintenance and never resumed.
+       Learn: kubectl rollout pause/resume, rollout status, detecting paused deployments
+
+  S46: 🖥️ kind-cka-lab — Pod Stuck Pending → All Nodes Have Insufficient CPU
+       Bug: Pod requests 4 CPUs but all nodes have <4 CPUs available. Pod stays Pending.
+       Story: The anihpj-api pod requests 4 CPUs (a huge request). All nodes have
+       fragmented CPU. The scheduler can't find a node with enough allocatable CPU.
+       Learn: Resource requests, node capacity, allocatable resources, kubectl describe node
+
+  S47: 🖥️ kind-cl1 — nodeSelector Mismatch → Pod Must Run on SSD but All Nodes Are HDD
+       Bug: Pod has nodeSelector: disktype=ssd but no nodes have that label.
+       Story: anihpj-db needs fast storage. The Deployment specifies nodeSelector:
+       disktype=ssd. But no nodes have the label disktype=ssd. The pod stays Pending.
+       Learn: nodeSelector, node labels, kubectl label node, scheduling constraints
+
+  S48: 🖥️ kind-cl1/cl2 — Pod Anti-Affinity → Spread anihpj-web Pods Across Nodes
+       Bug: All 3 web pods accidentally scheduled on the same node. Node failure = total outage.
+       Story: anihpj-web has 3 replicas but podAntiAffinity is missing. All 3 end up on
+       the same node. If that node fails, the entire web tier goes down.
+       Learn: podAntiAffinity, topologyKey, spreading pods for HA
+
+  S49: 🖥️ kubeadm — Taint/Toleration → Dedicate Node anih for Database Only
+       Bug: Web pods are being scheduled on the database node, causing resource contention.
+       Story: Node "anih" should ONLY run database pods. Add a taint to repel other pods,
+       and add a toleration to the anihpj-db pod so it can still run there.
+       Learn: Taints, Tolerations, NoSchedule/PreferNoSchedule/NoExecute, dedicated nodes
+
+  S50: 🖥️ kind-cl1/cl2/cl3 — Topology Spread → Distribute anihpj-api Evenly Across 3 Clusters
+       Bug: All API pods accidentally clustered in one zone. Zone failure = API down.
+       Story: Deploy anihpj-api across kind-cl1, cl2, cl3 for multi-zone HA. Use
+       topologySpreadConstraints to ensure pods are evenly distributed.
+       Learn: topologySpreadConstraints, maxSkew, whenUnsatisfiable, multi-zone scheduling
+
+  S51: 🖥️ kind-cka-lab — ConfigMap Updated but Pods Still Use Old Config → No Auto-Restart
+       Bug: Changed ConfigMap but Deployment doesn't auto-restart pods.
+       Story: You update the Django settings ConfigMap. But the pods keep using the old
+       config. Kubernetes does NOT auto-restart pods on ConfigMap changes.
+       Learn: ConfigMap immutability, kubectl rollout restart, stakater/Reloader
+
+  S52: 🖥️ kind-cka-lab — Database Password Rotated → Pods Still Using Old Secret
+       Bug: Updated Secret but pods still have old password → auth fails.
+       Story: Security policy requires rotating DB passwords every 90 days. You update
+       the Secret, but pods still use the old password mounted at startup. Restart needed.
+       Learn: Secret immutability, credential rotation, rollout restart, secretKeyRef
+
+  S53: 🖥️ kind-cka-lab — HPA → Auto-Scale anihpj-api Based on CPU at 50% Target
+       Bug: HPA configured but metrics-server is missing → no scaling.
+       Story: Load on anihpj-api spikes from 100 to 10,000 requests/second. The HPA should
+       automatically scale from 2 to 10 replicas. But nothing happens — metrics-server absent.
+       Learn: HPA, metrics-server, kubectl autoscale, CPU/memory targets, HPA conditions
+
+  S54: 🖥️ kind-cka-lab — PodDisruptionBudget → At Least 2 API Pods Must Stay During Drain
+       Bug: kubectl drain evicts ALL pods → PDB should protect minimum availability.
+       Story: You need to drain a node for maintenance. anihpj-api has 3 replicas.
+       Without a PDB, all 3 could be evicted simultaneously — API downtime. Create a PDB
+       with minAvailable: 2 to ensure at least 2 pods always run during voluntary disruptions.
+       Learn: PDB, minAvailable vs maxUnavailable, voluntary vs involuntary disruptions
+
+  S55: 🖥️ kind-cka-lab — ResourceQuota → Prevent anihpj-dev Namespace from Hogging CPU
+       Bug: Development namespace is consuming 80% of cluster CPU. Production is starving.
+       Story: The anihpj-dev namespace has no resource limits. Developers deploy 50 pods.
+       Production anihpj pods can't get CPU. Create a ResourceQuota limiting dev namespace.
+       Learn: ResourceQuota for CPU/memory, LimitRange for defaults, namespace isolation
 
 
 ───────────────────────────────────────────────────────────────────────
 CATEGORY 4: CLUSTER ARCHITECTURE (25 Scenarios: S56-S80)
 ───────────────────────────────────────────────────────────────────────
+Goal: Master cluster lifecycle — kubeadm, etcd, RBAC, certificates,
+      Helm, Kustomize, CRDs, and operators.
 
-  S56: kubeadm init — Bootstrap a 3-Node Cluster from Scratch
-  S57: kubeadm join — Worker Node Token Expired
-  S58: kubeadm upgrade — v1.28 → v1.29 Step by Step
-  S59: Certificate Expiration — Renew All Certificates
-  S60: kubeadm reset — Tear Down and Rebuild a Node
-  S61: etcd Backup — Snapshot Save to S3
-  S62: etcd Restore — Full Disaster Recovery from Snapshot
-  S63: etcd Defrag — Reclaim Disk Space After Compaction
-  S64: etcd Member Add — Scale from 3 to 5 Members
-  S65: etcd Health Check — Detect Slow Disk Before Failure
-  S66: Create Read-Only Developer — RBAC for anihpj-dev Namespace
-  S67: ServiceAccount + Role — Pod-Level Permissions for CI/CD
-  S68: Debug Forbidden — Missing ClusterRoleBinding for Dashboard
-  S69: CSR Approval — Node Bootstrap Certificate
-  S70: Multi-Cluster kubeconfig — Manage Dev and Prod from One Terminal
-  S71: Helm Install anihpj — Full Chart with Custom values.yaml
-  S72: Helm Rollback — Failed Upgrade, Recover to Previous Release
-  S73: Kustomize Overlay — anihpj Dev/Staging/Prod Environments
-  S74: Kustomize Patches — Change Image Tag via Strategic Merge
-  S75: Helm + Kustomize — Render Helm Chart, Then Patch with Kustomize
-  S76: Create CRD — Define a "JobPost" Custom Resource
-  S77: Deploy Operator — Automate anihpj Deployment Lifecycle
-  S78: CRD Validation — Fix Schema Error in Custom Resource
-  S79: Mutating Webhook — Inject Sidecar into Every Pod
-  S80: Install Calico CNI — Replace Default CNI Plugin
+  S56: 🖥️ kind-cka-lab — kubeadm init → Bootstrap a New Cluster from Scratch
+       Bug: Missing --pod-network-cidr flag → CNI plugin can't start.
+       Story: Initialize a fresh kind cluster for CKA practice. Use kubeadm init with
+       correct flags. Install Calico CNI. Join worker nodes (simulated in kind).
+       Learn: kubeadm init, --pod-network-cidr, kubeadm join, CNI installation
+
+  S57: 🖥️ kind-cka-lab — Worker Node Token Expired → Can't Join Cluster
+       Bug: kubeadm token expired (24h default). Worker node join fails.
+       Story: You created a token yesterday. Today a new worker tries to join — fails.
+       The token has expired. Create a new token and join the worker.
+       Learn: kubeadm token create/list/delete, token TTL, --print-join-command
+
+  S58: 🖥️ kubeadm — kubeadm upgrade → v1.31 → v1.32 Step by Step
+       Bug: Upgrading kubelet before control plane → version skew violation.
+       Story: Perform a full cluster upgrade. Control plane first, then worker nodes,
+       then kubelet. Correct order is critical to avoid version skew errors.
+       Learn: kubeadm upgrade plan/apply, version skew policy, drain nodes before upgrade
+
+  S59: 🖥️ kubeadm — Certificate Expired → Renew All kubeadm Certificates
+       Bug: kubeadm certificates expired → x509 error on kubectl commands.
+       Story: The cluster was installed 13 months ago. Certificates (1 year validity)
+       have expired. kubectl returns certificate errors. Renew all certs.
+       Learn: kubeadm certs check-expiration, kubeadm certs renew all, CA certificate
+
+  S60: 🖥️ kind-cka-lab — kubeadm reset → Tear Down and Rebuild a Node Cleanly
+       Bug: kubeadm reset without --force leaves residual config.
+       Story: A worker node needs to be rebuilt. Run kubeadm reset to clean everything:
+       stop kubelet, remove containers, unmount volumes, clean iptables, remove etcd data.
+       Learn: kubeadm reset, cleanup process, node rebuilding
+
+  S61: 🖥️ kubeadm — etcd Backup → Point-in-Time Snapshot Save
+       Bug: Snapshot save command missing --endpoints flag → fails silently.
+       Story: Set up automated etcd backups. Take a snapshot, verify its integrity,
+       store it off-node (simulated). Schedule regular backups via cron.
+       Learn: etcdctl snapshot save, snapshot status, backup best practices
+
+  S62: 🖥️ kubeadm — etcd Restore → Full Disaster Recovery from Snapshot
+       Bug: Restoring to wrong data-dir path → etcd fails to start.
+       Story: Full cluster recovery drill. Stop API server, restore etcd from snapshot,
+       verify data-dir path, restart etcd and API server. All cluster state restored.
+       Learn: etcdctl snapshot restore, --data-dir, static pod manifest, recovery procedure
+
+  S63: 🖥️ kubeadm — etcd Defrag → Reclaim Disk After Compaction
+       Bug: etcd database fragmented → 8GB used for 500MB of actual data.
+       Story: After months of operation, etcd database is badly fragmented. Compaction
+       and defragmentation needed to reclaim disk space and improve performance.
+       Learn: etcdctl compaction, etcdctl defrag, etcd storage management
+
+  S64: 🖥️ kind-cka-lab — etcd Member Add → Scale from 1 to 3 Members (Simulated)
+       Bug: Adding member with wrong peer URL → member stuck in unstarted state.
+       Story: For HA, you need 3 etcd members. Add two members to the existing single-node
+       etcd. Configure peer URLs correctly. Verify cluster health with etcdctl endpoint health.
+       Learn: etcdctl member add/remove/list, peer URLs, cluster health
+
+  S65: 🖥️ kubeadm — etcd Health Check → Detect Slow Disk Before It Causes Split-Brain
+       Bug: etcd disk latency >200ms → leader elections failing, cluster unstable.
+       Story: Monitor etcd health proactively. Check disk latency with etcdctl. Detect
+       slow disk BEFORE it causes quorum loss. Take corrective action.
+       Learn: etcdctl endpoint health/status, disk latency monitoring, etcd performance
+
+  S66: 🖥️ kind-cka-lab — RBAC → Create Read-Only Developer for anihpj-dev Namespace
+       Bug: Role has ["get","list"] but developer also needs "watch" for kubectl logs -f.
+       Story: A new developer needs read-only access to the anihpj-dev namespace. Create
+       a Role with appropriate verbs and a RoleBinding. Test access. Discover missing verbs.
+       Learn: Role, RoleBinding, verbs (get/list/watch), ServiceAccount, kubeconfig
+
+  S67: 🖥️ kind-cka-lab — ServiceAccount + Role → Pod-Level Permissions for CI/CD
+       Bug: Pod uses default ServiceAccount → "forbidden" when calling Kubernetes API.
+       Story: The CI/CD pipeline runs in a pod and needs to create Deployments. Create a
+       dedicated ServiceAccount with a Role that allows create/update on deployments.
+       Learn: ServiceAccount, pod-level RBAC, automountServiceAccountToken, CI/CD auth
+
+  S68: 🖥️ kind-cka-lab — kubectl Forbidden → Missing ClusterRoleBinding
+       Bug: User can't list pods → ClusterRoleBinding missing for their group.
+       Story: A new team member reports "kubectl get pods returns Forbidden." They're
+       in the "developers" group but no ClusterRoleBinding maps that group to a role.
+       Learn: ClusterRole, ClusterRoleBinding, user groups, kubectl auth can-i
+
+  S69: 🖥️ kubeadm — CSR Approval → Node Bootstrap Certificate Pending
+       Bug: New node's CSR stuck in Pending → node can't join → kubectl certificate approve
+       Story: A new worker node's certificate signing request is Pending. Manual approval
+       is required. Approve the CSR and verify the node joins the cluster.
+       Learn: CertificateSigningRequest, kubectl certificate approve/deny, node bootstrap
+
+  S70: 🖥️ all clusters — Multi-Cluster kubeconfig → Manage All 6 Clusters from One Terminal
+       Bug: Wrong current-context → kubectl commands go to wrong cluster.
+       Story: You have 6 clusters. Craft a merged kubeconfig file with all 6 contexts.
+       Set namespaces per context. Use kubectl config use-context to switch.
+       Learn: kubeconfig structure, contexts/clusters/users, kubectl config, ksw integration
+
+  S71: 🖥️ kind-cka-lab — Helm Install anihpj → Full Chart with Custom values.yaml
+       Bug: values.yaml has wrong image tag → pods fail with ImagePullBackOff.
+       Story: Package anihpj as a Helm chart. Create Chart.yaml, values.yaml, templates/.
+       Install with --values custom-values.yaml. Debug ImagePullBackOff from wrong tag.
+       Learn: Helm chart structure, helm install/upgrade, values.yaml, template rendering
+
+  S72: 🖥️ kind-cka-lab — Helm Rollback → Failed Upgrade, Recover to Previous Release
+       Bug: helm upgrade to v3 broke the app → must rollback to v2.
+       Story: You upgraded anihpj from v2 to v3 via Helm. The new version has a bug.
+       Rollback to the previous release using helm rollback.
+       Learn: helm rollback, helm history, release revisions, upgrade failure recovery
+
+  S73: 🖥️ kind-cka-lab — Kustomize Overlay → anihpj Dev/Staging/Prod Environments
+       Bug: Dev overlay accidentally uses prod database password → security leak.
+       Story: Create Kustomize overlays for dev, staging, and production. Each overlay
+       patches the base with environment-specific config. Find the leaked prod password
+       in the dev overlay.
+       Learn: Kustomize bases + overlays, patchesStrategicMerge, environment management
+
+  S74: 🖥️ kind-cka-lab — Kustomize Patches → Change Image Tag via Strategic Merge
+       Bug: Patch target not found → API version mismatch in kustomization.yaml.
+       Story: Update anihpj-api image from v2 to v3 using Kustomize image transformer.
+       The patch fails because of an API version mismatch in the patch file.
+       Learn: kustomization.yaml, images: tag override, patchesJson6902, patch debugging
+
+  S75: 🖥️ kind-cka-lab — CRD → Define a "JobPost" Custom Resource
+       Bug: CRD schema validation rejects valid fields → schema too restrictive.
+       Story: Create a Custom Resource Definition for JobPost (title, company, location,
+       salary). Apply an instance. Debug schema validation errors blocking creation.
+       Learn: CRD, apiVersion, schema validation, kubectl explain, custom resources
+
+  S76: 🖥️ kind-cka-lab — Operator → Automate anihpj Deployment Lifecycle
+       Bug: Operator's reconciliation loop broken → not responding to CR changes.
+       Story: Deploy a simple operator that watches JobPost CRs and creates corresponding
+       Deployments. When a JobPost is created, the operator should deploy an instance.
+       Learn: Operator pattern, reconciliation loop, controller-runtime, CRD + controller
+
+  S77: 🖥️ kind-cl1 — CRD Version Conversion → v1alpha1 → v1 CRD Migration
+       Bug: Old CRD instances in v1alpha1 format can't be read after migration.
+       Story: You initially created CRDs in v1alpha1. Now migrating to v1. Need to
+       ensure existing instances are properly converted to avoid data loss.
+       Learn: CRD versioning, conversion webhooks, stored versions, served versions
+
+  S78: 🖥️ kind-cka-lab — Admission Webhook → Mutating Webhook Injects Sidecar
+       Bug: Webhook timeout → pod creation hangs for 30 seconds then fails.
+       Story: A mutating admission webhook should inject a logging sidecar into every pod
+       in the anihpj namespace. But the webhook service is unreachable. Pod creation hangs.
+       Learn: MutatingWebhookConfiguration, admission webhooks, sidecar injection pattern
+
+  S79: 🖥️ kind-cka-lab — Validating Webhook → Reject Pods Without Resource Limits
+       Bug: Webhook rejects ALL pods → selector matches wrong namespaces.
+       Story: A validating webhook should reject pods without resource limits ONLY in
+       the anihpj namespace. But the namespaceSelector is wrong — it's rejecting ALL pods.
+       Learn: ValidatingWebhookConfiguration, namespaceSelector, validation rules
+
+  S80: 🖥️ kind-cl1/cl2/cl3 — Install Different CNI Plugins Across 3 Clusters
+       Bug: Calico on cl1, Flannel on cl2, Cilium on cl3 → compare behavior.
+       Story: Install Calico on kind-cl1, Flannel on kind-cl2, Cilium on kind-cl3.
+       Test pod-to-pod communication, NetworkPolicy support, and performance differences.
+       Learn: CNI comparison, Calico vs Flannel vs Cilium, NetworkPolicy compatibility
 
 
 ───────────────────────────────────────────────────────────────────────
 CATEGORY 5: SERVICES & NETWORKING (20 Scenarios: S81-S100)
 ───────────────────────────────────────────────────────────────────────
+Goal: Master Kubernetes networking — Services, Ingress, NetworkPolicy,
+      CoreDNS, and external access patterns.
 
-  S81: ClusterIP Service — Debug Selector Mismatch (No Endpoints)
-  S82: NodePort Service — Expose anihpj-web on Port 30080
-  S83: LoadBalancer — AWS NLB for anihpj-web
-  S84: Headless Service — StatefulSet with Stable Pod DNS
-  S85: ExternalName — Proxy anihpj-api to External RDS
-  S86: CoreDNS CrashLoopBackOff — Fix Corefile ConfigMap
-  S87: Pod DNS Resolution — ndots:5 Causing 5 DNS Queries per Request
-  S88: Custom DNS — Stub Domain for .internal Services
-  S89: CoreDNS Cache — Serve Stale on DNS Failure
-  S90: SRV Records — Discover anihpj Services via DNS
-  S91: Default-Deny NetworkPolicy — Lock Down anihpj Namespace
-  S92: Allow Only web→api on Port 8000 — Specific Policy
-  S93: Egress to AWS RDS — Allow anihpj-api to Reach External DB
-  S94: DNS-Only Egress — Block All Outbound Except CoreDNS
-  S95: Debug NetworkPolicy — Traffic Still Flowing After Deny Applied
-  S96: NGINX Ingress — Expose anihpj-web via Ingress
-  S97: TLS Termination — HTTPS with cert-manager + Let's Encrypt
-  S98: Path-Based Routing — /web → anihpj-web, /api → anihpj-api
-  S99: Debug 502 Bad Gateway — Ingress Can't Reach Backend
-  S100: Gateway API — HTTPRoute with Traffic Splitting (Future-Ready)
+  S81: 🖥️ kind-cka-lab — ClusterIP Service → Debug Selector Mismatch (No Endpoints)
+       Bug: Service selector {app: anihpj-web} ≠ Pod labels {tier: web}.
+       Story: Create a ClusterIP Service for anihpj-web. Pods are running but endpoints
+       show <none>. The Service selector doesn't match the pod labels.
+       Learn: ClusterIP, Service selectors, Endpoints, label debugging
+
+  S82: 🖥️ kind-cl1 — NodePort Service → Expose anihpj-web on Port 30080
+       Bug: externalTrafficPolicy: Local → traffic only routed to pods on same node.
+       Story: Expose anihpj-web via NodePort 30080. External requests arrive at node-1
+       but are NOT forwarded to pods on node-2 because of externalTrafficPolicy: Local.
+       Fix to Cluster mode for cross-node routing.
+       Learn: NodePort, externalTrafficPolicy (Local vs Cluster), source IP preservation
+
+  S83: 🖥️ kind-cl1/cl2 — LoadBalancer → Simulate Cloud LB with MetalLB or Port Forward
+       Bug: LoadBalancer Service stuck Pending → no cloud load balancer controller.
+       Story: Create a LoadBalancer Service. On bare metal/kind, it stays Pending forever
+       because there's no cloud controller. Install MetalLB or use port-forward as workaround.
+       Learn: LoadBalancer Service type, cloud-controller-manager, MetalLB for bare metal
+
+  S84: 🖥️ kind-cka-lab — Headless Service → StatefulSet with Stable Pod DNS
+       Bug: clusterIP: None missing → headless service not actually headless.
+       Story: anihpj-db StatefulSet needs stable per-pod DNS (anihpj-db-0.anihpj-db).
+       Create a headless Service (clusterIP: None). Verify DNS records resolve each pod.
+       Learn: Headless Service, StatefulSet DNS, pod identity, serviceName
+
+  S85: 🖥️ kind-cka-lab — ExternalName Service → Proxy anihpj-api to External PostgreSQL
+       Bug: ExternalName CNAME resolves to wrong host → connection refused.
+       Story: anihpj-api needs to connect to an external RDS PostgreSQL. Use ExternalName
+       Service to create a CNAME alias. The CNAME points to wrong RDS endpoint → fix it.
+       Learn: ExternalName Service type, CNAME records, external service access
+
+  S86: 🖥️ kind-cka-lab — CoreDNS CrashLoopBackOff → Fix Corefile ConfigMap
+       Bug: Corefile ConfigMap has syntax error → CoreDNS pods crash on start.
+       Story: After editing the CoreDNS ConfigMap to add a custom domain, CoreDNS pods
+       go into CrashLoopBackOff. A YAML syntax error is preventing CoreDNS from starting.
+       Learn: CoreDNS ConfigMap, Corefile format, CoreDNS plugins (kubernetes, forward, cache)
+
+  S87: 🖥️ kind-cka-lab — Pod DNS Resolution → ndots:5 Causing 5 External DNS Queries
+       Bug: ndots:5 in /etc/resolv.conf → every external domain lookup generates 5 DNS queries.
+       Story: anihpj-api makes calls to api.github.com. DNS resolution is SLOW — 5 queries
+       per lookup. The pod's ndots setting is too high for external domains.
+       Learn: ndots, DNS search domains, /etc/resolv.conf in pods, dnsPolicy
+
+  S88: 🖥️ kind-cka-lab — Custom DNS → Stub Domain for .internal Services
+       Bug: Stub domain config points to wrong DNS server → .internal resolution fails.
+       Story: Your organization uses .internal domains for internal services. Configure
+       CoreDNS to forward .internal queries to the corporate DNS server.
+       Learn: CoreDNS stub domains, forward plugin, custom DNS configuration
+
+  S89: 🖥️ kind-cka-lab — CoreDNS Cache → Serve Stale Records on DNS Failure
+       Bug: Cache TTL too high → DNS changes take 30 minutes to propagate.
+       Story: A backend service IP changed. DNS still returns the OLD IP for 30 minutes
+       because CoreDNS cache TTL is set high. API traffic goes to dead endpoint.
+       Learn: CoreDNS cache plugin, TTL, serve_stale, cache tuning
+
+  S90: 🖥️ kind-cka-lab — NetworkPolicy → Default-Deny All Ingress, Allow Only Web→API
+       Bug: NetworkPolicy allows web→api but blocks DNS → pods can't resolve anything.
+       Story: Secure the anihpj namespace: deny all ingress, then selectively allow
+       anihpj-web → anihpj-api on port 8000. But DNS is blocked too! Add DNS egress rule.
+       Learn: NetworkPolicy, podSelector, namespaceSelector, ingress/egress, policyTypes
+
+  S91: 🖥️ kind-cl1 — NetworkPolicy → Allow Only Specific Ports and Protocols
+       Bug: Policy allows TCP but app also needs UDP → connection partially broken.
+       Story: Create a fine-grained NetworkPolicy: allow anihpj-web → anihpj-api on
+       TCP 8000, allow anihpj-api → anihpj-db on TCP 5432. Test both TCP and UDP.
+       Learn: NetworkPolicy ports, protocols (TCP/UDP/SCTP), named ports
+
+  S92: 🖥️ kind-cl1 — Egress NetworkPolicy → Allow Only DNS + Specific External APIs
+       Bug: Egress policy blocks all outbound → pod can't pull images or call APIs.
+       Story: Lock down egress traffic from anihpj namespace. Allow DNS (UDP 53 to
+       CoreDNS), allow HTTPS to api.github.com (port 443), deny everything else.
+       Learn: Egress NetworkPolicy, toCIDR, toFQDNs (if CNI supports), DNS egress
+
+  S93: 🖥️ kind-cl1 — NetworkPolicy Debug → Traffic Still Flows After Deny Applied
+       Bug: NetworkPolicy applied but traffic NOT blocked → CNI doesn't support NetworkPolicy.
+       Story: You apply a default-deny NetworkPolicy but traffic still flows. The CNI
+       plugin (Flannel by default) doesn't support NetworkPolicy! Switch to Calico.
+       Learn: CNI NetworkPolicy support, Calico/Weave/Cilium, kubectl describe netpol
+
+  S94: 🖥️ kind-cl2 — Ingress → Expose anihpj-web via NGINX Ingress Controller
+       Bug: Ingress created but no IngressClass → no controller handles it.
+       Story: Deploy NGINX Ingress Controller on kind-cl2. Create an Ingress resource
+       for anihpj-web. The Ingress shows no address — missing IngressClass annotation.
+       Learn: Ingress, IngressClass, NGINX Ingress Controller, kubectl get ingress
+
+  S95: 🖥️ kind-cl2 — Ingress Path-Based Routing → /web → web, /api → api
+       Bug: Path /api matches both Prefix / and Prefix /api → all traffic goes to web.
+       Story: Route /web to anihpj-web and /api to anihpj-api. But all traffic goes to
+       web because the Prefix / rule matches everything. Fix path ordering.
+       Learn: Ingress path types (Prefix/Exact/ImplementationSpecific), path ordering
+
+  S96: 🖥️ kind-cl2 — Ingress TLS → HTTPS with Self-Signed Certificate
+       Bug: TLS Secret has wrong key names (cert vs tls.crt) → Ingress can't use it.
+       Story: Enable HTTPS for anihpj-web. Create a TLS Secret, reference it in Ingress.
+       The Secret has wrong key names. Fix and verify with curl -k https://...
+       Learn: TLS in Ingress, kubernetes.io/tls Secret, cert-manager, HTTPS termination
+
+  S97: 🖥️ kind-cl2 — cert-manager → Automatic TLS with Let's Encrypt (Simulated)
+       Bug: ClusterIssuer not found → Certificate resource stuck Pending.
+       Story: Install cert-manager. Create a ClusterIssuer (simulated HTTP01 challenge).
+       Create a Certificate resource. Debug why the Certificate is stuck Pending.
+       Learn: cert-manager, ClusterIssuer, Certificate, ACME, automatic TLS
+
+  S98: 🖥️ kind-cl2 — Debug Ingress 502 → Backend Service Has No Endpoints
+       Bug: Ingress returns 502 → backend pod readiness probe failing.
+       Story: curl returns 502 Bad Gateway from the Ingress. Trace the chain:
+       Ingress → Service → Endpoints → Pod. The pod's readiness probe is failing.
+       Learn: Ingress debugging chain, 502/503/504 error meanings, probe diagnostics
+
+  S99: 🖥️ kind-cl2 — Ingress 504 Gateway Timeout → Backend Too Slow
+       Bug: Backend takes 90 seconds to respond → Ingress times out at 60s.
+       Story: anihpj-api has a slow endpoint (generates big reports). The Ingress
+       controller times out at 60 seconds. Users get 504 errors. Increase timeout.
+       Learn: Ingress annotations (proxy-read-timeout), 504 debugging, slow backends
+
+  S100: 🖥️ kind-cl1/cl2/cl3 — Gateway API → HTTPRoute with Traffic Splitting Across Clusters
+        Bug: HTTPRoute references wrong backend Service name → traffic goes nowhere.
+        Story: The future of Kubernetes networking. Deploy Gateway API (experimental).
+        Create HTTPRoute with 90/10 traffic split between v1 and v2 across two clusters.
+        Debug the HTTPRoute when traffic doesn't flow.
+        Learn: Gateway API, GatewayClass, Gateway, HTTPRoute, traffic splitting, multi-cluster
 
 
 ═══════════════════════════════════════════════════════════════════════
