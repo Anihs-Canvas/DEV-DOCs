@@ -1323,7 +1323,51 @@ bitnami           https://charts.bitnami.com/bitnami</div>
                     <p class="output-note"><strong>📝 What happened:</strong> By setting <code>HELM_REPOSITORY_CONFIG</code> to a team-shared path, all developers see the same repositories. This ensures consistency — everyone uses the same repo URLs and the team can add/remove repos centrally. The shared config is version-controlled in the project repository.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 4: Set Multiple Environment Variables Together</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Relevant portion of the anihpj directory tree:
+lpj/
+└── 📁 scripts/
+    └── 📄 prod-deploy.sh</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml"># Carol sets all environment variables before running the deployment script
+# This ensures no accidental cross-environment contamination
+# The script sources this configuration</code></pre>
+<p><strong>Scenario:</strong> Carol configures all Helm environment variables for a production deployment session in one go.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">export HELM_NAMESPACE=production HELM_KUBECONTEXT=anihpj-prod HELM_DEBUG=1 HELM_MAX_HISTORY=20 && helm env | grep -E "HELM_NAMESPACE|HELM_KUBECONTEXT|HELM_DEBUG|HELM_MAX_HISTORY"</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">HELM_NAMESPACE="production"
+HELM_KUBECONTEXT="anihpj-prod"
+HELM_DEBUG="1"
+HELM_MAX_HISTORY="20"</div>
+<p class="output-note"><strong>📝 What happened:</strong> All four environment variables are set in a single <code>export</code> command, ensuring atomic configuration. The <code>helm env</code> output confirms all variables are active. This pattern is used in deployment scripts to set the entire environment context at the top of the file.</p>
+</div>
+<div class="example">
+<h5>Example 5: Override Kubeconfig for CI/CD Pipeline</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Relevant portion of the anihpj directory tree:
+lpj/
+├── 📁 charts/
+├── 📁 ops/ci/
+│   └── 📄 ci-kubeconfig.yaml
+└── 📁 scripts/</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml"># The CI/CD pipeline needs a restricted kubeconfig
+# Only deploy permissions to staging and production namespaces
+# Never use the admin kubeconfig in CI pipelines</code></pre>
+<p><strong>Scenario:</strong> Dave configures the CI/CD pipeline to use a dedicated service account kubeconfig with limited permissions.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">export KUBECONFIG=/lpj/ops/ci/ci-kubeconfig.yaml HELM_NAMESPACE=staging && helm list && kubectl auth can-i create deployments -n staging</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">NAME              NAMESPACE  REVISION  STATUS    CHART
+jobpost-staging   staging    8         deployed  jobpost-2.3.1
+yes</div>
+<p class="output-note"><strong>📝 What happened:</strong> The CI pipeline uses a dedicated kubeconfig with restricted permissions. <code>kubectl auth can-i</code> confirms the service account can only create deployments in the staging namespace — not production. This follows the principle of least privilege and prevents CI from accidentally modifying production.</p>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> Set <code>HELM_NAMESPACE</code> in your shell profile or CI/CD environment to avoid accidentally deploying to the wrong namespace. <code>HELM_DEBUG=1</code> is essential for CI pipelines — always enable it. Use <code>HELM_REPOSITORY_CONFIG</code> to point to a team-shared config for consistency across developers.
                 </div>
             </article>
@@ -1394,7 +1438,82 @@ KUBECONFIG="/home/carol/.kube/config"</div>
                     <p class="output-note"><strong>📝 What happened:</strong> Carol confirmed she's using the production kubecontext and namespace. All paths point to her home directory (correct for local development). If any path were wrong, she would fix the corresponding environment variable before proceeding.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 2: Verify Kubernetes Context Before Deploy</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Carol double-checks context before touching production
+# A wrong context could deploy staging config to production
+# Always verify with helm env before any helm install/upgrade</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm env | grep -E "KUBECONFIG|KUBECONTEXT" && kubectl config current-context</code></pre>
+<p><strong>Scenario:</strong> Carol confirms Helm sees the correct Kubernetes context before a critical production deployment.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">HELM_KUBECONTEXT="anihpj-prod"
+KUBECONFIG="/home/carol/.kube/config"
+anihpj-prod</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">Both <code>HELM_KUBECONTEXT</code> and <code>kubectl config current-context</code> agree — Carol is targeting the production cluster. If there was a mismatch, she would reset with <code>kubectl config use-context</code>. This pre-flight check prevents the most common Helm disaster: deploying to the wrong cluster.</div>
+</div>
+<div class="example">
+<h5>Example 3: Debug Missing Repository Error</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Alice gets "Error: repo bitnami not found" when running helm install
+# She needs to check if Helm is using the right repositories.yaml
+# The team shares a common repositories.yaml via HELM_REPOSITORY_CONFIG</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm env | grep REPOSITORY && cat $(helm env | grep HELM_REPOSITORY_CONFIG | cut -d= -f2 | tr -d '"') | head -5</code></pre>
+<p><strong>Scenario:</strong> Alice troubleshoots a "repository not found" error by inspecting which repository config file Helm is using.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">HELM_REPOSITORY_CONFIG="/home/alice/.config/helm/repositories.yaml"
+apiVersion: ""
+generated: "2026-01-01"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The repository config file exists and contains the Bitnami repo. Alice can now check why <code>helm repo list</code> doesn't show bitnami — perhaps the repo cache needs updating with <code>helm repo update</code>. Knowing exactly which config file Helm reads is essential for debugging repository issues.</div>
+</div>
+<div class="example">
+<h5>Example 4: Check Cache and Data Directories</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Dave is about to run helm dependency update which downloads charts
+# He needs to ensure the cache directory has enough disk space
+# The cache can grow large with many chart versions</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm env | grep -E "CACHE|DATA" && du -sh $(helm env | grep HELM_CACHE_HOME | cut -d= -f2 | tr -d '"')</code></pre>
+<p><strong>Scenario:</strong> Dave verifies Helm cache and data directories before running a space-intensive operation.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">HELM_CACHE_HOME="/home/dave/.cache/helm"
+HELM_DATA_HOME="/home/dave/.local/share/helm"
+234M    /home/dave/.cache/helm</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The Helm cache currently uses 234MB — plenty of space for the pending dependency update. If the cache was too large, Dave could run <code>helm repo remove</code> for unused repos or <code>rm -rf ~/.cache/helm</code> to clear it entirely. The cache is safe to delete — Helm will re-download charts as needed.</div>
+</div>
+<div class="example">
+<h5>Example 5: CI Pipeline Environment Audit</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Eve runs a security audit of the CI/CD pipeline
+# She captures the full Helm environment for documentation
+# All CI deployments must use TLS verification and specific plugins</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm env 2>&1 | tee /lpj/ops/audit/helm-env-$(date +%Y%m%d).log</code></pre>
+<p><strong>Scenario:</strong> Eve audits the CI pipeline's Helm environment to ensure compliance with security policies.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">HELM_BIN="helm"
+HELM_CACHE_HOME="/home/ci-runner/.cache/helm"
+HELM_CONFIG_HOME="/home/ci-runner/.config/helm"
+HELM_DATA_HOME="/home/ci-runner/.local/share/helm"
+HELM_KUBECONTEXT="anihpj-cicd"
+HELM_NAMESPACE="default"
+HELM_PLUGINS="/home/ci-runner/.local/share/helm/plugins"
+HELM_REGISTRY_CONFIG="/home/ci-runner/.config/helm/registry/config.json"
+HELM_REPOSITORY_CACHE="/home/ci-runner/.cache/helm/repository"
+HELM_REPOSITORY_CONFIG="/home/ci-runner/.config/helm/repositories.yaml"</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The full Helm environment is captured to a timestamped audit log. Eve verifies that HELM_KUBECONTEXT uses the dedicated CI/CD service account (not an admin account), and that the registry config exists for OCI chart pushes. This audit trail is essential for SOC2 and ISO 27001 compliance.</div>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> Run <code>helm env</code> before any critical operation — it takes 1 second and prevents hours of debugging. In CI/CD, always log <code>helm env</code> output for audit trails. Pipe through <code>grep</code> to focus on specific variables: <code>helm env | grep -E "KUBE|NAMESPACE"</code>.
                 </div>
             </article>
@@ -1526,7 +1645,48 @@ appVersion: "1.0.0"</div>
                     <p class="output-note"><strong>📝 What happened:</strong> The lint check passed with zero failures — the scaffolded chart is valid. The Chart.yaml shows the chart metadata: apiVersion v2 (Helm 3), type=application (not library), and version/appVersion at 0.1.0/1.0.0. Always lint after scaffolding to catch issues early.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 4: Create Chart with Custom Name and Path</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Relevant portion of the anihpj directory tree:
+lpj/
+└── 📁 charts/</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml"># Alice is building a new notification-service microservice
+# Each microservice gets its own Helm chart under charts/
+# The chart will share the anihpj conventions via the starter template</code></pre>
+<p><strong>Scenario:</strong> Alice scaffolds a new Helm chart at a specific nested path for the anihpj microservices project.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">mkdir -p /lpj/charts/services && helm create /lpj/charts/services/notification-service && ls /lpj/charts/services/notification-service/</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">Creating notification-service
+Chart.yaml
+templates/
+values.yaml
+charts/</div>
+<p class="output-note"><strong>📝 What happened:</strong> The notification-service chart is scaffolded at <code>/lpj/charts/services/notification-service/</code> — nested under a services subdirectory. The anihpj project organizes charts by type: <code>charts/services/</code> for microservices, <code>charts/infra/</code> for infrastructure. The scaffold includes all standard files ready for customization.</p>
+</div>
+<div class="example">
+<h5>Example 5: Compare Scaffold with Production Chart</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Carol wants to understand what customizations make the jobpost chart special
+# She diffs a fresh scaffold against the production chart
+# This reveals the delta between boilerplate and production-ready</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">cd /tmp && helm create compare-template && diff -rq compare-template/templates/ /lpj/charts/jobpost/templates/ 2>&1 | head -10</code></pre>
+<p><strong>Scenario:</strong> Carol diffs a fresh scaffold against the production jobpost chart to see what customizations were added over time.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Files compare-template/templates/deployment.yaml and /lpj/charts/jobpost/templates/deployment.yaml differ
+Only in /lpj/charts/jobpost/templates/: configmap-django.yaml
+Only in /lpj/charts/jobpost/templates/: secret.yaml
+Only in /lpj/charts/jobpost/templates/: pvc.yaml
+Only in /lpj/charts/jobpost/templates/: service-monitor.yaml
+Files compare-template/templates/_helpers.tpl and /lpj/charts/jobpost/templates/_helpers.tpl differ</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The diff reveals the production chart has 4 additional templates not in the scaffold: <code>configmap-django.yaml</code> (Django settings), <code>secret.yaml</code> (sensitive config), <code>pvc.yaml</code> (persistent storage), and <code>service-monitor.yaml</code> (Prometheus monitoring). The deployment.yaml and _helpers.tpl have also been customized. This is a standard evolution from scaffold to production-ready chart.</div>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> <code>helm create</code> produces a working chart immediately — you can install it right after scaffolding. Use <code>--starter</code> with team-specific templates to ensure consistency across all charts. Always run <code>helm lint</code> after scaffolding to verify the chart structure. The scaffolded chart is a starting point — customize it for your specific application needs.
                 </div>
             </article>
@@ -1616,7 +1776,52 @@ Successfully packaged chart and saved it to: /lpj/dist/jobpost-2.3.1.tgz</div>
                     <p class="output-note"><strong>📝 What happened:</strong> <code>--dependency-update</code> fetched the latest dependency charts (PostgreSQL 15.5.0, Redis 18.19.0) before packaging. The outdated dependency charts were deleted and replaced. This ensures the packaged chart always includes the latest compatible dependencies.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 4: Package and Verify Package Integrity</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Carol must ensure the packaged chart contains all expected files
+# A missing template or values file could cause deployment failures
+# Always verify the .tgz contents before pushing to a repository</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm package /lpj/charts/jobpost/ -d /lpj/dist/ && tar tzf /lpj/dist/jobpost-2.3.1.tgz | head -15</code></pre>
+<p><strong>Scenario:</strong> Carol packages the chart and immediately verifies the archive content before uploading.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Successfully packaged chart and saved it to: /lpj/dist/jobpost-2.3.1.tgz
+jobpost/Chart.yaml
+jobpost/values.yaml
+jobpost/templates/NOTES.txt
+jobpost/templates/_helpers.tpl
+jobpost/templates/deployment-web.yaml
+jobpost/templates/deployment-worker.yaml
+jobpost/templates/configmap-django.yaml
+jobpost/templates/secret.yaml
+jobpost/templates/service.yaml
+jobpost/templates/ingress.yaml
+jobpost/templates/pvc.yaml
+jobpost/templates/service-monitor.yaml
+jobpost/templates/hpa.yaml
+jobpost/values-prod.yaml</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The packaged chart contains all 13 expected files — the standard scaffold files plus anihpj-specific customizations. The <code>tar tzf</code> command confirms the archive is valid and complete. This verification step prevents the dreaded "chart installed but missing template" production issue.</div>
+</div>
+<div class="example">
+<h5>Example 5: Sign Chart for Production Release</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># The anihpj security policy requires all production charts to be signed
+# Eve uses her GPG key to sign the packaged chart
+# The .prov file contains cryptographic proof of authenticity</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm package /lpj/charts/jobpost/ --sign --key "Eve (Security Lead) <eve@anihpj.io>" --keyring ~/.gnupg/pubring.gpg -d /lpj/dist/ && ls -lh /lpj/dist/jobpost-2.3.1.*</code></pre>
+<p><strong>Scenario:</strong> Eve (security lead) signs the packaged jobpost chart with her GPG key before the production release.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Successfully packaged chart and saved it to: /lpj/dist/jobpost-2.3.1.tgz
+-rw-r--r-- 1 eve security 45K Jun  6 09:30 /lpj/dist/jobpost-2.3.1.tgz
+-rw-r--r-- 1 eve security 8.2K Jun  6 09:30 /lpj/dist/jobpost-2.3.1.tgz.prov</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The package created two files: the chart archive (.tgz) and a provenance file (.prov) containing the GPG signature. The provenance file proves that Eve — the authorized security lead — signed this exact chart version. Any tampering with the .tgz would break the signature. Signed charts are required for production deployments at anihpj.</div>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> The packaged .tgz file name follows the pattern <code>{name}-{version}.tgz</code> — this is the standard Helm chart archive format. Use <code>--dependency-update</code> to ensure packaged charts always include the latest dependencies. For CI/CD, use <code>--version</code> and <code>--app-version</code> to set versions dynamically without modifying Chart.yaml.
                 </div>
             </article>
@@ -1687,7 +1892,71 @@ helm lint --with-subcharts            # Lint dependencies too</code></pre>
                     <p class="output-note"><strong>📝 What happened:</strong> By providing the production values file, Helm validates the chart against actual production configuration. This catches issues like missing required values, incorrect types, or template errors that only appear with specific values. Always lint with the values you intend to use.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 3: Lint Subcharts (Dependencies)</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># The jobpost chart depends on PostgreSQL and Redis subcharts
+# A dependency chart update could introduce lint errors
+# --with-subcharts ensures the entire stack is validated</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm lint /lpj/charts/jobpost/ --with-subcharts --strict</code></pre>
+<p><strong>Scenario:</strong> Carol lints the jobpost chart including all subchart dependencies to catch issues in PostgreSQL and Redis configurations.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">==> Linting /lpj/charts/jobpost/
+[INFO] Chart.yaml: icon is recommended
+
+==> Linting /lpj/charts/jobpost/charts/postgresql
+1 chart(s) linted, 0 chart(s) failed
+
+==> Linting /lpj/charts/jobpost/charts/redis
+1 chart(s) linted, 0 chart(s) failed
+
+3 chart(s) linted, 0 chart(s) failed</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">All three charts (jobpost + PostgreSQL + Redis) passed lint with zero failures. The <code>--with-subcharts</code> flag recursively validates every dependency. This is essential after running <code>helm dependency update</code> to ensure new dependency versions don't introduce issues. Always lint with subcharts before a production upgrade.</div>
+</div>
+<div class="example">
+<h5>Example 4: Lint with Template Rendering Debug</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Alice modified the deployment.yaml template and now lint fails
+# She uses --debug to see the exact template execution path
+# The error points to a missing .Values key</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm lint /lpj/charts/jobpost/ -f /lpj/charts/jobpost/values-staging.yaml --debug 2>&1 | tail -10</code></pre>
+<p><strong>Scenario:</strong> Alice debugs a template rendering error by running lint with debug output and specific values.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">==> Linting /lpj/charts/jobpost/
+[DEBUG] CHART PATH: /lpj/charts/jobpost
+[DEBUG] Reading values file: /lpj/charts/jobpost/values-staging.yaml
+[ERROR] templates/deployment-web.yaml: error converting YAML to JSON: yaml: line 15: did not find expected key
+
+Error: 1 chart(s) linted, 1 chart(s) failed</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The debug output pinpoints the exact file and line: <code>deployment-web.yaml</code> line 15. Alice navigates to that line and finds a YAML indentation error — a missing two-space indent under <code>spec.template.spec.containers</code>. Without <code>--debug</code>, she would only see "lint failed" with no clue where to look. Debug + lint = the fastest template debugging workflow.</div>
+</div>
+<div class="example">
+<h5>Example 5: Lint in CI/CD with All Values Files</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># The CI pipeline must validate the chart for staging, production, and DR
+# Each environment has its own values file with different configurations
+# If any environment fails lint, the pipeline stops — no deployment</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">for env in staging prod dr; do echo "=== Linting $env ==="; helm lint /lpj/charts/jobpost/ -f /lpj/charts/jobpost/values-${env}.yaml --strict || exit 1; done</code></pre>
+<p><strong>Scenario:</strong> Dave integrates helm lint into the CI pipeline to validate the chart against all environment values files before any deployment.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">=== Linting staging ===
+1 chart(s) linted, 0 chart(s) failed
+
+=== Linting prod ===
+1 chart(s) linted, 0 chart(s) failed
+
+=== Linting dr ===
+1 chart(s) linted, 0 chart(s) failed</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">All three environments pass lint. The CI pipeline loops through each values file and runs <code>helm lint --strict</code> — if any environment fails, the pipeline exits with code 1 and blocks deployment. This guarantees that no chart change can break any environment's configuration. The anihpj team added this after a production deployment failed because values-dr.yaml referenced a removed template.</div>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> Make <code>helm lint --strict</code> part of your CI/CD pipeline and pre-commit hooks. Lint with each environment's values file to catch environment-specific template errors. <code>helm lint</code> is fast — run it after every chart change.
                 </div>
             </article>
@@ -1768,7 +2037,89 @@ spec:
                     <p class="output-note"><strong>📝 What happened:</strong> The diff reveals that staging uses 2 replicas with 500m CPU, while production uses 3 replicas with 1000m CPU. This is the safest way to verify environment-specific configurations before deployment — catch discrepancies before they hit the cluster.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 3: Template with Set Overrides</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Carol needs to test how the chart behaves with 5 replicas
+# Instead of editing values.yaml, she uses --set
+# This is a quick one-off test before making permanent changes</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm template jobpost-test /lpj/charts/jobpost/ --set replicaCount=5 --set image.tag=v3.3.0-rc2 | grep -A2 "replicas:"</code></pre>
+<p><strong>Scenario:</strong> Carol renders templates with inline value overrides to test a specific configuration without modifying values files.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">replicas: 5
+---
+# Source: jobpost/templates/deployment-worker.yaml
+  replicas: 5</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">Both web and worker deployments render with 5 replicas — confirmed by the grep output. The <code>--set</code> flag overrides chart values without touching any YAML files. Carol can now test the 5-replica configuration in staging before committing the change to <code>values-prod.yaml</code>. This is the fastest way to experiment with value changes.</div>
+</div>
+<div class="example">
+<h5>Example 4: Template and Validate with kubeconform</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Alice wants to ensure the rendered manifests are valid Kubernetes resources
+# kubeconform validates YAML against Kubernetes API schemas
+# This catches invalid resource definitions before they hit the API server</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm template jobpost /lpj/charts/jobpost/ -f /lpj/charts/jobpost/values-prod.yaml | kubeconform -strict -summary -output json 2>&1 | tail -5</code></pre>
+<p><strong>Scenario:</strong> Alice pipes rendered templates through kubeconform to validate Kubernetes API schema compliance.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">{
+  "summary": {
+    "valid": 11,
+    "invalid": 0,
+    "errors": 0
+  }
+}</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">All 11 rendered resources are valid Kubernetes objects — zero schema violations. <code>kubeconform</code> validates each resource against the Kubernetes API specification for the target version. Combined with <code>helm template</code>, this creates a complete offline validation pipeline that doesn't require cluster access. The anihpj CI pipeline uses this before every deployment.</div>
+</div>
+<div class="example">
+<h5>Example 5: Template Only Specific Templates</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Carol is troubleshooting an ingress routing problem
+# She only needs to see the ingress and service manifests
+# Rendering only specific templates saves time and reduces noise</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm template jobpost /lpj/charts/jobpost/ -f /lpj/charts/jobpost/values-staging.yaml -s templates/ingress.yaml -s templates/service.yaml</code></pre>
+<p><strong>Scenario:</strong> Carol renders only the ingress and service templates to debug a routing issue without generating all manifests.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">---
+# Source: jobpost/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jobpost-staging
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: staging.anihpj.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: jobpost-staging
+            port:
+              number: 8000
+---
+# Source: jobpost/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: jobpost-staging
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">Only the ingress and service templates are rendered — clean and focused. The <code>-s</code> (show-only) flag limits output to specific template files, making it easy to debug individual resources. Carol spotted that the ingress <code>rewrite-target</code> annotation had an incorrect path. She fixed it in <code>templates/ingress.yaml</code> and re-rendered to confirm.</div>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> <code>helm template</code> is the best debugging tool — it shows exactly what manifests will be generated. Use it with <code>--debug</code> to see template execution details. The output can be piped to <code>kubectl diff -f -</code> to see what would change on the cluster. For CI/CD, template then diff before applying.
                 </div>
             </article>
@@ -1814,7 +2165,80 @@ Chart Hash Verified: sha256:abc123def456...</div>
                     <p class="output-note"><strong>📝 What happened:</strong> The chart's signature matched — it was indeed signed by Carol and hasn't been modified. Eve can confidently approve the deployment knowing the chart is authentic. Chart signing is essential for production environments where supply chain security matters.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 2: Verify a Chart from Remote Repository</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Eve pulls and verifies a chart from the OCI registry
+# The chart must be signed by an authorized team member
+# Unsigned charts are rejected by production policy</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm pull oci://registry.anihpj.io/charts/jobpost --version 2.3.1 -d /tmp/ && helm verify /tmp/jobpost-2.3.1.tgz</code></pre>
+<p><strong>Scenario:</strong> Eve verifies a chart pulled from the anihpj OCI registry before production deployment.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Signed by: Carol (DevOps Lead) <carol@anihpj.io>
+Using Key: fingerprint ABC123DEF456
+Chart Hash Verified: sha256:abc123def456...</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The OCI-pulled chart is verified — signed by Carol with a matching hash. This proves the chart was published by an authorized team member and hasn't been tampered with in transit. The anihpj security policy requires verification of all charts before production deployment, even those pulled from the private OCI registry.</div>
+</div>
+<div class="example">
+<h5>Example 3: Verify with Custom Keyring</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># The anihpj team maintains a shared GPG keyring in the repo
+# All authorized signers have their public keys in team-keyring.gpg
+# This ensures consistent verification across the entire team</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm verify /lpj/dist/jobpost-2.3.1.tgz --keyring /lpj/ops/keys/team-keyring.gpg</code></pre>
+<p><strong>Scenario:</strong> Eve verifies a chart using a team-shared GPG keyring instead of her personal keyring.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Signed by: Eve (Security Lead) <eve@anihpj.io>
+Using Key: fingerprint DEF789GHI012
+Chart Hash Verified: sha256:def789ghi012...</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The chart is verified against the team-shared keyring — Eve's signature matches. Using a shared keyring ensures all team members verify against the same set of authorized keys. The <code>/lpj/ops/keys/team-keyring.gpg</code> file is version-controlled and updated whenever team members rotate their GPG keys.</div>
+</div>
+<div class="example">
+<h5>Example 4: Verify Before CI/CD Promotion</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># The CI pipeline runs helm verify as a gate before production promotion
+# If verification fails, the pipeline stops and alerts the security team
+# This prevents unsigned or tampered charts from reaching production</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm verify /lpj/dist/jobpost-2.3.1.tgz && echo "VERIFICATION PASSED - Promoting to production" || (echo "VERIFICATION FAILED - Blocking promotion" && exit 1)</code></pre>
+<p><strong>Scenario:</strong> The CI pipeline verifies the chart before promoting it from staging to production.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Signed by: Carol (DevOps Lead) <carol@anihpj.io>
+Using Key: fingerprint ABC123DEF456
+Chart Hash Verified: sha256:abc123def456...
+VERIFICATION PASSED - Promoting to production</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">Verification passed — the CI pipeline proceeds with the production promotion. The <code>&&</code> / <code>||</code> pattern creates a simple gate: if verify succeeds, continue; if it fails, block and alert. This is a standard CI/CD pattern for supply chain security. Without this gate, an attacker could potentially swap the chart between staging validation and production deployment.</div>
+</div>
+<div class="example">
+<h5>Example 5: Verify and Inspect Provenance File</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Eve needs to audit the signing certificate metadata
+# The .prov file contains the signer identity, timestamp, and hash
+# This is part of the SOC2 compliance audit trail</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">helm verify /lpj/dist/jobpost-2.3.1.tgz --debug 2>&1 | head -15</code></pre>
+<p><strong>Scenario:</strong> Eve manually inspects the provenance (.prov) file to audit signing metadata.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Verification START: /lpj/dist/jobpost-2.3.1.tgz
+[DEBUG] Reading provenance file: /lpj/dist/jobpost-2.3.1.tgz.prov
+[DEBUG] Found signature from: Carol (DevOps Lead) <carol@anihpj.io>
+[DEBUG] Signature created at: 2026-06-06T09:30:00Z
+[DEBUG] Key fingerprint: ABC123DEF456789GHI012JKL345MNO678PQR901
+[DEBUG] Digest algorithm: sha256
+[DEBUG] Computed digest: abc123def456789ghi012jkl345mno678pqr901stu234vwx567yz890...
+[DEBUG] Provenance digest: abc123def456789ghi012jkl345mno678pqr901stu234vwx567yz890...
+[DEBUG] Digest match: TRUE
+Verification PASSED</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The debug output reveals the full verification chain: the signature was created on June 6, 2026 by Carol, the computed digest matches the provenance digest exactly, and the key fingerprint is recorded for audit purposes. This level of detail is essential for SOC2 compliance — every production deployment must have a verifiable audit trail proving the chart's integrity.</div>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> Use <code>helm package --sign</code> to create signed charts for production releases. Verify charts before deploying to production — it's part of a secure software supply chain. Combine with OCI registry signatures for defense in depth.
                 </div>
             </article>
@@ -1930,7 +2354,49 @@ helm install jobpost ./charts/jobpost/ --namespace production</div>
                     <p class="output-note"><strong>📝 What happened:</strong> The README provides installation instructions, prerequisites, and configuration guidance. Dave now knows the chart requires Kubernetes 1.25+ and Helm 3.12+. This is standard documentation practice — every chart should have a comprehensive README.</p>
                 </div>
 
-                <div class="success">
+                
+<div class="example">
+<h5>Example 4: Show Values and Save for Customization</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Relevant portion of the anihpj directory tree:
+lpj/
+└── 📁 charts/jobpost/
+    └── 📄 values-staging.yaml</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml"># Alice prepares custom PostgreSQL values for the staging environment
+# She bases her customization on the chart defaults
+# Only overrides what needs to change for staging</code></pre>
+<p><strong>Scenario:</strong> Alice saves the default values of a remote chart to create a custom override file.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">helm show values bitnami/postgresql > /lpj/charts/jobpost/postgresql-staging-values.yaml && wc -l /lpj/charts/jobpost/postgresql-staging-values.yaml</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">312 /lpj/charts/jobpost/postgresql-staging-values.yaml</div>
+<p class="output-note"><strong>📝 What happened:</strong> The PostgreSQL chart has 312 configurable values — Alice saved them all to a file. She will now edit this file, keeping defaults for most settings and overriding only what differs for staging (smaller persistent volume, fewer replicas, different password). This is the cleanest way to customize a chart without losing upstream defaults.</p>
+</div>
+<div class="example">
+<h5>Example 5: Compare Values Between Chart Versions</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash"># Carol is upgrading jobpost from 2.3.1 to 3.0.0
+# She needs to check if any values were renamed or removed
+# Diffing values between versions catches breaking changes before upgrade</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">diff <(helm show values /lpj/charts/jobpost/) <(git show v2.3.1:charts/jobpost/values.yaml) 2>/dev/null | head -20</code></pre>
+<p><strong>Scenario:</strong> Carol compares the values of two chart versions before upgrading to understand breaking changes.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">5c5
+< replicaCount: 3
+---
+> replicaCount: 2
+12a13,15
+> monitoring:
+>   enabled: true
+>   serviceMonitorSelector: release: prometheus
+25d27
+< legacyMode: true</code></pre>
+<p><strong>Output:</strong></p>
+<div class="example-output">The diff reveals three changes in v3.0.0: (1) default replicas increased from 2 to 3, (2) a new <code>monitoring</code> section was added with Prometheus ServiceMonitor support, and (3) the deprecated <code>legacyMode</code> option was removed. Carol now knows she must remove <code>legacyMode: true</code> from her overrides and configure the new monitoring section before upgrading. <code>helm show values</code> + git diff is the safest way to prepare for chart version upgrades.</div>
+</div>
+<div class="success">
                     <strong>💡 Helm Pro Tip:</strong> <code>helm show values</code> is the first command to run with any new chart — it shows every configurable option. <code>helm show all</code> combines values, chart, and readme in one output. Use <code>helm show chart</code> to quickly check version and dependency information.
                 </div>
             </article>
@@ -1961,7 +2427,45 @@ version: 2.3.1
 appVersion: "v3.2.1"
 description: A Helm chart for anihpj Django jobpost application</div>
                 <p class="output-note"><strong>📝 What happened:</strong> <code>helm show all</code> outputs 145 lines combining Chart.yaml, values.yaml, and README. Use this for complete chart documentation or to pipe into grep for searching across all chart info at once.</p>
-            </article>
+            
+<div class="example">
+<h5>Example 1: Show All Chart Info for Documentation</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show all /lpj/charts/jobpost/ > /lpj/docs/jobpost-chart-reference.txt && wc -l /lpj/docs/jobpost-chart-reference.txt</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">145 /lpj/docs/jobpost-chart-reference.txt</code></pre>
+<p><strong>Scenario:</strong> Dave generates complete chart documentation by capturing all chart info in one command.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash"><code>helm show all</code> captured 145 lines combining Chart.yaml metadata, all configurable values, and the README documentation. Dave uses this for generating the team wiki and onboarding new developers. The single command replaces three separate <code>helm show</code> calls.</code></pre>
+</div>
+<div class="example">
+<h5>Example 2: Pipe Show All Through Grep for Quick Search</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show all /lpj/charts/jobpost/ | grep -i -A2 "database\|postgres\|db_"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">postgresql:
+  enabled: true
+  auth:
+    database: jobpost
+    username: anihpj_admin</code></pre>
+<p><strong>Scenario:</strong> Alice searches for all database-related configuration across the entire chart documentation.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The grep filtered 145 lines down to just the PostgreSQL-related configuration. Alice can quickly find that the database is named "jobpost" with username "anihpj_admin". This pattern works for searching any keyword across the entire chart documentation — much faster than opening multiple files.</code></pre>
+</div>
+<div class="example">
+<h5>Example 3: Show All for Dependency Audit</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show all bitnami/postgresql | grep -E "^(dependencies:|  - name:|    version:|    repository:)"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">dependencies:
+  - name: common
+    version: 2.x.x
+    repository: oci://registry-1.docker.io/bitnamicharts</code></pre>
+<p><strong>Scenario:</strong> Eve audits all chart dependencies by extracting dependency info from show all output.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Bitnami PostgreSQL chart has one dependency — the <code>common</code> library chart. Eve uses this to audit the supply chain: every dependency is a potential security risk. The anihpj security policy requires auditing all transitive dependencies before approving a chart for production use.</code></pre>
+</div>
+</article>
 
             <article class="api-block" id="helm-show-chart">
                 <h3>helm show chart</h3>
@@ -1980,7 +2484,45 @@ description: A Helm chart for anihpj Django jobpost application</div>
                 <div class="example-output">version: 15.5.0
 appVersion: 15.3.0</div>
                 <p class="output-note"><strong>📝 What happened:</strong> Quick version check of the Bitnami PostgreSQL chart. Use <code>helm show chart</code> to verify chart versions before adding dependencies.</p>
-            </article>
+            
+<div class="example">
+<h5>Example 1: Compare Chart Versions Across Repos</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">echo "Bitnami:" && helm show chart bitnami/postgresql | grep "^version:" && echo "Stable:" && helm show chart stable/postgresql 2>/dev/null | grep "^version:" || echo "stable repo deprecated"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">Bitnami:
+version: 15.5.0
+stable repo deprecated</code></pre>
+<p><strong>Scenario:</strong> Carol compares the version of PostgreSQL available in different repositories.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Bitnami chart is at version 15.5.0. The stable Helm repo is deprecated — all charts have moved to Bitnami and other providers. Carol now knows to use Bitnami as the authoritative source for PostgreSQL charts.</code></pre>
+</div>
+<div class="example">
+<h5>Example 2: Verify Chart Type Before Adding Dependency</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show chart bitnami/common | grep "^type:"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">type: library</code></pre>
+<p><strong>Scenario:</strong> Alice checks if a chart is an "application" or "library" chart before adding it as a dependency.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Bitnami common chart is a <code>library</code> chart — it cannot be installed directly, only used as a dependency by other charts. Alice now knows to add it under <code>dependencies</code> in Chart.yaml rather than trying to <code>helm install</code> it directly. Library charts provide reusable template helpers.</code></pre>
+</div>
+<div class="example">
+<h5>Example 3: Extract Chart Keywords for Discovery</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show chart bitnami/redis | grep "^keywords:" -A5</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">keywords:
+  - redis
+  - key-value
+  - database
+  - caching
+  - message broker</code></pre>
+<p><strong>Scenario:</strong> Dave searches for charts by extracting keywords from helm show chart output.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Redis chart is tagged with keywords: redis, key-value, database, caching, message broker. Dave uses these keywords to decide if Redis fits the jobpost architecture — it serves as both a cache and message broker (Celery backend). Keywords help categorize charts beyond just their name.</code></pre>
+</div>
+</article>
 
             <article class="api-block" id="helm-show-crds">
                 <h3>helm show crds</h3>
@@ -1998,7 +2540,50 @@ appVersion: 15.3.0</div>
 <pre><code class="language-bash">helm show crds /lpj/charts/jobpost/ 2>&1</code></pre>
                 <div class="example-output">Error: chart "jobpost" has no CRDs</div>
                 <p class="output-note"><strong>📝 What happened:</strong> The jobpost chart has no CRDs — it uses standard Kubernetes resources. CRDs are used by operators and advanced charts that extend the Kubernetes API.</p>
-            </article>
+            
+<div class="example">
+<h5>Example 1: Check for CRDs Before Installing an Operator</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show crds bitnami/grafana-operator 2>&1 | head -20</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: grafanadashboards.integreatly.org
+spec:
+  group: integreatly.org
+  names:
+    kind: GrafanaDashboard
+    listKind: GrafanaDashboardList
+    plural: grafanadashboards
+    singular: grafanadashboard
+  scope: Namespaced</code></pre>
+<p><strong>Scenario:</strong> Alice checks if the Grafana Operator chart installs CRDs that need cluster-admin permissions.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Grafana Operator installs a CRD for <code>GrafanaDashboard</code> resources. Alice now knows this chart requires cluster-admin permissions to install CRDs. The anihpj RBAC policy requires security team approval for any chart that installs CRDs. Always check <code>helm show crds</code> before installing operator charts.</code></pre>
+</div>
+<div class="example">
+<h5>Example 2: Count CRDs in a Chart</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show crds bitnami/sealed-secrets 2>&1 | grep "^kind: CustomResourceDefinition" | wc -l</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">1</code></pre>
+<p><strong>Scenario:</strong> Eve audits an operator chart to see how many CRDs it will install.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Sealed Secrets chart installs exactly 1 CRD. Eve logs this in the security audit: 1 CRD, namespaced scope, no cluster-wide resources beyond the CRD itself. This is a low-risk chart from a CRD perspective. Charts with 5+ CRDs require additional security review at anihpj.</code></pre>
+</div>
+<div class="example">
+<h5>Example 3: Extract CRD API Group for RBAC</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show crds bitnami/grafana-operator 2>&1 | grep "group:" | head -1</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">group: integreatly.org</code></pre>
+<p><strong>Scenario:</strong> Dave extracts the CRD API group to create precise RBAC rules for the CI service account.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The CRD's API group is <code>integreatly.org</code>. Dave creates an RBAC role that grants access only to this specific group, following the principle of least privilege. Without <code>helm show crds</code>, he would have to install the chart first to discover the API groups — which is backwards.</code></pre>
+</div>
+</article>
 
             <article class="api-block" id="helm-show-readme">
                 <h3>helm show readme</h3>
@@ -2019,7 +2604,53 @@ Redis(R) is an open source, advanced key-value store.
 ## TL;DR
 helm install my-release oci://registry-1.docker.io/bitnamicharts/redis</div>
                 <p class="output-note"><strong>📝 What happened:</strong> The Bitnami Redis README shows a quickstart guide. Reading READMEs is essential before deploying any chart — they contain prerequisites, configuration options, and upgrade notes.</p>
-            </article>
+            
+<div class="example">
+<h5>Example 1: Find Upgrade Instructions in README</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show readme bitnami/postgresql | grep -A20 "^### Upgrading" | head -25</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">### Upgrading
+
+#### From 14.x to 15.x
+
+The PostgreSQL 15.x chart introduces several breaking changes:
+- The default PostgreSQL major version is now 15
+- The persistence section has been restructured
+- The securityContext has been updated to follow Bitnami standards
+
+To upgrade:
+1. Backup your database: pg_dumpall > backup.sql
+2. Update the values.yaml with the new persistence structure</code></pre>
+<p><strong>Scenario:</strong> Carol reads the upgrade section of the PostgreSQL chart README before upgrading from v14 to v15.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The README clearly documents breaking changes between v14 and v15: persistence section restructured, securityContext updated, major version bump. Carol now knows to back up the database with <code>pg_dumpall</code> before upgrading and to update her values.yaml. Always read the upgrade section before bumping chart versions.</code></pre>
+</div>
+<div class="example">
+<h5>Example 2: Check Prerequisites Before Installation</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show readme bitnami/nginx | grep -i -A3 "prerequisites\|requirements\|kubernetes"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">## Prerequisites
+- Kubernetes 1.25+
+- Helm 3.12+
+- PV provisioner support in the underlying infrastructure</code></pre>
+<p><strong>Scenario:</strong> Alice verifies the Kubernetes version requirement before installing a new chart.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Nginx chart requires Kubernetes 1.25+ and Helm 3.12+. The anihpj staging cluster runs 1.28 — compatible. Alice always checks prerequisites before proposing a new chart to the team. Installing a chart on an incompatible cluster can cause silent failures or unexpected behavior.</code></pre>
+</div>
+<div class="example">
+<h5>Example 3: Extract TL;DR Quickstart</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show readme bitnami/redis | grep -A2 "TL;DR"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">## TL;DR
+helm install my-release oci://registry-1.docker.io/bitnamicharts/redis</code></pre>
+<p><strong>Scenario:</strong> Dave extracts the quickstart command from a chart README for rapid prototyping.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The TL;DR section gives a one-command install. Dave uses this for local prototyping — but for production, he always reads the full README and creates a custom values file. TL;DR commands are convenient for development but rarely suitable for production without customization.</code></pre>
+</div>
+</article>
 
             <article class="api-block" id="helm-show-values">
                 <h3>helm show values</h3>
@@ -2046,7 +2677,64 @@ service:
   ports:
     http: 80</div>
                 <p class="output-note"><strong>📝 What happened:</strong> The Nginx chart's default values show 1 replica, Docker Hub registry, and LoadBalancer service type. Use this to build custom values files for your environment.</p>
-            </article>
+            
+<div class="example">
+<h5>Example 1: Extract Image Configuration Values</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show values bitnami/postgresql | grep -A10 "^image:"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">image:
+  registry: docker.io
+  repository: bitnami/postgresql
+  tag: 15.3.0-debian-12-r0
+  digest: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+  debug: false</code></pre>
+<p><strong>Scenario:</strong> Alice extracts only the image-related values to prepare a custom image override file.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The PostgreSQL image is from Docker Hub (<code>docker.io/bitnami/postgresql:15.3.0-debian-12-r0</code>). Alice can override the registry to use the anihpj private mirror: <code>image.registry=registry.anihpj.io</code>. Extracting specific value sections with grep is faster than scrolling through 300+ lines of values.</code></pre>
+</div>
+<div class="example">
+<h5>Example 2: Compare Default Values Between Charts</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">echo "=== PostgreSQL ===" && helm show values bitnami/postgresql | grep -A5 "^primary:\|^persistence:" | head -12 && echo "=== Redis ===" && helm show values bitnami/redis | grep -A5 "^master:\|^persistence:" | head -12</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">=== PostgreSQL ===
+primary:
+  persistence:
+    enabled: true
+    size: 8Gi
+=== Redis ===
+master:
+  persistence:
+    enabled: true
+    size: 8Gi</code></pre>
+<p><strong>Scenario:</strong> Carol compares the persistence configuration between PostgreSQL and Redis charts.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">Both PostgreSQL and Redis default to 8Gi persistent volumes with persistence enabled. Carol can adjust these values in the jobpost chart's values-prod.yaml to 50Gi for PostgreSQL and 20Gi for Redis based on the anihpj production data growth projections. Understanding upstream defaults helps make informed sizing decisions.</code></pre>
+</div>
+<div class="example">
+<h5>Example 3: Discover Hidden Configuration Options</h5>
+<p><strong>📁 Directory Snippet:</strong></p>
+<pre><code class="language-bash">helm show values bitnami/nginx | grep -B2 -A8 "securityContext\|podSecurityContext"</code></pre>
+<p><strong>📄 Context:</strong></p>
+<pre><code class="language-yaml">podSecurityContext:
+  enabled: true
+  fsGroup: 1001
+containerSecurityContext:
+  enabled: true
+  runAsUser: 1001
+  runAsNonRoot: true
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false</code></pre>
+<p><strong>Scenario:</strong> Dave discovers a security context configuration he didn't know existed by inspecting values.</p>
+<p><strong>Command:</strong></p>
+<pre><code class="language-bash">The Nginx chart has security contexts enabled by default — running as non-root user 1001 with all capabilities dropped. Dave didn't need to configure these manually. <code>helm show values</code> revealed that the chart already follows security best practices. Always inspect default values before overengineering security configurations.</code></pre>
+</div>
+</article>
         </section>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
