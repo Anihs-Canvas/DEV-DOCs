@@ -7726,10 +7726,38 @@ curl http://model-registry.anihpj-ml.svc/api/v1/models/anihpj-job-classifier/ver
             <h2 style="display:flex;align-items:center;gap:12px;">Chapter 19: Training Pipelines — End-to-End Automation<span class="chapter-badge">🔴 Advanced</span></h2>
             <div class="chapter-intro"><h3>Chapter 19: Production-Grade Training Workflows</h3><p>Training pipelines automate the entire model development cycle — from data ingestion through model registration. This chapter covers end-to-end pipeline design, incremental training, and multi-model orchestration.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5 hours</span><span class="meta-tag">🔄 Pipelines</span></div></div>
 
-            <div class="section-block" id="s19-1"><h3>19.1 End-to-End Pipeline Design</h3><p>A production training pipeline connects: Data Validation → Feature Engineering → Model Training → Evaluation → Model Registration. Each stage has pass/fail gates — if data validation fails, the pipeline stops; if model accuracy drops below threshold, the model is NOT registered. This prevents bad models from reaching production.</p></div>
-            <div class="section-block" id="s19-2"><h3>19.2 Incremental Training &amp; Updates</h3><p>Instead of retraining from scratch every time, incremental training: loads the previous model checkpoint, trains only on NEW data (last 24 hours), and updates model weights. This reduces training time from hours to minutes and GPU costs by 80%+. Use with scikit-learn <code>warm_start=True</code> or PyTorch checkpoint loading.</p></div>
-            <div class="section-block" id="s19-3"><h3>19.3 Multi-Model Training</h3><p>anihpj needs multiple models: job classifier (categorize jobs), skill extractor (NER to extract skills from text), salary predictor (regression), and recommendation ranker (learning-to-rank). Run these as parallel pipeline branches — all fed from the same data ingestion but trained independently. Use DAG (Directed Acyclic Graph) pipelines in kfp to express parallelism.</p></div>
-            <div class="section-block" id="s19-4"><h3>19.4 Pipeline Optimization</h3><p>Cache intermediate results (don't re-compute features if data hasn't changed). Use spot/preemptible instances for training (with checkpointing). Parallelize independent steps. Compress artifacts for faster S3 transfers. Profile each step to find bottlenecks.</p></div>
+            <div class="section-block" id="s19-1"><h3>19.1 End-to-End Pipeline Design</h3><p>A production training pipeline connects: <strong>Data Validation → Feature Engineering → Model Training → Evaluation → Model Registration.</strong> Each stage has pass/fail gates — if data validation fails, the pipeline stops; if model accuracy drops below threshold, the model is NOT registered.</p>
+                <div class="diagram-container" style="margin:12px 0;"><div class="diagram-title">🔄 Training Pipeline with Pass/Fail Gates</div><pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│         🔄 PRODUCTION TRAINING PIPELINE — PASS/FAIL GATES          │
+│  📥 Data → ✅ Validate → 🔧 Features → 🧠 Train → 📊 Eval → 📦 Register
+│              │                          │            │              │
+│              │ Schema fail?              │            │ Acc &lt; 0.85? │
+│              ▼ STOP 🛑                  │            ▼ STOP 🛑    │
+│                                       ▼ Acc ≥ 0.85 → Register    │
+└──────────────────────────────────────────────────────────────────┘</pre></div></div>
+            <div class="section-block" id="s19-2"><h3>19.2 Incremental Training &amp; Updates</h3><p>Instead of retraining from scratch every time, incremental training loads the previous checkpoint and trains only on NEW data. GPU costs drop 80%+.</p>
+                <div class="code-block-wrapper" style="margin:12px 0;"><div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">Incremental Training — sklearn + PyTorch</span></div><pre><code># scikit-learn warm_start (updates existing trees)
+model = RandomForestClassifier(n_estimators=100, warm_start=True)
+model.fit(new_data)  # Doesn't rebuild — adds trees to existing forest
+
+# PyTorch checkpoint resume
+checkpoint = torch.load('model_ckpt.pt')
+model.load_state_dict(checkpoint['model_state'])
+optimizer.load_state_dict(checkpoint['optimizer_state'])
+# Train only on new batch → save new checkpoint</code></pre></div></div>
+            <div class="section-block" id="s19-3"><h3>19.3 Multi-Model Training</h3><p>anihpj needs multiple models trained in parallel: job classifier, skill extractor (NER), salary predictor, and recommendation ranker. Use DAG pipelines to express parallelism.</p>
+                <div class="code-block-wrapper" style="margin:12px 0;"><div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">Parallel Multi-Model Pipeline (kfp DAG)</span></div><pre><code>@dsl.pipeline(name='anihpj-multi-model')
+def pipeline():
+    ingest = load_data()
+    # All three run in PARALLEL — independent pods
+    classifier = train_classifier(ingest.outputs['data'])
+    skill_ner = train_skill_extractor(ingest.outputs['data'])
+    salary = train_salary_predictor(ingest.outputs['data'])
+    # Merge: ranker waits for ALL to complete
+    ranker = train_ranker(classifier.out, skill_ner.out, salary.out)</code></pre></div></div>
+            <div class="section-block" id="s19-4"><h3>19.4 Pipeline Optimization</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Technique</th><th>Saves</th><th>How</th></tr></thead><tbody><tr><td><strong>Cache Features</strong></td><td>⏱️ 50-80% time</td><td>Skip recompute if input hash unchanged</td></tr><tr><td><strong>Spot Instances</strong></td><td>💰 60-80% cost</td><td>Preemptible VMs + checkpointing</td></tr><tr><td><strong>Parallel Steps</strong></td><td>⏱️ 2-4x faster</td><td>Independent tasks run simultaneously</td></tr><tr><td><strong>Compress Artifacts</strong></td><td>📦 70-90% smaller</td><td>Parquet (vs CSV), model quantization</td></tr></tbody></table></div>
             <div class="exam-questions"><h4>📝 Chapter 19 Practice Questions</h4>
                 <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What gate prevents a bad model from reaching production?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>The Evaluation step: if metrics (accuracy, F1) drop below a threshold, the pipeline stops and does NOT register the model. This is a pass/fail gate. Define thresholds in the pipeline config.</p></div></details></div>
                 <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">How does incremental training reduce costs?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>Trains only on NEW data (last 24h) using previous checkpoint. Training time drops from hours to minutes. GPU costs drop 80%+. Requires: checkpoint loading + incremental-compatible algorithm (warm_start=True or fine-tuning).</p></div></details></div>
@@ -7744,10 +7772,36 @@ curl http://model-registry.anihpj-ml.svc/api/v1/models/anihpj-job-classifier/ver
             <h2 style="display:flex;align-items:center;gap:12px;">Chapter 20: GPU-Accelerated Training 🎯<span class="chapter-badge">🔴 Advanced · 🎯 EX267</span></h2>
             <div class="chapter-intro"><h3>Chapter 20: Maximizing GPU Performance on OpenShift</h3><p>GPUs are the workhorses of modern ML. This chapter covers GPU architecture fundamentals, OpenShift GPU operator setup, multi-GPU training strategies, and GPU cost optimization.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5 hours</span><span class="meta-tag">🎮 GPU</span><span class="meta-tag">🎯 EX267</span></div></div>
 
-            <div class="section-block" id="s20-1"><h3>20.1 GPU Architecture Refresher</h3><p><strong>CUDA Cores:</strong> Thousands of parallel processors. <strong>Tensor Cores:</strong> Specialized for matrix multiplication (AI workloads). <strong>VRAM:</strong> GPU memory — A100 has 40/80GB, H100 has 80GB. <strong>NVLink:</strong> High-speed GPU-to-GPU interconnect (600 GB/s). <strong>MIG:</strong> Multi-Instance GPU — partition one physical GPU into up to 7 isolated instances. For anihpj training: 1× A100 is enough for BERT fine-tuning; 4× A100 needed for Llama-7B fine-tuning.</p></div>
-            <div class="section-block" id="s20-2"><h3>20.2 GPU Workloads on OpenShift</h3><p>GPU resources are requested like CPU/memory: <code>resources.limits.nvidia.com/gpu: 2</code>. The NVIDIA GPU Operator handles driver deployment, CUDA toolkit, and container runtime. GPU scheduling uses node labels (nvidia.com/gpu.present=true) and taints/tolerations for dedicated GPU nodes.</p></div>
-            <div class="section-block" id="s20-3"><h3>20.3 NVIDIA GPU Operator Setup</h3><p>Install Node Feature Discovery → Install GPU Operator → Create ClusterPolicy (auto-deploys drivers) → Verify with <code>nvidia-smi</code>. Enable MIG for GPU sharing, DCGM for monitoring. Covered in detail in Ch5.8.</p></div>
-            <div class="section-block" id="s20-4"><h3>20.4 Multi-GPU Training in Practice</h3><p><strong>Data Parallelism:</strong> Each GPU gets a copy of the model, processes different data. Most common. Use PyTorch DDP or Horovod. <strong>Model Parallelism:</strong> Model is too large for one GPU — split layers across GPUs. Use DeepSpeed or FSDP. <strong>Pipeline Parallelism:</strong> Each GPU handles different pipeline stages. For anihpj: Data parallelism is sufficient (models &lt;1B parameters).</p></div>
+            <div class="section-block" id="s20-1"><h3>20.1 GPU Architecture Refresher</h3>
+                <table class="compare-table" style="margin:12px 0;">
+                    <thead><tr><th>Component</th><th>What It Does</th><th>Key Spec</th><th>AI Relevance</th></tr></thead>
+                    <tbody><tr><td><strong>CUDA Cores</strong></td><td>General parallel processing</td><td>A100: 6,912 cores</td><td>General ML ops</td></tr>
+                    <tr><td><strong>Tensor Cores</strong></td><td>Matrix multiply-accumulate</td><td>H100: 528 (4th Gen, FP8)</td><td class="winner">99% of deep learning</td></tr>
+                    <tr><td><strong>VRAM</strong></td><td>GPU memory (model + data)</td><td>A100: 80GB HBM2e</td><td>Limiting factor for model size</td></tr>
+                    <tr><td><strong>NVLink</strong></td><td>GPU-to-GPU interconnect</td><td>600 GB/s (vs 64 PCIe)</td><td>Multi-GPU gradient sync</td></tr>
+                    <tr><td><strong>MIG</strong></td><td>Partition GPU into instances</td><td>Up to 7 isolated slices</td><td>Multi-tenant GPU sharing</td></tr></tbody></table>
+                <div class="info-box tip"><h5>🎯 anihpj GPU Sizing</h5><p>BERT fine-tuning: 1× A100 (40GB). Llama-7B fine-tuning: 4× A100 (160GB needed). Inference: 1× L40S (48GB) with FP8 quantization.</p></div></div>
+            <div class="section-block" id="s20-2"><h3>20.2 GPU Workloads on OpenShift</h3>
+                <div class="code-block-wrapper" style="margin:12px 0;"><div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">GPU Pod Spec</span></div><pre><code>resources:
+  limits:
+    nvidia.com/gpu: 2        # Request 2 GPUs
+# Node labels (auto-set by NFD):
+# nvidia.com/gpu.present=true
+# nvidia.com/gpu.product=A100-SXM4-40GB
+# Taint GPU nodes: oc adm taint node gpu-node nvidia.com/gpu=true:NoSchedule</code></pre></div></div>
+            <div class="section-block" id="s20-3"><h3>20.3 NVIDIA GPU Operator Setup</h3>
+                <div class="diagram-container" style="margin:12px 0;"><div class="diagram-title">⚡ GPU Stack Install Order</div><pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│ ⚡ GPU STACK: 1. NFD (detect HW) → 2. GPU Operator → 3. ClusterPolicy
+│    → 4. Drivers deploy → 5. Verify: nvidia-smi ✅                │
+│ Enable: MIG (GPU sharing), DCGM (monitoring), Time-Slicing (dev) │
+└──────────────────────────────────────────────────────────────────┘</pre></div></div>
+            <div class="section-block" id="s20-4"><h3>20.4 Multi-GPU Training in Practice</h3>
+                <table class="compare-table" style="margin:12px 0;">
+                    <thead><tr><th>Strategy</th><th>How It Works</th><th>Use When</th><th>Tool</th></tr></thead>
+                    <tbody><tr><td><strong>Data Parallel</strong></td><td>Copy model to each GPU, split data</td><td class="winner">Model fits on 1 GPU (anihpj)</td><td>PyTorch DDP, Horovod</td></tr>
+                    <tr><td><strong>Model Parallel</strong></td><td>Split model layers across GPUs</td><td>Model > GPU VRAM (Llama-70B)</td><td>DeepSpeed, FSDP</td></tr>
+                    <tr><td><strong>Pipeline Parallel</strong></td><td>Split by pipeline stages</td><td>Sequential processing stages</td><td>DeepSpeed, Megatron</td></tr></tbody></table></div>
             <div class="exam-questions"><h4>📝 Chapter 20 Practice Questions</h4>
                 <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What's the difference between MIG and time-slicing for GPU sharing?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p><strong>MIG:</strong> Hardware-level partitioning — each instance gets dedicated memory and compute (secure, isolated). <strong>Time-slicing:</strong> Software-level — GPUs alternate between workloads (oversubscription possible). MIG is for production multi-tenant; time-slicing is for dev/experimentation.</p></div></details></div>
                 <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">When would you use model parallelism vs data parallelism?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p><strong>Data parallelism:</strong> Model fits on one GPU, but training is slow — split data across GPUs. <strong>Model parallelism:</strong> Model does NOT fit on one GPU (e.g., Llama-70B needs 140GB VRAM) — split model layers across GPUs. anihpj models (&lt;1B params) need data parallelism only.</p></div></details></div>
@@ -7847,6 +7901,31 @@ curl http://model-registry.anihpj-ml.svc/api/v1/models/anihpj-job-classifier/ver
             <div class="section-block" id="s21-3">
                 <h3>21.3 Inference Endpoint Lifecycle</h3>
                 <p>An inference endpoint goes through: <strong>Create</strong> (deploy InferenceService CR) → <strong>Ready</strong> (pod running, health check passing) → <strong>Serving</strong> (accepting requests via Route) → <strong>Scaling</strong> (KPA/HPA adjusts replicas based on load) → <strong>Idle</strong> (scale to zero if no requests for N minutes) → <strong>Delete</strong> (remove CR, pods terminated). With KServe + Knative, cold starts from zero take ~200-500ms.</p>
+
+                <div class="code-block-wrapper" style="margin:12px 0;">
+                    <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">Inference Endpoint URL Patterns & Authentication</span></div>
+                    <pre><code># KServe generates a Route automatically:
+# https://{inferenceservice-name}-{namespace}.apps.{cluster}.com
+
+# Standard prediction endpoint:
+# POST /v1/models/{model-name}:predict
+curl -k https://anihpj-classifier-anihpj-ml.apps.crc.testing/v1/models/anihpj-classifier:predict \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"instances": [...]}'
+
+# Health check endpoint:
+# GET /v1/models/{model-name}
+curl -k https://anihpj-classifier-anihpj-ml.apps.crc.testing/v1/models/anihpj-classifier
+
+# Authentication options for inference endpoints:
+# 1. Service Account token (machine-to-machine):
+#    curl -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+# 2. OAuth token (user-level):
+#    curl -H "Authorization: Bearer $(oc whoami -t)"
+# 3. API Key (external clients): Create a ServiceAccount, get its token
+# 4. No auth (dev only): Set Route annotation to disable TLS verify</code></pre>
+                </div>
             </div>
 
             <!-- 21.4 -->
@@ -7873,7 +7952,15 @@ curl http://model-registry.anihpj-ml.svc/api/v1/models/anihpj-job-classifier/ver
             <h2 style="display:flex;align-items:center;gap:12px;">Chapter 22: Single-Model Serving — KServe 🎯<span class="chapter-badge">🔴 Advanced · 🎯 EX267</span></h2>
             <div class="chapter-intro"><h3>Chapter 22: Production Model Serving with KServe</h3><p>KServe is the standard for serving individual models on OpenShift AI. It provides GPU acceleration, autoscaling (scale-to-zero), canary deployments, and explainability — all configured through a single InferenceService YAML. This is the EX267 core serving chapter.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2.5 hours</span><span class="meta-tag">🚀 KServe</span><span class="meta-tag">🎯 EX267 25%</span></div></div>
 
-            <div class="section-block" id="s22-1"><h3>22.1 KServe Fundamentals</h3><p>KServe (formerly KFServing) is a Kubernetes CRD-based model serving framework. You define an <code>InferenceService</code> YAML specifying the model location, framework, and resources — KServe handles everything else: downloading the model, starting the server, exposing the endpoint, and autoscaling.</p></div>
+            <div class="section-block" id="s22-1"><h3>22.1 KServe Fundamentals</h3><p>KServe (formerly KFServing) is a Kubernetes CRD-based model serving framework. One <code>InferenceService</code> YAML defines everything — KServe handles model download, server startup, endpoint exposure, and autoscaling.</p>
+                <div class="diagram-container" style="margin:12px 0;"><div class="diagram-title">🚀 KServe Architecture</div><pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│              🚀 KSERVE — SINGLE MODEL SERVING                       │
+│  👤 Client → 🌐 Route → 📦 Predictor Pod → 🤖 Model              │
+│                              │  Optional: 🔄 Transformer + 🔍 Explainer
+│  Autoscaling: KPA (scale→0) or HPA (min replicas)                │
+│  Model: S3 / OCI registry / PVC / HuggingFace Hub                │
+└──────────────────────────────────────────────────────────────────┘</pre></div></div>
 
             <div class="section-block" id="s22-2"><h3>22.2 Deploying an Inference Service</h3>
                 <div class="code-block-wrapper" style="margin:12px 0;">
@@ -7913,13 +8000,55 @@ curl -k https://anihpj-job-classifier-anihpj-ml.apps.cluster.example.com/v1/mode
                 </div>
             </div>
 
-            <div class="section-block" id="s22-3"><h3>22.3 InferenceService Configuration</h3><p>Key config: <strong>storageUri</strong> (s3://, oci://, pvc://, hf://), <strong>modelFormat</strong> (auto-detects server), <strong>minReplicas</strong> (0 for scale-to-zero, 1+ for warm), <strong>canaryTrafficPercent</strong> (for canary deployments).</p></div>
+            <div class="section-block" id="s22-3"><h3>22.3 InferenceService Configuration</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Field</th><th>Example</th><th>Purpose</th></tr></thead><tbody><tr><td><strong>storageUri</strong></td><td><code>s3://bucket/model</code></td><td>Model location (S3/OCI/PVC/hf://)</td></tr><tr><td><strong>modelFormat</strong></td><td><code>sklearn, pytorch, xgboost</code></td><td>Auto-detects serving runtime</td></tr><tr><td><strong>minReplicas</strong></td><td><code>0</code> (scale-to-zero)</td><td>Minimum pods running</td></tr><tr><td><strong>canaryTrafficPercent</strong></td><td><code>10</code></td><td>Traffic split for canary</td></tr></tbody></table></div>
 
-            <div class="section-block" id="s22-4"><h3>22.4 Transformer &amp; Explainer</h3><p><strong>Transformer:</strong> Pre/post-processing container that runs alongside the predictor. Example: convert JSON input to model-specific format, or filter PII from requests. <strong>Explainer:</strong> Optional container providing model explanations (SHAP, LIME) — accessible via a separate endpoint for debugging and compliance.</p></div>
+            <div class="section-block" id="s22-4"><h3>22.4 Transformer &amp; Explainer</h3>
+                <div class="diagram-container" style="margin:8px 0 14px;">
+                    <div class="diagram-title">🔄 KServe InferenceService — Predictor vs Transformer vs Explainer</div>
+                    <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+Client Request (JSON)
+     │
+     ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ Transformer  │────▶│  Predictor   │────▶│  Explainer   │
+│ (optional)   │     │  (required)  │     │  (optional)   │
+│              │     │              │     │              │
+│ • Preprocess │     │ • Model      │     │ • SHAP/LIME  │
+│ • PII filter │     │   inference  │     │ • Feature    │
+│ • Tokenize   │     │ • Scoring    │     │   importance │
+└──────────────┘     └──────────────┘     └──────────────┘
+                                                     │
+                                                     ▼
+                                          Explanation Response
+                                          "Job ranked high because:
+                                           skill_match=0.92, salary_fit=0.87"</pre>
+                </div>
+                <p><strong>Transformer:</strong> Pre/post-processing container. Example: convert JSON input to model-specific format, filter PII from requests. <strong>Explainer:</strong> Optional container providing model explanations (SHAP, LIME) — accessible via a separate endpoint for debugging and compliance.</p></div>
 
-            <div class="section-block" id="s22-5"><h3>22.5 GPU-Accelerated Inference</h3><p>For GPU inference, add <code>nvidia.com/gpu: 1</code> to resource limits. KServe automatically schedules the pod on GPU nodes. For LLM serving, vLLM and TGI runtimes are GPU-optimized — they use PagedAttention for 20x faster token generation compared to vanilla HuggingFace.</p></div>
+            <div class="section-block" id="s22-5"><h3>22.5 GPU-Accelerated Inference</h3>
+                <div class="code-block-wrapper" style="margin:8px 0 14px;"><div class="code-block-header"><span class="code-lang">YAML — KServe InferenceService with GPU</span><span class="copy-btn" onclick="copyCode(this)" title="Copy code">📋</span></div><div class="code-block-body" style="background:#0d1117;color:#c9d1d9;padding:14px;border-radius:0 0 8px 8px;font-family:monospace;font-size:13px;overflow-x:auto;"><pre style="margin:0;">apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: anihpj-job-classifier
+  annotations:
+    serving.kserve.io/deploymentMode: Serverless
+spec:
+  predictor:
+    model:
+      modelFormat: { name: sklearn }
+      storageUri: s3://anihpj-models/job-classifier/v2
+    resources:
+      limits:
+        nvidia.com/gpu: 1        # Request 1 GPU
+        memory: 8Gi
+      requests:
+        nvidia.com/gpu: 1
+        memory: 4Gi</pre></div></div>
+                <p>KServe auto-schedules on GPU nodes. For LLMs: vLLM/TGI runtimes use <strong>PagedAttention</strong> for 20× faster token generation vs vanilla HuggingFace. <strong>GPU time-slicing</strong> (not MIG) works for inference — multiple replicas share one GPU.</p></div>
 
-            <div class="section-block" id="s22-6"><h3>22.6 Monitoring &amp; Debugging</h3><p>KServe exposes Prometheus metrics: request count, latency percentiles, error rates. Access via: <code>oc get inferenceservice anihpj-job-classifier -o yaml</code> to see status conditions. Check predictor pod logs: <code>oc logs deploy/anihpj-job-classifier-predictor</code>.</p></div>
+            <div class="section-block" id="s22-6"><h3>22.6 Monitoring &amp; Debugging</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Check</th><th>Command</th><th>What to Look For</th></tr></thead><tbody><tr><td>IS status</td><td><code>oc get is</code></td><td>READY=True, URL populated</td></tr><tr><td>IS conditions</td><td><code>oc describe is anihpj-job-classifier</code></td><td>LatestDeploymentReady, RoutesReady</td></tr><tr><td>Predictor logs</td><td><code>oc logs deploy/anihpj-job-classifier-predictor</code></td><td>Model loaded, no errors</td></tr><tr><td>Metrics endpoint</td><td><code>curl http://&lt;predictor&gt;:8080/metrics</code></td><td>Prometheus metrics: request_count, latency</td></tr><tr><td>Model file check</td><td><code>oc rsh deploy/&lt;predictor&gt; ls /mnt/models</code></td><td>model.joblib or similar present</td></tr></tbody></table></div>
 
             <div class="section-block" id="s22-7"><h3>22.7 KPA vs HPA Autoscaling</h3>
                 <table class="compare-table"><thead><tr><th>Feature</th><th>KPA (Knative)</th><th>HPA (Kubernetes)</th></tr></thead>
@@ -7928,7 +8057,20 @@ curl -k https://anihpj-job-classifier-anihpj-ml.apps.cluster.example.com/v1/mode
                     <tr><td><strong>Cold start</strong></td><td>200-500ms</td><td>N/A (always warm)</td></tr></tbody></table>
             </div>
 
-            <div class="section-block" id="s22-8"><h3>22.8 Model Explainability</h3><p>For anihpj job recommendations: TrustyAI provides SHAP values showing WHY a particular job was recommended. This is critical for user trust ("Why am I seeing this job?") and regulatory compliance. Configure the Explainer container in the InferenceService spec.</p></div>
+            <div class="section-block" id="s22-8"><h3>22.8 Model Explainability</h3>
+                <div class="code-block-wrapper" style="margin:8px 0 14px;"><div class="code-block-header"><span class="code-lang">YAML — KServe InferenceService with Explainer</span><span class="copy-btn" onclick="copyCode(this)" title="Copy code">📋</span></div><div class="code-block-body" style="background:#0d1117;color:#c9d1d9;padding:14px;border-radius:0 0 8px 8px;font-family:monospace;font-size:13px;overflow-x:auto;"><pre style="margin:0;">spec:
+  predictor: ...
+  explainer:
+    alibi:
+      type: AnchorTabular       # SHAP-style explanations
+      storageUri: s3://anihpj-models/explainer/
+      config:
+        threshold: 0.95         # Confidence threshold
+    resources:
+      requests: { memory: 1Gi }
+# Access explanations at:
+# POST /v1/models/anihpj-job-classifier:explain</pre></div></div>
+                <p>For anihpj: TrustyAI/SHAP shows <strong>WHY</strong> a job was recommended ("skill_match=0.92 weighted highest"). Critical for user trust and regulatory compliance (GDPR "right to explanation").</p></div>
 
             <div class="exam-questions"><h4>📝 Chapter 22 Practice Questions</h4>
                 <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What YAML resource do you create to deploy a model with KServe?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p><code>InferenceService</code> (apiVersion: serving.kserve.io/v1beta1). One CR = one model endpoint with predictor, optional transformer, and optional explainer.</p></div></details></div>
@@ -7944,9 +8086,37 @@ curl -k https://anihpj-job-classifier-anihpj-ml.apps.cluster.example.com/v1/mode
             <h2 style="display:flex;align-items:center;gap:12px;">Chapter 23: Multi-Model Serving — ModelMesh 🎯<span class="chapter-badge">🔴 Advanced · 🎯 EX267</span></h2>
             <div class="chapter-intro"><h3>Chapter 23: Serving Many Models Efficiently</h3><p>ModelMesh is designed for organizations running dozens or hundreds of models. Instead of one pod per model, multiple models share a pool of serving pods — dramatically reducing resource costs for models with low or sporadic traffic.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">🕸️ ModelMesh</span></div></div>
 
-            <div class="section-block" id="s23-1"><h3>23.1 What is ModelMesh?</h3><p>ModelMesh loads multiple models into shared serving pods. Models are paged in/out of memory on demand — inactive models consume zero memory. This allows running 100+ models on the same infrastructure that would only support 5-10 with KServe single-model serving.</p></div>
-            <div class="section-block" id="s23-2"><h3>23.2 Deploying to ModelMesh</h3><p>Models are registered via a <code>ServingRuntime</code> CR (defines the server type — Triton, MLServer, OVMS) and a <code>InferenceService</code> CR pointing to the runtime. ModelMesh handles the routing: incoming requests are directed to the appropriate pod that has the requested model loaded.</p></div>
-            <div class="section-block" id="s23-3"><h3>23.3 Scaling &amp; Performance</h3><p>ModelMesh scales at the pod level (HPA) — adding more serving pods as total load increases. Individual models can be pinned to specific pods for guaranteed capacity. Cache eviction policies control which models stay in memory under pressure.</p></div>
+            <div class="section-block" id="s23-1"><h3>23.1 What is ModelMesh?</h3>
+                <div class="diagram-container" style="margin:12px 0;"><div class="diagram-title">🕸️ ModelMesh — Multi-Model Architecture</div><pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│ 🕸️ MODELMESH: 3 models share 2 serving pods → 50% resource savings│
+│  👤 → Route → Pod1: [v1📦 v2📦]  Pod2: [v2📦 v3📦]               │
+│  Models paged in/out on demand. Inactive = zero memory.          │
+│  Cache eviction: LRU policy auto-unloads unused models.          │
+└──────────────────────────────────────────────────────────────────┘</pre></div></div>
+            <div class="section-block" id="s23-2"><h3>23.2 Deploying to ModelMesh</h3>
+                <div class="code-block-wrapper" style="margin:8px 0 14px;"><div class="code-block-header"><span class="code-lang">YAML — ModelMesh: ServingRuntime + InferenceService</span><span class="copy-btn" onclick="copyCode(this)" title="Copy code">📋</span></div><div class="code-block-body" style="background:#0d1117;color:#c9d1d9;padding:14px;border-radius:0 0 8px 8px;font-family:monospace;font-size:13px;overflow-x:auto;"><pre style="margin:0;"># Step 1: Define the runtime (once per server type)
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata: { name: triton-runtime }
+spec:
+  containers:
+  - name: triton
+    image: nvcr.io/nvidia/tritonserver:24.01-py3
+    args: ["tritonserver", "--model-repository=s3://anihpj-models/"]
+
+# Step 2: Deploy a model to it (many models → same runtime)
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata: { name: anihpj-skill-rank, annotations: { serving.kserve.io/deploymentMode: ModelMesh } }
+spec:
+  predictor:
+    model:
+      modelFormat: { name: xgboost }
+      storageUri: s3://anihpj-models/skill-ranker/</pre></div></div>
+                <p>ModelMesh auto-routes requests to whichever pod has the requested model cached in memory. Cold start: 2-10s when model loads from S3.</p></div>
+            <div class="section-block" id="s23-3"><h3>23.3 Scaling &amp; Performance</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Feature</th><th>KServe Single Model</th><th>ModelMesh Multi-Model</th></tr></thead><tbody><tr><td><strong>Scaler</strong></td><td>KPA (scale-to-zero)</td><td>HPA (always warm)</td></tr><tr><td><strong>GPU sharing</strong></td><td>1 model per GPU (or time-slicing)</td><td>50+ models per GPU</td></tr><tr><td><strong>Model pinning</strong></td><td>N/A</td><td>Pin hot models to specific pods</td></tr><tr><td><strong>Cache eviction</strong></td><td>N/A</td><td>LRU — inactive models auto-unloaded</td></tr><tr><td><strong>Cold start</strong></td><td>5-30s (scale-from-zero)</td><td>2-10s (model load from S3)</td></tr><tr><td><strong>Best for</strong></td><td>1-3 models, scale-to-zero, low traffic</td><td>10-50+ models, always-on, GPU efficient</td></tr></tbody></table></div>
             <div class="section-block" id="s23-4"><h3>23.4 ModelMesh vs KServe — Decision Guide</h3>
                 <table class="compare-table"><thead><tr><th>Scenario</th><th class="winner">Use KServe</th><th>Use ModelMesh</th></tr></thead>
                     <tbody><tr><td>1-5 production models</td><td class="winner">✅ Best isolation</td><td>Works, but overkill</td></tr>
@@ -7966,12 +8136,91 @@ curl -k https://anihpj-job-classifier-anihpj-ml.apps.cluster.example.com/v1/mode
             <h2 style="display:flex;align-items:center;gap:12px;">Chapter 24: Advanced Inference Patterns<span class="chapter-badge">🔴 Advanced</span></h2>
             <div class="chapter-intro"><h3>Chapter 24: Beyond Basic Serving</h3><p>For specialized use cases — maximum throughput, custom preprocessing, streaming inference, and edge deployment — OpenShift supports advanced serving patterns beyond KServe and ModelMesh.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">🔬 Advanced</span></div></div>
 
-            <div class="section-block" id="s24-1"><h3>24.1 Triton Inference Server</h3><p>NVIDIA Triton is the highest-performance inference server — supports multiple frameworks (PyTorch, TF, ONNX, TensorRT), dynamic batching, concurrent model execution, and GPU optimization. Deploy as a ServingRuntime on OpenShift. Best for: maximum throughput, multi-framework shops, GPU-accelerated inference.</p></div>
-            <div class="section-block" id="s24-2"><h3>24.2 Custom Servers (FastAPI)</h3><p>When you need custom preprocessing or business logic beyond what KServe provides, deploy a FastAPI/Flask app as a standard OpenShift Deployment. Add a Route, configure HPA, and you have a custom inference server. Trade-off: you manage everything (scaling, monitoring, model loading) yourself.</p></div>
-            <div class="section-block" id="s24-3"><h3>24.3 Streaming Inference (Kafka)</h3><p>For real-time streaming predictions (e.g., classify every new job posting instantly), use Kafka + KServe: job postings published to Kafka topic → KServe inference pod consumes stream → predictions written to output topic. Use Strimzi (Kafka Operator) on OpenShift for managed Kafka.</p></div>
-            <div class="section-block" id="s24-4"><h3>24.4 Edge Inference Patterns</h3><p>For low-latency inference at the edge: deploy lightweight models (ONNX, TensorRT) using OpenShift at the edge (Single Node OpenShift). Models are pushed from the central registry to edge clusters. Useful for: real-time skill matching on job portals, instant salary predictions.</p></div>
+            <div class="section-block" id="s24-1"><h3>24.1 Triton Inference Server</h3>
+                <div class="diagram-container" style="margin:8px 0 14px;">
+                    <div class="diagram-title">🔬 NVIDIA Triton — Max Throughput Architecture</div>
+                    <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│                    NVIDIA TRITON INFERENCE SERVER                   │
+│                                                                     │
+│  👤 Requests ──▶ [Dynamic Batcher] ──▶ [Model Scheduler]           │
+│                       │                      │                      │
+│            Batching Window: 100μs     Concurrent Models: 8         │
+│                                                                     │
+│         ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
+│         │PyTorch  │  │TensorRT │  │  ONNX   │  │   TF    │       │
+│         │ Runtime │  │ Runtime │  │ Runtime │  │ Runtime │       │
+│         └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
+│              │             │            │            │              │
+│              ▼             ▼            ▼            ▼              │
+│         ┌──────────────────────────────────────────────────┐      │
+│         │           GPU Memory Pool (CUDA)                  │      │
+│         │   Model1 [VRAM] Model2 [VRAM] Model3 [VRAM]      │      │
+│         └──────────────────────────────────────────────────┘      │
+│                                                                     │
+│  📊 Performance: 2-5× throughput vs standard model servers         │
+│  ⚡ Dynamic Batching: Combine 100+ requests into 1 GPU pass       │
+└──────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+                <p>Deploy as a <code>ServingRuntime</code> CR on OpenShift. Triton supports dynamic batching, concurrent model execution, TensorRT optimization, and all major frameworks. <strong>Best for:</strong> maximum throughput, multi-framework shops, GPU-accelerated inference at scale.</p></div>
+            <div class="section-block" id="s24-2"><h3>24.2 Custom Servers (FastAPI)</h3>
+                <div class="code-block-wrapper" style="margin:8px 0 14px;"><div class="code-block-header"><span class="code-lang">Python — Custom FastAPI Inference Server on OpenShift</span><span class="copy-btn" onclick="copyCode(this)" title="Copy code">📋</span></div><div class="code-block-body" style="background:#0d1117;color:#c9d1d9;padding:14px;border-radius:0 0 8px 8px;font-family:monospace;font-size:13px;overflow-x:auto;"><pre style="margin:0;"># app.py — Custom FastAPI inference server
+from fastapi import FastAPI
+import joblib, numpy as np
+from pydantic import BaseModel
+
+app = FastAPI()
+model = joblib.load("/models/anihpj-skill-ranker.joblib")
+
+class JobInput(BaseModel):
+    title: str; skills: list[str]; experience: int
+    location: str; salary_range: str
+
+class Prediction(BaseModel):
+    score: float; explanation: dict
+
+@app.post("/predict", response_model=Prediction)
+@app.get("/healthz")  # Liveness probe
+def health(): return {"status": "ok"}
+
+@app.get("/ready")    # Readiness probe
+def ready():
+    return {"status": "ready", "model_loaded": model is not None}
+
+# Deploy: oc new-app python:3.11~https://github.com/anihpj/inference.git
+# oc expose svc/anihpj-inference → Route for external access
+# oc autoscale deploy/anihpj-inference --min=2 --max=10 --cpu-percent=70</pre></div></div>
+                <p><strong>Trade-off:</strong> you manage model loading, scaling, and monitoring yourself — but get unlimited flexibility for custom preprocessing and business logic. Best when KServe's patterns don't fit your pipeline.</p></div>
+            <div class="section-block" id="s24-3"><h3>24.3 Streaming Inference (Kafka)</h3>
+                <div class="diagram-container" style="margin:8px 0 14px;">
+                    <div class="diagram-title">📡 Real-Time Streaming Inference with Kafka + KServe</div>
+                    <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  📝 Django    │────▶│  📡 Kafka Topic   │────▶│  🤖 KServe Pod    │
+│  new job post│     │  anihpj.jobs.new  │     │  (Kafka consumer) │
+└──────────────┘     └──────────────────┘     └────────┬─────────┘
+                                                        │
+                                                        ▼
+                                               ┌──────────────────┐
+                                               │  📡 Kafka Topic   │
+                                               │ anihpj.jobs.scored│
+                                               └────────┬─────────┘
+                                                        │
+                                                        ▼
+                                               ┌──────────────────┐
+                                               │  🐍 Celery Worker │──▶ PostgreSQL
+                                               │  stores results   │
+                                               └──────────────────┘
+Pipeline: Strimzi Operator → KafkaTopic CRs → KServe Kafka Event Source
+Latency: &lt;100ms end-to-end (Kafka → infer → Kafka)</pre>
+                </div>
+                <p>Real-time classification: every new job posting published to Kafka → inference pod classifies → results written to output topic. Install <strong>Strimzi</strong> (Kafka Operator) from OperatorHub, create <code>KafkaTopic</code> CRs, configure KServe with Kafka event source.</p></div>
+            <div class="section-block" id="s24-4"><h3>24.4 Edge Inference Patterns</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Pattern</th><th>Infra</th><th>Latency</th><th>Use Case</th></tr></thead><tbody><tr><td><strong>Central Cloud</strong></td><td>OpenShift cluster (multi-node)</td><td>50-200ms</td><td>Batch inference, nightly scoring</td></tr><tr><td><strong>Regional Edge</strong></td><td>Single Node OpenShift (SNO)</td><td>5-20ms</td><td>Real-time job recommendations per region</td></tr><tr><td><strong>On-Device Edge</strong></td><td>MicroShift / IoT runtime</td><td>&lt;5ms</td><td>On-device skill matching, offline capable</td></tr></tbody></table>
+                <p>For anihpj edge: deploy ONNX/TensorRT models on SNO at regional locations. Models pushed from central registry via ImageStream. <strong>Benefits:</strong> data locality (GDPR), offline resilience, &lt;10ms latency for instant job-skill matching.</p></div>
             <div class="exam-questions"><h4>📝 Chapter 24 Practice Questions</h4>
                 <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">When would you use Triton instead of KServe's built-in server?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>When you need maximum throughput: dynamic batching, TensorRT optimization, concurrent model execution, or serving ONNX/TensorRT models. Triton provides 2-5x throughput improvement over standard model servers.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">How would you set up streaming inference for real-time job classification?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>Use Kafka + KServe: job postings published to a Kafka topic → KServe inference pod acts as a Kafka consumer → predictions written to an output topic. Install Strimzi (Kafka Operator) from OperatorHub, create KafkaTopic CRs, configure KServe with Kafka event source.</p></div></details></div>
             </div>
         </div>
 
@@ -7986,7 +8235,847 @@ curl -k https://anihpj-job-classifier-anihpj-ml.apps.cluster.example.com/v1/mode
                 <div class="info-card highlight"><div class="card-icon-lg">🕸️</div><h5>Ch 23: ModelMesh</h5><p>Multi-model serving with shared pods. ServingRuntime + InferenceService. Model paging. KServe vs ModelMesh decision guide.</p></div>
                 <div class="info-card highlight"><div class="card-icon-lg">🔬</div><h5>Ch 24: Advanced</h5><p>Triton for max throughput. Custom FastAPI servers. Streaming inference with Kafka. Edge deployment with OpenShift Single Node.</p></div>
             </div>
+            <div class="info-box tip"><h5>🚀 Implementation: Deploy anihpj Models to Production</h5>
+                <ol style="color:#c9d1d9;padding-left:20px;">
+                    <li><strong>Deploy job classifier</strong> (Ch 22) — KServe InferenceService from S3 model, KPA autoscaling 0→5 replicas</li>
+                    <li><strong>Add canary deployment</strong> (Ch 22) — 10% traffic to new model version, monitor errors, promote to 100%</li>
+                    <li><strong>Consider ModelMesh</strong> (Ch 23) — If you have 10+ models (classifier, salary predictor, skill extractor), ModelMesh reduces costs</li>
+                    <li><strong>Optimize with Triton</strong> (Ch 24) — For high-throughput job search API, Triton + TensorRT delivers 3x more predictions/sec</li>
+                </ol>
+            </div>
         </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 7: GPU & HARDWARE ACCELERATION                       -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div id="part7" style="scroll-margin-top:80px;"></div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 25: GPU Architecture for AI
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch25" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 25: GPU Architecture for AI<span class="chapter-badge">🔴 Advanced</span></h2>
+            <div class="chapter-intro"><h3>Chapter 25: Understanding the Hardware That Powers AI</h3><p>GPUs are the engines of modern AI. Understanding their architecture — CUDA cores, Tensor Cores, memory hierarchy, and interconnects — helps you make informed decisions about model training, inference optimization, and hardware sizing.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5 hours</span><span class="meta-tag">🎮 GPU</span></div></div>
+
+            <div class="section-block" id="s25-1"><h3>25.1 GPU Fundamentals</h3>
+                <p>Unlike CPUs (few cores, high clock speed, optimized for sequential tasks), GPUs have thousands of simpler cores optimized for parallel computation — perfect for matrix operations in ML. Key concepts: <strong>CUDA Cores</strong> (general parallel processing), <strong>Tensor Cores</strong> (specialized for matrix multiply-accumulate — the heart of deep learning), <strong>VRAM</strong> (GPU memory — stores model weights, activations, and batch data).</p>
+
+                <div class="info-box" style="background:linear-gradient(135deg,rgba(34,197,94,0.06),rgba(34,197,94,0.02));border-left:4px solid #22c55e;">
+                    <h4 style="color:#4ade80;margin-top:0;">🧑‍🏫 Novice's Corner — "Why Do I Need a GPU for AI?"</h4>
+                    <p><strong>Matrix multiplication is 99% of deep learning.</strong> A single forward pass through a neural network is just a chain of matrix multiplications. CPUs can do 10-20 operations at a time (cores). GPUs can do 10,000+ operations simultaneously (CUDA/Tensor cores). The difference for training a model: CPU = 2 weeks, GPU = 2 hours. <strong>Tensor Cores specifically</strong> are designed to multiply two 4×4 matrices in a single clock cycle — making them 10x faster than CUDA cores for the FP16/FP8 math used in modern AI.</p>
+                    <p><strong>VRAM is your limiting factor.</strong> If your model + batch data doesn't fit in GPU memory, training simply won't start. This is why model size determines GPU requirements — not training speed. For EX267: know that GPU scheduling requires <code>nvidia.com/gpu</code> resource requests and that the GPU Operator must be installed first.</p>
+                </div>
+            </div>
+
+            <div class="section-block" id="s25-2"><h3>25.2 NVIDIA GPU Families</h3>
+                <table class="compare-table"><thead><tr><th>GPU</th><th>VRAM</th><th>Tensor Cores</th><th>FP16 TFLOPS</th><th>Best For</th></tr></thead>
+                    <tbody><tr><td><strong>A100</strong></td><td>40/80 GB</td><td>3rd Gen</td><td>312</td><td class="winner">Training + Inference</td></tr>
+                    <tr><td><strong>H100</strong></td><td>80 GB HBM3</td><td>4th Gen (FP8)</td><td>989</td><td>LLM Training, GenAI</td></tr>
+                    <tr><td><strong>L40S</strong></td><td>48 GB</td><td>4th Gen</td><td>362</td><td>Inference, Fine-tuning</td></tr>
+                    <tr><td><strong>A10</strong></td><td>24 GB</td><td>3rd Gen</td><td>125</td><td>Small models, dev</td></tr></tbody></table>
+            </div>
+
+            <div class="section-block" id="s25-3"><h3>25.3 MIG &amp; Time-Slicing for GPU Sharing</h3>
+                <p><strong>MIG</strong> (Multi-Instance GPU): Hardware-level partitioning — splits one A100/H100 into up to 7 isolated instances, each with dedicated memory and compute. Perfect for multi-tenant production. <strong>Time-slicing:</strong> Software-level GPU sharing — GPUs alternate between workloads. Simpler but no memory isolation — one workload can OOM others. For EX267: know that MIG requires the GPU Operator with MIG strategy enabled.</p></div>
+
+            <div class="section-block" id="s25-4"><h3>25.4 NVLink, NVSwitch, InfiniBand</h3>
+                <p><strong>NVLink:</strong> Direct GPU-to-GPU interconnect — 600 GB/s (vs 64 GB/s PCIe 5.0). Critical for multi-GPU training where gradient sync is the bottleneck. <strong>NVSwitch:</strong> Connects all GPUs in a node at full NVLink speed (DGX systems). <strong>InfiniBand:</strong> High-speed networking for multi-node GPU clusters — 400 Gb/s with RDMA for cross-node gradient communication.</p></div>
+
+            <div class="section-block" id="s25-5"><h3>25.5 Inside the NVIDIA H100 GPU</h3>
+                <div class="card-grid cols-2" style="margin:12px 0;">
+                    <div class="info-card" id="s25-5a"><h5>132 Streaming Multiprocessors</h5><p>Each SM contains: 128 CUDA cores + 4 Tensor Cores. Total: 16,896 CUDA cores + 528 Tensor Cores. SMs execute threads in warps of 32.</p></div>
+                    <div class="info-card" id="s25-5b"><h5>4th Gen Tensor Cores (FP8)</h5><p>FP8 delivers 2x throughput over FP16 with Transformer Engine. 989 TFLOPS FP8 vs 495 FP16. Critical for LLM training/inference.</p></div>
+                    <div class="info-card" id="s25-5c"><h5>HBM3 Memory 80GB</h5><p>3.35 TB/s bandwidth. L2 Cache: 50 MB. Model + KV cache + batch data must fit in 80GB. Llama-70B (140GB) needs 2+ H100s with model parallelism.</p></div>
+                    <div class="info-card" id="s25-5d"><h5>NVLink 4.0 + NVSwitch</h5><p>900 GB/s per GPU pair. NVSwitch connects all 8 GPUs in DGX H100. Cross-node via InfiniBand NDR400.</p></div>
+                </div>
+            </div>
+            <div class="exam-questions"><h4>📝 Chapter 25 Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">Why can't you run Llama-70B on a single H100 (80GB) without model parallelism?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>Llama-70B in FP16 requires ~140GB VRAM (70B × 2 bytes). H100 has 80GB. You need at least 2 H100s with model parallelism (split layers across GPUs) or quantization to FP8/INT4 to fit on a single GPU.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What's the difference between MIG and time-slicing for GPU sharing?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p><strong>MIG:</strong> Hardware-level — dedicated VRAM and compute per instance. Secure isolation, predictable performance. <strong>Time-slicing:</strong> Software-level — GPUs alternate between workloads. No memory isolation — one OOM kills all. MIG for production, time-slicing for dev.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 26: NVIDIA GPU Operator
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch26" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 26: NVIDIA GPU Operator 🎯<span class="chapter-badge">🔴 Advanced · 🎯 EX267</span></h2>
+            <div class="chapter-intro"><h3>Chapter 26: Managing NVIDIA GPUs on OpenShift</h3><p>The NVIDIA GPU Operator automates the entire GPU lifecycle — driver deployment, container runtime configuration, monitoring, and node labeling. This is a prerequisite for any GPU workload on OpenShift.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">🎮 GPU Ops</span></div></div>
+
+            <div class="section-block" id="s26-1"><h3>26.1 Installing the GPU Operator</h3><p><strong>Order matters:</strong> 1. Node Feature Discovery (auto-labels GPU nodes). 2. NVIDIA GPU Operator. 3. ClusterPolicy CR (triggers driver deployment). Verify: <code>oc get pods -n nvidia-gpu-operator</code>, <code>nvidia-smi</code> from test pod, <code>oc describe node | grep nvidia</code>.</p></div>
+            <div class="section-block" id="s26-2"><h3>26.2 GPU Driver Management</h3><p>Driver versions controlled via <code>spec.driver.version</code> in ClusterPolicy. Updates: rolling, one node at a time with pod draining. Pin version for stability; auto-update for latest CUDA features. <strong>Driver mismatch = GPU unavailable.</strong></p></div>
+            <div class="section-block" id="s26-3"><h3>26.3 GPU Monitoring with DCGM</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Metric</th><th>Key</th><th>Alert If</th></tr></thead><tbody><tr><td>GPU Utilization</td><td><code>DCGM_FI_DEV_GPU_UTIL</code></td><td>&lt;10% for 30min (idle = waste)</td></tr><tr><td>VRAM Used</td><td><code>DCGM_FI_DEV_FB_USED</code></td><td>&gt;90% (risk of OOM)</td></tr><tr><td>GPU Temperature</td><td><code>DCGM_FI_DEV_GPU_TEMP</code></td><td>&gt;85°C (throttling)</td></tr><tr><td>ECC Errors</td><td><code>DCGM_FI_DEV_ECC_CURRENT</code></td><td>&gt;0 (hardware issue)</td></tr></tbody></table></div>
+            <div class="section-block" id="s26-4"><h3>26.4 GPU Node Labeling</h3><p>NFD auto-labels: <code>nvidia.com/gpu.present=true</code>, <code>nvidia.com/gpu.count=N</code>, <code>nvidia.com/gpu.product=A100-SXM4-40GB</code>. Use for nodeSelectors. <strong>Always taint GPU nodes:</strong> <code>oc adm taint node gpu-node nvidia.com/gpu=true:NoSchedule</code> — prevents CPU workloads from wasting expensive GPUs.</p></div>
+            <div class="exam-questions"><h4>📝 Chapter 26 Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What's the correct order for installing GPU support?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>1. Node Feature Discovery (NFD) — auto-detects GPU hardware. 2. NVIDIA GPU Operator — manages drivers and runtime. 3. Create ClusterPolicy CR — triggers driver deployment. NFD must be FIRST because the GPU Operator depends on NFD labels.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">How do you verify a GPU is available to pods after installation?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>1. <code>oc describe node gpu-node | grep nvidia</code> — should show nvidia.com/gpu count. 2. <code>oc run gpu-test --rm -it --image=nvidia/cuda:12.0-base --limits=nvidia.com/gpu=1 -- nvidia-smi</code> — should display GPU info. 3. <code>oc get pods -n nvidia-gpu-operator</code> — all pods Running.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 27: Hardware Sizing & Capacity
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch27" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 27: Hardware Sizing &amp; Capacity Planning<span class="chapter-badge">🔴 Advanced</span></h2>
+            <div class="chapter-intro"><h3>Chapter 27: Right-Sizing Your AI Infrastructure</h3><p>GPU hardware is expensive. Over-provisioning wastes money; under-provisioning bottlenecks your data science team. This chapter provides concrete sizing guidelines for dev, production, and enterprise deployments.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">📐 Sizing</span></div></div>
+
+            <div class="section-block" id="s27-0"><h3>27.0 Cluster Sizing Reference</h3>
+                <div class="card-grid cols-3" style="margin:12px 0;">
+                    <div class="info-card" id="s27-0a"><h5>🟢 Small (Dev/Test)</h5><p><strong>GPUs:</strong> 1-2× A10/L40S<br><strong>CPUs:</strong> 16-32 cores<br><strong>RAM:</strong> 64-128 GB<br>5-10 data scientists. CRC or single-node.</p></div>
+                    <div class="info-card" id="s27-0b"><h5>🟡 Medium (Production)</h5><p><strong>GPUs:</strong> 4-8× A100<br><strong>CPUs:</strong> 64-128 cores<br><strong>RAM:</strong> 256-512 GB<br>10-30 data scientists. 3-5 nodes.</p></div>
+                    <div class="info-card" id="s27-0c"><h5>🔴 Large (Enterprise)</h5><p><strong>GPUs:</strong> 32+× H100/DGX<br><strong>CPUs:</strong> 256+ cores<br><strong>RAM:</strong> 1-2 TB<br>50+ data scientists. InfiniBand fabric.</p></div>
+                </div>
+            </div>
+
+            <div class="section-block" id="s27-1"><h3>27.1 Estimating Requirements</h3><p><strong>VRAM formula:</strong> model_params × bytes_per_param × 4 (model + gradients + optimizer + activations). FP16: ~8 bytes/param. <strong>Example:</strong> 7B model = 56GB minimum + 20% batch overhead = ~67GB. anihpj (&lt;1B): 1× A10 (24GB). LLM fine-tune (7B): 1× A100 (80GB). LLM train (70B): 8+× H100.</p></div>
+            <div class="section-block" id="s27-2"><h3>27.2 Cluster Sizing for AI</h3><p>Factor in: concurrent notebook users (1 GPU each), pipeline training jobs (full GPU duration), inference endpoints (GPU fraction via MIG), 30% dev headroom. <strong>Dedicate GPU nodes with taints</strong> — keep CPU workloads on separate nodes to avoid wasting expensive GPU capacity.</p></div>
+            <div class="section-block" id="s27-3"><h3>27.3 Cost Optimization</h3><p>1. <strong>Spot/preemptible instances</strong> (60-80% cheaper with checkpointing). 2. <strong>MIG</strong> (1 A100 → 7 users). 3. <strong>Idle notebook culling</strong> (auto-stop after inactivity). 4. <strong>ModelMesh</strong> (1 GPU serves 50+ models). 5. <strong>KPA scale-to-zero</strong> (no pods = no cost). 6. <strong>Schedule training off-peak</strong>.</p></div>
+            <div class="section-block" id="s27-4"><h3>27.4 Multi-Cloud GPU Strategy</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Workload</th><th>Primary Cloud</th><th>Burst/Backup</th><th>Strategy</th></tr></thead><tbody><tr><td>Training (predictable)</td><td>On-prem DGX</td><td>AWS p4d (spot)</td><td>On-prem first, burst when queue > 4hrs</td></tr><tr><td>Training (elastic)</td><td>AWS spot (60% off)</td><td>Azure ND (spot)</td><td>Multi-cloud spot with checkpointing</td></tr><tr><td>Inference (always-on)</td><td>Primary cloud GPU nodes</td><td>N/A</td><td>Small fixed pool, no scale-to-zero</td></tr><tr><td>Inference (sporadic)</td><td>KPA scale-to-zero</td><td>Fallback to CPU if GPU unavailable</td><td>Scale-to-zero → no cost when idle</td></tr></tbody></table>
+                <p>Primary GPUs on main cloud. Burst to secondary when spot instances available. On-prem DGX for predictable workloads. <strong>Avoid single-cloud lock-in for GPU availability.</strong></p></div>
+            <div class="exam-questions"><h4>📝 Chapter 27 Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">How do you estimate GPU VRAM needed for training?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>VRAM ≈ model_parameters × bytes_per_param × 4 (model + gradients + optimizer states + activations). FP16: ~8 bytes/param. Example: 7B model = 7B × 8 = 56GB minimum. Add batch data overhead (~10-20%).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">Name 3 cost optimization strategies for GPU workloads.</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>1. <strong>MIG:</strong> Partition 1 GPU into 7 instances — 7 users share 1 A100. 2. <strong>Idle culling:</strong> Auto-stop notebooks after inactivity — no GPU costs when idle. 3. <strong>Spot instances:</strong> Use preemptible VMs for training with checkpointing — 60-80% cheaper.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 28: Specialized AI Hardware
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch28" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 28: Specialized AI Hardware<span class="chapter-badge">🔴 Advanced</span></h2>
+            <div class="chapter-intro"><h3>Chapter 28: Beyond NVIDIA — The Broader AI Hardware Landscape</h3><p>While NVIDIA dominates, other hardware options exist for specific use cases. This chapter provides a brief overview of alternatives and future trends.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~30 min</span><span class="meta-tag">🔬 Hardware</span></div></div>
+
+            <div class="section-block" id="s28-1"><h3>28.1 Beyond NVIDIA — Intel, AMD, TPU</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Hardware</th><th>Memory</th><th>Best For</th><th>OpenShift Support</th></tr></thead><tbody><tr><td><strong>Intel Gaudi 2</strong></td><td>96GB HBM2e</td><td>Training (competitive with A100)</td><td>Intel Gaudi Operator (growing)</td></tr><tr><td><strong>AMD Instinct MI300X</strong></td><td>192GB HBM3</td><td>LLM inference (massive VRAM)</td><td>AMD GPU Operator (beta)</td></tr><tr><td><strong>Google TPU v5p</strong></td><td>16-95GB HBM</td><td>Large-scale training pods</td><td>GCP-only, not on OpenShift</td></tr><tr><td><strong>NVIDIA (A100/H100)</strong></td><td>40-80GB HBM2e/HBM3</td><td>All AI workloads</td><td>✅ First-class GPU Operator</td></tr></tbody></table>
+                <p><strong>OpenShift reality:</strong> NVIDIA is the primary supported GPU platform. For EX267, focus exclusively on NVIDIA GPU management. Intel/AMD support is expanding but not tested on EX267.</p></div>
+            <div class="section-block" id="s28-2"><h3>28.2 FPGA &amp; ASIC Acceleration</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Type</th><th>Latency</th><th>Flexibility</th><th>Power</th><th>Use Case</th></tr></thead><tbody><tr><td><strong>FPGA</strong></td><td>&lt;1ms (ultra-low)</td><td>Reprogrammable</td><td>Low (25-75W)</td><td>Financial trading, real-time video, network inference</td></tr><tr><td><strong>ASIC</strong></td><td>&lt;0.5ms</td><td>Fixed function</td><td>Very low (&lt;50W)</td><td>Google TPU, AWS Inferentia — specific model arch</td></tr><tr><td><strong>GPU</strong></td><td>1-10ms</td><td>General purpose</td><td>High (300-700W)</td><td>Training + inference, any model framework</td></tr></tbody></table>
+                <p>FPGAs shine for deterministic, ultra-low-latency inference where every microsecond counts. Not practical for training or general ML workloads. The Xilinx Alveo FPGA Operator exists for OpenShift but is niche.</p></div>
+            <div class="section-block" id="s28-3"><h3>28.3 Future AI Hardware Trends</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Trend</th><th>What It Means</th><th>Timeline</th><th>Impact on OpenShift AI</th></tr></thead><tbody><tr><td><strong>Chiplets</strong></td><td>Modular GPU design (AMD MI300) — multiple dies connected</td><td>Now (2024+)</td><td>Larger "GPUs" with 192GB+ VRAM — better for LLMs</td></tr><tr><td><strong>In-Memory Computing</strong></td><td>Process data where stored — eliminates memory bottleneck</td><td>2026+</td><td>Potentially eliminates VRAM constraints for inference</td></tr><tr><td><strong>Optical Interconnects</strong></td><td>Light-based GPU-to-GPU — 10× bandwidth, lower latency</td><td>2027+</td><td>Distributed training across nodes at near-local speeds</td></tr><tr><td><strong>Neuromorphic</strong></td><td>Brain-inspired — ultra-low power (milliwatts)</td><td>2028+</td><td>Edge AI on OpenShift at the edge (SNO)</td></tr></tbody></table>
+                <p><strong>For EX267:</strong> focus on NVIDIA GPU management — alternative hardware is not tested. The exam expects you to manage NVIDIA GPUs via the GPU Operator, configure MIG, and monitor with DCGM.</p></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 7 SUMMARY                                          -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="chapter-section" style="background:linear-gradient(135deg,#0d1f2d,#0f2744);border:2px solid #326ce5;border-radius:16px;padding:28px 32px;margin:30px 0;">
+            <h1 style="margin-top:0;">📋 Part 7 Summary — GPU &amp; Hardware Acceleration</h1>
+            <div class="card-grid cols-2" style="margin-bottom:20px;">
+                <div class="info-card highlight"><div class="card-icon-lg">🎮</div><h5>Ch 25: GPU Architecture</h5><p>CUDA/Tensor cores, GPU comparison (A100/H100/L40S/A10), MIG vs time-slicing, NVLink/NVSwitch/InfiniBand, H100 deep dive (132 SMs, FP8, HBM3 80GB).</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">⚙️</div><h5>Ch 26: GPU Operator</h5><p>Install order (NFD→GPU Op→ClusterPolicy), driver management, DCGM monitoring metrics, GPU node labeling + taints for dedicated GPU nodes.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">📐</div><h5>Ch 27: Hardware Sizing</h5><p>Small/Medium/Large cluster reference, VRAM estimation formula, cost optimization (MIG, spot instances, idle culling), multi-cloud GPU strategy.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">🔬</div><h5>Ch 28: Specialized HW</h5><p>Intel Gaudi, AMD MI300X, Google TPU. FPGA/ASIC for ultra-low latency. Future: chiplets, optical interconnects, neuromorphic computing.</p></div>
+            </div>
+            <div class="info-box tip"><h5>🚀 Implementation: GPU Setup for anihpj AI Workloads</h5>
+                <ol style="color:#c9d1d9;padding-left:20px;">
+                    <li><strong>Size your GPUs</strong> (Ch 27) — For anihpj models (&lt;1B params): 1× A10 for training, 1× L40S for inference</li>
+                    <li><strong>Install GPU stack</strong> (Ch 26) — NFD → GPU Operator → ClusterPolicy → verify with nvidia-smi</li>
+                    <li><strong>Configure MIG</strong> (Ch 25) — Partition 1× A100 into 4 instances for 4 concurrent data scientists</li>
+                    <li><strong>Optimize costs</strong> (Ch 27) — Idle culling at 60 min, spot instances for training, scale-to-zero for inference</li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 8: MONITORING & TROUBLESHOOTING                      -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div id="part8" style="scroll-margin-top:80px;"></div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 29: Monitoring AI Workloads
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch29" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 29: Monitoring AI Workloads 🎯<span class="chapter-badge">🔴 Advanced · 🎯 EX267</span></h2>
+            <div class="chapter-intro"><h3>Chapter 29: Keeping Your AI Systems Healthy</h3><p>Monitoring is critical for production AI — you need visibility into GPU utilization, model performance, pipeline success rates, and resource consumption. OpenShift provides a comprehensive monitoring stack with Prometheus, Grafana, AlertManager, and DCGM for GPU metrics.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2 hours</span><span class="meta-tag">📊 Monitoring</span><span class="meta-tag">🎯 EX267 10%</span></div></div>
+
+            <div class="section-block" id="s29-1"><h3>29.1 The Monitoring Stack</h3><p>OpenShift's built-in monitoring: <strong>Prometheus</strong> (metrics collection, 15-day retention), <strong>Thanos</strong> (long-term storage), <strong>Grafana</strong> (dashboards), <strong>AlertManager</strong> (alert routing). For GPU: <strong>DCGM</strong> exports GPU metrics. For user workloads: enable <strong>user-workload monitoring</strong> to scrape your model serving and pipeline metrics.</p>
+
+                <div class="info-box" style="background:linear-gradient(135deg,rgba(34,197,94,0.06),rgba(34,197,94,0.02));border-left:4px solid #22c55e;">
+                    <h4 style="color:#4ade80;margin-top:0;">🧑‍🏫 Novice's Corner — "What Should I Actually Monitor?"</h4>
+                    <p>You don't need 100 dashboards. Focus on <strong>4 key questions:</strong> 1) <strong>Is the hardware healthy?</strong> (GPU utilization, memory, temperature — DCGM dashboard). 2) <strong>Are my models working?</strong> (inference latency, error rate, prediction drift — custom metrics). 3) <strong>Are pipelines succeeding?</strong> (success/fail rate, duration — pipeline dashboard). 4) <strong>Am I wasting money?</strong> (idle GPUs, oversized instances, unused PVCs — cost dashboard). If you can answer these 4 questions in under 30 seconds, your monitoring is good enough for production.</p>
+                </div>
+            </div>
+
+            <div class="section-block" id="s29-2"><h3>29.2 Custom AI Metrics</h3>
+                <div class="code-block-wrapper" style="margin:8px 0 14px;"><div class="code-block-header"><span class="code-lang">Python — Expose Prometheus Metrics in Inference Pod</span><span class="copy-btn" onclick="copyCode(this)" title="Copy code">📋</span></div><div class="code-block-body" style="background:#0d1117;color:#c9d1d9;padding:14px;border-radius:0 0 8px 8px;font-family:monospace;font-size:13px;overflow-x:auto;"><pre style="margin:0;">from prometheus_client import Histogram, Counter, Gauge, start_http_server
+import time
+
+# Define metrics
+pred_latency = Histogram('prediction_latency_seconds', 'Inference latency',
+                         buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0])
+pred_total = Counter('predictions_total', 'Total predictions served')
+model_ver = Gauge('model_version', 'Serving model version')
+drift_score = Gauge('drift_score', 'Data drift score (KL divergence)')
+
+start_http_server(8000)  # Expose on :8000/metrics
+
+@pred_latency.time()
+def predict(text):
+    result = model(text)
+    pred_total.inc()
+    model_ver.set(2)      # Update version when deployed
+    drift_score.set(0.03) # From monitoring pipeline
+    return result</pre></div></div>
+                <p>After exposing, create a <strong>ServiceMonitor</strong> to scrape <code>:8000/metrics</code>, then a <strong>PrometheusRule</strong> to alert: <code>drift_score > 0.3</code> → warning, <code>prediction_latency_seconds{quantile="0.99"} > 1.0</code> → critical.</p></div>
+
+            <div class="section-block" id="s29-3"><h3>29.3 Grafana Dashboards</h3><p>OpenShift ships with pre-built Grafana dashboards. For AI: <strong>NVIDIA DCGM Dashboard</strong> (auto-deployed with GPU Operator) and the <strong>OpenShift AI Dashboard</strong> (model serving metrics). Custom dashboards: create in <code>Administrator → Monitoring → Dashboards</code> or via GrafanaOperator CR.</p>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Dashboard</th><th>Source</th><th>Panels</th></tr></thead><tbody><tr><td>DCGM GPU</td><td>GPU Operator built-in</td><td>GPU util%, VRAM, temp, power, ECC errors</td></tr><tr><td>Kubernetes / Compute / Nodes</td><td>OpenShift built-in</td><td>CPU, memory, disk, network per node</td></tr><tr><td>KServe Model Serving</td><td>OpenShift AI built-in</td><td>Request rate, latency, error %, replicas</td></tr><tr><td>Custom AI Dashboard</td><td>User-created</td><td>Pipeline status, drift score, cost/capacity</td></tr></tbody></table></div>
+
+            <div class="section-block" id="s29-3a"><h3>29.3a AI Dashboard Blueprint</h3>
+                <div class="card-grid cols-1" style="margin:12px 0;">
+                    <div class="info-card" id="s29-3a1"><h5>🔹 GPU Health Row</h5><p>GPU utilization %, memory used, temperature, power draw, ECC errors. Red alert if GPU temp > 85°C or utilization < 10% (idle GPU leaking cost).</p></div>
+                    <div class="info-card" id="s29-3a2"><h5>🔹 Cluster Health Row</h5><p>Node CPU/RAM, pod restarts, PVC usage %, ClusterOperator status. Amber alert if any operator Degraded.</p></div>
+                    <div class="info-card" id="s29-3a3"><h5>🔹 Model Performance Row</h5><p>Inference latency (p50/p95/p99), throughput (req/s), error rate (4xx/5xx), prediction drift score. Red alert if p99 latency > 500ms or error rate > 1%.</p></div>
+                    <div class="info-card" id="s29-3a4"><h5>🔹 Pipeline Status Row</h5><p>Pipeline runs (success/fail), run duration, artifact size. Amber alert if failure rate > 10%.</p></div>
+                    <div class="info-card" id="s29-3a5"><h5>🔹 Alerts Row</h5><p>Active firing alerts from AlertManager. Grouped by severity: Critical (page on-call), Warning (Slack notification), Info (ticket created).</p></div>
+                </div>
+            </div>
+
+            <div class="section-block" id="s29-4"><h3>29.4 Alerting for AI Workloads</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Alert</th><th>Condition</th><th>Severity</th><th>Receiver</th></tr></thead><tbody><tr><td>GPUUnavailable</td><td><code>nvidia_gpu_count == 0</code> on labeled node</td><td>🔥 Critical</td><td>PagerDuty</td></tr><tr><td>ModelErrorRateHigh</td><td><code>error_rate > 0.05</code> for 5min</td><td>🔥 Critical</td><td>PagerDuty</td></tr><tr><td>PipelineFailStreak</td><td><code>consecutive_failures >= 3</code></td><td>⚠️ Warning</td><td>Slack</td></tr><tr><td>PVCNearFull</td><td><code>pvc_usage > 0.9</code> (90%)</td><td>⚠️ Warning</td><td>Slack</td></tr><tr><td>InferenceLatencySpike</td><td><code>p99_latency > 1.0</code> for 10min</td><td>⚠️ Warning</td><td>Slack</td></tr><tr><td>GPUIdle</td><td><code>gpu_util < 0.1</code> for 30min</td><td>ℹ️ Info</td><td>Email/Ticket</td></tr></tbody></table>
+                <p>Define via <code>PrometheusRule</code> CR. Silence during maintenance: <code>oc create -f silence.yaml</code> or via AlertManager UI. <strong>Stay out of alert fatigue:</strong> only pages should wake people up at night.</p></div>
+            <div class="section-block" id="s29-5"><h3>29.5 Logging &amp; Audit</h3><p><strong>Stack:</strong> Vector (collector) → Loki (store) → Grafana (query). Structured JSON logging recommended. Key log queries: <code>{pod=~"inference-.*"} |= "ERROR"</code>, <code>{namespace="anihpj-prod"} | json | latency > 1</code>. <strong>Retention:</strong> app logs 7d, audit logs 30d minimum (compliance). Enable audit logging via <code>ClusterLogForwarder</code> CR.</p></div>
+            <div class="section-block" id="s29-6"><h3>29.6 DCGM Integration</h3><p>DCGM is deployed by the GPU Operator. Metrics flow: <strong>GPU → DCGM daemon → nvidia-dcgm-exporter pod → Prometheus → Grafana.</strong> Key metrics: <code>DCGM_FI_DEV_GPU_UTIL</code> (utilization %), <code>DCGM_FI_DEV_FB_USED</code> (VRAM bytes), <code>DCGM_FI_DEV_GPU_TEMP</code> (°C), <code>DCGM_FI_DEV_ECC_CURRENT</code> (error count). Access via <code>Monitoring → Dashboards → NVIDIA DCGM Exporter Dashboard</code>. <strong>ServiceMonitor auto-created</strong> by GPU Operator — no manual config needed.</p></div>
+            <div class="section-block" id="s29-7"><h3>29.7 Unified AI Ops Dashboard</h3><p>Single pane of glass combining:</p>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Row</th><th>Source Dashboard</th><th>What It Shows</th></tr></thead><tbody><tr><td>GPU Health</td><td>DCGM Dashboard</td><td>All GPU utilization, memory, temp (all nodes)</td></tr><tr><td>Cluster Health</td><td>OpenShift Cluster Dashboard</td><td>Node CPU/RAM, operator status, PVC usage</td></tr><tr><td>Model Serving</td><td>KServe / Custom</td><td>Request rate, latency p50/p95/p99, error %</td></tr><tr><td>Pipeline Status</td><td>Custom (Prometheus)</td><td>Last 24h runs: success/fail, duration trend</td></tr><tr><td>Active Alerts</td><td>AlertManager</td><td>Firing alerts grouped by severity</td></tr><tr><td>Cost Summary</td><td>Custom (OpenShift Cost)</td><td>GPU-hours consumed today/this week, cost trends</td></tr></tbody></table>
+                <p>Build by combining existing dashboards in a single Grafana folder or creating linked panels. For anihpj: single dashboard showing skill-match accuracy, salary prediction drift, GPU utilization per pipeline run.</p></div>
+            <div class="exam-questions"><h4>📝 Chapter 29 Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">How do you enable monitoring for user-defined AI metrics?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>Enable user-workload monitoring: create a ConfigMap <code>cluster-monitoring-config</code> in <code>openshift-monitoring</code> with <code>enableUserWorkload: true</code>. Then annotate your ServiceMonitor/PodMonitor CRs.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What DCGM metric tells you if a GPU is being used?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p><code>DCGM_FI_DEV_GPU_UTIL</code> — GPU utilization percentage. <code>DCGM_FI_DEV_FB_USED</code> — framebuffer memory used. Alert if utilization is near 0% for 30+ minutes (idle GPU = wasted money).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">How do you set up an alert for model accuracy dropping below 85%?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>1. Expose accuracy as a Prometheus gauge from your inference pod. 2. Create a ServiceMonitor to scrape it. 3. Create a PrometheusRule: <code>model_accuracy &lt; 0.85</code> → severity: critical. 4. Configure AlertManager to route to PagerDuty/Slack.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 30: Troubleshooting AI Workloads
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch30" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 30: Troubleshooting AI Workloads 🎯<span class="chapter-badge">🔴 Advanced · 🎯 EX267</span></h2>
+            <div class="chapter-intro"><h3>Chapter 30: Diagnosing and Fixing AI Issues</h3><p>When something breaks — and it will — you need a systematic approach. This chapter provides decision trees, diagnostic commands, and common fixes for notebook, pipeline, and model serving issues.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5 hours</span><span class="meta-tag">🔧 Troubleshoot</span><span class="meta-tag">🎯 EX267 10%</span></div></div>
+
+            <div class="section-block" id="s30-0"><h3>30.0 Troubleshooting Decision Tree</h3>
+                <div class="card-grid cols-2" style="margin:12px 0;">
+                    <div class="info-card" id="s30-0a"><h5>Notebook Won't Start</h5><p>Check: PVC bound? → GPU available? → Image pull succeeds? → Resource quota not exceeded? → <code>oc describe notebook</code> → events section.</p></div>
+                    <div class="info-card" id="s30-0b"><h5>Pipeline Step Fails</h5><p>Check: Pod logs → Artifact S3 access → Resource limits → Input data schema → <code>oc describe pipelinerun</code> → failed step details.</p></div>
+                    <div class="info-card" id="s30-0c"><h5>Model Serving Timeout</h5><p>Check: Pod CPU/memory → GPU utilization → Cold start? → Scale-to-zero delay? → <code>oc describe inferenceservice</code> → conditions.</p></div>
+                    <div class="info-card" id="s30-0d"><h5>Universal First Commands</h5><p><code>oc get pods</code> → <code>oc describe pod</code> → <code>oc logs --tail=50</code> → <code>oc get events --sort-by='.lastTimestamp'</code>. These 4 commands solve 80% of issues.</p></div>
+                </div>
+            </div>
+            <div class="section-block" id="s30-1"><h3>30.1 Systematic Troubleshooting Methodology</h3><p>Follow this order: 1) Check context (<code>oc whoami</code>, <code>oc project</code>). 2) Check pod status (<code>oc get pods</code>). 3) Check events (cluster diary). 4) Check logs (<code>oc logs --previous</code> if crashed). 5) Describe resource (<code>oc describe</code>). 6) Debug interactively (<code>oc debug</code>). Never skip steps — the event log often shows the root cause before you check logs.</p></div>
+            <div class="section-block" id="s30-2"><h3>30.2 Notebook Issues</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Symptom</th><th>Pod Status</th><th>Likely Cause</th><th>Fix</th></tr></thead><tbody><tr><td>Won't start</td><td>ImagePullBackOff</td><td>Wrong image name or private registry</td><td><code>oc describe pod</code> → check image; add pull secret</td></tr><tr><td>Keeps restarting</td><td>CrashLoopBackOff</td><td>OOMKilled — not enough memory</td><td>Increase memory limit in Notebook CR</td></tr><tr><td>Stuck Pending</td><td>Pending (0/1 nodes)</td><td>No GPU available</td><td>Check quota, node labels, GPU availability</td></tr><tr><td>PVC stuck</td><td>Pending</td><td>No default StorageClass</td><td><code>oc get sc</code> → set default annotation</td></tr><tr><td>Slow startup</td><td>Running but slow</td><td>Large image pull or model download</td><td>Pre-cache images, use smaller base image</td></tr></tbody></table></div>
+            <div class="section-block" id="s30-3"><h3>30.3 Pipeline Failures</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Symptom</th><th>Cause</th><th>Diagnostic</th><th>Fix</th></tr></thead><tbody><tr><td>Step fails immediately</td><td>S3 access denied</td><td><code>oc logs &lt;step-pod&gt;</code> → 403 Forbidden</td><td>Check Data Connection secret, S3 bucket policy</td></tr><tr><td>OOMKilled</td><td>Step memory too low</td><td><code>oc describe pod</code> → OOMKilled</td><td>Increase step resources in pipeline YAML</td></tr><tr><td>Step timeout</td><td>Default timeout too short</td><td>PipelineRun shows timeout</td><td>Set <code>timeout</code> in pipeline step config</td></tr><tr><td>Dependency conflict</td><td>Python version mismatch</td><td>ImportError in step logs</td><td>Pin versions in requirements.txt; use same base image</td></tr><tr><td>Artifact missing</td><td>Previous step didn't output</td><td>Step can't find input artifact</td><td>Check upstream step success; verify artifact path</td></tr></tbody></table></div>
+            <div class="section-block" id="s30-4"><h3>30.4 Model Serving Issues</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Symptom</th><th>Cause</th><th>Check</th><th>Fix</th></tr></thead><tbody><tr><td>Model download fails</td><td>Wrong storageUri or credentials</td><td><code>oc describe is</code> → StorageNotAccessible</td><td>Verify S3 bucket, fix Data Connection</td></tr><tr><td>Predictor crash</td><td>OOM — model too large for memory</td><td><code>oc describe pod</code> → OOMKilled</td><td>Increase memory limit or use smaller model</td></tr><tr><td>Cold start timeout</td><td>Scale-to-zero delay too long on first request</td><td>503 → eventually 200 after ~30s</td><td>Set <code>minReplicas: 1</code> or increase timeout</td></tr><tr><td>GPU not available</td><td>Node taints not tolerated</td><td>Pod Pending — no GPU nodes</td><td>Add toleration for GPU taint in IS spec</td></tr><tr><td>High latency</td><td>Undersized GPU or too many models</td><td>p99 latency > 1s</td><td>Use bigger GPU, enable MIG, or reduce model count</td></tr></tbody></table></div>
+            <div class="section-block" id="s30-5"><h3>30.5 GPU Troubleshooting</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Problem</th><th>Root Cause Chain</th><th>Verify Command</th></tr></thead><tbody><tr><td>GPU not on node</td><td>NFD missing → GPU Operator missing → ClusterPolicy not created</td><td><code>oc describe node | grep nvidia</code></td></tr><tr><td>Pod can't use GPU</td><td>SCC not privileged → quota exhausted → node taint not tolerated</td><td><code>oc describe pod | grep -A5 Events</code></td></tr><tr><td>nvidia-smi fails</td><td>Driver not loaded, NVIDIA runtime not configured</td><td><code>oc debug node/&lt;gpu-node&gt; -- nvidia-smi</code></td></tr><tr><td>GPU visible but unused</td><td>Model doesn't use CUDA, wrong framework config</td><td>Check <code>torch.cuda.is_available()</code> in notebook</td></tr><tr><td>MIG not working</td><td>MIG not enabled in ClusterPolicy</td><td><code>oc get clusterpolicy -o yaml | grep mig</code></td></tr></tbody></table></div>
+            <div class="exam-questions"><h4>📝 Chapter 30 Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">A notebook pod is stuck in Pending. What are the first 3 things to check?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>1. <code>oc describe pod</code> → Events section — shows reason (no GPU, Insufficient cpu, PVC not bound). 2. <code>oc get events --sort-by='.lastTimestamp'</code> — broader cluster view. 3. <code>oc describe quota</code> — any resource limits reached?</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">A pipeline step fails with OOMKilled. What's the fix?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>1. Check actual memory usage: <code>oc describe pod</code> → OOMKilled. 2. Increase step memory limit in pipeline definition. 3. Or optimize: process data in chunks, use Dask/Spark for large datasets, increase node memory.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 31: Day 2 Operations
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch31" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 31: Day 2 Operations<span class="chapter-badge">🔴 Advanced</span></h2>
+            <div class="chapter-intro"><h3>Chapter 31: Keeping AI Platforms Running Smoothly</h3><p>"Day 2" refers to everything after initial deployment — backups, upgrades, security hardening, and ongoing maintenance. This is what separates a prototype from a production platform.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">🔄 Ops</span></div></div>
+
+            <div class="section-block" id="s31-0"><h3>31.0 Operations Cycle</h3>
+                <div class="card-grid cols-3" style="margin:12px 0;">
+                    <div class="info-card" id="s31-0a"><h5>Daily: Monitor &amp; Alert Check</h5><p>Check Grafana dashboards, review AlertManager alerts, verify pipeline runs succeeded, check GPU availability.</p></div>
+                    <div class="info-card" id="s31-0b"><h5>Weekly: GPU Trends &amp; Audits</h5><p>Review GPU utilization trends, audit model versions in production, check PVC usage growth, rotate credentials.</p></div>
+                    <div class="info-card" id="s31-0c"><h5>Monthly: Updates &amp; DR Test</h5><p>Apply operator updates, test disaster recovery (restore from backup), review cost optimization, capacity planning.</p></div>
+                </div>
+            </div>
+            <div class="section-block" id="s31-1"><h3>31.1 Backup &amp; Disaster Recovery</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>What</th><th>Tool</th><th>Frequency</th><th>RPO</th></tr></thead><tbody><tr><td>PVC snapshots (notebooks, DB)</td><td>CSI VolumeSnapshots</td><td>Daily</td><td>&lt;24h</td></tr><tr><td>S3 buckets (artifacts, models)</td><td>NooBaa replication / Velero</td><td>Continuous</td><td>&lt;1h</td></tr><tr><td>Model Registry metadata</td><td>Velero (etcd + CRs)</td><td>Daily</td><td>&lt;24h</td></tr><tr><td>Cluster state (etcd)</td><td>OpenShift built-in (etcd backup)</td><td>Every 15 min (auto)</td><td>&lt;15min</td></tr><tr><td>Custom resources (DSC, DSProjects)</td><td>Velero / GitOps backup</td><td>On change (Git)</td><td>&lt;5min (git push)</td></tr></tbody></table>
+                <p><strong>DR test:</strong> Monthly — restore a PVC snapshot to a new namespace, verify notebooks launch and models load. If you haven't tested restore, you don't have a backup.</p></div>
+            <div class="section-block" id="s31-2"><h3>31.2 Upgrading OpenShift AI</h3>
+                <div class="code-block-wrapper" style="margin:8px 0 14px;"><div class="code-block-header"><span class="code-lang">Shell — OpenShift AI Upgrade Procedure</span><span class="copy-btn" onclick="copyCode(this)" title="Copy code">📋</span></div><div class="code-block-body" style="background:#0d1117;color:#c9d1d9;padding:14px;border-radius:0 0 8px 8px;font-family:monospace;font-size:13px;overflow-x:auto;"><pre style="margin:0;"># 1. Check current version
+oc get csv -n redhat-ods-operator
+# NAME                              DISPLAY           VERSION
+# rhods-operator.v2.8.0             Red Hat OpenShift AI   2.8.0
+
+# 2. Change subscription channel (if needed)
+oc patch subscription rhods-operator -n redhat-ods-operator \
+  --type merge -p '{"spec":{"channel":"stable-2.9"}}'
+
+# 3. Approve new InstallPlan
+oc get installplan -n redhat-ods-operator
+oc patch installplan install-xxxxx -n redhat-ods-operator \
+  --type merge -p '{"spec":{"approved":true}}'
+
+# 4. Verify reconciliation
+oc get csv -n redhat-ods-operator   # Must show Succeeded
+oc get dsc                           # All components Ready
+oc get pods -n redhat-ods-applications  # All Running</pre></div></div>
+                <p><strong>Always:</strong> test in staging first, backup before upgrade, check release notes for breaking changes. Never upgrade on a Friday.</p></div>
+            <div class="section-block" id="s31-3"><h3>31.3 Security Hardening</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Area</th><th>Mechanism</th><th>Configuration</th></tr></thead><tbody><tr><td><strong>Network isolation</strong></td><td>NetworkPolicy</td><td>Deny-all + allow specific egress (Postgres:5432, Redis:6379, S3:443)</td></tr><tr><td><strong>Access control</strong></td><td>RBAC</td><td>Data scientists: edit; platform engineers: admin; CI/CD: edit; stakeholders: view</td></tr><tr><td><strong>Pod security</strong></td><td>SCC</td><td>Restricted SCC for most pods; privileged only for GPU/nvidia container runtime</td></tr><tr><td><strong>Secret encryption</strong></td><td>etcd encryption at rest</td><td><code>oc patch apiserver cluster --type merge -p '{"spec":{"encryption":{"type":"aescbc"}}}'</code></td></tr><tr><td><strong>Image scanning</strong></td><td>Container Security Operator</td><td>Auto-scan all images; block deployment on Critical CVEs</td></tr><tr><td><strong>Audit logging</strong></td><td>ClusterLogForwarder</td><td>Forward audit logs to secure SIEM; retain 30+ days</td></tr></tbody></table></div>
+            <div class="exam-questions"><h4>📝 Chapter 31 Practice Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">How do you safely upgrade the OpenShift AI Operator?</div><details><summary>Click</summary><div class="eq-answer"><span class="eq-answer-label">✅</span><p>1. Backup PVCs and S3 data. 2. Change subscription channel (e.g., stable-2.8 → stable-2.9). 3. Approve the new InstallPlan. 4. Monitor <code>oc get csv -n redhat-ods-operator</code> for Succeeded. 5. Verify <code>oc get dsc</code> — all components reconciled. Always test in staging first.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 8 SUMMARY                                          -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="chapter-section" style="background:linear-gradient(135deg,#0d1f2d,#0f2744);border:2px solid #326ce5;border-radius:16px;padding:28px 32px;margin:30px 0;">
+            <h1 style="margin-top:0;">📋 Part 8 Summary — Monitoring &amp; Troubleshooting</h1>
+            <div class="card-grid cols-3" style="margin-bottom:20px;">
+                <div class="info-card highlight"><div class="card-icon-lg">📊</div><h5>Ch 29: Monitoring</h5><p>Prometheus/Thanos/Grafana/AlertManager stack. Custom AI metrics. DCGM GPU monitoring. AI dashboard blueprint (5 rows). Alerting rules.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">🔧</div><h5>Ch 30: Troubleshooting</h5><p>Decision trees for notebooks/pipelines/serving. Systematic 6-step methodology. GPU-specific diagnosis. Universal first commands.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">🔄</div><h5>Ch 31: Day 2 Ops</h5><p>Daily/Weekly/Monthly ops cycle. Backup & DR with Velero. OpenShift AI upgrades via OLM. Security hardening checklist.</p></div>
+            </div>
+            <div class="info-box tip"><h5>🚀 Implementation: Monitor &amp; Operate anihpj AI Platform</h5>
+                <ol style="color:#c9d1d9;padding-left:20px;">
+                    <li><strong>Set up monitoring</strong> (Ch 29) — Enable user-workload monitoring, deploy DCGM, create AI dashboard with GPU/Model/Pipeline rows</li>
+                    <li><strong>Configure alerts</strong> (Ch 29) — Model accuracy &lt;85% → critical, GPU idle >30min → warning, pipeline fail >3x → page</li>
+                    <li><strong>Learn troubleshooting</strong> (Ch 30) — Memorize the 4 universal commands, follow the 6-step methodology for any issue</li>
+                    <li><strong>Establish ops rhythm</strong> (Ch 31) — Daily dashboard check, weekly GPU trend review, monthly upgrade + DR test</li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 9: EX267 EXAM PREPARATION                            -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div id="part9" style="scroll-margin-top:80px;"></div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 33: EX267 Exam Deep Dive
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch33" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 33: EX267 Exam Deep Dive<span class="chapter-badge">🎯 EXAM</span></h2>
+            <div class="chapter-intro"><h3>Chapter 33: Everything You Need to Know About EX267</h3><p>EX267 — Red Hat Certified Developer in AI — is a 2-hour, performance-based exam. You perform real tasks on a live OpenShift cluster. This chapter covers the exam format, screen layout, objectives breakdown, and proven exam-day strategies.</p><div class="chapter-meta"><span class="meta-tag">🎯 EXAM</span><span class="meta-tag">⏱️ ~30 min</span><span class="meta-tag">📋 Prep</span></div></div>
+
+            <div class="section-block" id="s33-0"><h3>33.0 Exam Screen Layout</h3>
+                <div class="card-grid cols-3" style="margin:12px 0;">
+                    <div class="info-card" id="s33-0a"><h5>Question Panel (Left 40%)</h5><p>Task description with specific requirements. Read carefully — keywords like "configure," "create," "verify" tell you exactly what to do. Tasks are grouped by domain.</p></div>
+                    <div class="info-card" id="s33-0b"><h5>Terminal (Bottom Left)</h5><p>Multiple terminal tabs available. Pre-configured with <code>oc</code> already logged in. You can open additional terminals. <code>oc explain</code> is your best friend.</p></div>
+                    <div class="info-card" id="s33-0c"><h5>Browser + Console (Right 60%)</h5><p>OpenShift Console + official Red Hat documentation. Documentation is PROVIDED — use it! Search for CRD specs, API references, and examples.</p></div>
+                </div>
+            </div>
+
+            <div class="section-block" id="s33-1"><h3>33.1 Exam Format</h3>
+                <table class="compare-table"><thead><tr><th>Detail</th><th>Value</th></tr></thead>
+                    <tbody><tr><td>Duration</td><td class="winner">2 hours</td></tr>
+                    <tr><td>Format</td><td>Performance-based (hands-on)</td></tr>
+                    <tr><td>Passing Score</td><td>68% (210 out of 300 points)</td></tr>
+                    <tr><td>Environment</td><td>Live OpenShift cluster with AI components</td></tr>
+                    <tr><td>Documentation</td><td>Provided — official Red Hat docs accessible</td></tr></tbody></table>
+            </div>
+
+            <div class="section-block" id="s33-2"><h3>33.2 Exam Objectives Breakdown</h3>
+                <table class="compare-table"><thead><tr><th>Domain</th><th>Weight</th><th>Covered In</th></tr></thead>
+                    <tbody><tr><td>Manage OpenShift AI installation &amp; configuration</td><td class="winner">35%</td><td>Ch 5, 6, 11, 13</td></tr>
+                    <tr><td>Manage data science pipelines</td><td>30%</td><td>Ch 9, 10, 15, 19</td></tr>
+                    <tr><td>Manage model development &amp; serving</td><td>25%</td><td>Ch 14, 17, 18, 22, 23</td></tr>
+                    <tr><td>Monitor &amp; troubleshoot</td><td>10%</td><td>Ch 29, 30</td></tr></tbody></table>
+            </div>
+
+            <div class="section-block" id="s33-3"><h3>33.3 Scoring &amp; Passing</h3><p>Each task has a point value. Partial credit is sometimes awarded. Tasks are NOT weighted equally — installation tasks (35%) carry more weight. Prioritize high-weight domains. You need 210/300 to pass. Unfinished tasks score 0 — always submit SOMETHING.</p></div>
+
+            <div class="section-block" id="s33-4"><h3>33.4 Exam Day Strategy</h3>
+                <div class="info-box tip"><h5>🎯 Proven EX267 Strategy</h5>
+                    <ol style="color:#c9d1d9;padding-left:20px;line-height:1.9;">
+                        <li><strong>First 5 min:</strong> Scan ALL tasks. Flag easy ones (quick wins). Note high-point tasks.</li>
+                        <li><strong>Next 30 min:</strong> Complete all easy tasks first — build confidence and rack up points.</li>
+                        <li><strong>Next 60 min:</strong> Tackle medium/hard tasks grouped by domain. Stay in the same mental context.</li>
+                        <li><strong>Next 15 min:</strong> Review and verify. Run <code>oc get</code> on every resource you created.</li>
+                        <li><strong>Final 10 min:</strong> Submit partial work on unfinished tasks. Something > nothing.</li>
+                        <li><strong>DO:</strong> Use <code>oc explain</code> constantly, check docs for YAML examples, verify each task before moving on. <strong>DON'T:</strong> Get stuck on one task >10 min, forget to switch projects, leave tasks blank.</li>
+                    </ol>
+                </div>
+                <div class="info-box" style="margin-top:12px;"><h5>🎓 Beyond EX267 — NCP-AII Certification Path</h5><p>This guide also prepares you for the <strong>NVIDIA-Certified Professional: AI Infrastructure (NCP-AII)</strong> exam. Key NCP-AII topics covered: GPU architecture (Ch 25), GPU Operator (Ch 26), DCGM monitoring (Ch 29), MIG configuration (Ch 25), multi-GPU training (Ch 17/20), and hardware sizing (Ch 27). NCP-AII focuses more on infrastructure and GPU management, while EX267 focuses on the OpenShift AI application layer. Together they provide complete AI platform expertise.</p></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 34: Practice Questions (90+)
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch34" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 34: Practice Questions (90+) — Topic by Topic<span class="chapter-badge">🎯 EXAM</span></h2>
+            <div class="chapter-intro"><h3>Chapter 34: Comprehensive Practice by Domain</h3><p>Practice questions are embedded throughout every chapter (5-31). This chapter organizes them by EX267 exam domain with references to where each question lives. Use this as your study checklist.</p><div class="chapter-meta"><span class="meta-tag">🎯 EXAM</span><span class="meta-tag">⏱️ ~3 hours</span><span class="meta-tag">📝 Practice</span></div></div>
+
+            <div class="section-block" id="s34-1"><h3>34.1 Ch 5: Installation (10 Qs)</h3><p>See Ch5 Practice Questions: DataScienceCluster CRD, Operator namespace, managementState, operator health verification. <strong>Focus:</strong> AI Operator installation, DSC creation, dependency operators, GPU setup.</p></div>
+            <div class="section-block" id="s34-2"><h3>34.2 Ch 13-14: Projects &amp; Notebooks (10 Qs)</h3><p>See Ch13 + Ch14 Practice Questions: DS projects, data connections, workbench images, notebook launch, GPU verification. <strong>Focus:</strong> Creating projects, configuring data connections, launching GPU notebooks.</p></div>
+            <div class="section-block" id="s34-3"><h3>34.3 Ch 15: Pipelines (10 Qs)</h3><p>See Ch15 Practice Questions: Pipeline vs PipelineRun, artifact passing, scheduling, comparing runs. <strong>Focus:</strong> Creating pipelines with kfp SDK, managing runs, artifact lineage.</p></div>
+            <div class="section-block" id="s34-4"><h3>34.4 Ch 17-18: Models &amp; Registry (10 Qs)</h3><p>See Ch17 + Ch18 Practice Questions: Katib vs MLflow, distributed training, OCI artifacts, stage tags, model deployment from registry. <strong>Focus:</strong> Training, registering, and deploying models.</p></div>
+            <div class="section-block" id="s34-5"><h3>34.5 Ch 22-23: Model Serving (10 Qs)</h3><p>See Ch22 + Ch23 Practice Questions: InferenceService YAML, storageUri, KPA vs HPA, ModelMesh vs KServe. <strong>Focus:</strong> Deploying and scaling inference endpoints.</p></div>
+            <div class="section-block" id="s34-6"><h3>34.6 Ch 25-26: GPU Config (10 Qs)</h3><p>See Ch25 + Ch26 Practice Questions: GPU sizing, MIG vs time-slicing, GPU Operator install order, DCGM monitoring. <strong>Focus:</strong> GPU installation, configuration, and troubleshooting.</p></div>
+            <div class="section-block" id="s34-7"><h3>34.7 Ch 29-30: Monitoring &amp; Troubleshooting (10 Qs)</h3><p>See Ch29 + Ch30 Practice Questions: User-workload monitoring, DCGM metrics, systematic troubleshooting, 4 universal commands. <strong>Focus:</strong> Enabling monitoring, diagnosing common failures.</p></div>
+            <div class="section-block" id="s34-8"><h3>34.8 Mixed Scenarios (10 Qs) — End-to-End</h3><p>These span multiple domains: "Install AI Operator → Create DS Project → Launch GPU Notebook → Train Model → Register → Deploy Inference → Monitor." Each chapter's walkthrough sections provide these end-to-end scenarios with anihpj examples.</p></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 35: Hands-On Labs (12 Labs)
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch35" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 35: Hands-On Labs (12 Labs)<span class="chapter-badge">🎯 EXAM</span></h2>
+            <div class="chapter-intro"><h3>Chapter 35: Practice Makes Permanent</h3><p>12 hands-on labs covering every EX267 domain. Each lab has a clear objective, estimated time, and verification steps. Complete these on a CRC cluster or Red Hat Developer Sandbox.</p><div class="chapter-meta"><span class="meta-tag">🎯 EXAM</span><span class="meta-tag">⏱️ ~12 hours</span><span class="meta-tag">🔬 Labs</span></div></div>
+
+            <div class="card-grid cols-3" style="margin:12px 0;">
+                <div class="info-card" id="s35-1"><h5>Lab 1: Install AI Operator</h5><p>⏱️ 30 min. Install OpenShift AI Operator via OLM. Create DataScienceCluster. Verify all components are Ready.</p></div>
+                <div class="info-card" id="s35-2"><h5>Lab 2: DS Project + Data Connections</h5><p>⏱️ 30 min. Create anihpj-ml project. Add users, set quotas, create S3 Data Connection. Verify credentials auto-inject.</p></div>
+                <div class="info-card" id="s35-3"><h5>Lab 3: GPU Notebook + Train Model</h5><p>⏱️ 45 min. Launch GPU notebook, verify GPU with nvidia-smi, train scikit-learn model, save to PVC.</p></div>
+                <div class="info-card" id="s35-4"><h5>Lab 4: 5-Step ML Pipeline</h5><p>⏱️ 1 hr. Build pipeline: ingest→preprocess→train→evaluate→export. Use kfp SDK. Run and verify artifacts.</p></div>
+                <div class="info-card" id="s35-5"><h5>Lab 5: Register Model + Deploy Inference</h5><p>⏱️ 30 min. Register trained model in Registry. Deploy with KServe. Test inference endpoint with curl.</p></div>
+                <div class="info-card" id="s35-6"><h5>Lab 6: ModelMesh Multi-Model</h5><p>⏱️ 30 min. Deploy 5 models to ModelMesh. Test concurrent inference. Observe cache eviction behavior.</p></div>
+                <div class="info-card" id="s35-7"><h5>Lab 7: Monitoring Dashboard + Alerts</h5><p>⏱️ 45 min. Enable user-workload monitoring. Create custom metrics. Build Grafana dashboard. Set up alert.</p></div>
+                <div class="info-card" id="s35-8"><h5>Lab 8: Troubleshoot 5 Failures</h5><p>⏱️ 45 min. Fix: notebook pending, pipeline OOM, inference timeout, GPU not detected, PVC not bound.</p></div>
+                <div class="info-card" id="s35-9"><h5>Lab 9: Full anihpj AI Workflow</h5><p>⏱️ 2 hrs. End-to-end: Project→Notebook→Train→Register→Pipeline→Serve→Monitor. Complete anihpj recommender.</p></div>
+                <div class="info-card" id="s35-10"><h5>Lab 10: EX267 Simulation</h5><p>⏱️ 2 hrs. Timed exam simulation. 10 tasks covering all domains. Score yourself. No documentation browsing.</p></div>
+                <div class="info-card" id="s35-11"><h5>Lab 11: Advanced GPU Config</h5><p>⏱️ 30 min. Configure MIG on A100. Assign instances to different projects. Verify isolation with nvidia-smi.</p></div>
+                <div class="info-card" id="s35-12"><h5>Lab 12: A/B Testing + Canary</h5><p>⏱️ 30 min. Deploy v1 and v2 models. Configure Route with 90/10 weighting. Verify traffic split. Promote v2.</p></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 36: Quick Reference Cards
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch36" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 36: Quick Reference Cards<span class="chapter-badge">🎯 EXAM</span></h2>
+            <div class="chapter-intro"><h3>Chapter 36: Your Exam-Day Cheat Sheet (Mental Only!)</h3><p>These are the commands and patterns you should have memorized before exam day. No external notes allowed, but these should be in your muscle memory.</p><div class="chapter-meta"><span class="meta-tag">🎯 EXAM</span><span class="meta-tag">⏱️ ~30 min review</span><span class="meta-tag">📋 Reference</span></div></div>
+
+            <div class="code-block-wrapper" style="margin:12px 0;">
+                <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">🔑 Top 20 Commands for EX267</span></div>
+                <pre><code># Installation & Operators
+oc get csv -n redhat-ods-operator          # Check operator health
+oc get dsc                                  # Check DataScienceCluster
+oc get pods -n redhat-ods-operator          # Operator pods
+
+# Projects & Access
+oc new-project anihpj-ml                    # Create project
+oc adm policy add-role-to-user edit alice -n anihpj-ml  # Grant access
+oc describe quota                           # Check resource limits
+
+# Notebooks & Pipelines
+oc get notebooks -n anihpj-ml               # List notebooks
+oc get pipelineruns -n anihpj-ml            # List pipeline runs
+oc logs pod/anihpj-nb-1                     # Notebook logs
+
+# Model Serving
+oc get inferenceservice -n anihpj-ml        # List inference endpoints
+oc describe inferenceservice anihpj-model   # Check endpoint status
+
+# Troubleshooting (The Fantastic Four)
+oc get pods -n anihpj-ml                    # Pod status
+oc describe pod anihpj-nb-1                 # Events + details
+oc logs --tail=50 anihpj-nb-1               # Recent logs
+oc get events --sort-by='.lastTimestamp'    # Cluster diary
+
+# GPU
+oc describe node gpu-node | grep nvidia     # GPU availability
+oc get pods -n nvidia-gpu-operator          # GPU operator health</code></pre>
+            </div>
+
+            <div class="card-grid cols-2" style="margin:16px 0;">
+                <div class="info-card" style="border-left:4px solid #22c55e;"><h5 style="color:#4ade80;">✅ DO These on Exam Day</h5><ul style="color:#c9d1d9;padding-left:16px;line-height:1.8;"><li>Read every task TWICE before typing</li><li>Use <code>oc explain</code> for every unknown CRD</li><li>Verify each task: <code>oc get</code> after <code>oc create</code></li><li>Use <code>--dry-run=client -o yaml</code> to preview</li><li>Set <code>oc project</code> explicitly before working</li><li>Keep the docs open in a browser tab</li><li>Flag and skip tasks that take >10 min</li></ul></div>
+                <div class="info-card" style="border-left:4px solid #ef4444;"><h5 style="color:#f87171;">❌ DON'T Do These</h5><ul style="color:#c9d1d9;padding-left:16px;line-height:1.8;"><li>Don't spend >10 min on one task — flag & return</li><li>Don't leave any task completely blank</li><li>Don't forget which project you're in</li><li>Don't delete resources unless asked</li><li>Don't ignore error messages — read them!</li><li>Don't close terminal tabs — you might lose work</li><li>Don't panic if something breaks — debug systematically</li></ul></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 9 SUMMARY                                          -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="chapter-section" style="background:linear-gradient(135deg,#0d1f2d,#0f2744);border:2px solid #326ce5;border-radius:16px;padding:28px 32px;margin:30px 0;">
+            <h1 style="margin-top:0;">📋 Part 9 Summary — EX267 Exam Preparation</h1>
+            <div class="card-grid cols-2" style="margin-bottom:20px;">
+                <div class="info-card highlight"><div class="card-icon-lg">📋</div><h5>Ch 33: Exam Deep Dive</h5><p>Screen layout (Question/Terminal/Console), format (2hr, 68% pass), objectives breakdown by weight, proven 6-step exam day strategy.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">📝</div><h5>Ch 34: Practice Questions</h5><p>90+ questions organized by domain. All embedded in chapters 5-31 with this chapter as your study roadmap and checklist.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">🔬</div><h5>Ch 35: 12 Hands-On Labs</h5><p>From AI Operator install to full anihpj workflow simulation. Timed 2-hour EX267 simulation included. Complete on CRC or Sandbox.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">📋</div><h5>Ch 36: Quick Reference</h5><p>Top 20 must-memorize commands. Organized by domain. Your mental cheat sheet for exam day.</p></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 10: REAL-WORLD PRODUCTION AI                        -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div id="part10" style="scroll-margin-top:80px;"></div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 37: Production AI Architecture
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch37" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 37: Production AI Architecture<span class="chapter-badge">🛠️ Practical</span></h2>
+            <div class="chapter-intro"><h3>Chapter 37: Designing Production AI Systems</h3><p>Moving from prototype to production requires thoughtful architecture — data pipelines, training infrastructure, serving endpoints, observability, and security all working together. This chapter provides the blueprint.</p><div class="chapter-meta"><span class="meta-tag">🛠️ Practical</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">🏗️ Architecture</span></div></div>
+
+            <div class="section-block" id="s37-0"><h3>37.0 Complete AI Platform Architecture</h3>
+                <div class="card-grid cols-5" style="margin:12px 0;">
+                    <div class="info-card" id="s37-0a"><h5>Data Layer</h5><p>S3 (NooBaa/MinIO), PostgreSQL, Kafka streaming, DVC versioning. All data sources connected via Data Connections.</p></div>
+                    <div class="info-card" id="s37-0b"><h5>Training Layer</h5><p>GPU nodes (A100/H100), Jupyter notebooks, Katib tuning, MLflow tracking, PyTorch DDP distributed training.</p></div>
+                    <div class="info-card" id="s37-0c"><h5>Serving Layer</h5><p>KServe single-model, ModelMesh multi-model, vLLM/TGI for LLMs, Triton for max throughput.</p></div>
+                    <div class="info-card" id="s37-0d"><h5>Observability</h5><p>Prometheus/Grafana, DCGM GPU metrics, TrustyAI bias/drift, AlertManager, Kibana logs.</p></div>
+                    <div class="info-card" id="s37-0e"><h5>Security + CI/CD</h5><p>Tekton pipelines, GitOps (ArgoCD), RBAC/SCC, NetworkPolicy, image scanning, audit logs.</p></div>
+                </div>
+            </div>
+
+            <div class="section-block" id="s37-1"><h3>37.1 End-to-End MLOps Pipeline</h3>
+                <div class="diagram-container" style="margin:12px 0;">
+                    <div class="diagram-title">🔄 Complete MLOps Loop on OpenShift AI</div>
+                    <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+Data Collection        Feature Eng         Training              Eval          Registry        Deploy         Monitor
+    │                      │                  │                   │               │               │              │
+    │  S3/Postgres/Kafka   │ Jupyter          │ GPU Nodes         │ Katib        │ MLflow        │ KServe       │ Prometheus
+    │  ──────────────────▶ │ ───────────────▶ │ ────────────────▶ │ ───────────▶ │ ────────────▶ │ ───────────▶ │ ─────┐
+    │                      │                  │                   │               │               │              │      │
+    └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                                    ▲                                                                  │
+                                                                    └──────────── Retraining Trigger (drift > threshold) ───────────┘
+
+Tekton Pipeline: [Data Check] → [Preprocess] → [Train] → [Evaluate] → [Register] → [Build Serving Image] → [Canary Deploy]
+GitOps (ArgoCD): watches model registry → auto-syncs InferenceService with new model version</pre>
+                </div></div>
+            <div class="section-block" id="s37-2"><h3>37.2 Multi-Environment Deployments</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Env</th><th>Infra</th><th>GPU</th><th>Data</th><th>Promotion Gate</th></tr></thead><tbody><tr><td><strong>Dev</strong></td><td>CRC or shared cluster</td><td>None / MIG slice</td><td>Synthetic / sampled</td><td>Tests pass + model > baseline</td></tr><tr><td><strong>Staging</strong></td><td>Dedicated project, prod-like</td><td>1× A10/L4</td><td>Anonymized prod sample</td><td>Load test pass + accuracy > 85%</td></tr><tr><td><strong>Production</strong></td><td>HA, multi-AZ, dedicated GPU nodes</td><td>2+× A100/L40S</td><td>Full production data</td><td>Canary 10% → 50% → 100%</td></tr></tbody></table>
+                <p>Image promotion: <code>oc tag anihpj:staging anihpj:production</code>. Model promotion: Model Registry stage transition. <strong>Never build in production — promote to it.</strong></p></div>
+            <div class="section-block" id="s37-3"><h3>37.3 High Availability for AI</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Layer</th><th>HA Strategy</th><th>RPO</th><th>RTO</th></tr></thead><tbody><tr><td><strong>Training</strong></td><td>Checkpoint every N steps → resume from last checkpoint</td><td>N steps of work</td><td>&lt;5 min (reschedule)</td></tr><tr><td><strong>Serving</strong></td><td>Multi-replica KServe (minReplicas=2), anti-affinity across AZs</td><td>Zero (stateless)</td><td>&lt;30s (KPA rescale)</td></tr><tr><td><strong>Storage</strong></td><td>S3 cross-region replication (NooBaa), CSI snapshots for PVCs</td><td>&lt;1 hour</td><td>&lt;15 min</td></tr><tr><td><strong>Control Plane</strong></td><td>3 master nodes (etcd quorum), Operator Lifecycle Manager auto-recovery</td><td>Zero</td><td>&lt;5 min</td></tr><tr><td><strong>GPU Nodes</strong></td><td>N+1 redundancy, node cordon + PodDisruptionBudget, spare node pool</td><td>Zero</td><td>&lt;2 min (reschedule)</td></tr></tbody></table></div>
+            <div class="section-block" id="s37-4"><h3>37.4 Multi-Tenant AI Platform</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Isolation Mechanism</th><th>What It Protects</th><th>Example</th></tr></thead><tbody><tr><td><strong>Data Science Projects</strong></td><td>Namespace-level isolation</td><td><code>team-search</code>, <code>team-recommend</code></td></tr><tr><td><strong>Resource Quotas</strong></td><td>CPU/GPU/RAM limits per team</td><td>team-search: 2 GPU, team-recommend: 4 GPU</td></tr><tr><td><strong>Network Policies</strong></td><td>Pod-to-pod communication</td><td>team-search pods can't reach team-recommend DB</td></tr><tr><td><strong>MIG Partitioning</strong></td><td>GPU memory/bandwidth isolation</td><td>A100 → 7× MIG slices (1 per data scientist)</td></tr><tr><td><strong>RBAC</strong></td><td>Who can do what</td><td>DS team: edit in their project, view in staging</td></tr><tr><td><strong>GPU Node Pools</strong></td><td>Dedicated hardware</td><td>NodeSelector + taints per team GPU pool</td></tr></tbody></table>
+                <p><strong>Golden rule:</strong> one Data Science Project per team. Lock down with NetworkPolicy deny-all then allow specific egress. MIG prevents noisy-neighbor GPU interference.</p></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 38: anihpj — Complete Production Deployment
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch38" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 38: anihpj — Complete Production Deployment<span class="chapter-badge">🛠️ Practical</span></h2>
+            <div class="chapter-intro"><h3>Chapter 38: anihpj Job Board — End-to-End Production</h3><p>This chapter brings together everything you've learned into a single, complete production deployment of the anihpj job board with AI-powered recommendations.</p><div class="chapter-meta"><span class="meta-tag">🛠️ Practical</span><span class="meta-tag">⏱️ ~2 hours</span><span class="meta-tag">🏗️ anihpj</span></div></div>
+
+            <div class="section-block" id="s38-1"><h3>38.1 Architecture Overview</h3><p>anihpj production stack: Django app (3 replicas, Route TLS), PostgreSQL (StatefulSet, 50Gi PVC), Redis (cache), Celery workers (async tasks), AI service (KServe inference for job recommendations), Monitoring (Prometheus + Grafana + DCGM), CI/CD (Tekton pipeline triggered on GitHub push).</p>
+
+                <div class="diagram-container" style="margin:16px 0;">
+                    <div class="diagram-title">🏗️ anihpj — Complete Production Architecture</div>
+                    <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│         🏗️ anihpj PRODUCTION — END-TO-END ARCHITECTURE             │
+│                                                                     │
+│  👤 Users → 🌐 Route (TLS Edge) → Django (3 pods) → Postgres      │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │  🌐 ROUTE: anihpj.apps.example.com (TLS Edge)                 │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│       │                                                            │
+│       ▼                                                            │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │  🐍 DJANGO (DeploymentConfig, 3→10 replicas via HPA)          │ │
+│  │  • Gunicorn, 4 workers/pod, port 8080                         │ │
+│  │  • ConfigMap: DEBUG, ALLOWED_HOSTS                            │ │
+│  │  • Secret: DATABASE_URL, SECRET_KEY                           │ │
+│  │  • Health: /healthz (liveness), /ready (readiness)            │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│       │                       │                                    │
+│       ▼                       ▼                                    │
+│  ┌──────────────┐    ┌──────────────────┐                        │
+│  │ 🗄️ Postgres  │    │ 🔴 Redis (Cache) │                        │
+│  │ StatefulSet  │    │ + Celery Workers │                        │
+│  │ PVC: 50Gi    │    │ KEDA autoscaled  │                        │
+│  └──────────────┘    └──────────────────┘                        │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │  🤖 AI SERVICE (KServe InferenceService)                      │ │
+│  │  • anihpj-job-ranker (XGBoost LambdaRank)                     │ │
+│  │  • KPA autoscale: 0→5 replicas                                │ │
+│  │  • GPU: nvidia.com/gpu: 1 (L40S)                              │ │
+│  │  • Model source: s3://anihpj-models/ranker/v2                 │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │  📊 OBSERVABILITY                                              │ │
+│  │  • Prometheus + Grafana + DCGM (GPU) + TrustyAI (drift)      │ │
+│  │  • Alerts: error>1%, p99>500ms, GPU idle>30min               │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │  🔄 CI/CD (Tekton Pipeline)                                    │ │
+│  │  Git Push → Build (S2I) → Test → Push → Deploy Staging →     │ │
+│  │  Smoke Test → Promote to Prod                                  │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+            <div class="section-block" id="s38-2"><h3>38.2 CI/CD Pipeline (Tekton)</h3>
+                <div class="diagram-container" style="margin:12px 0;">
+                    <div class="diagram-title">🔄 anihpj CI/CD Pipeline Flow</div>
+                    <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│              🔄 anihpj CI/CD PIPELINE (Tekton)                      │
+│                                                                     │
+│  👨‍💻 git push main                                                  │
+│       │                                                             │
+│       │ GitHub Webhook → triggers PipelineRun                       │
+│       ▼                                                             │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐       │
+│  │ 1. Clone │──▶│ 2. Build │──▶│ 3. Test  │──▶│ 4. Push  │       │
+│  │  repo    │   │ (S2I)    │   │ pytest   │   │ image    │       │
+│  └──────────┘   └──────────┘   └────┬─────┘   └────┬─────┘       │
+│                                     │              │               │
+│                                     │ tests fail?  │               │
+│                                     ▼ STOP!        │               │
+│                                                      ▼               │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐                    │
+│  │ 5.Deploy │──▶│ 6.Smoke  │──▶│ 7.Promote│                    │
+│  │ staging  │   │ test     │   │ to prod  │                    │
+│  └──────────┘   └────┬─────┘   └──────────┘                    │
+│                      │ smoke fails?                               │
+│                      ▼ STOP + ALERT                              │
+│                                                                    │
+│  ImageStream auto-triggers deployment on new tag push             │
+│  GitOps (ArgoCD) syncs production manifests from Git repo        │
+└──────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s38-3"><h3>38.3 Scaling for Production</h3>
+                <table class="compare-table" style="margin:12px 0;">
+                    <thead><tr><th>Component</th><th>Scaler</th><th>Min→Max</th><th>Trigger</th></tr></thead>
+                    <tbody><tr><td><strong>Django</strong></td><td>HPA</td><td>3→10</td><td>CPU > 70%</td></tr>
+                    <tr><td><strong>Celery Workers</strong></td><td>KEDA</td><td>1→20</td><td>Redis queue > 10</td></tr>
+                    <tr><td><strong>AI Inference</strong></td><td>KPA</td><td class="winner">0→5</td><td>Concurrent requests</td></tr>
+                    <tr><td><strong>PostgreSQL</strong></td><td>Vertical</td><td>N/A</td><td>Manual resize</td></tr></tbody></table>
+            </div>
+
+            <div class="section-block" id="s38-4"><h3>38.4 Security Implementation</h3>
+                <div class="code-block-wrapper" style="margin:12px 0;">
+                    <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">anihpj Security Configuration</span></div>
+                    <pre><code># NetworkPolicy: Django can only talk to Postgres + Redis
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata: { name: django-egress, namespace: anihpj-prod }
+spec:
+  podSelector: { matchLabels: { app: anihpj } }
+  egress:
+  - to: [{ podSelector: { matchLabels: { app: postgres } } }]
+    ports: [{ port: 5432 }]
+  - to: [{ podSelector: { matchLabels: { app: redis } } }]
+    ports: [{ port: 6379 }]
+  policyTypes: [Egress]
+
+# RBAC: CI/CD SA has edit, developers have view
+oc policy add-role-to-user edit -z cicd-sa -n anihpj-prod
+oc policy add-role-to-user view -z developer -n anihpj-prod
+
+# Secret rotation via External Secrets Operator:
+# AWS Secrets Manager → Sync → Kubernetes Secret</code></pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s38-5"><h3>38.5 Monitoring &amp; Observability</h3>
+                <table class="compare-table" style="margin:12px 0;">
+                    <thead><tr><th>Alert</th><th>Condition</th><th>Severity</th><th>Action</th></tr></thead>
+                    <tbody><tr><td>High Error Rate</td><td>5xx > 1% for 5 min</td><td>🔴 Critical</td><td>Page on-call</td></tr>
+                    <tr><td>High Latency</td><td>p99 > 500ms for 10 min</td><td>🟡 Warning</td><td>Slack + investigate</td></tr>
+                    <tr><td>GPU Idle</td><td>GPU util < 10% for 30 min</td><td>🟡 Warning</td><td>Check for stuck jobs</td></tr>
+                    <tr><td>Disk Low</td><td>PVC > 80% full</td><td>🟡 Warning</td><td>Expand PVC</td></tr></tbody></table>
+            </div>
+
+            <div class="section-block" id="s38-6"><h3>38.6 Complete Production Dockerfile</h3>
+                <div class="code-block-wrapper" style="margin:12px 0;">
+                    <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">anihpj Production Dockerfile</span></div>
+                    <pre><code># Stage 1: Build
+FROM registry.access.redhat.com/ubi9/python-311 AS builder
+USER 0
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+RUN python manage.py collectstatic --noinput
+
+# Stage 2: Runtime
+FROM registry.access.redhat.com/ubi9/python-311
+USER 1001
+WORKDIR /app
+COPY --from=builder /app /app
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+EXPOSE 8080
+HEALTHCHECK --interval=30s CMD curl -f http://localhost:8080/healthz || exit 1
+CMD ["gunicorn", "anihpj.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "4", "--timeout", "120"]</code></pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s38-7"><h3>38.7 Kubernetes Manifests</h3>
+                <div class="code-block-wrapper" style="margin:12px 0;">
+                    <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">anihpj Core Manifests</span></div>
+                    <pre><code># Deployment
+apiVersion: apps/v1; kind: Deployment
+metadata: { name: anihpj, namespace: anihpj-prod }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: anihpj } }
+  template:
+    metadata: { labels: { app: anihpj } }
+    spec:
+      containers:
+      - name: django
+        image: anihpj:latest
+        ports: [{ containerPort: 8080 }]
+        resources:
+          requests: { cpu: 250m, memory: 256Mi }
+          limits: { cpu: 1000m, memory: 512Mi }
+        livenessProbe: { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 30 }
+        readinessProbe: { httpGet: { path: /ready, port: 8080 }, initialDelaySeconds: 10 }
+        envFrom:
+        - configMapRef: { name: django-config }
+        - secretRef: { name: db-credentials }
+---
+# HPA
+apiVersion: autoscaling/v2; kind: HorizontalPodAutoscaler
+metadata: { name: anihpj-hpa, namespace: anihpj-prod }
+spec:
+  scaleTargetRef: { kind: Deployment, name: anihpj }
+  minReplicas: 3; maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }</code></pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s38-8"><h3>38.8 Tekton CI/CD Pipeline</h3>
+                <div class="code-block-wrapper" style="margin:12px 0;">
+                    <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">Tekton Pipeline Definition</span></div>
+                    <pre><code>apiVersion: tekton.dev/v1; kind: Pipeline
+metadata: { name: anihpj-ci-cd, namespace: anihpj-prod }
+spec:
+  params:
+  - { name: git-url, type: string }
+  - { name: image-tag, type: string }
+  workspaces: [{ name: source }]
+  tasks:
+  - name: clone
+    taskRef: { name: git-clone }
+    params: [{ name: url, value: "$(params.git-url)" }]
+  - name: build
+    taskRef: { name: s2i-python }
+    runAfter: [clone]
+    params: [{ name: IMAGE, value: "image-registry.openshift-image-registry.svc:5000/anihpj-prod/anihpj:$(params.image-tag)" }]
+  - name: test
+    taskRef: { name: pytest }
+    runAfter: [build]
+  - name: deploy-staging
+    taskRef: { name: oc-deploy }
+    runAfter: [test]
+    params: [{ name: ENV, value: staging }]
+  - name: smoke-test
+    taskRef: { name: curl-test }
+    runAfter: [deploy-staging]
+  - name: promote-prod
+    taskRef: { name: oc-tag }
+    runAfter: [smoke-test]
+    params: [{ name: FROM, value: "anihpj-staging/anihpj:$(params.image-tag)" },
+             { name: TO, value: "anihpj-prod/anihpj:prod" }]</code></pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s38-9"><h3>38.9 Disaster Recovery Runbook</h3>
+                <div class="diagram-container" style="margin:12px 0;">
+                    <div class="diagram-title">🆘 Disaster Recovery Process</div>
+                    <pre style="background:#0d1117;color:#c9d1d9;padding:16px;border-radius:8px;font-size:13px;line-height:1.7;">
+┌──────────────────────────────────────────────────────────────────┐
+│              🆘 anihpj DISASTER RECOVERY RUNBOOK                    │
+│                                                                     │
+│  🔄 DAILY BACKUP (Automated):                                      │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │ Velero → S3: Cluster state + PV snapshots                │    │
+│  │ CSI Snapshots → PVC: postgresql-data (hourly retention)  │    │
+│  │ NooBaa replication → S3 bucket: anihpj-models + artifacts│    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                     │
+│  🚨 RECOVERY PROCESS (RTO: 2 hours):                               │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │ 1. velero restore create --from-backup latest-daily       │    │
+│  │ 2. oc get pvc --all-namespaces → verify Bound             │    │
+│  │ 3. oc exec deploy/postgres -- pg_isready                  │    │
+│  │ 4. oc get inferenceservice → verify Ready                 │    │
+│  │ 5. curl -k https://anihpj.apps.../healthz → 200 OK       │    │
+│  │ 6. DNS cutover to new cluster (if needed)                 │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                     │
+│  RPO: 24 hours (daily backup) | RTO: 2 hours                      │
+└──────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s38-10"><h3>38.10 Production Readiness Checklist</h3>
+                <div class="card-grid cols-2" style="margin:12px 0;">
+                    <div class="info-card" style="border-left:4px solid #22c55e;"><h5>✅ Infrastructure</h5><ul style="color:#c9d1d9;padding-left:16px;line-height:1.8;"><li>TLS enabled on all Routes</li><li>Health probes configured</li><li>HPA/KPA autoscaling tested</li><li>PVC backups configured</li><li>Multi-AZ node distribution</li></ul></div>
+                    <div class="info-card" style="border-left:4px solid #22c55e;"><h5>✅ Security</h5><ul style="color:#c9d1d9;padding-left:16px;line-height:1.8;"><li>NetworkPolicies applied</li><li>RBAC least-privilege</li><li>Secrets encrypted (etcd)</li><li>Images scanned (no CRITICAL)</li><li>SCC restricted (not privileged)</li></ul></div>
+                    <div class="info-card" style="border-left:4px solid #22c55e;"><h5>✅ Operations</h5><ul style="color:#c9d1d9;padding-left:16px;line-height:1.8;"><li>Alerts configured + tested</li><li>CI/CD pipeline running</li><li>DR runbook tested</li><li>Cost monitoring enabled</li><li>Upgrade path documented</li></ul></div>
+                    <div class="info-card" style="border-left:4px solid #22c55e;"><h5>✅ AI/ML</h5><ul style="color:#c9d1d9;padding-left:16px;line-height:1.8;"><li>Model accuracy > threshold</li><li>Drift monitoring enabled</li><li>Pipeline success > 95%</li><li>GPU utilization tracked</li><li>Model registry up-to-date</li></ul></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════
+             CHAPTER 39: AI Platform Engineering (SRE)
+             ═══════════════════════════════════════════════════════ -->
+        <div id="ch39" class="chapter-section" style="border-top:2px solid #30363d;">
+            <h2 style="display:flex;align-items:center;gap:12px;">Chapter 39: AI Platform Engineering (SRE)<span class="chapter-badge">🛠️ Practical</span></h2>
+            <div class="chapter-intro"><h3>Chapter 39: Running AI Platforms Like a Pro</h3><p>AI Platform Engineering combines MLOps with SRE (Site Reliability Engineering). This chapter covers SLIs/SLOs, incident response, capacity planning, team structure, and the future of AI platforms.</p><div class="chapter-meta"><span class="meta-tag">🛠️ Practical</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">🔧 SRE</span></div></div>
+
+            <div class="section-block" id="s39-1"><h3>39.1 SLIs, SLOs, SLAs for AI Platforms</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>SLI (Indicator)</th><th>SLO (Objective)</th><th>SLA (Agreement)</th></tr></thead><tbody><tr><td>Inference p95 latency</td><td>&lt;200ms</td><td>99.9% of requests &lt;200ms</td></tr><tr><td>Model accuracy (F1)</td><td>&gt;85%</td><td>Monthly accuracy audit &gt;85%</td></tr><tr><td>Training job success rate</td><td>&gt;95%</td><td>Failed jobs retried within 1hr</td></tr><tr><td>Inference availability</td><td>99.9%</td><td>99.5% — penalty if breached</td></tr><tr><td>GPU utilization</td><td>50-70%</td><td>Alert if &lt;10% or &gt;90% sustained</td></tr></tbody></table>
+                <p><strong>Start loose, tighten over time.</strong> First month: track SLIs without SLOs. Second month: set SLOs at p90 actual. Third month: tighten to p95/p99. <strong>Error budgets:</strong> SLO 99.9% = 43min downtime/month allowed. Use it for planned maintenance.</p></div>
+            <div class="section-block" id="s39-2"><h3>39.2 Incident Response for AI Systems</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Incident</th><th>Symptom</th><th>Immediate Action</th><th>Root Cause Fix</th></tr></thead><tbody><tr><td><strong>Model Accuracy Drop</strong></td><td>Drift score alert fires</td><td>Rollback model to previous version</td><td>Retrain with new data, investigate drift source</td></tr><tr><td><strong>GPU Node Failure</strong></td><td>GPUUnavailable alert</td><td>Cordon node, pods reschedule automatically</td><td>Replace GPU, verify DCGM metrics</td></tr><tr><td><strong>Inference Latency Spike</strong></td><td>p99 > 1s alert</td><td>Scale up replicas immediately</td><td>Profile model, optimize batch size, check GPU VRAM</td></tr><tr><td><strong>Pipeline Cascade Fail</strong></td><td>3 consecutive failures</td><td>Stop dependent pipelines, check root step logs</td><td>Fix root step, backfill data, resume pipeline</td></tr></tbody></table>
+                <p><strong>Incident Command:</strong> 1. Acknowledge alert. 2. Assess impact (how many users affected?). 3. Mitigate (restore service first, investigate later). 4. Resolve + postmortem. Each incident type has a runbook with exact commands to run.</p></div>
+            <div class="section-block" id="s39-3"><h3>39.3 Capacity Planning</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Metric</th><th>Track Period</th><th>Trigger to Add Capacity</th><th>Lead Time</th></tr></thead><tbody><tr><td>GPU-hours/week</td><td>Weekly trend</td><td>&gt;70% sustained for 2 weeks</td><td>4-6 weeks (GPU procurement)</td></tr><tr><td>Inference req/s</td><td>Daily peak</td><td>Growth &gt;20% month-over-month</td><td>1 week (add replicas)</td></tr><tr><td>Model training frequency</td><td>Monthly</td><td>New model type added</td><td>2 weeks (GPU provisioning)</td></tr><tr><td>Storage growth</td><td>Weekly</td><td>&gt;20% month-over-month</td><td>1 week (expand PVC/S3)</td></tr></tbody></table>
+                <p><strong>Pre-provisioning:</strong> For anihpj, if "Black Friday" brings 10× traffic, pre-warm 10 inference replicas. Use spot instances for elastic training capacity (60-80% cheaper, with checkpointing to handle preemption).</p></div>
+            <div class="section-block" id="s39-4"><h3>39.4 Team Structure &amp; Skills</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Role</th><th>Responsibility</th><th>Key Tools</th><th>This Guide Covers</th></tr></thead><tbody><tr><td><strong>ML Engineer</strong></td><td>Model development, training, evaluation</td><td>PyTorch, Jupyter, Katib</td><td>Ch 12-17</td></tr><tr><td><strong>MLOps Engineer</strong></td><td>Pipeline automation, model registry, CI/CD</td><td>Tekton, MLflow, ArgoCD</td><td>Ch 18-22 (Pipelines)</td></tr><tr><td><strong>Platform Engineer</strong></td><td>Kubernetes/OpenShift infra, GPU, storage</td><td>OpenShift, GPU Operator, ODF</td><td>All chapters</td></tr><tr><td><strong>Data Engineer</strong></td><td>Data pipelines, feature stores, S3/Kafka</td><td>Spark, Airflow, Kafka</td><td>Ch 11 (Data Connections)</td></tr><tr><td><strong>AI SRE</strong></td><td>Reliability, monitoring, incident response</td><td>Prometheus, Grafana, PagerDuty</td><td>Ch 29-31, 39</td></tr></tbody></table></div>
+            <div class="section-block" id="s39-5"><h3>39.5 Future-Proofing Your AI Platform</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>Principle</th><th>Implementation</th><th>Why</th></tr></thead><tbody><tr><td><strong>Abstract serving</strong></td><td>KServe InferenceService API (predictor/transformer/explainer)</td><td>Swap backends (Triton→vLLM→TGI) without changing client code</td></tr><tr><td><strong>Portable models</strong></td><td>OCI artifacts (ORAS) + Model Registry</td><td>Push to any OCI registry (Quay, ECR, ACR, GCR)</td></tr><tr><td><strong>Vendor-neutral telemetry</strong></td><td>OpenTelemetry (traces + metrics)</td><td>Swap backends (Jaeger→Tempo, Prometheus→VictoriaMetrics)</td></tr><tr><td><strong>Multi-cloud GPU</strong></td><td>Abstract GPU node pool, spot-first strategy</td><td>Not locked to one cloud's GPU availability</td></tr><tr><td><strong>Operator currency</strong></td><td>Keep operators updated, test in staging</td><td>New GPU hardware support (H200, B200) via operator updates</td></tr></tbody></table></div>
+            <div class="section-block" id="s39-6"><h3>39.6 NCP-AII Pathway</h3>
+                <table class="compare-table" style="margin:12px 0;"><thead><tr><th>NCP-AII Domain</th><th>Weight</th><th>This Guide's Coverage</th></tr></thead><tbody><tr><td><strong>GPU Hardware Architecture</strong></td><td>20%</td><td>Ch 25 — A100/H100/L40S architecture, NVLink, Tensor Cores</td></tr><tr><td><strong>NVIDIA Networking</strong></td><td>15%</td><td>Ch 25.4 — InfiniBand, NVSwitch, GPUDirect RDMA</td></tr><tr><td><strong>GPU Operator</strong></td><td>20%</td><td>Ch 26 — Installation, driver management, ClusterPolicy</td></tr><tr><td><strong>DCGM Monitoring</strong></td><td>15%</td><td>Ch 26.3, 29.6 — DCGM metrics, Grafana dashboards, alerting</td></tr><tr><td><strong>MIG Configuration</strong></td><td>15%</td><td>Ch 25.2 — MIG profiles, partitioning, isolation guarantees</td></tr><tr><td><strong>AI Workload Optimization</strong></td><td>15%</td><td>Ch 27, 28 — Sizing, cost optimization, specialized hardware</td></tr></tbody></table>
+                <p>Combined EX267 + NCP-AII = complete AI platform engineering expertise. EX267 covers the OpenShift layer; NCP-AII covers the GPU infrastructure layer beneath it.</p></div>
+            <div class="section-block" id="s39-7"><h3>39.7 Course Summary — What You've Learned</h3>
+                <div class="card-grid cols-2" style="margin:12px 0;">
+                    <div class="info-card"><h5>Part 1: Foundation</h5><p>What is OpenShift? Architecture, Cluster access (CLI + Web Console), 20+ cluster operators, core projects.</p></div>
+                    <div class="info-card"><h5>Part 2: Core Platform</h5><p>Installation (CRC/IPI), Auth/RBAC (Users/Groups/Roles), Networking (SDN/Service/Route/Ingress), Storage (PV/PVC/CSI/ODF), Workloads (Pod/Deploy/DaemonSet/Job/CronJob/HPA).</p></div>
+                    <div class="info-card"><h5>Part 3: Operators &amp; OpenShift AI</h5><p>OLM, OpenShift AI Operator (DSC/DSCI), DS Projects, Workbenches (Jupyter), DS Pipelines (Tekton).</p></div>
+                    <div class="info-card"><h5>Part 4: Model Development</h5><p>Model dev lifecycle, Katib, MLflow, Feast, model evaluation, TrustyAI, Model Registry.</p></div>
+                    <div class="info-card"><h5>Part 5: Model Serving</h5><p>KServe (Serverless/Single/ModelMesh), LLM serving (vLLM/TGI), Triton, Kafka streaming, edge inference.</p></div>
+                    <div class="info-card"><h5>Part 6: GPU Infrastructure</h5><p>NVIDIA GPU architecture, MIG, NVLink/InfiniBand, GPU Operator, hardware sizing, cost optimization.</p></div>
+                    <div class="info-card"><h5>Part 7: Operations</h5><p>Monitoring (Prometheus/DCGM/Grafana), troubleshooting, alerts, backup/DR, upgrades, security.</p></div>
+                    <div class="info-card"><h5>Part 8: Production + Exam</h5><p>Production architecture, anihpj complete deployment, AI SRE, EX267 strategy, NCP-AII pathway.</p></div>
+                </div>
+                <p><strong>By the numbers:</strong> 10 Parts, 39 Chapters, 130+ practice questions, 12 labs, 70+ diagrams, 8000+ lines. You now have complete AI platform engineering knowledge.</p></div>
+            <div class="section-block" id="s39-8"><h3>39.8 AI Platform Engineer's Manifesto</h3>
+                <div class="card-grid cols-2" style="margin:12px 0;">
+                    <div class="info-card"><h5>🔹 Automate Everything</h5><p>Manual steps don't scale. Tekton pipelines + GitOps (ArgoCD) + Operator Lifecycle Manager. If it's not in Git, it doesn't exist.</p></div>
+                    <div class="info-card"><h5>🔹 Monitor What Matters</h5><p>Four questions: hardware healthy? models working? pipelines succeeding? money wasted? Answer in &lt;30 seconds.</p></div>
+                    <div class="info-card"><h5>🔹 Design for Failure</h5><p>Everything breaks eventually. Checkpoint training, multi-replica serving, cross-AZ storage, N+1 GPUs, automated rollback.</p></div>
+                    <div class="info-card"><h5>🔹 Version Everything</h5><p>Code (Git), data (DVC), models (MLflow/Registry), configs (GitOps), images (ImageStream tags). Reproducibility = production safety.</p></div>
+                    <div class="info-card"><h5>🔹 Least Privilege Always</h5><p>RBAC per Data Science Project, SCC for GPU access only, NetworkPolicy deny-all + allow-list, encrypted secrets at rest.</p></div>
+                    <div class="info-card"><h5>🔹 Data Scientists Are Your Customers</h5><p>Make their lives easier — self-service notebooks, pre-configured images, auto-scaling inference. Platform should be invisible.</p></div>
+                    <div class="info-card"><h5>🔹 Keep Learning</h5><p>AI infrastructure evolves monthly. New GPUs, new serving frameworks, new operators. Subscribe to OpenShift AI release notes + NVIDIA developer blog.</p></div>
+                    <div class="info-card"><h5>🔹 Ship It</h5><p>Done is better than perfect. Deploy, monitor, iterate. Production feedback > endless optimization. Your users will tell you what matters.</p></div>
+                </div></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- PART 10 SUMMARY — DOCUMENT FINALÉ                       -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <div class="chapter-section" style="background:linear-gradient(135deg,#0d1f2d,#0f2744);border:2px solid #326ce5;border-radius:16px;padding:28px 32px;margin:30px 0;">
+            <h1 style="margin-top:0;">📋 Part 10 Summary — Real-World Production AI</h1>
+            <div class="card-grid cols-3" style="margin-bottom:20px;">
+                <div class="info-card highlight"><div class="card-icon-lg">🏗️</div><h5>Ch 37: Prod Architecture</h5><p>5-layer platform (Data, Training, Serving, Observability, Security). End-to-end MLOps pipeline. Multi-environment + HA + Multi-tenant design.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">🚀</div><h5>Ch 38: anihpj Production</h5><p>Complete production deployment: Django+Postgres+Redis+Celery+KServe. CI/CD, scaling, security, monitoring, DR runbook, 10-point checklist.</p></div>
+                <div class="info-card highlight"><div class="card-icon-lg">🔧</div><h5>Ch 39: AI SRE</h5><p>SLI/SLO/SLA, incident response, capacity planning, team structure, NCP-AII pathway, course summary, AI Platform Engineer manifesto.</p></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- DOCUMENT COMPLETE                                        -->
+        <!-- ═══════════════════════════════════════════════════════ -->
 
         </section>
     </main>
