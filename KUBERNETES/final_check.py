@@ -1,0 +1,11 @@
+import re
+h = open(r'c:\Users\owner\Desktop\DEV-DOCs\KUBERNETES\helm.html','r',encoding='utf-8').read()
+qas = len(re.findall(r'class="exam-question-item"', h))
+exp_divs = len(re.findall(r'class="eq-explanation"', h))
+gb = h.count('This is a key Helm certification concept')
+doubles = sum(1 for d in re.findall(r'<details>.*?</details>', h, re.DOTALL) if d.count('class="eq-explanation"') > 1)
+print("Total Q&As:", qas)
+print("Total explanation divs:", exp_divs)
+print("Generic boilerplates:", gb)
+print("Remaining doubles:", doubles)
+print("1:1 ratio?", qas == exp_divs, "(difference:", exp_divs - qas, ")")
