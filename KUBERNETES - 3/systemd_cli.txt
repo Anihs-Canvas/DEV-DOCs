@@ -1,111 +1,184 @@
-SYSTEMD CLI — COMPLETE REFERENCE
+SYSTEMD CLI — COMPLETE SRE/PE REFERENCE
 ================================================================================
 This document is the structural guide for systemd_cli.html.
 It covers systemctl, journalctl, and writing systemd unit files for
-everyday Linux system administration activities in the anihpj/jobpost environment.
+Site Reliability Engineering (SRE) and Platform Engineering (PE) practitioners.
+All examples use production-grade services: kubelet, containerd, nginx,
+prometheus, sshd, and systemd-journald on a real Kubernetes worker node.
 
-GENERIC DIRECTORY SKELETON
+SRE/PE DIRECTORY SKELETON
 --------------------------------------------------------------------------------
-This document uses a universal project structure that ANY Linux admin or
-developer will recognize — no framework-specific dependencies. All examples,
-paths, and context use this directory structure. The "webapp" is a generic
-HTTP application (could be Python/Node/Go — the systemd concepts are identical).
+This document models a realistic K8s worker node at /sre-platform running
+the full infrastructure stack an SRE/PE engineer manages daily. Every
+systemctl example, journalctl query, and unit file is grounded in real
+operational scenarios — not abstract "hello world" services.
 
-PROJECT ROOT: /lpj
+SERVICES IN SCOPE:
+  Tier 1 — K8s Core:     kubelet, containerd, kube-proxy
+  Tier 2 — Infra:         nginx, sshd, haproxy, firewalld, chronyd
+  Tier 3 — Observability: prometheus, node_exporter, grafana, fluent-bit, otelcol
+  Tier 4 — Platform Ops:  systemd-journald, systemd-resolved, systemd-timesyncd
+
+PROJECT ROOT: /sre-platform
 ─────────────────────────────────────────────────────────────────
-lpj/
+A realistic SRE/PE (Platform Engineering) node running a Kubernetes
+worker with core infrastructure services. All examples demonstrate
+real-world systemctl/journalctl usage against these services.
+
+INFRASTRUCTURE OVERVIEW
+─────────────────────────────────────────────────────────────────
+This project simulates a production K8s worker node running:
+  ┌──────────────────────────────────────────────────────────┐
+  │                  /sre-platform (Node)                     │
+  │                                                          │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
+  │  │ KUBELET   │  │CONTAINERD│  │  NGINX   │  │PROMETHEUS│ │
+  │  │ K8s agent │  │ Runtime  │  │ Reverse  │  │ Metrics  │ │
+  │  │ :10250    │  │ :grpc    │  │ :80/:443 │  │ :9090    │ │
+  │  └─────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬────┘ │
+  │        │              │             │              │      │
+  │  ┌─────┴──────────────┴─────────────┴──────────────┴────┐ │
+  │  │              SYSTEMD (PID 1) — Unit Manager           │ │
+  │  │         systemctl + journalctl + systemd-analyze      │ │
+  │  └──────────────────────────────────────────────────────┘ │
+  │                                                          │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────────┐│
+  │  │   SSHD   │  │JOURNALD  │  │   Platform Ops Tooling   ││
+  │  │ Remote   │  │ Logging  │  │   scripts, timers, conf  ││
+  │  │ :22      │  │ /run/log │  │   backups, healthchecks  ││
+  │  └──────────┘  └──────────┘  └──────────────────────────┘│
+  └──────────────────────────────────────────────────────────┘
+
+sre-platform/
 │
-├── 📁 webapp/                          # Generic web application source
-│   ├── 📄 app.py                       # Main application entry point
-│   ├── 📄 config.yaml                  # App configuration
-│   └── 📄 utils.py                     # Shared utilities
+├── 📁 k8s-node/                        # Kubernetes node components
+│   ├── 📄 kubelet.env                  # Kubelet environment (--node-ip, --hostname-override)
+│   ├── 📄 kubelet-config.yaml          # KubeletConfiguration (maxPods, evictionHard, etc.)
+│   ├── 📄 containerd-config.toml       # Containerd runtime config (runc, cni, mirrors)
+│   ├── 📄 kube-proxy-config.yaml       # kube-proxy mode (iptables/IPVS), conntrack
+│   ├── 📄 10-cni.conflist              # CNI network configuration
+│   ├── 📄 crictl.yaml                  # crictl runtime endpoint config
+│   └── 📁 static-pods/                 # Static pod manifests (watched by kubelet)
+│       ├── 📄 nginx-static-pod.yaml
+│       └── 📄 etcd-static-pod.yaml
 │
-├── 📁 worker/                          # Background job processor
-│   ├── 📄 worker.py                    # Worker entry point
-│   └── 📄 jobs.py                      # Job definitions
-│
-├── 📁 api/                             # REST API endpoints
-│   ├── 📄 server.py
-│   └── 📄 handlers.py
-│
-├── 📁 ops/
-│   ├── 📁 systemd/                     # Systemd unit files
-│   │   ├── 📄 webapp.service           # Web application (HTTP server)
-│   │   ├── 📄 webapp.socket            # Socket activation
-│   │   ├── 📄 worker.service           # Background worker
-│   │   ├── 📄 worker-scheduler.service # Periodic job scheduler
-│   │   ├── 📄 nginx.service            # Reverse proxy / load balancer
-│   │   ├── 📄 webapp.target            # Target unit for all services
-│   │   ├── 📁 timer/                   # Systemd timers
-│   │   │   ├── 📄 backup.timer
-│   │   │   ├── 📄 backup.service
-│   │   │   ├── 📄 cleanup.timer
-│   │   │   └── 📄 cleanup.service
-│   │   └── 📁 override/               # Drop-in overrides
-│   │       └── 📄 webapp.service.d/
-│   │           └── 📄 override.conf
-│   ├── 📁 logs/                        # Application & service logs
-│   │   ├── 📄 webapp-access.log
-│   │   ├── 📄 webapp-error.log
-│   │   ├── 📄 worker.log
-│   │   └── 📄 nginx-access.log
-│   └── 📁 scripts/                     # Management scripts
-│       ├── 📄 deploy.sh
-│       └── 📄 health-check.sh
-│
-├── 📁 k8s/                             # Kubernetes manifests (Kustomize)
-│   ├── 📁 base/                        # Base manifests (common to all envs)
-│   │   ├── 📄 kustomization.yaml       # Kustomize base definition
-│   │   ├── 📄 namespace.yaml
-│   │   ├── 📄 webapp-deployment.yaml   # Web app deployment
-│   │   ├── 📄 worker-deployment.yaml   # Background worker deployment
-│   │   ├── 📄 api-deployment.yaml
-│   │   ├── 📄 db-statefulset.yaml      # Database StatefulSet
-│   │   ├── 📄 webapp-service.yaml      # ClusterIP for webapp
-│   │   ├── 📄 api-service.yaml
-│   │   ├── 📄 db-service.yaml
-│   │   ├── 📄 configmap.yaml           # App configuration
-│   │   ├── 📄 secrets.yaml             # Secrets (sealed)
-│   │   └── 📄 hpa.yaml                 # HorizontalPodAutoscaler
+├── 📁 systemd-units/                   # ⭐ Systemd unit files (THE CORE OF THIS DOC)
 │   │
-│   ├── 📁 overlays/                    # Kustomize overlays per environment
-│   │   ├── 📁 dev/
-│   │   │   ├── 📄 kustomization.yaml   # Dev overlay (patches + images)
-│   │   │   ├── 📄 patch-replicas.yaml  # Dev: 1 replica
-│   │   │   ├── 📄 patch-resources.yaml # Dev: low CPU/memory
-│   │   │   └── 📄 ingress-dev.yaml     # dev.webapp.local
-│   │   │
-│   │   ├── 📁 staging/
-│   │   │   ├── 📄 kustomization.yaml   # Staging overlay
-│   │   │   ├── 📄 patch-replicas.yaml  # Staging: 2 replicas
-│   │   │   ├── 📄 patch-resources.yaml # Staging: medium CPU/mem
-│   │   │   └── 📄 ingress-staging.yaml # staging.webapp.io
-│   │   │
-│   │   └── 📁 prod/
-│   │       ├── 📄 kustomization.yaml   # Prod overlay
-│   │       ├── 📄 patch-replicas.yaml  # Prod: 3-5 replicas
-│   │       ├── 📄 patch-resources.yaml # Prod: high CPU/memory
-│   │       ├── 📄 patch-node-selector.yaml # SSD/performance nodes
-│   │       └── 📄 ingress-prod.yaml    # webapp.io
+│   ├── 📁 core/                        # Tier 1 — MUST run for K8s to function
+│   │   ├── 📄 kubelet.service          # K8s node agent (talks to API server)
+│   │   ├── 📄 kubelet.service.d/       # Drop-in override directory
+│   │   │   └── 📄 10-node-labels.conf  # --node-labels override via drop-in
+│   │   ├── 📄 containerd.service       # Container runtime (runs all pods)
+│   │   ├── 📄 kube-proxy.service       # Network proxy & load balancer
+│   │   └── 📄 node.target              # Target unit: all K8s node services
 │   │
-│   ├── 📁 network/                     # Network policies
-│   │   ├── 📄 netpol-baseline.yaml     # Default deny + allow rules
-│   │   ├── 📄 netpol-l7.yaml           # L7 HTTP policies
-│   │   └── 📄 netpol-dns.yaml          # DNS egress policies
+│   ├── 📁 infra/                       # Tier 2 — Infrastructure services
+│   │   ├── 📄 nginx.service            # Reverse proxy / ingress controller
+│   │   ├── 📄 nginx.service.d/
+│   │   │   └── 📄 20-ulimit.conf       # LimitNOFILE=65536 via drop-in
+│   │   ├── 📄 nginx.socket             # Socket-activated Nginx (lazy start)
+│   │   ├── 📄 sshd.service             # SSH daemon
+│   │   ├── 📄 sshd.socket              # Socket-activated SSH (port 22)
+│   │   ├── 📄 haproxy.service          # Alternative load balancer
+│   │   ├── 📄 firewalld.service        # Dynamic firewall
+│   │   └── 📄 chronyd.service          # NTP time sync (cert validity!)
 │   │
-│   └── 📁 monitoring/                  # Observability
-│       ├── 📄 servicemonitor.yaml       # Prometheus CRD
-│       └── 📄 grafana-dashboard.yaml
+│   ├── 📁 observability/               # Tier 3 — Monitoring & logging stack
+│   │   ├── 📄 prometheus.service       # Metrics collection & TSDB
+│   │   ├── 📄 prometheus.service.d/
+│   │   │   └── 📄 30-retention.conf    # --storage.tsdb.retention.time=30d
+│   │   ├── 📄 node_exporter.service    # Node-level metrics (CPU/mem/disk/net)
+│   │   ├── 📄 grafana-server.service   # Dashboard server
+│   │   ├── 📄 fluent-bit.service       # Log forwarder (→ Loki/Elastic)
+│   │   ├── 📄 otelcol.service          # OpenTelemetry Collector
+│   │   └── 📄 alertmanager.service     # Alert routing & grouping
+│   │
+│   ├── 📁 timers/                      # Systemd timers (cron replacement)
+│   │   ├── 📄 k8s-snapshot.timer       # Daily etcd/k8s snapshot @ 02:00
+│   │   ├── 📄 k8s-snapshot.service     # ExecStart=/sre-platform/scripts/etcd-snapshot.sh
+│   │   ├── 📄 logrotate.timer          # Hourly log rotation
+│   │   ├── 📄 logrotate.service
+│   │   ├── 📄 cert-check.timer         # Weekly TLS cert expiry check
+│   │   ├── 📄 cert-check.service
+│   │   ├── 📄 disk-cleanup.timer       # Daily prune old images/containers
+│   │   └── 📄 disk-cleanup.service
+│   │
+│   └── 📁 targets/                     # Systemd targets (runlevel groups)
+│       ├── 📄 sre-bootstrap.target      # First-boot provisioning
+│       ├── 📄 sre-production.target    # Full production stack
+│       └── 📄 sre-maintenance.target   # Maintenance mode (kubelet off)
+│
+├── 📁 scripts/                         # SRE operational scripts
+│   ├── 📄 node-health.sh               # Full node health check (all services)
+│   ├── 📄 kubelet-diag.sh              # Kubelet logs, config, static pod check
+│   ├── 📄 containerd-diag.sh           # Containerd: ctr list, image GC, snapshots
+│   ├── 📄 nginx-reload.sh              # Safe nginx config test + reload
+│   ├── 📄 etcd-snapshot.sh             # ETCD snapshot + S3 upload
+│   ├── 📄 disk-prune.sh                # Remove unused images, exited containers
+│   ├── 📄 cert-expiry.sh               # Check all TLS cert expiry dates
+│   ├── 📄 service-recovery.sh          # Auto-restart failed services, notify
+│   ├── 📄 journal-export.sh            # Export journal to remote syslog
+│   └── 📄 incident-response.sh         # INCIDENT: gather state, tarball, ship
+│
+├── 📁 configs/                         # Configuration files
+│   ├── 📄 journald.conf                # /etc/systemd/journald.conf (rate limits, retention)
+│   ├── 📄 resolved.conf                # /etc/systemd/resolved.conf (DNS, DNSSEC)
+│   ├── 📄 timesyncd.conf               # /etc/systemd/timesyncd.conf (NTP servers)
+│   ├── 📄 logind.conf                  # /etc/systemd/logind.conf (lid switch, sessions)
+│   ├── 📄 system.conf                  # /etc/systemd/system.conf (manager tunables)
+│   ├── 📄 nginx.conf                   # Nginx main config
+│   ├── 📁 nginx-conf.d/                # Nginx site configs
+│   │   ├── 📄 sre-api.conf             # API reverse proxy
+│   │   └── 📄 sre-status.conf          # /nginx_status stub
+│   ├── 📄 sshd_config                  # SSH daemon config (port, ciphers, banners)
+│   ├── 📁 prometheus/                  # Prometheus config directory
+│   │   ├── 📄 prometheus.yml           # Scrape configs, rules
+│   │   └── 📁 rules/                   # Alerting & recording rules
+│   │       ├── 📄 node-rules.yml
+│   │       └── 📄 k8s-rules.yml
+│   └── 📁 grafana/                     # Grafana provisioning
+│       ├── 📁 dashboards/
+│       │   ├── 📄 node-overview.json
+│       │   └── 📄 k8s-pod-metrics.json
+│       └── 📁 datasources/
+│           └── 📄 prometheus-ds.yaml
+│
+├── 📁 logs/                            # Local log staging (before forwarding)
+│   ├── 📄 kubelet.log                  # Kubelet logs (journald → file export)
+│   ├── 📄 containerd.log               # Containerd logs
+│   ├── 📄 nginx-access.log             # Nginx access log
+│   ├── 📄 nginx-error.log              # Nginx error log
+│   ├── 📄 prometheus.log               # Prometheus startup log
+│   ├── 📄 sshd.log                     # SSH auth attempts
+│   └── 📁 archived/                    # Rotated & compressed logs
+│       ├── 📄 kubelet-2026-06-01.log.gz
+│       └── 📄 nginx-access-2026-06-01.log.gz
+│
+├── 📁 backups/                         # Backup artifacts
+│   ├── 📄 etcd-snapshot-20260610.db    # ETCD snapshot
+│   ├── 📄 systemd-units-backup.tar.gz  # All unit files backup
+│   └── 📄 configs-backup.tar.gz        # All configs backup
+│
+├── 📁 k8s-manifests/                   # Kubernetes manifests (this node's workloads)
+│   ├── 📁 production/
+│   │   ├── 📄 nginx-deployment.yaml    # Nginx ingress deployment
+│   │   ├── 📄 nginx-configmap.yaml     # Nginx config as ConfigMap
+│   │   ├── 📄 prometheus-deployment.yaml
+│   │   └── 📄 grafana-deployment.yaml
+│   └── 📁 network-policies/
+│       ├── 📄 deny-all-default.yaml
+│       ├── 📄 allow-kubelet-api.yaml
+│       └── 📄 allow-monitoring.yaml
 │
 ├── 📁 docker/
-│   ├── 📄 Dockerfile                    # Production image
-│   ├── 📄 Dockerfile.dev                # Dev image (hot reload)
-│   ├── 📄 docker-compose.yml            # Local dev stack
+│   ├── 📄 Dockerfile.nginx             # Custom Nginx image
+│   ├── 📄 Dockerfile.prometheus        # Custom Prometheus image
+│   ├── 📄 docker-compose-sre.yml       # Local SRE stack for testing
 │   └── 📄 .dockerignore
 │
-├── 📄 Makefile
+├── 📄 Makefile                         # make {status|restart|logs|diag|backup}
 ├── 📄 .gitignore
-└── 📄 README.md
+└── 📄 README.md                        # Node runbook & onboarding guide
 
 
 ================================================================================
@@ -122,8 +195,10 @@ and service manager. It is used to introspect and control the state of the
 systemd system, manage system services (both at runtime and persistently),
 manage system states (poweroff, reboot, etc), and inspect the system state.
 
-For the anihpj/jobpost project, systemctl manages the Gunicorn WSGI server,
-Celery workers, Nginx reverse proxy, and periodic backup/cleanup timers.
+For the SRE platform, systemctl manages the K8s node stack:
+kubelet (node agent), containerd (runtime), kube-proxy (networking),
+nginx (reverse proxy), prometheus (monitoring), sshd (remote access),
+and periodic timers (etcd snapshots, cert checks, disk cleanup).
 
 SYNTAX:
   systemctl [OPTIONS...] COMMAND [UNIT...]
@@ -174,8 +249,8 @@ SYNTAX:
 
 Examples:
   systemctl start nginx
-  systemctl start gunicorn.service celery-worker.service
-  systemctl start jobpost.target
+  systemctl start kubelet.service containerd.service
+  systemctl start sre-production.target
 
 
 systemctl stop
@@ -190,8 +265,8 @@ SYNTAX:
   systemctl stop UNIT...
 
 Examples:
-  systemctl stop gunicorn
-  systemctl stop celery-worker celery-beat
+  systemctl stop kubelet
+  systemctl stop containerd kube-proxy
 
 
 systemctl restart
@@ -207,7 +282,7 @@ SYNTAX:
 
 Examples:
   systemctl restart nginx
-  systemctl restart gunicorn
+  systemctl restart kubelet
 
 
 systemctl reload
@@ -225,7 +300,7 @@ SYNTAX:
 
 Examples:
   systemctl reload nginx          # Graceful config reload
-  systemctl reload gunicorn       # HUP signal: reload workers
+  systemctl reload nginx          # Graceful config reload (no dropped connections)
 
 
 systemctl reload-or-restart
@@ -255,8 +330,8 @@ SYNTAX:
   systemctl status UNIT...
 
 Examples:
-  systemctl status gunicorn
-  systemctl status nginx celery-worker
+  systemctl status kubelet
+  systemctl status containerd kube-proxy
 
 
 systemctl enable / disable
@@ -271,7 +346,7 @@ SYNTAX:
 
 Examples:
   systemctl enable nginx
-  systemctl enable --now gunicorn celery-worker
+  systemctl enable --now kubelet containerd
   systemctl disable old-service
 
 
@@ -288,7 +363,7 @@ SYNTAX:
 Examples:
   systemctl list-units --type=service
   systemctl list-units --state=failed
-  systemctl list-units 'gunicorn*'
+  systemctl list-units 'kubelet*'
 
 
 systemctl daemon-reload
@@ -302,9 +377,9 @@ SYNTAX:
   systemctl daemon-reload
 
 Examples:
-  cp gunicorn.service /etc/systemd/system/
+  cp kubelet.service /etc/systemd/system/
   systemctl daemon-reload
-  systemctl start gunicorn
+  systemctl start kubelet
 
 
 systemctl show / cat / edit
@@ -318,9 +393,9 @@ SYNTAX:
   systemctl edit UNIT              # Create/edit drop-in override
 
 Examples:
-  systemctl show gunicorn | grep ExecStart
+  systemctl show kubelet | grep ExecStart
   systemctl cat nginx
-  systemctl edit gunicorn
+  systemctl edit kubelet
 
 
 systemctl mask / unmask
@@ -345,8 +420,8 @@ SYNTAX:
   systemctl kill -s SIGNAL UNIT...  # Specific signal (HUP, TERM, KILL, etc.)
 
 Examples:
-  systemctl kill -s HUP gunicorn     # Graceful reload
-  systemctl kill -s TERM celery-worker
+  systemctl kill -s HUP nginx       # Graceful config reload
+  systemctl kill -s TERM kubelet     # Force stop (drains before exit)
 
 
 ================================================================================
@@ -363,11 +438,12 @@ by systemd-journald. It provides timestamped, structured log entries from
 the kernel, services, and applications. Supports filtering by service,
 time range, priority, boot session, and more.
 
-For the anihpj/jobpost project, journalctl is used to:
-- Monitor Gunicorn and Celery service logs
-- Debug application startup failures
-- Track cron/timer job execution
-- Analyze kernel OOM events and security audit logs
+For the SRE platform, journalctl is used to:
+- Monitor kubelet and containerd service logs (node health, pod lifecycle)
+- Debug container runtime failures and image pull errors
+- Track timer job execution (etcd snapshots, cert checks, disk cleanup)
+- Analyze kernel OOM events (kubelet killed by memory pressure)
+- Investigate SSH brute-force attempts and firewall blocks
 
 SYNTAX:
   journalctl [OPTIONS...] [MATCHES...]
@@ -397,8 +473,8 @@ SYNTAX:
   journalctl _SYSTEMD_UNIT=UNIT  # Alternative filter syntax
 
 Examples:
-  journalctl -u gunicorn -f
-  journalctl -u gunicorn -u celery-worker -n 100
+  journalctl -u kubelet -f
+  journalctl -u kubelet -u containerd -n 100
   journalctl -u nginx --since today
 
 
@@ -414,7 +490,7 @@ SYNTAX:
   journalctl -S "2026-06-01" -U "2026-06-06"
 
 Examples:
-  journalctl -u gunicorn --since "1 hour ago"
+  journalctl -u kubelet --since "1 hour ago"
   journalctl --since today --until "23:59"
   journalctl -S "2026-06-06 08:00:00" -U "2026-06-06 12:00:00"
 
@@ -431,7 +507,7 @@ SYNTAX:
 Examples:
   journalctl -b -1               # Why did the last boot fail?
   journalctl --list-boots
-  journalctl -b -1 -u gunicorn   # Gunicorn logs from previous boot
+  journalctl -b -1 -u kubelet   # Kubelet logs from previous boot
 
 
 journalctl — Priority/Error Filtering
@@ -455,7 +531,7 @@ PRIORITY LEVELS:
 
 Examples:
   journalctl -p err              # Errors and worse
-  journalctl -u gunicorn -p warning
+  journalctl -u kubelet -p warning
   journalctl -b -p crit
 
 
@@ -492,7 +568,7 @@ FORMATS:
   export         Binary export for archiving
 
 Examples:
-  journalctl -u gunicorn -o json-pretty | head -50
+  journalctl -u kubelet -o json-pretty | head -50
   journalctl -o short-iso --since "1 hour ago"
   journalctl -u nginx -o cat
 
@@ -510,9 +586,9 @@ SYNTAX:
   journalctl --case-sensitive     # Case-sensitive grep
 
 Examples:
-  journalctl _COMM=gunicorn
+  journalctl _COMM=kubelet
   journalctl --grep="OOM killer"
-  journalctl -u gunicorn --grep="ERROR|CRITICAL"
+  journalctl -u kubelet --grep="ERROR|CRITICAL"
 
 
 journalctl — Disk Usage and Maintenance
@@ -648,171 +724,174 @@ Restart=always          Always restart (even on clean exit)
 Use Restart=on-failure with RestartSec=5s for production services.
 
 
-Example 1: Simple Gunicorn Service
+Example 1: Kubelet Service (K8s Node Agent)
 ------------------------------------
-# /etc/systemd/system/gunicorn.service
-# Django WSGI server for the anihpj jobpost application
+# /etc/systemd/system/kubelet.service
+# Kubernetes node agent — registers node, runs pods
 
 [Unit]
-Description=Gunicorn WSGI server for anihpj jobpost
-Documentation=https://docs.gunicorn.org/
+Description=Kubernetes Kubelet
+Documentation=https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/
 After=network.target network-online.target
-Requires=gunicorn.socket
+Wants=network-online.target
+Requires=containerd.service
 
 [Service]
 Type=notify
-User=anihpj
-Group=anihpj
-WorkingDirectory=/lpj
-EnvironmentFile=/lpj/ops/systemd/gunicorn.env
-ExecStart=/lpj/env/bin/gunicorn anihpj.wsgi:application \
-    --workers 4 \
-    --bind unix:/run/gunicorn.sock \
-    --access-logfile /lpj/ops/logs/gunicorn-access.log \
-    --error-logfile /lpj/ops/logs/gunicorn-error.log
-ExecReload=/bin/kill -s HUP $MAINPID
-Restart=on-failure
-RestartSec=5s
-TimeoutStopSec=30s
-KillMode=mixed
+ExecStart=/usr/bin/kubelet \
+    --config=/sre-platform/k8s-node/kubelet-config.yaml \
+    --container-runtime-endpoint=unix:///run/containerd/containerd.sock \
+    --node-ip=192.168.10.10 \
+    --hostname-override=sre-node-01 \
+    --register-node=true \
+    --max-pods=110 \
+    --eviction-hard=memory.available<500Mi,nodefs.available<10%
+Restart=always
+RestartSec=10s
+TimeoutStopSec=60s
+KillMode=process
+OOMScoreAdjust=-999
 
 # Security hardening
-PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
-ReadWritePaths=/lpj/ops/logs /run/gunicorn.sock
+ReadWritePaths=/var/lib/kubelet /var/log/pods /var/log/containers
 
 # Resource limits
 LimitNOFILE=65536
 MemoryMax=2G
+CPUQuota=200%
 
 [Install]
 WantedBy=multi-user.target
 
 
-Example 2: Gunicorn Socket Activation
+Example 2: Nginx Socket Activation
 ---------------------------------------
-# /etc/systemd/system/gunicorn.socket
-# Socket-activated Gunicorn — starts on first connection
+# /etc/systemd/system/nginx.socket
+# Socket-activated Nginx — starts on first HTTP connection
 
 [Unit]
-Description=Gunicorn socket for anihpj jobpost
+Description=Nginx socket for SRE platform
 
 [Socket]
-ListenStream=/run/gunicorn.sock
-SocketUser=anihpj
-SocketGroup=www-data
-SocketMode=0660
-Backlog=2048
+ListenStream=80
+ListenStream=443
+Backlog=4096
+NoDelay=true
+ReusePort=true
 
 [Install]
 WantedBy=sockets.target
 
 
-Example 3: Celery Worker Service
+Example 3: Containerd Service (Container Runtime)
 ----------------------------------
-# /etc/systemd/system/celery-worker.service
-# Celery background task worker for anihpj jobpost
+# /etc/systemd/system/containerd.service
+# Container runtime for Kubernetes — runs all pods
 
 [Unit]
-Description=Celery Worker for anihpj jobpost
-Documentation=https://docs.celeryproject.org/
-After=network.target network-online.target
-Requires=gunicorn.service
-PartOf=jobpost.target
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target
+PartOf=sre-production.target
 
 [Service]
-Type=forking
-User=anihpj
-Group=anihpj
-WorkingDirectory=/lpj
-EnvironmentFile=/lpj/ops/systemd/celery.env
-PIDFile=/run/celery-worker.pid
-ExecStart=/lpj/env/bin/celery -A anihpj worker \
-    --loglevel=INFO \
-    --concurrency=4 \
-    --pidfile=/run/celery-worker.pid \
-    --logfile=/lpj/ops/logs/celery-worker.log
+Type=notify
+ExecStartPre=/sbin/modprobe overlay
+ExecStart=/usr/bin/containerd \
+    --config /sre-platform/k8s-node/containerd-config.toml
 ExecReload=/bin/kill -s HUP $MAINPID
-ExecStop=/bin/kill -s TERM $MAINPID
-Restart=on-failure
-RestartSec=10s
-TimeoutStopSec=60s
-KillMode=mixed
-
-PrivateTmp=yes
-NoNewPrivileges=yes
-LimitNOFILE=65536
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+OOMScoreAdjust=-999
 
 [Install]
-WantedBy=jobpost.target
+WantedBy=multi-user.target
 
 
-Example 4: Celery Beat Service
+Example 4: Prometheus Service (Metrics Collection)
 --------------------------------
-# /etc/systemd/system/celery-beat.service
-# Celery periodic task scheduler for anihpj jobpost
+# /etc/systemd/system/prometheus.service
+# Metrics collection & TSDB for SRE platform observability
 
 [Unit]
-Description=Celery Beat Scheduler for anihpj jobpost
+Description=Prometheus monitoring
+Documentation=https://prometheus.io/docs/
 After=network.target
-PartOf=jobpost.target
+PartOf=sre-production.target
 
 [Service]
 Type=simple
-User=anihpj
-Group=anihpj
-WorkingDirectory=/lpj
-EnvironmentFile=/lpj/ops/systemd/celery.env
-ExecStart=/lpj/env/bin/celery -A anihpj beat \
-    --loglevel=INFO \
-    --pidfile=/run/celery-beat.pid
-Restart=on-failure
+User=prometheus
+Group=prometheus
+WorkingDirectory=/var/lib/prometheus
+ExecStart=/usr/bin/prometheus \
+    --config.file=/sre-platform/configs/prometheus/prometheus.yml \
+    --storage.tsdb.path=/var/lib/prometheus \
+    --storage.tsdb.retention.time=30d \
+    --web.listen-address=:9090 \
+    --web.enable-lifecycle
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
 RestartSec=10s
+TimeoutStopSec=30s
+
+# Security
 NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/prometheus
+LimitNOFILE=65536
 
 [Install]
-WantedBy=jobpost.target
+WantedBy=multi-user.target
 
 
-Example 5: Target Unit for All Services
+Example 5: Target Unit for All SRE Services
 -----------------------------------------
-# /etc/systemd/system/jobpost.target
-# Groups all anihpj jobpost services together
+# /etc/systemd/system/sre-production.target
+# Groups all SRE platform services together
 
 [Unit]
-Description=anihpj jobpost application services
-Wants=gunicorn.service celery-worker.service celery-beat.service nginx.service
+Description=SRE Platform production services
+Wants=kubelet.service containerd.service kube-proxy.service nginx.service prometheus.service sshd.service
 After=network.target
 
 [Install]
 WantedBy=multi-user.target
 
 
-Example 6: Systemd Timer + Service (Backup)
+Example 6: Systemd Timer + Service (K8s ETCD Snapshot)
 ---------------------------------------------
-# /etc/systemd/system/backup.service
-# Database backup service (one-shot)
+# /etc/systemd/system/k8s-snapshot.service
+# Kubernetes ETCD snapshot backup (one-shot)
 
 [Unit]
-Description=anihpj jobpost database backup
+Description=SRE platform ETCD snapshot backup
 After=network.target
 
 [Service]
 Type=oneshot
-User=anihpj
-WorkingDirectory=/lpj
-ExecStart=/lpj/ops/scripts/backup-db.sh
+User=sre
+WorkingDirectory=/sre-platform
+ExecStart=/sre-platform/scripts/etcd-snapshot.sh
 StandardOutput=journal
 StandardError=journal
 
-# /etc/systemd/system/backup.timer
-# Runs backup.service daily at 02:00
+# /etc/systemd/system/k8s-snapshot.timer
+# Runs k8s-snapshot.service daily at 02:00
 
 [Unit]
-Description=Daily anihpj database backup
-Requires=backup.service
+Description=Daily ETCD snapshot for SRE platform
+Requires=k8s-snapshot.service
 
 [Timer]
 OnCalendar=daily
@@ -826,19 +905,20 @@ WantedBy=timers.target
 
 Example 7: Writing Unit Files with Drop-in Overrides
 ------------------------------------------------------
-# Full base unit: /etc/systemd/system/gunicorn.service
-# Drop-in override: /etc/systemd/system/gunicorn.service.d/override.conf
+# Full base unit: /etc/systemd/system/kubelet.service
+# Drop-in override: /etc/systemd/system/kubelet.service.d/10-node-labels.conf
 
 [Service]
-# Increase workers for production and adjust memory limit
+# Add node labels and increase max pods for production
 ExecStart=
-ExecStart=/lpj/env/bin/gunicorn anihpj.wsgi:application \
-    --workers 8 \
-    --bind unix:/run/gunicorn.sock \
-    --access-logfile /lpj/ops/logs/gunicorn-access.log \
-    --error-logfile /lpj/ops/logs/gunicorn-error.log
-Environment=DJANGO_SETTINGS_MODULE=anihpj.settings.production
+ExecStart=/usr/bin/kubelet \
+    --config=/sre-platform/k8s-node/kubelet-config.yaml \
+    --container-runtime-endpoint=unix:///run/containerd/containerd.sock \
+    --node-labels=env=production,team=sre,workload=general \
+    --max-pods=200 \
+    --register-with-taints=production=true:NoSchedule
 MemoryMax=4G
+CPUQuota=300%
 
 # Note: ExecStart= (empty) clears the original ExecStart first.
 # Then the new ExecStart= replaces it with updated values.
@@ -890,8 +970,8 @@ Subcommands:
 Examples:
   systemd-analyze blame | head -20
   systemd-analyze critical-chain
-  systemd-analyze verify /etc/systemd/system/gunicorn.service
-  systemd-analyze security gunicorn.service
+  systemd-analyze verify /etc/systemd/system/kubelet.service
+  systemd-analyze security kubelet.service
 
 
 ================================================================================
@@ -916,7 +996,7 @@ SYNTAX:
 Examples:
   loginctl list-users
   loginctl session-status 3
-  loginctl enable-linger anihpj
+  loginctl enable-linger sre
 
 
 hostnamectl
@@ -931,7 +1011,7 @@ SYNTAX:
 
 Examples:
   hostnamectl
-  hostnamectl set-hostname prod-api-01.anihpj.io
+  hostnamectl set-hostname sre-node-01.sre-platform.io
 
 
 timedatectl
@@ -1065,8 +1145,8 @@ SYNTAX:
   systemctl try-restart UNIT...
 
 Examples:
-  systemctl try-restart gunicorn    # Only restarts if active
-  systemctl try-restart celery-*    # Pattern matching
+  systemctl try-restart kubelet    # Only restarts if active
+  systemctl try-restart containerd* # Pattern matching
 
 
 systemctl isolate
@@ -1102,8 +1182,8 @@ SYNTAX:
   systemctl set-property UNIT PROPERTY=VALUE
 
 Examples:
-  systemctl set-property gunicorn MemoryMax=4G
-  systemctl set-property celery-worker CPUQuota=50%
+  systemctl set-property kubelet MemoryMax=4G
+  systemctl set-property containerd CPUQuota=50%
 
 
 systemctl list-dependencies
@@ -1116,7 +1196,7 @@ SYNTAX:
   systemctl list-dependencies --all UNIT       # Recursive, expanded
 
 Examples:
-  systemctl list-dependencies gunicorn
+  systemctl list-dependencies kubelet
   systemctl list-dependencies --reverse multi-user.target
 
 
@@ -1130,7 +1210,7 @@ SYNTAX:
 
 Examples:
   systemctl list-timers
-  systemctl list-timers 'backup*'
+  systemctl list-timers 'k8s-snapshot*'
 
 
 systemctl list-sockets
@@ -1143,7 +1223,7 @@ SYNTAX:
 
 Examples:
   systemctl list-sockets
-  systemctl list-sockets 'gunicorn*'
+  systemctl list-sockets 'kubelet*'
 
 
 systemctl get-default / set-default
@@ -1185,7 +1265,7 @@ SYNTAX:
   systemctl reset-failed              # Reset ALL failed units
 
 Examples:
-  systemctl reset-failed gunicorn
+  systemctl reset-failed kubelet
   systemctl reset-failed
 
 
@@ -1219,25 +1299,25 @@ AccuracySec=       Randomize start time to spread load (default 1min)
 RandomizedDelaySec= Max random delay (for spreading load across machines)
 
 
-Example: Jobpost Database Backup Timer
+Example: SRE Platform ETCD Snapshot Timer
 ----------------------------------------
-# /etc/systemd/system/backup-jobpost.service
+# /etc/systemd/system/k8s-snapshot.service
 [Unit]
-Description=PostgreSQL backup for anihpj jobpost
+Description=ETCD snapshot backup for SRE platform
 After=network.target
 
 [Service]
 Type=oneshot
-User=anihpj
-WorkingDirectory=/lpj
-ExecStart=/lpj/ops/scripts/backup-db.sh
+User=sre
+WorkingDirectory=/sre-platform
+ExecStart=/sre-platform/scripts/etcd-snapshot.sh
 StandardOutput=journal
 StandardError=journal
 
-# /etc/systemd/system/backup-jobpost.timer
+# /etc/systemd/system/k8s-snapshot.timer
 [Unit]
-Description=Daily jobpost database backup at 2 AM
-Requires=backup-jobpost.service
+Description=Daily ETCD snapshot for SRE platform at 2 AM
+Requires=k8s-snapshot.service
 
 [Timer]
 OnCalendar=*-*-* 02:00:00
@@ -1249,17 +1329,17 @@ AccuracySec=1min
 WantedBy=timers.target
 
 Management:
-  systemctl enable backup-jobpost.timer
-  systemctl start backup-jobpost.timer
-  systemctl list-timers backup-jobpost.timer
-  journalctl -u backup-jobpost.service
+  systemctl enable k8s-snapshot.timer
+  systemctl start k8s-snapshot.timer
+  systemctl list-timers k8s-snapshot.timer
+  journalctl -u k8s-snapshot.service
 
 
 Example: Hourly Cleanup Timer
 -------------------------------
-# /etc/systemd/system/cleanup-sessions.timer
+# /etc/systemd/system/disk-cleanup.timer
 [Unit]
-Description=Hourly session cleanup for anihpj
+Description=Hourly disk cleanup for SRE platform
 
 [Timer]
 OnCalendar=hourly
@@ -1317,9 +1397,9 @@ Socket Options:
 
 Example: Nginx Reverse Proxy with Socket Activation
 -----------------------------------------------------
-# /etc/systemd/system/nginx-proxy.socket
+# /etc/systemd/system/nginx.socket
 [Unit]
-Description=Nginx proxy socket for anihpj
+Description=Nginx proxy socket for SRE platform
 
 [Socket]
 ListenStream=80
@@ -1331,14 +1411,14 @@ ReusePort=true
 [Install]
 WantedBy=sockets.target
 
-# /etc/systemd/system/nginx-proxy.service
+# /etc/systemd/system/nginx.service
 [Unit]
-Description=Nginx reverse proxy for anihpj
+Description=Nginx reverse proxy for SRE platform
 After=network.target
 
 [Service]
 Type=notify
-ExecStart=/usr/sbin/nginx -c /lpj/ops/nginx/nginx.conf
+ExecStart=/usr/sbin/nginx -c /sre-platform/configs/nginx.conf
 ExecReload=/usr/sbin/nginx -s reload
 Restart=on-failure
 
@@ -1373,7 +1453,7 @@ Example: Watch for Deployment Artifacts
 Description=Watch for new deployment artifacts
 
 [Path]
-PathChanged=/lpj/ops/deployments/
+PathChanged=/sre-platform/scripts/
 MakeDirectory=yes
 
 [Install]
@@ -1385,7 +1465,7 @@ Description=Process deployment artifacts
 
 [Service]
 Type=oneshot
-ExecStart=/lpj/ops/scripts/process-deploy.sh
+ExecStart=/sre-platform/scripts/process-deploy.sh
 
 
 ================================================================================
@@ -1415,17 +1495,17 @@ MANAGEMENT:
   loginctl show-user USER           # Check linger status
   export XDG_RUNTIME_DIR=/run/user/$(id -u)  # Must be set
 
-Example: User-Level Django Development Server
+Example: User-Level Development Server
 -----------------------------------------------
-# ~/.config/systemd/user/django-dev.service
+# ~/.config/systemd/user/dev-server.service
 [Unit]
-Description=Django development server for anihpj jobpost
+Description=Development server for SRE platform
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/lpj
-ExecStart=/lpj/env/bin/python manage.py runserver 0.0.0.0:8000
+WorkingDirectory=/sre-platform
+ExecStart=/usr/bin/python3 -m http.server 8000
 Restart=on-failure
 RestartSec=3s
 
@@ -1483,9 +1563,9 @@ SYNTAX:
   coredumpctl debug PID            # Open in registered debugger
 
 Examples:
-  coredumpctl list gunicorn
-  coredumpctl info $(coredumpctl list gunicorn --no-pager -1 | tail -1 | awk '{print $5}')
-  coredumpctl gdb $(coredumpctl list celery-worker -1 | tail -1 | awk '{print $5}')
+  coredumpctl list kubelet
+  coredumpctl info $(coredumpctl list kubelet --no-pager -1 | tail -1 | awk '{print $5}')
+  coredumpctl gdb $(coredumpctl list containerd -1 | tail -1 | awk '{print $5}')
 
 
 ================================================================================
@@ -1665,7 +1745,7 @@ journalctl _SYSTEMD_UNIT=*.service --since "10 min ago" -o cat | grep "Started" 
 systemctl list-sockets --no-pager | grep -E ':80|:443|:22'
 
 # Bulk restart all services matching a pattern
-systemctl restart $(systemctl list-units --type=service --no-legend 'celery*' | awk '{print $1}')
+systemctl restart $(systemctl list-units --type=service --no-legend 'kubelet*' | awk '{print $1}')
 
 # Check journal disk usage and clean if needed
 journalctl --disk-usage && journalctl --vacuum-size=500M
