@@ -1123,17 +1123,128 @@ taylor@prod-node-01:~$ kubectl cordon prod-node-01
 node/prod-node-01 cordoned
 taylor@prod-node-01:~$ kubectl drain prod-node-01 --ignore-daemonsets --delete-emptydir-data
 node/prod-node-01 drained</code></pre>
-                <div class="example"><h5>Example 1: Stop a Single Service</h5><p><strong>Scenario:</strong> Taylor stops nginx before updating its configuration.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl stop nginx && systemctl is-active nginx; echo "Exit: $?"</code></pre><p><strong>Output:</strong></p><div class="example-output">inactive
-Exit: 0</div><p class="output-note"><strong>📝 What happened:</strong> systemd sent SIGTERM to nginx, which closed its listening sockets and terminated. <code>is-active</code> now returns <code>inactive</code>. Exit code 0 confirms success. Any active connections were allowed to complete within TimeoutStopSec before the process exited.</p></div>
-                <div class="example"><h5>Example 2: Stop K8s Node Agent (Drain First)</h5><p><strong>Scenario:</strong> Taylor stops kubelet after draining pods for kernel upgrade.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl stop kubelet && systemctl status kubelet --no-pager | grep -E "Active|Main PID"</code></pre><p><strong>Output:</strong></p><div class="example-output">Active: inactive (dead) since Wed 2026-06-10 09:30:00 UTC; 3s ago
-Main PID: 2841 (code=exited, status=0/SUCCESS)</div><p class="output-note"><strong>📝 What happened:</strong> kubelet shut down cleanly (status=0). The node is now <code>NotReady</code> from the control plane perspective. Always <code>kubectl drain</code> BEFORE stopping kubelet to avoid workload disruption.</p></div>
-                <div class="example"><h5>Example 3: Stop Multiple Services for Maintenance</h5><p><strong>Scenario:</strong> Taylor stops the entire K8s stack before a containerd upgrade.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl stop kubelet kube-proxy && sleep 3 && systemctl stop containerd && systemctl is-active kubelet containerd kube-proxy</code></pre><p><strong>Output:</strong></p><div class="example-output">inactive
+
+                <pre><code class="language-yaml"># Key locations where systemctl stop operates daily:
+#  /sre-platform/systemd-units/core/       # K8s core services (stop last)
+#  /sre-platform/systemd-units/infra/      # Infrastructure services
+#  /etc/systemd/system/                    # Active unit file locations
+#  /var/run/                               # Runtime sockets (stop socket units)</code></pre>
+
+                <h4>📄 Context — Service Deactivation Flow:</h4>
+                <pre><code class="language-yaml"># Taylor uses systemctl stop to safely decommission services
+# Stop order matters: apps → platform → runtime → kernel
+# Always drain K8s nodes BEFORE stopping kubelet in production</code></pre>
+
+                <div class="example">
+                    <h5>Example 1: Stop a Single Service</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Pre-Config Change:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 infra/
+│       └── 📄 nginx.service          # Reverse proxy unit file
+└── 📁 configs/
+    └── 📄 nginx.conf                 # Config file to be updated</code></pre>
+                    <pre><code class="language-yaml"># Taylor stops nginx before updating its configuration</code></pre> Taylor needs to update nginx config. Stopping the service first ensures no connections are being processed with the old configuration during the update.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl stop nginx && systemctl is-active nginx; echo "Exit: $?"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">inactive
+Exit: 0</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> systemd sent SIGTERM to nginx, which closed its listening sockets and terminated. <code>is-active</code> now returns <code>inactive</code>. Exit code 0 confirms success. Any active connections were allowed to complete within TimeoutStopSec before the process exited.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Stop K8s Node Agent (Drain First)</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Planned Maintenance:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 core/
+│       ├── 📄 kubelet.service        # K8s node agent
+│       └── 📄 containerd.service     # Container runtime
+└── 📁 k8s-node/
+    └── 📄 kubelet-config.yaml        # Kubelet configuration</code></pre>
+                    <pre><code class="language-yaml"># Taylor stops kubelet after draining pods for kernel upgrade
+# kubectl drain evicts all workloads to other nodes first</code></pre> Taylor is preparing for a kernel security update. Before stopping kubelet, she drains all pods to other healthy nodes to avoid workload disruption.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl stop kubelet && systemctl status kubelet --no-pager | grep -E "Active|Main PID"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Active: inactive (dead) since Wed 2026-06-10 09:30:00 UTC; 3s ago
+Main PID: 2841 (code=exited, status=0/SUCCESS)</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> kubelet shut down cleanly (status=0). The node is now <code>NotReady</code> from the control plane perspective. Always <code>kubectl drain</code> BEFORE stopping kubelet to avoid workload disruption.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Stop Multiple Services for Maintenance</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Runtime Upgrade:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    └── 📁 core/
+        ├── 📄 kubelet.service        # Depends on containerd
+        ├── 📄 kube-proxy.service     # Depends on kubelet
+        └── 📄 containerd.service     # Container runtime (upgrade target)</code></pre>
+                    <pre><code class="language-yaml"># Taylor stops the entire K8s stack before a containerd upgrade
+# Reverse-dependency order: kube-proxy → kubelet → containerd</code></pre> Taylor needs to upgrade containerd. She stops dependent services first to prevent systemd from auto-restarting them when containerd goes down.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl stop kubelet kube-proxy && sleep 3 && systemctl stop containerd && systemctl is-active kubelet containerd kube-proxy</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">inactive
 inactive
-inactive</div><p class="output-note"><strong>📝 What happened:</strong> kubelet and kube-proxy stopped first (they depend on containerd). After a 3-second settle, containerd stopped. All three now show inactive. Stopping in reverse-dependency order prevents systemd from auto-restarting dependent services.</p></div>
-                <div class="example"><h5>Example 4: Stop a Service with Timeout</h5><p><strong>Scenario:</strong> nginx is slow to stop due to lingering connections. Taylor watches the timeout.</p><p><strong>Command:</strong></p><pre><code class="language-bash">time systemctl stop nginx && echo "Stop time recorded"</code></pre><p><strong>Output:</strong></p><div class="example-output">real    0m5.234s
-Stop time recorded</div><p class="output-note"><strong>📝 What happened:</strong> nginx took 5.2 seconds to stop — within the default 90s TimeoutStopSec. Systemd waited for all worker connections to drain before exiting. If it exceeded 90s, SIGKILL would have been sent. This is why production services should have reasonable TimeoutStopSec values.</p></div>
-                <div class="example"><h5>Example 5: Stop a Timer-Activated Service</h5><p><strong>Scenario:</strong> Taylor stops the logrotate timer while debugging a disk space issue.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl stop logrotate.timer && systemctl is-active logrotate.timer logrotate.service</code></pre><p><strong>Output:</strong></p><div class="example-output">inactive
-inactive</div><p class="output-note"><strong>📝 What happened:</strong> Stopping the timer prevents the next scheduled run. The associated service also stopped if it was mid-execution. This is useful for pausing maintenance jobs during investigations. Use <code>systemctl start logrotate.timer</code> to resume scheduling.</p></div>
+inactive</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> kubelet and kube-proxy stopped first (they depend on containerd). After a 3-second settle, containerd stopped. All three now show inactive. Stopping in reverse-dependency order prevents systemd from auto-restarting dependent services.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Stop a Service with Timeout</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Connection Drain Monitoring:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 infra/
+│       └── 📄 nginx.service          # TimeoutStopSec=90s
+└── 📁 logs/
+    └── 📄 nginx-access.log           # Active connection log</code></pre>
+                    <pre><code class="language-yaml"># nginx is slow to stop due to lingering connections
+# Taylor measures the actual stop time against TimeoutStopSec</code></pre> Taylor notices nginx takes unusually long to stop. She times the stop to verify it stays within the configured 90-second timeout.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">time systemctl stop nginx && echo "Stop time recorded"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">real    0m5.234s
+Stop time recorded</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> nginx took 5.2 seconds to stop — within the default 90s TimeoutStopSec. Systemd waited for all worker connections to drain before exiting. If it exceeded 90s, SIGKILL would have been sent. This is why production services should have reasonable TimeoutStopSec values.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Stop a Timer-Activated Service</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Debugging Disk Space:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    └── 📁 timers/
+        ├── 📄 logrotate.timer        # Hourly log rotation
+        └── 📄 logrotate.service      # Oneshot rotation script</code></pre>
+                    <pre><code class="language-yaml"># Taylor pauses the logrotate timer while debugging a disk issue
+# Stopping the timer prevents scheduled runs during investigation</code></pre> The disk is filling up and Taylor suspects logrotate might be misconfigured. She stops the timer to pause automatic rotation while she investigates.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl stop logrotate.timer && systemctl is-active logrotate.timer logrotate.service</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">inactive
+inactive</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> Stopping the timer prevents the next scheduled run. The associated service also stopped if it was mid-execution. This is useful for pausing maintenance jobs during investigations. Use <code>systemctl start logrotate.timer</code> to resume scheduling.</p>
+                </div>
+
                 <div class="success"><strong>💡 Pro Tips:</strong> Always drain K8s nodes before stopping kubelet. Stop services in reverse-dependency order (apps → runtime → network). <code>systemctl stop</code> waits for graceful shutdown — use <code>--no-block</code> for parallel stops. Check <code>journalctl -u UNIT -n 20</code> if a stop hangs. A unit stuck in <code>deactivating</code> state means the process is ignoring SIGTERM — use <code>systemctl kill -s KILL UNIT</code> as last resort.</div>
             </article>
             <article class="api-block" id="systemctl-restart">
@@ -1161,17 +1272,125 @@ jordan@prod-node-01:~$ sudo vi /sre-platform/k8s-node/kubelet-config.yaml
 jordan@prod-node-01:~$ systemctl restart kubelet && systemctl status kubelet --no-pager | grep -E "Active|PID"
      Active: active (running) since Wed 2026-06-10 09:45:00 UTC; 2s ago
    Main PID: 15234 (kubelet)</code></pre>
-                <div class="example"><h5>Example 1: Restart After Config Change</h5><p><strong>Scenario:</strong> Jordan restarts kubelet after updating node configuration.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl restart kubelet && systemctl is-active kubelet && journalctl -u kubelet --no-pager -n 3</code></pre><p><strong>Output:</strong></p><div class="example-output">active
+
+                <pre><code class="language-yaml"># Key locations where systemctl restart operates daily:
+#  /sre-platform/systemd-units/core/       # K8s core services
+#  /sre-platform/systemd-units/infra/      # Infrastructure services
+#  /sre-platform/k8s-node/                 # Kubelet config files
+#  /etc/systemd/system/                    # Active unit files</code></pre>
+
+                <h4>📄 Context — Service Cycling Flow:</h4>
+                <pre><code class="language-yaml"># Jordan uses systemctl restart to apply config changes and recover hung services
+# Restart = stop + start — causes brief downtime but guarantees fresh state
+# Use reload for zero-downtime when the service supports it</code></pre>
+
+                <div class="example">
+                    <h5>Example 1: Restart After Config Change</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Config Update:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 core/
+│       └── 📄 kubelet.service        # Restart target
+└── 📁 k8s-node/
+    └── 📄 kubelet-config.yaml        # Changed: maxPods 110→200</code></pre>
+                    <pre><code class="language-yaml"># Jordan restarts kubelet after updating node configuration
+# The new process reads the updated kubelet-config.yaml</code></pre> Jordan updated maxPods from 110 to 200 in the kubelet config. The running kubelet still has the old value — a restart is needed to pick up the change.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl restart kubelet && systemctl is-active kubelet && journalctl -u kubelet --no-pager -n 3</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">active
 Jun 10 09:45:00 prod-node-01 systemd[1]: Stopping Kubernetes Kubelet...
 Jun 10 09:45:00 prod-node-01 systemd[1]: kubelet.service: Deactivated successfully.
-Jun 10 09:45:01 prod-node-01 systemd[1]: Started Kubernetes Kubelet.</div><p class="output-note"><strong>📝 What happened:</strong> systemd stopped kubelet, waited for it to exit, then started a new instance with PID 15234. The new kubelet reads the updated config. Total downtime: ~1 second. The control plane sees the node go NotReady briefly, then Ready again.</p></div>
-                <div class="example"><h5>Example 2: Restart a Hung Service</h5><p><strong>Scenario:</strong> containerd is unresponsive — Jordan force-restarts it.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl restart containerd && systemctl is-active containerd</code></pre><p><strong>Output:</strong></p><div class="example-output">active</div><p class="output-note"><strong>📝 What happened:</strong> If containerd was hung, systemd sent SIGTERM, waited TimeoutStopSec (30s), then SIGKILL. A fresh instance started. All pods on this node were briefly disrupted but recovered once containerd was back.</p></div>
-                <div class="example"><h5>Example 3: Restart Multiple Services</h5><p><strong>Scenario:</strong> After updating both nginx and prometheus configs, Jordan restarts them together.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl restart nginx prometheus && systemctl is-active nginx prometheus</code></pre><p><strong>Output:</strong></p><div class="example-output">active
-active</div><p class="output-note"><strong>📝 What happened:</strong> Both services stopped and restarted. nginx had ~1s downtime, prometheus had ~2s. If these were production services, Jordan would have used <code>reload</code> for nginx (zero-downtime) and only restarted prometheus. Restarting multiple services simultaneously is faster than one-by-one.</p></div>
-                <div class="example"><h5>Example 4: Restart After Binary Update</h5><p><strong>Scenario:</strong> Taylor updated the kubelet binary via package manager and needs to restart.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo apt upgrade kubelet && systemctl restart kubelet && systemctl status kubelet --no-pager | grep -E "Active|PID|Memory"</code></pre><p><strong>Output:</strong></p><div class="example-output">Active: active (running) since Wed 2026-06-10 14:00:00 UTC; 3s ago
+Jun 10 09:45:01 prod-node-01 systemd[1]: Started Kubernetes Kubelet.</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> systemd stopped kubelet, waited for it to exit, then started a new instance with PID 15234. The new kubelet reads the updated config. Total downtime: ~1 second. The control plane sees the node go NotReady briefly, then Ready again.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Restart a Hung Service</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Incident Recovery:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    └── 📁 core/
+        └── 📄 containerd.service     # Container runtime (hung)</code></pre>
+                    <pre><code class="language-yaml"># containerd is unresponsive — Jordan force-restarts it
+# The restart sends SIGTERM first, then SIGKILL after TimeoutStopSec</code></pre> Jordan gets alerts that pods are stuck in ContainerCreating. containerd is unresponsive to crictl commands. A restart is needed.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl restart containerd && systemctl is-active containerd</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">active</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> If containerd was hung, systemd sent SIGTERM, waited TimeoutStopSec (30s), then SIGKILL. A fresh instance started. All pods on this node were briefly disrupted but recovered once containerd was back.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Restart Multiple Services</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Bulk Config Deployment:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    ├── 📁 infra/
+    │   └── 📄 nginx.service          # Config updated
+    └── 📁 observability/
+        └── 📄 prometheus.service     # Rules updated</code></pre>
+                    <pre><code class="language-yaml"># After updating both nginx and prometheus configs, Jordan restarts them together
+# Parallel restart is faster than sequential for independent services</code></pre> Both nginx and prometheus had config changes deployed. Jordan restarts them simultaneously since they don't depend on each other.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl restart nginx prometheus && systemctl is-active nginx prometheus</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">active
+active</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> Both services stopped and restarted. nginx had ~1s downtime, prometheus had ~2s. If these were production services, Jordan would have used <code>reload</code> for nginx (zero-downtime) and only restarted prometheus. Restarting multiple services simultaneously is faster than one-by-one.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Restart After Binary Update</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Package Upgrade:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 core/
+│       └── 📄 kubelet.service        # Points to /usr/bin/kubelet
+└── 📁 k8s-node/
+    └── 📄 kubelet-config.yaml        # Kubelet configuration</code></pre>
+                    <pre><code class="language-yaml"># Taylor updated the kubelet binary via apt — old process still running
+# Restart replaces the running binary with the newly installed version</code></pre> The package manager installed kubelet v1.32, but the running process is still v1.31. Taylor restarts to activate the new binary.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo apt upgrade kubelet && systemctl restart kubelet && systemctl status kubelet --no-pager | grep -E "Active|PID|Memory"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Active: active (running) since Wed 2026-06-10 14:00:00 UTC; 3s ago
    Main PID: 28901 (kubelet)
-     Memory: 45.2M</div><p class="output-note"><strong>📝 What happened:</strong> The package manager updated the binary on disk, but the old kubelet was still running. <code>restart</code> stopped the old process and launched the new binary. The new PID confirms a fresh instance. Memory usage dropped from 128M to 45M — fresh start, no accumulated state.</p></div>
-                <div class="example"><h5>Example 5: Conditional Restart (Only If Active)</h5><p><strong>Scenario:</strong> Jordan wants to restart sshd only if it's already running (don't start if stopped).</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl is-active --quiet sshd && systemctl restart sshd && echo "Restarted" || echo "Not running — skipped"</code></pre><p><strong>Output:</strong></p><div class="example-output">Restarted</div><p class="output-note"><strong>📝 What happened:</strong> <code>is-active --quiet</code> returns exit code 0 if active, so the <code>&&</code> chain proceeds to restart. If sshd were inactive, the <code>||</code> branch would execute instead. This pattern prevents accidentally starting a service that was intentionally stopped. Use <code>try-restart</code> for the built-in version of this.</p></div>
+     Memory: 45.2M</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> The package manager updated the binary on disk, but the old kubelet was still running. <code>restart</code> stopped the old process and launched the new binary. The new PID confirms a fresh instance. Memory usage dropped from 128M to 45M — fresh start, no accumulated state.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Conditional Restart (Only If Active)</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Safe Automation:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    └── 📁 infra/
+        └── 📄 sshd.service           # SSH daemon</code></pre>
+                    <pre><code class="language-yaml"># Jordan restarts sshd only if it's already running
+# If sshd was intentionally stopped, don't start it accidentally</code></pre> Jordan's automation script needs to restart sshd but must not start it if it was intentionally stopped for security reasons.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl is-active --quiet sshd && systemctl restart sshd && echo "Restarted" || echo "Not running — skipped"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Restarted</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> <code>is-active --quiet</code> returns exit code 0 if active, so the <code>&&</code> chain proceeds to restart. If sshd were inactive, the <code>||</code> branch would execute instead. This pattern prevents accidentally starting a service that was intentionally stopped. Use <code>try-restart</code> for the built-in version of this.</p>
+                </div>
+
                 <div class="success"><strong>💡 Pro Tips:</strong> <code>restart</code> = stop + start — causes downtime. Use <code>reload</code> for zero-downtime config changes when supported. <code>restart</code> always starts the unit even if it was stopped. Check <code>journalctl -u UNIT -n 20</code> after restart to verify clean startup. For K8s services, always <code>cordon</code> + <code>drain</code> before restarting kubelet/containerd in production.</div>
             </article>
             <article class="api-block" id="systemctl-reload">
@@ -1200,20 +1419,138 @@ nginx: configuration file /etc/nginx/nginx.conf test is successful
 taylor@prod-node-01:~$ systemctl status nginx --no-pager | grep -E "Active|PID"
      Active: active (running) since Tue 2026-06-09 22:00:00 UTC; 12h ago
    Main PID: 1201 (nginx)</code></pre>
-                <div class="example"><h5>Example 1: Zero-Downtime Nginx Reload</h5><p><strong>Scenario:</strong> Taylor adds a new API backend to nginx without dropping any active connections.</p><p><strong>Command:</strong></p><pre><code class="language-bash">nginx -t && systemctl reload nginx && echo "Reload OK - PID unchanged: $(systemctl show -p MainPID --value nginx)"</code></pre><p><strong>Output:</strong></p><div class="example-output">nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+
+                <pre><code class="language-yaml"># Key locations where systemctl reload operates daily:
+#  /sre-platform/configs/nginx-conf.d/     # Nginx site configs
+#  /sre-platform/configs/prometheus/       # Prometheus rules
+#  /etc/ssh/sshd_config                    # SSH daemon config
+#  /etc/systemd/system/                    # Unit files with ExecReload=</code></pre>
+                <h4>📄 Context — Zero-Downtime Config Updates:</h4>
+                <pre><code class="language-yaml"># Taylor uses systemctl reload for config changes without service interruption
+# Reload sends SIGHUP (or ExecReload command) — PID stays the same
+# Always test config before reloading: nginx -t, sshd -t, etc.</code></pre>
+
+                <div class="example">
+                    <h5>Example 1: Zero-Downtime Nginx Reload</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Backend Pool Update:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 infra/
+│       └── 📄 nginx.service          # ExecReload=/bin/kill -s HUP $MAINPID
+└── 📁 configs/
+    └── 📁 nginx-conf.d/
+        └── 📄 sre-api.conf           # Upstream backend list</code></pre>
+                    <pre><code class="language-yaml"># Taylor adds a new API backend without dropping active connections
+# Zero-downtime config deployment for production traffic</code></pre> Taylor adds a new API server to the nginx upstream pool. Reloading lets her apply the change without dropping a single active client connection.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">nginx -t && systemctl reload nginx && echo "Reload OK - PID unchanged: $(systemctl show -p MainPID --value nginx)"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
 nginx: configuration file /etc/nginx/nginx.conf test is successful
-Reload OK - PID unchanged: 1201</div><p class="output-note"><strong>📝 What happened:</strong> nginx tested the config first (<code>nginx -t</code>), then systemd triggered ExecReload which sent SIGHUP to PID 1201. Nginx re-read its config, started new worker processes with the updated backend list, and gracefully retired old workers. The PID stayed the same — zero downtime, zero dropped connections.</p></div>
-                <div class="example"><h5>Example 2: Reload Prometheus Rules</h5><p><strong>Scenario:</strong> Alex adds new alerting rules and reloads prometheus without restarting it.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo vi /sre-platform/configs/prometheus/rules/node-rules.yml && systemctl reload prometheus && systemctl status prometheus --no-pager | grep -E "Active|PID"</code></pre><p><strong>Output:</strong></p><div class="example-output">Active: active (running) since Tue 2026-06-09 22:00:00 UTC; 14h ago
-   Main PID: 3401 (prometheus)</div><p class="output-note"><strong>📝 What happened:</strong> Prometheus read the new rules without restarting. PID stayed 3401, uptime preserved. All existing metrics and time-series data remained intact. If Alex had used <code>restart</code>, prometheus would have lost its in-memory data and taken minutes to reload from disk.</p></div>
-                <div class="example"><h5>Example 3: Reload SSHD After Port Change</h5><p><strong>Scenario:</strong> Morgan changes the SSH port and reloads sshd without dropping active sessions.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo sed -i 's/^Port 22/Port 2222/' /etc/ssh/sshd_config && sshd -t && systemctl reload sshd && echo "New port active"</code></pre><p><strong>Output:</strong></p><div class="example-output">New port active</div><p class="output-note"><strong>📝 What happened:</strong> sshd now listens on port 2222 for new connections while existing port 22 sessions remain active. Reloading sshd never drops established connections. Morgan can now update firewall rules and gradually migrate users to the new port without any session disruption.</p></div>
-                <div class="example"><h5>Example 4: Check If a Service Supports Reload</h5><p><strong>Scenario:</strong> Taylor wants to know which services can be reloaded vs restarted.</p><p><strong>Command:</strong></p><pre><code class="language-bash">for svc in nginx kubelet prometheus sshd containerd; do printf "%-15s: " "$svc"; systemctl show "$svc" -p ExecReload --value 2>/dev/null | head -c 20; echo; done</code></pre><p><strong>Output:</strong></p><div class="example-output">nginx          : /bin/kill -s HUP $M
+Reload OK - PID unchanged: 1201</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> nginx tested the config first (<code>nginx -t</code>), then systemd triggered ExecReload which sent SIGHUP to PID 1201. Nginx re-read its config, started new worker processes with the updated backend list, and gracefully retired old workers. The PID stayed the same — zero downtime, zero dropped connections.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Reload Prometheus Rules</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Alert Rule Update:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 observability/
+│       └── 📄 prometheus.service     # ExecReload=/bin/kill -s HUP $MAINPID
+└── 📁 configs/
+    └── 📁 prometheus/
+        └── 📁 rules/
+            └── 📄 node-rules.yml     # Alert rules updated</code></pre>
+                    <pre><code class="language-yaml"># Alex adds new alerting rules and reloads prometheus without restarting
+# Reload preserves all in-memory time-series data and current scrape state</code></pre> Alex added a new alert for disk space > 85%. Restarting prometheus would lose in-memory metrics and take minutes to reload from disk.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo vi /sre-platform/configs/prometheus/rules/node-rules.yml && systemctl reload prometheus && systemctl status prometheus --no-pager | grep -E "Active|PID"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Active: active (running) since Tue 2026-06-09 22:00:00 UTC; 14h ago
+   Main PID: 3401 (prometheus)</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> Prometheus read the new rules without restarting. PID stayed 3401, uptime preserved. All existing metrics and time-series data remained intact. If Alex had used <code>restart</code>, prometheus would have lost its in-memory data and taken minutes to reload from disk.</p>
+                </div>
+                <div class="example">
+                    <h5>Example 3: Reload SSHD After Port Change</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Security Hardening:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 infra/
+│       └── 📄 sshd.service           # ExecReload=/bin/kill -s HUP $MAINPID
+└── 📁 configs/
+    └── 📄 sshd_config               # Port changed: 22 → 2222</code></pre>
+                    <pre><code class="language-yaml"># Morgan changes the SSH port and reloads without dropping sessions
+# Existing port 22 connections stay active; new connections use port 2222</code></pre> Morgan is migrating SSH to a non-standard port. Reloading means nobody gets disconnected during the transition.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo sed -i 's/^Port 22/Port 2222/' /etc/ssh/sshd_config && sshd -t && systemctl reload sshd && echo "New port active"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">New port active</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> sshd now listens on port 2222 for new connections while existing port 22 sessions remain active. Reloading sshd never drops established connections. Morgan can now update firewall rules and gradually migrate users to the new port without any session disruption.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Check If a Service Supports Reload</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Service Audit:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    ├── 📁 core/
+    │   ├── 📄 kubelet.service        # NO ExecReload — must restart
+    │   └── 📄 containerd.service     # Has ExecReload
+    ├── 📁 infra/
+    │   └── 📄 nginx.service          # Has ExecReload
+    └── 📁 observability/
+        └── 📄 prometheus.service     # Has ExecReload</code></pre>
+                    <pre><code class="language-yaml"># Taylor audits which services can be reloaded vs which need restart
+# Services without ExecReload must be restarted for config changes</code></pre> Taylor wants to know which services support zero-downtime config updates before writing automation scripts.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">for svc in nginx kubelet prometheus sshd containerd; do printf "%-15s: " "$svc"; systemctl show "$svc" -p ExecReload --value 2>/dev/null | head -c 20; echo; done</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">nginx          : /bin/kill -s HUP $M
 kubelet        : 
 prometheus     : /bin/kill -s HUP $M
 sshd           : /bin/kill -s HUP $M
-containerd     : /bin/kill -s HUP $M</div><p class="output-note"><strong>📝 What happened:</strong> Most services support reload via SIGHUP. kubelet has NO ExecReload — it must be restarted for config changes. This one-liner is perfect for auditing which services support zero-downtime config updates. Use it before writing automation scripts.</p></div>
-                <div class="example"><h5>Example 5: Reload After Cert Rotation</h5><p><strong>Scenario:</strong> New TLS certificates were deployed. Taylor reloads nginx to pick them up.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo cp /sre-platform/configs/certs/sre-api.crt /etc/nginx/certs/ && sudo cp /sre-platform/configs/certs/sre-api.key /etc/nginx/certs/ && nginx -t && systemctl reload nginx && echo "Certs rotated - $(date)"</code></pre><p><strong>Output:</strong></p><div class="example-output">nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+containerd     : /bin/kill -s HUP $M</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> Most services support reload via SIGHUP. kubelet has NO ExecReload — it must be restarted for config changes. This one-liner is perfect for auditing which services support zero-downtime config updates. Use it before writing automation scripts.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Reload After Cert Rotation</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — TLS Certificate Rotation:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 infra/
+│       └── 📄 nginx.service          # Reload to pick up new certs
+└── 📁 configs/
+    └── 📁 certs/
+        ├── 📄 sre-api.crt            # New certificate deployed
+        └── 📄 sre-api.key            # New private key deployed</code></pre>
+                    <pre><code class="language-yaml"># Taylor rotates TLS certificates and reloads nginx to activate them
+# Cert rotation with zero downtime — connections keep using old cert until complete</code></pre> The TLS certificate expires in 24 hours. Taylor deploys the new cert and reloads nginx to activate it without any service interruption.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo cp /sre-platform/configs/certs/sre-api.crt /etc/nginx/certs/ && sudo cp /sre-platform/configs/certs/sre-api.key /etc/nginx/certs/ && nginx -t && systemctl reload nginx && echo "Certs rotated - $(date)"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
 nginx: configuration file /etc/nginx/nginx.conf test is successful
-Certs rotated - Wed Jun 10 14:30:00 UTC 2026</div><p class="output-note"><strong>📝 What happened:</strong> New certs deployed, config tested, nginx reloaded — all without dropping a single connection. This is the standard cert rotation workflow for production web servers. The old cert's connections completed gracefully while new connections use the new cert.</p></div>
+Certs rotated - Wed Jun 10 14:30:00 UTC 2026</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> New certs deployed, config tested, nginx reloaded — all without dropping a single connection. This is the standard cert rotation workflow for production web servers. The old cert's connections completed gracefully while new connections use the new cert.</p>
+                </div>
+
                 <div class="success"><strong>💡 Pro Tips:</strong> Always test config before reloading: <code>nginx -t && systemctl reload nginx</code>. Not all services support reload — check with <code>systemctl show UNIT -p ExecReload</code>. If ExecReload is empty, use <code>restart</code> instead. <code>reload-or-restart</code> handles both cases automatically. Reload preserves the PID; restart creates a new one.</div>
             </article>
             <article class="api-block" id="systemctl-reload-or-restart">
@@ -1242,20 +1579,128 @@ jordan@prod-node-01:~$ for svc in nginx prometheus kubelet; do
 Reloading nginx...     # Reloaded (has ExecReload)
 Reloading prometheus... # Reloaded (has ExecReload)
 Reloading kubelet...    # Restarted (no ExecReload)</code></pre>
-                <div class="example"><h5>Example: Bulk Config Apply</h5><p><strong>Scenario:</strong> After updating multiple service configs, Jordan applies them all at once.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl reload-or-restart nginx prometheus kubelet && systemctl is-active nginx prometheus kubelet</code></pre><p><strong>Output:</strong></p><div class="example-output">active
+
+                <pre><code class="language-yaml"># Key locations where reload-or-restart operates daily:
+#  /etc/systemd/system/                    # Unit files with/without ExecReload
+#  /sre-platform/systemd-units/            # Source unit file templates
+#  Ansible playbooks, CI/CD pipelines      # Automation contexts</code></pre>
+                <h4>📄 Context — Universal Config Apply:</h4>
+                <pre><code class="language-yaml"># reload-or-restart is the safest "apply config" command for automation
+# It reloads if ExecReload is defined, otherwise restarts
+# One command that always does the right thing — no manual checks needed</code></pre>
+
+                <div class="example">
+                    <h5>Example 1: Bulk Config Apply</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Multi-Service Config Push:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    ├── 📁 infra/
+    │   └── 📄 nginx.service          # Has ExecReload → reloads
+    ├── 📁 observability/
+    │   └── 📄 prometheus.service     # Has ExecReload → reloads
+    └── 📁 core/
+        └── 📄 kubelet.service        # NO ExecReload → restarts</code></pre>
+                    <pre><code class="language-yaml"># After updating multiple service configs, Jordan applies them all at once
+# reload-or-restart handles each service optimally — reload if possible, restart if not</code></pre> Jordan updated configs for nginx, prometheus, and kubelet. Instead of checking each service's capabilities, he uses one command that does the right thing for all three.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl reload-or-restart nginx prometheus kubelet && systemctl is-active nginx prometheus kubelet</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">active
 active
-active</div><p class="output-note"><strong>📝 What happened:</strong> nginx and prometheus reloaded gracefully (zero downtime). kubelet restarted (brief interruption). All three are active. One command, three services, optimal behavior for each.</p></div>
-                <div class="example"><h5>Example 2: Ansible-Style Config Deployment</h5><p><strong>Scenario:</strong> Jordan deploys new configs to multiple services using a CI/CD pipeline pattern.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo cp /sre-platform/systemd-units/observability/prometheus.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl reload-or-restart prometheus && systemctl is-active prometheus</code></pre><p><strong>Output:</strong></p><div class="example-output">active</div><p class="output-note"><strong>📝 What happened:</strong> Unit file copied, daemon-reload refreshed systemd, reload-or-restart applied the changes. If prometheus had ExecReload defined (it does), it reloads. If not, it restarts. This is the exact pattern used by Ansible's systemd module and CI/CD pipelines. One command that always works.</p></div>
-                <div class="example"><h5>Example 3: Safe Restart with Fallback Check</h5><p><strong>Scenario:</strong> Taylor uses reload-or-restart with a post-check to verify the service came back healthy.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl reload-or-restart nginx && sleep 1 && curl -s -o /dev/null -w "%{http_code}" http://localhost:80/health && echo " - Healthy"</code></pre><p><strong>Output:</strong></p><div class="example-output">200 - Healthy</div><p class="output-note"><strong>📝 What happened:</strong> nginx reloaded, then Taylor verified it's serving traffic correctly (HTTP 200 from /health endpoint). If the reload had broken nginx, the curl would return a non-200 code and the pipeline would stop. Always add a health check after config changes in production.</p></div>
-                <div class="example"><h5>Example 4: Service That Doesn't Support Reload</h5><p><strong>Scenario:</strong> Jordan runs reload-or-restart on kubelet (no ExecReload) — it restarts instead.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl show kubelet -p ExecReload --value | grep -q . && echo "Will reload" || echo "Will restart"; systemctl reload-or-restart kubelet && journalctl -u kubelet --no-pager -n 2</code></pre><p><strong>Output:</strong></p><div class="example-output">Will restart
+active</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> nginx and prometheus reloaded gracefully (zero downtime). kubelet restarted (brief interruption). All three are active. One command, three services, optimal behavior for each.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 2: Ansible-Style Config Deployment</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — CI/CD Pipeline:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+├── 📁 systemd-units/
+│   └── 📁 observability/
+│       └── 📄 prometheus.service     # Updated unit file
+└── 📁 scripts/
+    └── 📄 deploy.sh                  # CI/CD deployment script</code></pre>
+                    <pre><code class="language-yaml"># Jordan deploys new unit file via daemon-reload + reload-or-restart
+# This is the standard Ansible systemd module pattern</code></pre> Jordan's CI/CD pipeline copies updated unit files and refreshes systemd. reload-or-restart ensures the new config is applied regardless of reload support.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">sudo cp /sre-platform/systemd-units/observability/prometheus.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl reload-or-restart prometheus && systemctl is-active prometheus</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">active</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> Unit file copied, daemon-reload refreshed systemd, reload-or-restart applied the changes. If prometheus had ExecReload defined (it does), it reloads. If not, it restarts. This is the exact pattern used by Ansible's systemd module and CI/CD pipelines. One command that always works.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 3: Safe Restart with Health Check</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Production Safety:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    └── 📁 infra/
+        └── 📄 nginx.service          # Has /health endpoint on :80</code></pre>
+                    <pre><code class="language-yaml"># Taylor uses reload-or-restart with a post-check health verification
+# Always verify the service came back healthy after config changes</code></pre> Taylor reloads nginx and immediately checks if it's serving traffic correctly. If the health check fails, the pipeline stops and alerts the team.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl reload-or-restart nginx && sleep 1 && curl -s -o /dev/null -w "%{http_code}" http://localhost:80/health && echo " - Healthy"</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">200 - Healthy</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> nginx reloaded, then Taylor verified it's serving traffic correctly (HTTP 200 from /health endpoint). If the reload had broken nginx, the curl would return a non-200 code and the pipeline would stop. Always add a health check after config changes in production.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 4: Service Without Reload Support</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Graceful Fallback:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    └── 📁 core/
+        └── 📄 kubelet.service        # NO ExecReload defined</code></pre>
+                    <pre><code class="language-yaml"># Jordan runs reload-or-restart on kubelet (no ExecReload)
+# It falls back to restart — Jordan knows to expect brief downtime</code></pre> kubelet has no ExecReload. Jordan uses reload-or-restart knowing it will restart. The pre-check confirms the expected behavior.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">systemctl show kubelet -p ExecReload --value | grep -q . && echo "Will reload" || echo "Will restart"; systemctl reload-or-restart kubelet && journalctl -u kubelet --no-pager -n 2</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">Will restart
 Jun 10 14:35:00 prod-node-01 systemd[1]: Stopping Kubernetes Kubelet...
-Jun 10 14:35:02 prod-node-01 systemd[1]: Started Kubernetes Kubelet.</div><p class="output-note"><strong>📝 What happened:</strong> kubelet has no ExecReload, so reload-or-restart fell back to a full restart. The pre-check confirmed this. Jordan now knows to expect brief downtime when applying kubelet changes — no surprise interruptions.</p></div>
-                <div class="example"><h5>Example 5: Bulk Reload After System-Wide Config Update</h5><p><strong>Scenario:</strong> After updating SSL cipher policies across all services, Alex reloads everything.</p><p><strong>Command:</strong></p><pre><code class="language-bash">for svc in nginx haproxy sshd; do echo "=== $svc ==="; systemctl reload-or-restart $svc && systemctl is-active $svc; done</code></pre><p><strong>Output:</strong></p><div class="example-output">=== nginx ===
+Jun 10 14:35:02 prod-node-01 systemd[1]: Started Kubernetes Kubelet.</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> kubelet has no ExecReload, so reload-or-restart fell back to a full restart. The pre-check confirmed this. Jordan now knows to expect brief downtime when applying kubelet changes — no surprise interruptions.</p>
+                </div>
+
+                <div class="example">
+                    <h5>Example 5: Bulk Reload After Policy Update</h5>
+                    <p><strong>Scenario:</strong>
+                    <p><strong>📄 Context — Security Policy Rollout:</strong></p>
+                    <p><strong>📁 Directory Snippet:</strong></p>
+                    <pre><code class="language-bash"># Relevant portion of the /sre-platform directory tree:
+sre-platform/
+└── 📁 systemd-units/
+    └── 📁 infra/
+        ├── 📄 nginx.service          # SSL ciphers updated
+        ├── 📄 haproxy.service        # SSL ciphers updated
+        └── 📄 sshd.service           # Cipher policy updated</code></pre>
+                    <pre><code class="language-yaml"># Alex rolls out new SSL cipher policies across all edge services
+# Bulk reload-or-restart ensures each service gets optimal treatment</code></pre> Security updated SSL cipher requirements. Alex needs to apply the change to all edge services without manual per-service logic.</p>
+                    <p><strong>Command:</strong></p>
+                    <pre><code class="language-bash">for svc in nginx haproxy sshd; do echo "=== $svc ==="; systemctl reload-or-restart $svc && systemctl is-active $svc; done</code></pre>
+                    <p><strong>Output:</strong></p>
+                    <div class="example-output">=== nginx ===
 active
 === haproxy ===
 active
 === sshd ===
-active</div><p class="output-note"><strong>📝 What happened:</strong> Three services reloaded (or restarted) with one loop. All came back active. This pattern is perfect for security policy updates that affect multiple services. Each service got the optimal treatment — reload if supported, restart if not.</p></div>
+active</div>
+                    <p class="output-note"><strong>📝 What happened:</strong> Three services reloaded (or restarted) with one loop. All came back active. This pattern is perfect for security policy updates that affect multiple services. Each service got the optimal treatment — reload if supported, restart if not.</p>
+                </div>
+
                 <div class="success"><strong>💡 Pro Tips:</strong> This is the best command for Ansible <code>systemd</code> module's <code>daemon_reload</code>-and-restart pattern. Use in CI/CD pipelines for safe config deployment. Combine with <code>configtest</code> commands (nginx -t, sshd -t) before running. For services without ExecReload, this is equivalent to <code>restart</code>.</div>
             </article>
             <article class="api-block" id="systemctl-status">
@@ -1290,6 +1735,17 @@ jordan@prod-node-01:~$ systemctl status kubelet --no-pager -l
              └─15234 /usr/bin/kubelet --config=/sre-platform/k8s-node/kubelet-config.yaml
 
 Jun 10 11:55:00 prod-node-01 kubelet[15234]: I0610 11:55:00 SyncLoop (pod sync) completed</code></pre>
+
+                <pre><code class="language-yaml"># Key locations where systemctl status reads from:
+#  /etc/systemd/system/                    # Unit files and drop-ins
+#  /run/systemd/system/                    # Runtime units
+#  /proc/PID/                              # Process information for PID, memory, CPU
+#  /var/log/journal/                       # Journal logs (last 10 lines shown)</code></pre>
+                <h4>📄 Context — Primary Diagnostic Command:</h4>
+                <pre><code class="language-yaml"># Jordan uses systemctl status as the #1 diagnostic tool
+# It shows Loaded state, Active state, PID, memory, CPU, and recent logs
+# Always the first command run when troubleshooting any service issue</code></pre>
+
                 <div class="example"><h5>Example 1: Quick Status Check</h5><p><strong>Scenario:</strong> Jordan checks if kubelet is healthy after the morning restart.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl status kubelet --no-pager | grep -E "Active:|Memory:|CPU:"</code></pre><p><strong>Output:</strong></p><div class="example-output">Active: active (running) since Wed 2026-06-10 09:45:01 UTC; 2h 15min ago
 Memory: 128.5M (peak: 256.3M)
 CPU: 4min 32.180s</div><p class="output-note"><strong>📝 What happened:</strong> kubelet has been running for 2h15m, using 128.5M memory with peak at 256.3M. Everything looks normal. If "Active:" showed <code>failed</code> or <code>inactive</code>, Jordan would immediately check journalctl for error logs.</p></div>
@@ -1349,6 +1805,16 @@ enabled
 enabled
 enabled
 enabled</code></pre>
+
+                <pre><code class="language-yaml"># Key locations where enable/disable operates:
+#  /etc/systemd/system/*.target.wants/    # Symlinks created by enable
+#  /lib/systemd/system/                   # Vendor-preset unit files
+#  /sre-platform/systemd-units/           # Source unit file templates</code></pre>
+                <h4>📄 Context — Boot-Time Configuration:</h4>
+                <pre><code class="language-yaml"># Taylor uses enable/disable to control which services start at boot
+# Enable creates symlinks, disable removes them — neither affects current state
+# Always use --now to enable+start or disable+stop in one command</code></pre>
+
                 <div class="example"><h5>Example 1: Enable Critical Services at Provisioning</h5><p><strong>Scenario:</strong> New node — Taylor enables all production services to survive reboots.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl enable --now kubelet containerd nginx && systemctl is-enabled kubelet containerd nginx && systemctl is-active kubelet containerd nginx</code></pre><p><strong>Output:</strong></p><div class="example-output">enabled
 enabled
 enabled
@@ -1398,6 +1864,16 @@ jordan@prod-node-01:~$ systemctl list-units --type=timer --no-legend
 k8s-snapshot.timer   loaded active waiting Daily ETCD snapshot
 logrotate.timer      loaded active waiting Daily log rotation
 cert-check.timer     loaded active waiting Weekly cert expiry check</code></pre>
+
+                <pre><code class="language-yaml"># Key locations where list-units reads from:
+#  /run/systemd/system/                    # Currently loaded units (in memory)
+#  /etc/systemd/system/                    # Admin-managed unit files
+#  /usr/lib/systemd/system/                # Vendor-provided unit files</code></pre>
+                <h4>📄 Context — Service Inventory & Monitoring:</h4>
+                <pre><code class="language-yaml"># Jordan uses list-units for service inventory and health monitoring
+# Filters by type (service/socket/timer), state (active/failed), and name pattern
+# list-unit-files shows ALL installed units, list-units shows only loaded ones</code></pre>
+
                 <div class="example"><h5>Example 1: Find Failed Units</h5><p><strong>Scenario:</strong> Jordan checks for any services that failed overnight.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl list-units --state=failed --no-legend | wc -l && systemctl list-units --state=failed</code></pre><p><strong>Output:</strong></p><div class="example-output">0
   UNIT LOAD ACTIVE SUB DESCRIPTION
 0 loaded units listed.</div><p class="output-note"><strong>📝 What happened:</strong> Zero failed units — the node is healthy. This command is the core of every monitoring health check. Non-zero output triggers an immediate alert.</p></div>
@@ -1448,7 +1924,18 @@ jordan@prod-node-01:~$ systemctl status kubelet --no-pager | head -4
 ● kubelet.service - Kubernetes Kubelet
      Loaded: loaded (/etc/systemd/system/kubelet.service; enabled; preset: enabled)
      Active: active (running)</code></pre>
-                <div class="example"><h5>Example: Deploy a New Unit File</h5><p><strong>Scenario:</strong> Jordan creates a new service and needs systemd to recognize it.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo cp /sre-platform/systemd-units/observability/node_exporter.service /etc/systemd/system/ && sudo systemctl daemon-reload && systemctl status node_exporter --no-pager | head -4</code></pre><p><strong>Output:</strong></p><div class="example-output">● node_exporter.service - Node metrics exporter
+
+                <pre><code class="language-yaml"># Key locations where daemon-reload is essential:
+#  /etc/systemd/system/                    # Admin unit files (edit here)
+#  /etc/systemd/system/UNIT.d/             # Drop-in override directories
+#  /usr/lib/systemd/system/                # Vendor files (don't edit)
+#  After ANY unit file change: cp, mv, rm, edit, sed</code></pre>
+                <h4>📄 Context — Configuration Refresh:</h4>
+                <pre><code class="language-yaml"># Jordan runs daemon-reload after every unit file change
+# It tells systemd (PID 1) to re-read all unit files from disk
+# Forgetting daemon-reload is the #1 cause of "Unit not found" errors</code></pre>
+
+                <div class="example"><h5>Example 1: Deploy a New Unit File</h5><p><strong>Scenario:</strong> Jordan creates a new service and needs systemd to recognize it.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo cp /sre-platform/systemd-units/observability/node_exporter.service /etc/systemd/system/ && sudo systemctl daemon-reload && systemctl status node_exporter --no-pager | head -4</code></pre><p><strong>Output:</strong></p><div class="example-output">● node_exporter.service - Node metrics exporter
      Loaded: loaded (/etc/systemd/system/node_exporter.service; disabled; preset: disabled)
      Active: inactive (dead)</div><p class="output-note"><strong>📝 What happened:</strong> After daemon-reload, systemd recognizes node_exporter as a known unit (Loaded: loaded). It's inactive because Jordan hasn't started it yet. Without daemon-reload, <code>systemctl start node_exporter</code> would fail with "Unit not found."</p></div>
                 <div class="example"><h5>Example 2: Modify and Reload a Unit File</h5><p><strong>Scenario:</strong> Taylor edits kubelet's unit file to increase memory limits, then reloads.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo sed -i 's/MemoryMax=2G/MemoryMax=4G/' /etc/systemd/system/kubelet.service && sudo systemctl daemon-reload && systemctl show kubelet -p MemoryMax --value</code></pre><p><strong>Output:</strong></p><div class="example-output">4294967296</div><p class="output-note"><strong>📝 What happened:</strong> MemoryMax changed to 4G (4294967296 bytes). daemon-reload made systemd aware of the change. However, the running kubelet still has the old 2G limit — a restart is needed to apply. daemon-reload updates config, restart applies it to the running process.</p></div>
@@ -1492,6 +1979,16 @@ ExecStart=/usr/bin/kubelet ... --node-labels=env=production...
 
 jordan@prod-node-01:~$ sudo systemctl edit kubelet
 # Opens editor for /etc/systemd/system/kubelet.service.d/override.conf</code></pre>
+
+                <pre><code class="language-yaml"># Key locations where show/cat/edit operate:
+#  /etc/systemd/system/UNIT.d/            # Drop-in override directories
+#  /etc/systemd/system/UNIT.service       # Admin-managed unit files
+#  /usr/lib/systemd/system/               # Vendor files (read-only reference)</code></pre>
+                <h4>📄 Context — Unit Inspection & Modification:</h4>
+                <pre><code class="language-yaml"># Jordan uses show/cat/edit to inspect and modify unit configurations
+# show: query runtime properties | cat: view file contents | edit: create drop-ins
+# Always use edit (drop-in) rather than edit --full to survive package updates</code></pre>
+
                 <div class="example"><h5>Example 1: Find Exact ExecStart</h5><p><strong>Scenario:</strong> Jordan needs to know the exact command used to start kubelet.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl show kubelet -p ExecStart --value</code></pre><p><strong>Output:</strong></p><div class="example-output">/usr/bin/kubelet --config=/sre-platform/k8s-node/kubelet-config.yaml --container-runtime-endpoint=unix:///run/containerd/containerd.sock --node-ip=192.168.10.10 --max-pods=200 --node-labels=env=production,team=platform</div><p class="output-note"><strong>📝 What happened:</strong> <code>--value</code> strips the property name, returning just the value. This shows the resolved ExecStart including all drop-in overrides. Jordan can now verify the exact arguments kubelet was launched with.</p></div>
                 <div class="example"><h5>Example 2: View All Drop-ins</h5><p><strong>Scenario:</strong> Jordan audits which overrides are active on kubelet.</p><p><strong>Command:</strong></p><pre><code class="language-bash">systemctl cat kubelet | grep -E "^# /|ExecStart=|MemoryMax=|CPUQuota="</code></pre><p><strong>Output:</strong></p><div class="example-output"># /etc/systemd/system/kubelet.service
 ExecStart=/usr/bin/kubelet --config=... --max-pods=110
@@ -1544,7 +2041,17 @@ morgan@prod-node-01:~$ sudo systemctl start firewalld
 Failed to start firewalld.service: Unit firewalld.service is masked.
 morgan@prod-node-01:~$ sudo systemctl unmask firewalld
 Removed /etc/systemd/system/firewalld.service</code></pre>
-                <div class="example"><h5>Example: Mask a Conflicting Service</h5><p><strong>Scenario:</strong> The node uses systemd-resolved, but NetworkManager tries to start its own dnsmasq.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo systemctl mask dnsmasq && systemctl status dnsmasq --no-pager 2>&1 | head -3</code></pre><p><strong>Output:</strong></p><div class="example-output">● dnsmasq.service
+
+                <pre><code class="language-yaml"># Key locations where mask/unmask operates:
+#  /etc/systemd/system/                    # Mask creates symlink → /dev/null here
+#  /lib/systemd/system/                    # Vendor units (mask overrides these)
+#  Use list-unit-files --state=masked      # Audit all masked units</code></pre>
+                <h4>📄 Context — Absolute Prevention:</h4>
+                <pre><code class="language-yaml"># Morgan uses mask for services that must NEVER run on specific nodes
+# Mask > Disable: Disable prevents boot-start, Mask prevents ALL starts
+# Use mask for conflicting services, security requirements, and maintenance locks</code></pre>
+
+                <div class="example"><h5>Example 1: Mask a Conflicting Service</h5><p><strong>Scenario:</strong> The node uses systemd-resolved, but NetworkManager tries to start its own dnsmasq.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo systemctl mask dnsmasq && systemctl status dnsmasq --no-pager 2>&1 | head -3</code></pre><p><strong>Output:</strong></p><div class="example-output">● dnsmasq.service
      Loaded: masked (Reason: Unit dnsmasq.service is masked.)
      Active: inactive (dead)</div><p class="output-note"><strong>📝 What happened:</strong> dnsmasq is now masked. Even if NetworkManager tries to start it as a dependency, it will fail. The Loaded line shows <code>masked</code>. To undo: <code>systemctl unmask dnsmasq</code>.</p></div>
                 <div class="example"><h5>Example 2: Mask to Prevent Accidental Start During Maintenance</h5><p><strong>Scenario:</strong> Alex masks kubelet during a storage migration to prevent anyone from accidentally starting it.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo systemctl mask kubelet && sudo systemctl start kubelet 2>&1; echo "Exit: $?"</code></pre><p><strong>Output:</strong></p><div class="example-output">Failed to start kubelet.service: Unit kubelet.service is masked.
@@ -1587,6 +2094,16 @@ alex@prod-node-01:~$ systemctl status nginx --no-pager | grep "Main PID"
 alex@prod-node-01:~$ sudo systemctl kill -s KILL kubelet
 alex@prod-node-01:~$ systemctl is-active kubelet
 inactive</code></pre>
+
+                <pre><code class="language-yaml"># Key locations where systemctl kill operates:
+#  Signal reference: man 7 signal            # Full signal list and meanings
+#  /proc/PID/                                # Target process information
+#  ExecReload= in unit files                 # Often maps to SIGHUP</code></pre>
+                <h4>📄 Context — Direct Signal Delivery:</h4>
+                <pre><code class="language-yaml"># Alex uses systemctl kill for fine-grained process control
+# Unlike stop (manages lifecycle), kill sends raw UNIX signals directly
+# Common: HUP=reload, TERM=stop, KILL=force, USR1=app-specific</code></pre>
+
                 <div class="example"><h5>Example 1: Graceful Reload via SIGHUP</h5><p><strong>Scenario:</strong> Alex sends SIGHUP directly to nginx for config reload.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo systemctl kill -s HUP nginx && echo "PID unchanged: $(systemctl show -p MainPID --value nginx)"</code></pre><p><strong>Output:</strong></p><div class="example-output">PID unchanged: 1201</div><p class="output-note"><strong>📝 What happened:</strong> SIGHUP told nginx to reload its config. Same effect as <code>systemctl reload nginx</code>. The PID stayed at 1201 — no restart, no downtime.</p></div>
                 <div class="example"><h5>Example 2: Force Kill a Hung Process</h5><p><strong>Scenario:</strong> containerd is stuck and won't respond to SIGTERM.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo systemctl kill -s KILL containerd && sleep 2 && systemctl is-active containerd</code></pre><p><strong>Output:</strong></p><div class="example-output">inactive</div><p class="output-note"><strong>📝 What happened:</strong> SIGKILL (signal 9) forcefully terminated containerd — no cleanup, no graceful shutdown. This is a last resort. systemd detected the process died and marked the unit as failed then auto-restarted it (Restart=always). Use SIGKILL only when SIGTERM doesn't work.</p></div>
                 <div class="example"><h5>Example 3: Send SIGUSR1 for Application-Specific Action</h5><p><strong>Scenario:</strong> Taylor sends SIGUSR1 to a custom app to trigger log rotation without restarting.</p><p><strong>Command:</strong></p><pre><code class="language-bash">sudo systemctl kill -s USR1 myapp && echo "Log rotation signal sent"</code></pre><p><strong>Output:</strong></p><div class="example-output">Log rotation signal sent</div><p class="output-note"><strong>📝 What happened:</strong> SIGUSR1 (signal 10) is reserved for application-defined behavior. In this app, it triggers log file reopening — same effect as logrotate's postrotate script but without external tooling. SIGUSR1 and SIGUSR2 are commonly used for custom triggers in daemons.</p></div>
