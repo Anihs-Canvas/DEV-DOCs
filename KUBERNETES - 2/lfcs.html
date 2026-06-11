@@ -6891,6 +6891,34 @@ lsblk  # new disk should appear</code></pre></div></details></div>
             <div class="info-box warning"><h5>⚠️ SSH Agent Forwarding — The Hidden Danger</h5><p>SSH agent forwarding (<code>ssh -A</code> or <code>ForwardAgent yes</code> in config) lets you use your local SSH keys on a remote server. The danger: if the remote server is compromised, an attacker can use your forwarded agent to authenticate to ANY server your key has access to. They don't steal your private key — they use the agent socket while you're connected. <strong>Never use agent forwarding on untrusted servers.</strong> Safer alternative: <code>ProxyJump</code> (<code>ssh -J bastion target</code>) which tunnels the connection through an intermediate host without exposing your keys. Another alternative: use separate keys with limited scope per server.</p></div></div>
 
         <div class="section-block" id="s26-3"><h3>26.3 SSH Troubleshooting</h3>
+            <div class="diagram-container"><div class="diagram-title">SSH Troubleshooting Decision Tree</div>
+<pre>
+  SSH FAILS TO CONNECT?
+      │
+      ├─ "Connection refused"
+      │   ├─ sshd running? → systemctl status sshd
+      │   ├─ Correct port?  → ss -tlnp | grep 22
+      │   └─ Firewall?      → ufw status, iptables -L
+      │
+      ├─ "Connection timed out"
+      │   ├─ Can ping?      → ping server-ip
+      │   ├─ Port open?     → nc -zv server 22
+      │   └─ Cloud SG?      → Check AWS/Azure security group
+      │
+      ├─ "Permission denied (publickey)"
+      │   ├─ Key in authorized_keys? → cat ~/.ssh/authorized_keys
+      │   ├─ Permissions?    → chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys
+      │   ├─ Right key?      → ssh -i /path/to/key user@host
+      │   └─ Check server log → tail -f /var/log/auth.log
+      │
+      ├─ "Host key verification failed"
+      │   ├─ Expected change? → ssh-keygen -R hostname
+      │   └─ UNEXPECTED?      → ⚠️ POSSIBLE MITM ATTACK! Verify with admin.
+      │
+      └─ "Too many authentication failures"
+          ├─ Too many keys in agent? → ssh -o IdentitiesOnly=yes
+          └─ Try specific key: ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes user@host
+</pre></div>
             <div class="info-box note"><h5>🔬 How known_hosts Prevents MITM Attacks</h5><p>On your FIRST SSH connection to a server, you see: "The authenticity of host 'anihpj.com (203.0.113.50)' can't be established. ED25519 key fingerprint is SHA256:abc123... Are you sure you want to continue?" <strong>This is the most important security prompt in SSH.</strong> If you type "yes", the server's public host key is saved in <code>~/.ssh/known_hosts</code>. On every FUTURE connection, SSH verifies the server's presented key MATCHES the saved one. If they don't match, SSH screams "HOST KEY VERIFICATION FAILED" and refuses to connect. This protects against MITM (Man-in-the-Middle) attacks: if someone intercepts your connection and presents a fake server, the key won't match and SSH warns you. <strong>When to trust the warning:</strong> Server was reinstalled, IP reassigned, or you're connecting to a DIFFERENT server at the same IP. <strong>When to PANIC:</strong> You didn't expect the key to change — someone might be intercepting your traffic. Fix: <code>ssh-keygen -R hostname</code> removes the old key so you can accept the new one. Never blindly type "yes" to a changed host key — verify with the server admin first.</p></div>
             <table class="compare-table"><thead><tr><th>Symptom</th><th>Likely Cause</th><th>Fix</th></tr></thead><tbody>
                 <tr><td>"Connection refused"</td><td>sshd not running or wrong port</td><td><code>systemctl status sshd</code>, check <code>ss -tlnp | grep 22</code></td></tr>
@@ -6909,6 +6937,7 @@ lsblk  # new disk should appear</code></pre></div></details></div>
                 <div class="split-side split-bad"><h5>🔴 Password Authentication</h5><p>Bots guess passwords 24/7. Even strong passwords can be keylogged or phished. Server logs fill with "Failed password for root from 103.x.x.x". A single weak user password = full server compromise.</p></div>
                 <div class="split-side split-good"><h5>🟢 SSH Key Authentication</h5><p>Ed25519 key = 256 bits of cryptographic proof. Cannot be brute-forced. Cannot be keylogged (private key never leaves your machine). Pair with a passphrase for 2FA-like protection.</p></div>
             </div>
+            <div class="diagram-container"><div class="diagram-title">The SSH Hardening Ladder — From Default to Fortress</div>
 <pre>
   LEVEL 1: DEFAULT (INSECURE)
   ├─ Port 22, root login allowed, password auth enabled
@@ -6992,7 +7021,24 @@ lsblk  # new disk should appear</code></pre></div></details></div>
   # Just type:
   #   ssh anihpj-prod
 </pre></div>
-            <p><strong>Common ~/.ssh/config directives:</strong> <code>Host</code> (alias name), <code>HostName</code> (actual server IP/hostname), <code>User</code> (default username), <code>Port</code> (non-default port), <code>IdentityFile</code> (path to private key), <code>LocalForward</code> (port forwarding), <code>ProxyJump</code> (bastion/jump host).</p></div>
+            <table class="compare-table"><thead><tr><th>Directive</th><th>Example</th><th>What It Does</th></tr></thead><tbody>
+                <tr><td><code>Host</code></td><td><code>Host anihpj-prod</code></td><td>Alias name — what you type after <code>ssh</code></td></tr>
+                <tr><td><code>HostName</code></td><td><code>HostName 203.0.113.50</code></td><td>Real server IP or FQDN</td></tr>
+                <tr><td><code>User</code></td><td><code>User deploy</code></td><td>Default SSH username (skip <code>user@</code> in commands)</td></tr>
+                <tr><td><code>Port</code></td><td><code>Port 2222</code></td><td>Non-default SSH port</td></tr>
+                <tr><td><code>IdentityFile</code></td><td><code>IdentityFile ~/.ssh/anihpj_ed25519</code></td><td>Which private key to use</td></tr>
+                <tr><td><code>IdentitiesOnly</code></td><td><code>IdentitiesOnly yes</code></td><td>Only try THIS key (ignore ssh-agent keys)</td></tr>
+                <tr><td><code>LocalForward</code></td><td><code>LocalForward 5433 localhost:5432</code></td><td>Tunnel local port to remote host:port</td></tr>
+                <tr><td><code>ProxyJump</code></td><td><code>ProxyJump bastion.anihpj.com</code></td><td>Jump through bastion host to reach target</td></tr>
+                <tr><td><code>ServerAliveInterval</code></td><td><code>ServerAliveInterval 60</code></td><td>Send keepalive every 60s (prevents timeout)</td></tr>
+                <tr><td><code>ForwardAgent</code></td><td><code>ForwardAgent no</code></td><td>NEVER forward SSH agent (security risk!)</td></tr>
+                <tr><td><code>StrictHostKeyChecking</code></td><td><code>StrictHostKeyChecking ask</code></td><td>Prompt on new host keys (security default)</td></tr>
+            </tbody></table>
+            <div class="split-panel">
+                <div class="split-side split-bad"><h5>❌ WITHOUT ~/.ssh/config</h5><p><code>ssh -i ~/.ssh/anihpj_ed25519 -p 2222 anihpj-deploy@203.0.113.50</code><br>Every. Single. Time. You must remember the port, user, key path, and IP.</p></div>
+                <div class="split-side split-good"><h5>✅ WITH ~/.ssh/config</h5><p><code>ssh anihpj-prod</code><br>That's it. Tab-completes. All settings applied automatically from the config file.</p></div>
+            </div>
+            <div class="info-box note"><h5>🔬 ProxyJump — The Safe Way to Reach Internal Servers</h5><p>Many organizations have a bastion/jump host — the ONLY server exposed to the internet. Internal servers (databases, staging, monitoring) sit behind it with no public IP. Instead of SSH-ing into the bastion THEN SSH-ing again, use ProxyJump: <code>ssh -J bastion.anihpj.com internal-db.anihpj.local</code>. The connection is tunneled THROUGH the bastion — your keys stay on your laptop. In ~/.ssh/config: <code>Host internal-db<br>HostName 10.0.1.50<br>User deploy<br>ProxyJump bastion.anihpj.com</code>. This is why ProxyJump replaces the dangerous <code>ssh -A</code> (agent forwarding) — same result, zero key exposure.</p></div></div>
 
         <div class="visual-summary"><h4>📊 Chapter 26 Visual Summary</h4><div class="vs-grid">
             <div class="vs-item"><div class="vs-icon">🔐</div><span class="vs-label">sshd_config</span><span class="vs-detail">Port, PermitRootLogin no, PasswordAuthentication no. sshd -t before reload!</span></div>
@@ -7196,6 +7242,42 @@ sudo systemctl reload sshd  # 2. RELOAD (not restart!) — existing session stay
 </pre></div></div>
 
         <div class="section-block" id="s27-4"><h3>27.4 SSL/TLS with Let's Encrypt (Certbot)</h3>
+            <div class="diagram-container"><div class="diagram-title">The Certificate Chain — How Your Browser Trusts Anihpj.com</div>
+<pre>
+  ROOT CA (pre-installed in browsers/OS)
+  ┌─────────────────────────────────────────┐
+  │  ISRG Root X1                            │
+  │  (Internet Security Research Group)      │
+  │  🔑 Self-signed, valid until 2035        │
+  │  Pre-installed in ALL modern systems     │
+  └──────────────────┬──────────────────────┘
+                     │ Signed by ISRG Root X1
+                     ▼
+  INTERMEDIATE CA
+  ┌─────────────────────────────────────────┐
+  │  Let's Encrypt R3 / R4                   │
+  │  🔑 Signed by ISRG Root X1              │
+  │  Issues end-user certificates            │
+  └──────────────────┬──────────────────────┘
+                     │ Signed by Let's Encrypt R3
+                     ▼
+  END-ENTITY (YOUR SERVER)
+  ┌─────────────────────────────────────────┐
+  │  anihpj.com                               │
+  │  🔑 Signed by Let's Encrypt R3          │
+  │  Valid for 90 days (auto-renew!)         │
+  │  SAN: anihpj.com, www.anihpj.com         │
+  └─────────────────────────────────────────┘
+
+  VERIFICATION PATH (browser does this automatically):
+  1. Browser sees anihpj.com cert → signed by Let's Encrypt R3
+  2. Browser checks Let's Encrypt R3 → signed by ISRG Root X1
+  3. ISRG Root X1 is in browser's TRUST STORE → CHAIN TRUSTED ✅
+
+  🎯 LFCS: You create the BOTTOM cert via certbot.
+     The chain (fullchain.pem) includes YOUR cert + intermediate.
+     The browser already has the root. Trust flows DOWN the chain.
+</pre></div>
             <div class="diagram-container"><div class="diagram-title">How HTTPS/TLS Works — The Handshake (Simplified for LFCS)</div>
 <pre>
   BROWSER (Client)                    NGINX (Server — anihpj.com)
@@ -7330,6 +7412,39 @@ sudo systemctl reload apache2  # apply</code></pre></div></details></div>
         <div class="lfcs-exam-tip"><h5>🎯 PostgreSQL on the LFCS Exam</h5><p>You may need to install PostgreSQL, create a database and user, and configure basic authentication. Know: how to switch to the postgres user (<code>sudo -u postgres psql</code>), the difference between postgresql.conf (server settings) and pg_hba.conf (who can connect), and basic backup with pg_dump.</p></div>
 
         <div class="section-block" id="s28-1"><h3>28.1 Installing PostgreSQL</h3>
+            <div class="diagram-container"><div class="diagram-title">PostgreSQL Directory Structure — What Goes Where</div>
+<pre>
+  /etc/postgresql/15/main/          ← CONFIGURATION (what you edit)
+  ├── postgresql.conf                ← Server settings: port, memory, SSL
+  ├── pg_hba.conf                    ← Authentication: who can connect
+  ├── pg_ident.conf                  ← User name mapping (rarely used)
+  └── environment                    ← Environment variables for PostgreSQL
+
+  /var/lib/postgresql/15/main/       ← DATA DIRECTORY (where your data lives)
+  ├── base/                          ← Actual database files (one subdir per DB)
+  │   ├── 1/                         ← Template database
+  │   ├── 13765/                     ← anihpj_db (OID = 13765)
+  │   │   ├── 12345                  ← jobpost_jobpost table file
+  │   │   └── 12345_fsm              ← Free space map for that table
+  │   └── ...
+  ├── pg_wal/                        ← Write-Ahead Log (crash recovery)
+  ├── pg_stat/                       ← Statistics (query planner uses this)
+  ├── pg_logical/                    ← Logical replication data
+  └── PG_VERSION                     ← File containing "15" (version marker)
+
+  /usr/lib/postgresql/15/bin/        ← EXECUTABLES
+  ├── postgres                       ← The database engine itself
+  ├── pg_dump / pg_restore           ← Backup/restore tools
+  ├── psql                           ← Interactive SQL client
+  └── pg_ctl                         ← Start/stop/reload control
+
+  /var/log/postgresql/               ← LOG FILES
+  └── postgresql-15-main.log         ← Main log (errors, slow queries, connections)
+
+  KEY INSIGHT: Config is in /etc/, data is in /var/lib/, binaries in /usr/lib/,
+  logs in /var/log/.  Back up /var/lib/postgresql/15/main/ — that's your data.
+  Never lose pg_wal/ — it's your crash recovery safety net.
+</pre></div>
             <table class="compare-table"><thead><tr><th>Command / Path</th><th>What It Is</th></tr></thead><tbody>
                 <tr><td><code>apt install postgresql postgresql-contrib</code></td><td>Install PostgreSQL + extra modules (pgcrypto, etc.)</td></tr>
                 <tr><td><code>/etc/postgresql/15/main/</code></td><td>Config directory (15 = version number)</td></tr>
@@ -7454,6 +7569,46 @@ sudo systemctl reload apache2  # apply</code></pre></div></details></div>
 </pre></div></div>
 
         <div class="section-block" id="s28-5"><h3>28.5 Performance Basics</h3>
+            <div class="diagram-container"><div class="diagram-title">PostgreSQL Memory Architecture — How RAM Is Used</div>
+<pre>
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    TOTAL SYSTEM RAM (4GB)                    │
+  │                                                              │
+  │  ┌──────────────────────────────────────┐                   │
+  │  │  shared_buffers = 1GB (25%)          │ ← PG's own cache │
+  │  │  ┌────┬────┬────┬────┬────┬────┐    │   Data pages     │
+  │  │  │ 📄 │ 📄 │ 📄 │ 📄 │ 📄 │ 📄 │... │   read from disk  │
+  │  │  └────┴────┴────┴────┴────┴────┘    │   cached here     │
+  │  └──────────────────────────────────────┘                   │
+  │                                                              │
+  │  ┌──────────────────────────────────────┐                   │
+  │  │  OS Page Cache ~2.5GB (the rest)     │ ← Linux caches   │
+  │  │  (effective_cache_size = 3GB hint)   │   files in RAM.  │
+  │  │  PostgreSQL reads through this —     │   "Double buffering"│
+  │  │  data cached TWICE if not tuned!    │   is wasteful.    │
+  │  └──────────────────────────────────────┘                   │
+  │                                                              │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                 │
+  │  │work_mem  │  │work_mem  │  │work_mem  │  ← Per-operation │
+  │  │ 16MB     │  │ 16MB     │  │ 16MB     │     NOT per-     │
+  │  │ Sort Q1  │  │ Sort Q2  │  │ Hash Q3  │     connection!  │
+  │  └──────────┘  └──────────┘  └──────────┘                 │
+  │                                                              │
+  │  ⚠️ 10 connections × 4 sorts each × 16MB = 640MB possible!  │
+  │     total work_mem usage can spike dramatically.            │
+  │                                                              │
+  │  ┌──────────────────────┐                                   │
+  │  │ maintenance_work_mem │  ← Used by VACUUM, CREATE INDEX  │
+  │  │ 256MB                │     Only ONE operation at a time │
+  │  └──────────────────────┘                                   │
+  └─────────────────────────────────────────────────────────────┘
+
+  TUNING RULE OF THUMB:
+  shared_buffers = 25% RAM (start here, max 8GB)
+  effective_cache_size = 75% RAM (just a hint, not an allocation)
+  work_mem = (RAM - shared_buffers) / (max_connections × 4)
+  maintenance_work_mem = 10% RAM (but max 2GB)
+</pre></div>
             <table class="compare-table"><thead><tr><th>Parameter</th><th>What It Does</th><th>Recommended (4GB Server)</th></tr></thead><tbody>
                 <tr><td><code>shared_buffers</code></td><td>PostgreSQL's internal cache — the single most important setting</td><td>1GB (25% of RAM)</td></tr>
                 <tr><td><code>effective_cache_size</code></td><td>Hint: how much OS cache is available (doesn't allocate, just estimates)</td><td>3GB (75% of RAM)</td></tr>
@@ -7573,6 +7728,52 @@ find /backups/ -name "anihpj_*.dump" -mtime +14 -delete
   # Test:
   echo "Anihpj backup completed successfully" | mail -s "Daily Backup Report" admin@anihpj.com
 </pre></div>
+            <div class="diagram-container"><div class="diagram-title">Mail Flow Diagram — How Anihpj Sends a Password Reset Email</div>
+<pre>
+  ┌────────────────────┐
+  │  Django (anihpj)    │
+  │  User clicks        │
+  │  "Forgot Password"  │
+  └────────┬───────────┘
+           │ ① Django calls send_mail()
+           ▼
+  ┌────────────────────┐
+  │  Postfix (localhost)│  ← MTA (Mail Transfer Agent)
+  │  Accepts email      │
+  │  Queues for delivery│
+  └────────┬───────────┘
+           │ ② Postfix authenticates
+           │    with SASL (smtp_sasl)
+           ▼
+  ┌────────────────────┐
+  │  Gmail SMTP Relay   │  ← Upstream MTA
+  │  smtp.gmail.com:587│
+  │  (App Password auth)│
+  └────────┬───────────┘
+           │ ③ DNS MX lookup:
+           │    recipient@company.com
+           │    → MX: mail.company.com
+           ▼
+  ┌────────────────────┐
+  │  Recipient's MTA    │
+  │  mail.company.com   │
+  │  (e.g., Office 365, │
+  │   Gmail, Exchange)  │
+  └────────┬───────────┘
+           │ ④ Deliver to mailbox
+           ▼
+  ┌────────────────────┐
+  │  Recipient's Inbox  │
+  │  "Anihpj Password   │
+  │   Reset Link"       │
+  └────────────────────┘
+
+  IMPORTANT CONCEPTS:
+  MUA (Mail User Agent)  = Thunderbird, Outlook, Gmail web — what user sees
+  MTA (Mail Transfer)    = Postfix, Sendmail — routes mail between servers
+  MDA (Mail Delivery)    = Dovecot, procmail — puts mail in user's mailbox
+  SMTP (Simple Mail)     = The protocol MTAs speak to each other (port 25/587)
+</pre></div>
             <div class="info-box note"><h5>🔬 How Email Actually Travels — SMTP Protocol Flow</h5><p>When your Django app sends a password reset email: (1) Django connects to Postfix on localhost:25, (2) Postfix accepts the email and queues it, (3) Postfix connects to the relay (smtp.gmail.com:587), authenticates, and forwards, (4) Gmail's servers look up the MX record of the recipient's domain, (5) Gmail delivers to the recipient's mail server. <strong>Key terms:</strong> MUA (Mail User Agent — Thunderbird, Gmail web), MTA (Mail Transfer Agent — Postfix, Sendmail, Gmail's servers), MDA (Mail Delivery Agent — dovecot, places mail in user's mailbox). Postfix can be: (a) a full mail server (receives AND sends), (b) a relay (sends only, like anihpj), (c) a smarthost (forwards everything to one upstream). Anihpj uses relay mode — sends notifications but doesn't receive email. <strong>Check logs:</strong> <code>tail -f /var/log/mail.log</code> shows the full SMTP conversation including delivery status. <strong>SPF/DKIM/DMARC:</strong> If your emails go to spam, you need these DNS records to prove your server is authorized to send from @anihpj.com.</p></div></div>
 
         <div class="section-block" id="s29-3"><h3>29.3 vsftpd — FTP Server Basics</h3>
@@ -7586,6 +7787,30 @@ find /backups/ -name "anihpj_*.dump" -mtime +14 -delete
                 <tr><td><code>write_enable</code></td><td><code>YES</code></td><td>Allow file uploads (if needed)</td></tr>
                 <tr><td><code>chroot_local_user</code></td><td><code>YES</code></td><td>Jail users to their home directory</td></tr>
             </tbody></table>
+            <div class="diagram-container"><div class="diagram-title">Active vs Passive FTP — The Firewall Nightmare Explained</div>
+<pre>
+  ACTIVE FTP (the OLD way — firewall unfriendly)
+  ┌──────────┐                    ┌──────────┐
+  │ CLIENT   │                    │ SERVER   │
+  │ Port 21──┼───────────────────▶│ Port 21  │ ← Control (commands)
+  │           │                    │          │
+  │ Port 20◀─┼────────────────────│ Port 20  │ ← DATA (server connects BACK!)
+  └──────────┘                    └──────────┘
+  ⚠️  PROBLEM: Server initiates connection TO client.
+      Client firewalls BLOCK this! NAT breaks it!
+
+  PASSIVE FTP (the NEW way — firewall friendly)
+  ┌──────────┐                    ┌──────────┐
+  │ CLIENT   │                    │ SERVER   │
+  │ Port 21──┼───────────────────▶│ Port 21  │ ← Control (commands)
+  │           │  "Enter Passive"    │          │
+  │ Port ? ──┼───────────────────▶│ Port 30xx│ ← DATA (client connects out)
+  └──────────┘                    └──────────┘
+  ✅ Client initiates BOTH connections → firewalls allow outgoing traffic
+
+  🎯 SFTP (SSH-based, port 22) eliminates this ENTIRE problem:
+      ONE port, ONE connection, FULL encryption. No active/passive drama.
+</pre></div>
             <div class="info-box warning"><h5>⚠️ Use SFTP, Not FTP!</h5><p>FTP sends usernames and passwords in <strong>plaintext</strong> over the network. Anyone on the same network can sniff credentials. <strong>SFTP</strong> (SSH File Transfer Protocol) encrypts everything and uses the same SSH key infrastructure you already have. It runs over port 22 — no additional daemon needed. Modern tools (FileZilla, WinSCP, scp, rsync) all support SFTP. <code>sftp user@anihpj-server</code> is the secure alternative. vsftpd is included on the LFCS exam, but in real production, always use SFTP.</p></div>
             <div class="info-box note"><h5>🔬 /etc/aliases — Redirect System Mail to Real Addresses</h5><p>Linux system daemons (cron, at, sudo) send mail to the local <code>root</code> user for errors and reports. Since you (hopefully) never log in as root, these messages pile up unseen. <code>/etc/aliases</code> lets you redirect them: <code>root: admin@anihpj.com</code>. After editing, run <code>sudo newaliases</code> to update the alias database. Other useful aliases: <code>postmaster: root</code> (RFC requirement), <code>www-data: /dev/null</code> (discard web server mail). Test: <code>echo "test" | mail -s "Alias Test" root</code> → should arrive at admin@anihpj.com.</p></div></div>
 
@@ -7670,6 +7895,49 @@ sudo timedatectl set-timezone Africa/Lagos
   SUPPORTING INFRASTRUCTURE:
   🔐 SSH (Ch26)    │  ⏰ Chrony (Ch29)  │  🔁 logrotate (Ch17)
   ⏱️ Cron (Ch37)  │  🛡️ fail2ban (Ch32)│  📊 monitoring (Ch34)
+</pre></div>
+            <div class="diagram-container"><div class="diagram-title">Request Flow — What Happens When a User Visits https://anihpj.com/jobs/</div>
+<pre>
+  USER'S BROWSER
+      │ ① DNS lookup: anihpj.com → 203.0.113.50
+      │ ② TCP connect to 203.0.113.50:443
+      ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  UFW FIREWALL — Allow 443? ✅ → PASS                    │
+  └─────────────────────────────────────────────────────────┘
+      │
+      ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  NGINX :443                                              │
+  │  ③ TLS HANDSHAKE → encrypt with AES-256-GCM             │
+  │  ④ Parse HTTP request: GET /jobs/ HTTP/1.1              │
+  │  ⑤ /jobs/ matches location / → proxy to Gunicorn socket │
+  └──────────────────────────┬──────────────────────────────┘
+                             │ ⑥ HTTP via UNIX socket
+                             ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  GUNICORN (anihpj.service)                               │
+  │  ⑦ Parse WSGI request → call Django app                 │
+  └──────────────────────────┬──────────────────────────────┘
+                             │ ⑧ Django ORM query
+                             ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  POSTGRESQL (localhost:5432)                             │
+  │  ⑨ SELECT * FROM jobpost_jobpost WHERE status='active'  │
+  │  ⑩ Return 1,247 rows                                    │
+  └──────────────────────────┬──────────────────────────────┘
+                             │
+                             ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  DJANGO → GUNICORN → NGINX → BROWSER                    │
+  │  ⑪ Django renders HTML template with 1,247 jobs         │
+  │  ⑫ Gunicorn returns HTTP 200 with HTML                  │
+  │  ⑬ Nginx sends encrypted response to browser            │
+  │  ⑭ Browser decrypts + renders anihpj job board          │
+  └─────────────────────────────────────────────────────────┘
+
+  TOTAL TIME: ~50-200ms (depending on query complexity)
+  SECURITY: Every step from ③-⑬ is encrypted or local-only
 </pre></div></div>
 
         <div class="section-block" id="s30-2"><h3>30.2 Step-by-Step Production Deployment Checklist</h3>
@@ -7889,10 +8157,499 @@ sudo ufw status verbose   # verify</code></pre></div></details></div>
     <div class="highlight-box" style="margin:30px 0;"><strong>🧩 Part 8 Consolidation — The Anihpj Service Stack:</strong> SSH (Ch26) is your encrypted entry point — configure it once, harden it, and it protects every future connection. Nginx (Ch27) is the public face — it terminates SSL, serves static files at wire speed, and proxies dynamic requests to Gunicorn. PostgreSQL (Ch28) is the silent workhorse — running on localhost, serving data only to trusted local services, backed up nightly. Chrony (Ch29) keeps the clocks synchronized so SSL certs validate and logs correlate. Together, these four services form the minimum viable production stack for ANY web application — not just anihpj. <strong>Master these four, and you can deploy any Linux-based web app.</strong></div>
 
     <!-- Part 9 -->
-    <div class="chapter-section" id="part9"><h2><span class="chapter-badge">🔴</span> Part 9: Security & Hardening</h2></div>
-    <div class="chapter-section" id="ch31"><h2><span class="chapter-badge">Ch 31</span> SELinux & AppArmor</h2><div class="content-placeholder"><div class="placeholder-icon">🛡️</div><p>Content coming soon — DAC vs MAC, SELinux (Rocky), AppArmor (Ubuntu)</p></div></div>
-    <div class="chapter-section" id="ch32"><h2><span class="chapter-badge">Ch 32</span> System Hardening</h2><div class="content-placeholder"><div class="placeholder-icon">🔒</div><p>Content coming soon — Least privilege, auditd, fail2ban, AIDE, hardening checklist</p></div></div>
-    <div class="chapter-section" id="ch33"><h2><span class="chapter-badge">Ch 33</span> Certificates & Encryption</h2><div class="content-placeholder"><div class="placeholder-icon">📜</div><p>Content coming soon — Symmetric vs asymmetric, OpenSSL, GPG, SSH keys deep dive</p></div></div>
+    <div class="chapter-section" id="part9"><h2><span class="chapter-badge">🔴</span> Part 9: Security & Hardening</h2>
+        <div class="diagram-container"><div class="diagram-title">🛡️ Defense in Depth — The Anihpj Security Onion (7 Layers)</div>
+<pre>
+  Layer 7: APPLICATION SECURITY
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Django DEBUG=False | SECRET_KEY in .env (chmod 600)        │
+  │ HTTPS only (HSTS) | Input validation, CSRF protection      │
+  └─────────────────────────────────────────────────────────────┘
+                           ▲
+  Layer 6: SERVICE HARDENING
+  ┌─────────────────────────────────────────────────────────────┐
+  │ SSH: key-only, no root | Nginx: hide version, limit size   │
+  │ PostgreSQL: localhost only | Remove unused services         │
+  └─────────────────────────────────────────────────────────────┘
+                           ▲
+  Layer 5: MANDATORY ACCESS CONTROL (SELinux / AppArmor)
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Even IF nginx is hacked, SELinux limits what it can do     │
+  │ AppArmor profiles confine each service to its job           │
+  └─────────────────────────────────────────────────────────────┘
+                           ▲
+  Layer 4: INTRUSION DETECTION (fail2ban, AIDE, auditd)
+  ┌─────────────────────────────────────────────────────────────┐
+  │ fail2ban: 5 failed SSH → IP banned | AIDE: file integrity  │
+  │ auditd: log access to /etc/shadow, /etc/passwd             │
+  └─────────────────────────────────────────────────────────────┘
+                           ▲
+  Layer 3: FIREWALL (iptables/nftables/ufw/firewalld)
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Default: DENY all incoming | Allow: 22, 80, 443 ONLY       │
+  │ PostgreSQL (5432): NEVER exposed to internet                │
+  └─────────────────────────────────────────────────────────────┘
+                           ▲
+  Layer 2: USER & PERMISSION SECURITY
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Least privilege: anihpj has NO shell, NO sudo              │
+  │ SSH key-only | sudo: specific commands only | umask 027    │
+  └─────────────────────────────────────────────────────────────┘
+                           ▲
+  Layer 1: PHYSICAL SECURITY & UPDATES
+  ┌─────────────────────────────────────────────────────────────┐
+  │ unattended-upgrades | apt update weekly | LUKS encryption  │
+  │ BIOS password, secure boot enabled                          │
+  └─────────────────────────────────────────────────────────────┘
+
+  🎯 KEY INSIGHT: If ONE layer fails, the NEXT still protects you.
+     Defense in Depth = no single point of failure.
+</pre></div>
+        <div class="icon-feature-list">
+            <div class="icon-feature"><span class="if-icon">🔐</span><div><h5>Layered Security</h5><p>No single tool protects everything. SELinux + fail2ban + auditd + firewall = overlapping defenses that compensate for each other's gaps.</p></div></div>
+            <div class="icon-feature"><span class="if-icon">🔍</span><div><h5>Auditability</h5><p>Every access to sensitive files is logged. When a breach happens, you know exactly what was accessed and when — not guessing days later.</p></div></div>
+            <div class="icon-feature"><span class="if-icon">🚫</span><div><h5>Automated Response</h5><p>fail2ban doesn't wait for you — it bans attackers automatically. AIDE alerts you to changed files immediately. Security that works while you sleep.</p></div></div>
+        </div></div>
+    <div id="ch31">
+        <div class="chapter-intro"><h3>Chapter 31: SELinux & AppArmor — Mandatory Access Control</h3><p>Standard Linux permissions (DAC) let the file owner decide who accesses it. But what if a hacker compromises your <strong>anihpj</strong> web app and runs code as the www-data user? DAC can't stop them from reading everything www-data can read. <strong>Mandatory Access Control</strong> (MAC) adds a second, system-enforced security layer that even root can't bypass. This chapter covers both MAC systems tested on the LFCS: <strong>SELinux</strong> (Rocky/RHEL) and <strong>AppArmor</strong> (Ubuntu).</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2 hours</span><span class="meta-tag">🛡️ Security</span></div></div>
+        <div class="learning-objectives"><h4>🎯 What You'll Learn</h4><ul><li>✅ Understand DAC vs MAC — why Linux permissions alone aren't enough</li><li>✅ Manage SELinux modes, contexts, and troubleshooting</li><li>✅ Manage AppArmor profiles, modes, and troubleshooting</li></ul></div>
+        <div class="lfcs-chapter-relevance"><span class="relevance-label">🎓 LFCS Relevance</span><div class="relevance-domains"><span class="lfcs-domain-badge">Security <span class="lfcs-weight">10%</span></span></div></div>
+        <div class="lfcs-exam-tip"><h5>🎯 MAC on the LFCS Exam</h5><p>The LFCS exam gives you BOTH an Ubuntu VM and a Rocky VM. On Ubuntu: use AppArmor commands. On Rocky: use SELinux commands. The #1 exam scenario: "Service X can't access files" — check the MAC system FIRST before debugging permissions. Know how to temporarily disable (for testing) and re-enable.</p></div>
+
+        <div class="section-block" id="s31-1"><h3>31.1 DAC vs MAC — Why Linux Permissions Aren't Enough</h3>
+            <div class="split-panel">
+                <div class="split-side split-bad"><h5>🔴 DAC — Discretionary Access Control</h5><p>Owner decides who accesses. rwx bits + owner/group. The PROBLEM: if a process runs as user "anihpj", it has ALL of anihpj's permissions. A compromised Django app can read .env, SSH keys, everything anihpj owns.</p></div>
+                <div class="split-side split-good"><h5>🟢 MAC — Mandatory Access Control</h5><p>System enforces policy BEYOND rwx. Even if you're root, the MAC policy can block you. A compromised nginx process can only access files labeled httpd_sys_content_t — your .env and SSH keys are off-limits.</p></div>
+            </div>
+            <div class="info-box note"><h5>🔬 Analogy: DAC vs MAC</h5><p><strong>DAC = Apartment key.</strong> If you have the key (correct rwx permissions), you can enter any room. <strong>MAC = Security guard with a clipboard.</strong> Even if you have the key, the guard checks your ID against the list. If you're not on the list for that room, you don't enter — even if you're the building owner (root). SELinux/AppArmor is that security guard. Every process and file gets a label, and the kernel enforces which labels can interact.</p></div>
+            <div class="process-steps"><div class="process-step-item"><div class="step-number" style="background:#ef4444;">1</div><h5>Service Fails with "Permission Denied"</h5><p>Your web app or daemon can't access a file even though <code>ls -l</code> shows correct rwx permissions. First clue that MAC is blocking.</p></div><div class="process-step-item"><div class="step-number" style="background:#f59e0b;">2</div><h5>Check the MAC System</h5><p><strong>Ubuntu:</strong> <code>sudo dmesg | grep apparmor</code>. <strong>Rocky:</strong> <code>sudo ausearch -m avc -ts recent</code>. Look for "DENIED" entries with the process name.</p></div><div class="process-step-item"><div class="step-number" style="background:#3b82f6;">3</div><h5>Fix the Policy (Not Disable It)</h5><p><strong>Ubuntu:</strong> Edit AppArmor profile or <code>aa-complain</code> for testing. <strong>Rocky:</strong> <code>restorecon -Rv /path/</code> or <code>semanage fcontext</code>. NEVER permanently disable MAC!</p></div></div></div>
+
+        <div class="section-block" id="s31-2"><h3>31.2 SELinux — Security-Enhanced Linux (Rocky/RHEL)</h3>
+            <table class="compare-table"><thead><tr><th>Command</th><th>What It Does</th></tr></thead><tbody>
+                <tr><td><code>getenforce</code></td><td>Show current mode: Enforcing / Permissive / Disabled</td></tr>
+                <tr><td><code>setenforce 0</code></td><td>Temporarily switch to Permissive (log but don't block)</td></tr>
+                <tr><td><code>/etc/selinux/config</code></td><td>Persistent SELinux mode setting</td></tr>
+                <tr><td><code>ls -Z /var/www/anihpj/</code></td><td>Show SELinux context (user:role:type:level)</td></tr>
+                <tr><td><code>ps -Z</code></td><td>Show SELinux context of running processes</td></tr>
+                <tr><td><code>restorecon -Rv /var/www/anihpj/</code></td><td>Restore default file contexts (fixes most SELinux issues!)</td></tr>
+                <tr><td><code>semanage fcontext -a -t httpd_sys_content_t "/var/www/anihpj(/.*)?"</code></td><td>Set persistent file context for a directory</td></tr>
+                <tr><td><code>ausearch -m avc -ts recent</code></td><td>Search audit log for recent SELinux denials</td></tr>
+                <tr><td><code>ausearch -c nginx</code></td><td>Search denials for a specific command (quick filter)</td></tr>
+                <tr><td><code>sealert -l \*</code></td><td>Show human-readable explanations for all recent denials</td></tr>
+                <tr><td><code>audit2allow -a -M anihpj_policy</code></td><td>Generate SELinux policy from denial logs</td></tr>
+            </tbody></table>
+            <div class="info-box note"><h5>🔬 SELinux Booleans — Toggle Features Without Rewriting Policy</h5><p>SELinux booleans are on/off switches that modify policy behavior WITHOUT creating custom policies. <code>getsebool -a</code> lists all booleans. <code>getsebool httpd_can_network_connect</code> checks one. <code>setsebool -P httpd_can_network_connect on</code> enables it permanently (-P = persistent across reboots). <strong>Common booleans for web servers:</strong> <code>httpd_can_network_connect</code> (allow nginx/apache to make outbound connections — needed for reverse proxy), <code>httpd_can_sendmail</code> (allow web app to send email), <code>httpd_enable_cgi</code> (allow CGI scripts). <strong>Anihpj use case:</strong> If Django needs to connect to an external API (e.g., payment gateway), and SELinux blocks it: <code>sudo setsebool -P httpd_can_network_connect on</code>. This is safer than disabling SELinux entirely!</p></div>
+            <div class="scenario-box positive"><h5>🔧 Real-World: "SELinux Is Blocking Nginx from Serving Anihpj"</h5><p><strong>Situation:</strong> You deployed anihpj code to /var/www/anihpj. Nginx returns 403 Forbidden for all requests.</p><ol><li><strong>Check SELinux:</strong> <code>getenforce</code> → Enforcing. <code>ausearch -m avc -ts recent | grep nginx</code> → "denied { read } for pid=1234 comm="nginx" name="index.html" dev="sda1" ino=45678 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:default_t:s0"</li><li><strong>Diagnosis:</strong> Files have context <code>default_t</code> (wrong!). Nginx needs <code>httpd_sys_content_t</code>.</li><li><strong>Fix:</strong> <code>sudo semanage fcontext -a -t httpd_sys_content_t "/var/www/anihpj(/.*)?" && sudo restorecon -Rv /var/www/anihpj/</code></li><li><strong>Verify:</strong> <code>ls -Z /var/www/anihpj/</code> → <code>httpd_sys_content_t</code>. Nginx now serves files!</li></ol><p><strong>Key lesson:</strong> 90% of SELinux problems are wrong file contexts. <code>restorecon</code> fixes most of them.</p></div></div>
+
+        <div class="section-block" id="s31-3"><h3>31.3 AppArmor — Application Armor (Ubuntu)</h3>
+            <table class="compare-table"><thead><tr><th>Command</th><th>What It Does</th></tr></thead><tbody>
+                <tr><td><code>aa-status</code></td><td>Show AppArmor status: loaded profiles, modes, processes in complain</td></tr>
+                <tr><td><code>/etc/apparmor.d/</code></td><td>Profile directory — one profile per application</td></tr>
+                <tr><td><code>aa-enforce /etc/apparmor.d/usr.sbin.nginx</code></td><td>Enforce a profile (block violations)</td></tr>
+                <tr><td><code>aa-complain /etc/apparmor.d/usr.sbin.nginx</code></td><td>Complain mode (log but don't block — for debugging)</td></tr>
+                <tr><td><code>aa-disable /etc/apparmor.d/usr.sbin.nginx</code></td><td>Disable a profile entirely</td></tr>
+                <tr><td><code>dmesg | grep apparmor</code></td><td>View AppArmor denial messages in kernel log</td></tr>
+                <tr><td><code>apparmor_parser -r /etc/apparmor.d/profile</code></td><td>Reload a profile after editing</td></tr>
+            </tbody></table>
+            <div class="scenario-box positive"><h5>🔧 Real-World: "AppArmor Blocks Gunicorn from Writing Logs"</h5><p><strong>Situation:</strong> Gunicorn can't write to /var/log/anihpj/. <code>dmesg | grep apparmor</code> shows: <code>apparmor="DENIED" operation="mknod" profile="/usr/bin/gunicorn" name="/var/log/anihpj/gunicorn-error.log"</code>.</p><ol><li><strong>Diagnose:</strong> The gunicorn AppArmor profile doesn't allow writing to /var/log/anihpj/.</li><li><strong>Fix (temporary):</strong> <code>sudo aa-complain /etc/apparmor.d/usr.bin.gunicorn</code> — puts profile in complain mode.</li><li><strong>Fix (permanent):</strong> Edit /etc/apparmor.d/local/usr.bin.gunicorn and add: <code>/var/log/anihpj/* rw,</code>. Reload: <code>sudo apparmor_parser -r /etc/apparmor.d/usr.bin.gunicorn</code>. Set back to enforce: <code>sudo aa-enforce /etc/apparmor.d/usr.bin.gunicorn</code>.</li></ol></div>
+            <div class="info-box note"><h5>🔬 Inside an AppArmor Profile — What the Rules Actually Look Like</h5><p>AppArmor profiles live in <code>/etc/apparmor.d/</code> and are named after the executable path (slashes become dots: <code>usr.sbin.nginx</code>). Each profile declares what the program CAN do — everything else is denied. <strong>Key sections:</strong> <code>#include &lt;tunables/global&gt;</code> (variables like @{HOME}), <code>capability net_bind_service,</code> (Linux capabilities), <code>/var/www/anihpj/staticfiles/** r,</code> (file access: r=read, w=write, m=memory-map, k=lock), <code>network inet tcp,</code> (allow TCP networking). <strong>Local overrides:</strong> <code>/etc/apparmor.d/local/usr.sbin.nginx</code> — add custom rules here (not in main profile) so package updates don't overwrite them. <strong>Syntax:</strong> glob patterns use <code>*</code> (one directory level) and <code>**</code> (recursive). <code>deny /etc/shadow r,</code> explicitly blocks access even if a broader rule would allow it. <strong>Debugging:</strong> <code>aa-logprof</code> scans logs for denials and interactively suggests profile updates — the easiest way to fix a broken profile!</p></div>
+            <div class="diagram-container"><div class="diagram-title">SELinux vs AppArmor — LFCS Comparison (Both Are Tested!)</div>
+            <table class="compare-table"><thead><tr><th>Feature</th><th>SELinux</th><th>AppArmor</th></tr></thead><tbody>
+                <tr><td><strong>Used by</strong></td><td>RHEL, Rocky, Fedora</td><td>Ubuntu, Debian</td></tr>
+                <tr><td><strong>LFCS distro</strong></td><td>Rocky Linux 9 VM</td><td>Ubuntu 22.04 VM</td></tr>
+                <tr><td><strong>Approach</strong></td><td>Label-based — every FILE & PROCESS has a context (user:role:type:level)</td><td>Path-based — profiles attached to executable paths</td></tr>
+                <tr><td><strong>Check status</strong></td><td><code>getenforce</code></td><td><code>aa-status</code></td></tr>
+                <tr><td><strong>Modes</strong></td><td>Enforcing / Permissive / Disabled</td><td>Enforce / Complain / Disabled</td></tr>
+                <tr><td><strong>Temp disable</strong></td><td><code>setenforce 0</code></td><td><code>aa-complain /path/to/profile</code></td></tr>
+                <tr><td><strong>Troubleshoot</strong></td><td><code>ausearch -m avc</code></td><td><code>dmesg | grep apparmor</code></td></tr>
+                <tr><td><strong>Restore defaults</strong></td><td><code>restorecon -Rv /path/</code></td><td><code>aa-enforce /path/to/profile</code></td></tr>
+            </tbody></table></div></div>
+
+        <div class="visual-summary"><h4>📊 Chapter 31 Visual Summary</h4><div class="vs-grid">
+            <div class="vs-item"><div class="vs-icon">🔓</div><span class="vs-label">DAC</span><span class="vs-detail">rwx bits. Owner decides. Vulnerable to compromised processes.</span></div>
+            <div class="vs-item"><div class="vs-icon">🔒</div><span class="vs-label">MAC</span><span class="vs-detail">System-enforced beyond rwx. Even root restricted. SELinux or AppArmor.</span></div>
+            <div class="vs-item"><div class="vs-icon">🏷️</div><span class="vs-label">SELinux</span><span class="vs-detail">Label-based contexts. ls -Z, restorecon, semanage. Rocky/RHEL.</span></div>
+            <div class="vs-item"><div class="vs-icon">🛡️</div><span class="vs-label">AppArmor</span><span class="vs-detail">Path-based profiles. aa-status, aa-enforce, dmesg. Ubuntu.</span></div>
+        </div></div>
+
+        <div class="lfcs-exam-questions"><h4>Chapter 31 — LFCS Practice Questions</h4>
+            <div class="exam-question-item"><div class="eq-number">Q1</div><div class="eq-question">Check if SELinux is enforcing, permissive, or disabled. Write the command.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>getenforce</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q2</div><div class="eq-question">Temporarily switch SELinux to permissive mode to test if it's blocking your application.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo setenforce 0
+getenforce  # verify: Permissive</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q3</div><div class="eq-question">Files in /var/www/anihpj have the wrong SELinux context. Restore the default context recursively.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo restorecon -Rv /var/www/anihpj/</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q4</div><div class="eq-question">Check the SELinux context of all files in /var/www. Write the command.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>ls -Z /var/www/</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q5</div><div class="eq-question">Search the audit log for recent SELinux denials related to nginx.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo ausearch -m avc -ts recent | grep nginx</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q6</div><div class="eq-question">Show the current AppArmor status including loaded profiles and any processes in complain mode.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo aa-status</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q7</div><div class="eq-question">Put the nginx AppArmor profile into complain mode (log but don't block).</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo aa-complain /etc/apparmor.d/usr.sbin.nginx</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q8</div><div class="eq-question">How do you view AppArmor denial messages? Where are they logged?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo dmesg | grep apparmor
+# AppArmor denials appear in the kernel ring buffer (dmesg)
+# and in /var/log/syslog on Ubuntu</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q9</div><div class="eq-question">What's the fundamental difference between SELinux and AppArmor? Which distro uses which?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><p><strong>SELinux:</strong> Label-based — every file and process has a security context (user:role:type:level). Policies define which contexts can interact. Used by RHEL/Rocky/Fedora. <strong>AppArmor:</strong> Path-based — profiles attached to executable file paths. Simpler syntax. Used by Ubuntu/Debian. On the LFCS exam: Ubuntu VM = AppArmor, Rocky VM = SELinux.</p></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q10</div><div class="eq-question">A service works when SELinux is in permissive mode but fails in enforcing mode. What's the proper fix (not just disabling SELinux)?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code># 1. Check denials:
+sudo ausearch -m avc -ts recent
+# 2. Set correct file context:
+sudo semanage fcontext -a -t CORRECT_TYPE "/path(/.*)?"
+sudo restorecon -Rv /path/
+# 3. OR generate policy from denials:
+sudo audit2allow -a -M myapp_policy
+sudo semodule -i myapp_policy.pp
+# NEVER: setenforce 0 permanently or SELINUX=disabled in config.
+# Always fix the policy — disabling SELinux removes a critical security layer.</code></pre></div></details></div>
+        </div>
+        <div class="beyond-exam"><div class="beyond-exam-header"><span class="beyond-icon">🚀</span><h4>Beyond the Exam — Enterprise MAC</h4></div><div class="beyond-exam-body"><p>AppArmor/SELinux are just the start:</p><div class="evo-road"><div class="evo-item"><div class="evo-name">SELinux/AppArmor</div><div class="evo-desc">Per-host MAC — LFCS foundation</div></div><div class="evo-arrow">→</div><div class="evo-item"><div class="evo-name">seccomp</div><div class="evo-desc">Syscall filtering — Docker/K8s use this to restrict containers</div></div><div class="evo-arrow">→</div><div class="evo-item"><div class="evo-name">Pod Security</div><div class="evo-desc">K8s Pod Security Standards — MAC at cluster scale</div></div></div></div></div></div>
+    </div>
+    <div id="ch32">
+        <div class="chapter-intro"><h3>Chapter 32: System Hardening — Defense in Depth</h3><p>Security isn't one tool — it's layers. This chapter covers the practical hardening techniques every <strong>anihpj</strong> server needs: <strong>least privilege</strong> (giving users/services only what they need), <strong>auditd</strong> (tracking who accessed what), <strong>fail2ban</strong> (automatic IP banning), <strong>AIDE</strong> (detecting changed files), and a comprehensive hardening checklist you can apply to any production server.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5 hours</span><span class="meta-tag">🔒 Security</span></div></div>
+        <div class="learning-objectives"><h4>🎯 What You'll Learn</h4><ul><li>✅ Apply the principle of least privilege to users, services, and networks</li><li>✅ Set up auditd to track access to sensitive files</li><li>✅ Configure fail2ban to block brute-force attacks</li><li>✅ Use AIDE to detect unauthorized file changes</li><li>✅ Follow a 30-point hardening checklist for production</li></ul></div>
+        <div class="lfcs-chapter-relevance"><span class="relevance-label">🎓 LFCS Relevance</span><div class="relevance-domains"><span class="lfcs-domain-badge">Security <span class="lfcs-weight">10%</span></span></div></div>
+        <div class="lfcs-exam-tip"><h5>🎯 Hardening on the LFCS Exam</h5><p>The exam may ask you to configure fail2ban, set up audit rules, or implement least privilege. Key commands: <code>auditctl -w</code> (watch files), <code>fail2ban-client</code> (manage jails), <code>find / -perm -4000</code> (find SUID binaries). Know the philosophy: every open port, every running service, every user with a shell is an attack surface.</p></div>
+
+        <div class="section-block" id="s32-1"><h3>32.1 The Principle of Least Privilege</h3>
+            <div class="diagram-container"><div class="diagram-title">Least Privilege Applied to Anihpj</div>
+<pre>
+  PRINCIPLE: Every entity should have the MINIMUM permissions
+  needed to do its job — and NO MORE.
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  ANIHPJ USER (anihpj)                                       │
+  │  ✅ Can: run Gunicorn, read .env, write to /var/log/anihpj │
+  │  ❌ Cannot: sudo, SSH in (nologin shell), read other homes  │
+  │  Implementation: useradd -r -s /usr/sbin/nologin            │
+  └─────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  DATABASE USER (anihpj_user)                                │
+  │  ✅ Can: SELECT/INSERT/UPDATE/DELETE on anihpj_db           │
+  │  ❌ Cannot: CREATE DATABASE, DROP DATABASE, see other DBs   │
+  │  Implementation: GRANT ALL ON DATABASE anihpj_db (only!)    │
+  └─────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  NGINX WORKERS (www-data)                                   │
+  │  ✅ Can: read /var/www/anihpj/static/, connect to socket    │
+  │  ❌ Cannot: read .env, write to code, execute binaries      │
+  │  Implementation: chown anihpj:www-data; chmod 750 static/   │
+  └─────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  NETWORK                                                   │
+  │  ✅ Open: 22 (SSH), 80 (HTTP), 443 (HTTPS)                 │
+  │  ❌ Closed: 5432 (PostgreSQL), 8000 (Gunicorn), 3306 (MySQL)│
+  │  Implementation: ufw default deny; ufw allow 22,80,443     │
+  └─────────────────────────────────────────────────────────────┘
+</pre></div>
+            <div class="process-steps"><div class="process-step-item"><div class="step-number" style="background:#22c55e;">1</div><h5>Service Accounts</h5><p>Create with <code>useradd -r -s /usr/sbin/nologin</code>. No interactive login possible. Each service gets its own user — never share accounts.</p></div><div class="process-step-item"><div class="step-number" style="background:#3b82f6;">2</div><h5>File Permissions</h5><p><code>.env</code> = 600. Static files = 644. Application code = 640 for owner:group. <code>find / -perm -o+w -type f</code> to audit world-writable files.</p></div><div class="process-step-item"><div class="step-number" style="background:#8b5cf6;">3</div><h5>sudo Control</h5><p>Grant specific commands: <code>deploy ALL=(root) /usr/bin/systemctl reload nginx</code> — NOT <code>ALL=(ALL) NOPASSWD: ALL</code>. Audit sudo usage: <code>journalctl -xe | grep sudo</code>.</p></div><div class="process-step-item"><div class="step-number" style="background:#f59e0b;">4</div><h5>Network Restriction</h5><p>UFW default deny incoming. Open only needed ports. PostgreSQL on localhost. Internal services on private IPs only. Audit: <code>ss -tlnp</code> weekly.</p></div></div></div>
+
+        <div class="section-block" id="s32-2"><h3>32.2 auditd — Auditing File Access</h3>
+            <table class="compare-table"><thead><tr><th>Command</th><th>What It Does</th></tr></thead><tbody>
+                <tr><td><code>apt install auditd</code></td><td>Install the audit daemon</td></tr>
+                <tr><td><code>auditctl -w /etc/passwd -p rwxa -k passwd_changes</code></td><td>Watch /etc/passwd for read/write/execute/attr changes</td></tr>
+                <tr><td><code>auditctl -w /etc/shadow -p rwa -k shadow_access</code></td><td>Watch /etc/shadow for any access</td></tr>
+                <tr><td><code>auditctl -l</code></td><td>List all active audit rules</td></tr>
+                <tr><td><code>ausearch -f /etc/shadow</code></td><td>Search audit log for /etc/shadow access</td></tr>
+                <tr><td><code>ausearch -k passwd_changes -i</code></td><td>Search by key name, interpret timestamps/UIDs</td></tr>
+                <tr><td><code>aureport --summary</code></td><td>Summary report of all audit events</td></tr>
+                <tr><td><code>augenrules --load</code></td><td>Load rules from /etc/audit/rules.d/ (persistent)</td></tr>
+            </tbody></table>
+            <div class="info-box note"><h5>🔬 Make Audit Rules Persistent</h5><p>Rules added with <code>auditctl -w</code> are LOST on reboot. For persistent rules, add them to <code>/etc/audit/rules.d/audit.rules</code>: <code>-w /etc/passwd -p rwxa -k passwd_changes</code>. Then <code>sudo augenrules --load && sudo systemctl restart auditd</code>. Audit logs are at <code>/var/log/audit/audit.log</code> — search with ausearch, not grep (the log is binary-optimized).</p></div>
+            <div class="info-box note"><h5>🔬 auditd Rule Syntax Deep-Dive</h5><p>Audit rules use flags to specify what to monitor. <strong>File watches (-w):</strong> <code>-p rwxa</code> = watch for (r)ead, (w)rite, e(x)ecute, (a)ttribute changes. <strong>Syscall rules (-a):</strong> <code>-a always,exit -S unlink -S rename -k file_deletion</code> logs every file deletion and rename. <strong>Key (-k):</strong> Tags all events from a rule with a searchable key — <code>ausearch -k passwd_changes</code> finds them all. <strong>Performance:</strong> Too many rules can slow the system. Be selective: watch <code>/etc/</code>, <code>/var/www/anihpj/</code>, <code>~/.ssh/authorized_keys</code> — not <code>/var/log/</code> (excessive noise). <strong>View loaded rules:</strong> <code>auditctl -l</code>. <strong>Delete a rule:</strong> <code>auditctl -W /etc/passwd -p rwxa</code> (same syntax but uppercase -W). <strong>Anihpj example:</strong> <code>-w /var/www/anihpj/ -p wa -k anihpj_code_changes</code> — alerts on any code modification.</p></div></div>
+
+        <div class="section-block" id="s32-3"><h3>32.3 fail2ban — Automatic IP Banning</h3>
+            <div class="diagram-container"><div class="diagram-title">How fail2ban Protects Anihpj</div>
+<pre>
+  ATTACKER                          ANIHPJ SERVER
+  ─────────────────────────────────────────────────────────────────
+  ① SSH attempt (wrong password)
+     ─────────────────────────────────▶  /var/log/auth.log:
+                                          "Failed password for root"
+
+  ② SSH attempt (wrong password)
+     ─────────────────────────────────▶  Failed again (2nd attempt)
+
+  ③ SSH attempt (wrong password)
+     ─────────────────────────────────▶  Failed again (3rd attempt)
+
+  ④ SSH attempt (wrong password)
+     ─────────────────────────────────▶  Failed again (4th attempt)
+
+  ⑤ SSH attempt (wrong password)
+     ─────────────────────────────────▶  Failed again (5th attempt!)
+                                          🔴 fail2ban TRIGGERS:
+                                          iptables -A INPUT -s IP -j DROP
+
+  ⑥ SSH attempt (any password)
+     ──────── ✗ BLOCKED ✗ ─────────────  iptables DROPS connection
+                                          (Banned for 1 hour)
+
+  CONFIG (/etc/fail2ban/jail.local):
+  [sshd]
+  enabled = true
+  port = 22
+  maxretry = 5
+  bantime = 3600        # 1 hour
+  findtime = 600        # 10 minute window for counting failures
+
+  CHECK STATUS:
+  sudo fail2ban-client status sshd     → list banned IPs
+  sudo fail2ban-client set sshd unbanip 1.2.3.4  → manual unban
+</pre></div>
+            <div class="info-box note"><h5>🔬 fail2ban for Nginx — Protect Your Web App Too</h5><p>SSH isn't the only attack vector. fail2ban can protect Nginx against: (1) <strong>4xx floods:</strong> Ban IPs generating excessive 404/403 errors (vulnerability scanners). (2) <strong>Login brute-force:</strong> Django admin or WordPress wp-login.php attacks. (3) <strong>Rate-limit abuse:</strong> IPs hitting your API too fast. <strong>Setup:</strong> Create <code>/etc/fail2ban/filter.d/nginx-4xx.conf</code> with regex matching 4xx errors in access.log. Create <code>/etc/fail2ban/jail.local</code> entry: <code>[nginx-4xx]<br>enabled = true<br>port = http,https<br>filter = nginx-4xx<br>logpath = /var/log/nginx/anihpj-access.log<br>maxretry = 100<br>findtime = 300<br>bantime = 3600</code>. This bans IPs generating 100+ 4xx errors in 5 minutes. Check: <code>sudo fail2ban-client status nginx-4xx</code>.</p></div></div>
+
+        <div class="section-block" id="s32-4"><h3>32.4 AIDE — File Integrity Monitoring</h3>
+            <table class="compare-table"><thead><tr><th>Command</th><th>What It Does</th></tr></thead><tbody>
+                <tr><td><code>apt install aide</code></td><td>Install AIDE</td></tr>
+                <tr><td><code>aideinit</code></td><td>Initialize AIDE database (baseline snapshot of system files)</td></tr>
+                <tr><td><code>aide --check</code></td><td>Compare current state against baseline — report changes</td></tr>
+                <tr><td><code>aide --update</code></td><td>Update baseline after legitimate changes (apt upgrade, deploy)</td></tr>
+                <tr><td><code>/etc/aide/aide.conf</code></td><td>Config: which directories to monitor, what attributes to check</td></tr>
+            </tbody></table>
+            <div class="info-box note"><h5>🔬 What AIDE Detects</h5><p>AIDE creates a cryptographic hash of every monitored file. On each check, it recomputes hashes and compares. It detects: modified files (hacker changed your code), new files (hacker uploaded a backdoor), deleted files (hacker removed logs), changed permissions (hacker made a file SUID root). <strong>Anihpj use case:</strong> Monitor <code>/var/www/anihpj/</code>, <code>/etc/nginx/</code>, <code>/etc/postgresql/</code>, <code>/etc/ssh/sshd_config</code>, <code>/etc/passwd</code>, <code>/etc/shadow</code>. Run <code>aide --check</code> daily via cron and email the diff. If source code changes unexpectedly — investigate immediately.</p></div></div>
+
+        <div class="section-block" id="s32-5"><h3>32.5 Hardening Checklist</h3>
+            <div class="card-grid cols-2">
+                <div class="info-card"><div class="card-icon">🔐</div><h5>SSH Hardening</h5><p>PermitRootLogin no, PasswordAuthentication no, AllowUsers whitelist, non-default port. sshd -t before reload.</p></div>
+                <div class="info-card"><div class="card-icon">🛡️</div><h5>Firewall</h5><p>UFW default deny incoming. Only 22, 80, 443 open. PostgreSQL on localhost only. Verify weekly with ufw status verbose.</p></div>
+                <div class="info-card"><div class="card-icon">👤</div><h5>User Security</h5><p>Service accounts: nologin shell. .env: chmod 600. sudo: specific commands only. umask 027 for services.</p></div>
+                <div class="info-card"><div class="card-icon">📦</div><h5>Updates & Patches</h5><p>unattended-upgrades for security patches. Weekly apt update. Remove unused services. Kernel hardening via sysctl.</p></div>
+                <div class="info-card"><div class="card-icon">📋</div><h5>Auditing</h5><p>auditd watching /etc/passwd, /etc/shadow. AIDE daily integrity checks. fail2ban active on SSH and Nginx.</p></div>
+                <div class="info-card"><div class="card-icon">💾</div><h5>Backups & Recovery</h5><p>Nightly pg_dump. GPG encrypted offsite copy. Tested restore procedure. 3-2-1 backup rule enforced.</p></div>
+            </div>
+            <div class="diagram-container"><div class="diagram-title">Complete 30-Point Production Hardening Checklist</div>
+<pre>
+  ☐  1. SSH: PermitRootLogin no
+  ☐  2. SSH: PasswordAuthentication no (key-only)
+  ☐  3. SSH: AllowUsers whitelist
+  ☐  4. SSH: non-default port (>1024 reduces scan noise)
+  ☐  5. UFW: default deny incoming, allow 22/80/443
+  ☐  6. PostgreSQL: listen_addresses = 'localhost'
+  ☐  7. PostgreSQL: strong password for anihpj_user
+  ☐  8. anihpj user: nologin shell, no sudo
+  ☐  9. .env file: chmod 600, NOT in Git
+  ☐ 10. Django: DEBUG=False in production
+  ☐ 11. Django: ALLOWED_HOSTS restricted
+  ☐ 12. Django: SECRET_KEY not in settings.py (use env var)
+  ☐ 13. unattended-upgrades: auto-install security patches
+  ☐ 14. fail2ban: active on SSH (maxretry=5, bantime=1h)
+  ☐ 15. fail2ban: active on Nginx (rate-limit abuse)
+  ☐ 16. AppArmor: enforce profiles on nginx, gunicorn
+  ☐ 17. auditd: watch /etc/passwd, /etc/shadow, /etc/sudoers
+  ☐ 18. AIDE: monitor /var/www/anihpj/, key configs
+  ☐ 19. File permissions: find / -perm -4000 (audit SUID)
+  ☐ 20. No default passwords: change all vendor defaults
+  ☐ 21. Chrony: time synced (SSL certs need correct time)
+  ☐ 22. logrotate: logs rotated (prevent disk full)
+  ☐ 23. /tmp mounted with noexec,nosuid,nodev
+  ☐ 24. Remove unused services: telnet, rsh, ftp, nfs if not needed
+  ☐ 25. Kernel: sysctl net.ipv4.tcp_syncookies=1 (SYN flood protection)
+  ☐ 26. Kernel: sysctl net.ipv4.ip_forward=0 (unless router)
+  ☐ 27. SSL: certbot auto-renewal verified
+  ☐ 28. Backups: nightly, tested restore, offsite copy
+  ☐ 29. Monitoring: disk space, CPU, memory alerts
+  ☐ 30. Documentation: server build log, config backups in Git
+</pre></div></div>
+
+        <div class="visual-summary"><h4>📊 Chapter 32 Visual Summary</h4><div class="vs-grid">
+            <div class="vs-item"><div class="vs-icon">🔑</div><span class="vs-label">Least Privilege</span><span class="vs-detail">nologin shells, limited DB users, closed ports. MINIMUM needed permissions.</span></div>
+            <div class="vs-item"><div class="vs-icon">📋</div><span class="vs-label">auditd</span><span class="vs-detail">auditctl -w to watch files. ausearch to find who accessed what.</span></div>
+            <div class="vs-item"><div class="vs-icon">🚫</div><span class="vs-label">fail2ban</span><span class="vs-detail">5 failures = 1 hour ban. Protects SSH + Nginx. fail2ban-client to manage.</span></div>
+            <div class="vs-item"><div class="vs-icon">🔍</div><span class="vs-label">AIDE</span><span class="vs-detail">Cryptographic hashes detect modified files. aide --check daily.</span></div>
+        </div></div>
+
+        <div class="lfcs-exam-questions"><h4>Chapter 32 — LFCS Practice Questions</h4>
+            <div class="exam-question-item"><div class="eq-number">Q1</div><div class="eq-question">Set up auditd to monitor /etc/passwd for any write or attribute changes.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo auditctl -w /etc/passwd -p wa -k passwd_changes</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q2</div><div class="eq-question">Search the audit log for all events related to /etc/shadow. Show who accessed it and when.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo ausearch -f /etc/shadow -i</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q3</div><div class="eq-question">Configure fail2ban to ban IPs after 3 failed SSH attempts within 5 minutes, for 30 minutes.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code># /etc/fail2ban/jail.local:
+[sshd]
+enabled = true
+maxretry = 3
+bantime = 1800
+findtime = 300</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q4</div><div class="eq-question">Check which IPs are currently banned by fail2ban for SSH. Write the command.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo fail2ban-client status sshd</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q5</div><div class="eq-question">How do you manually unban an IP address 192.168.1.100 from fail2ban's SSH jail?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo fail2ban-client set sshd unbanip 192.168.1.100</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q6</div><div class="eq-question">Initialize AIDE to create a baseline, then run a check after deploying code. Write both commands.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo aideinit                  # creates baseline (first time)
+sudo aide --check              # compares current state to baseline</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q7</div><div class="eq-question">Find all SUID binaries on the system. Why are these a security concern?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>sudo find / -perm -4000 -type f 2>/dev/null
+# SUID binaries run with the OWNER's permissions (often root).
+# If a SUID binary has a vulnerability, attackers can exploit
+# it to escalate to root. Audit this list regularly — remove
+# SUID from any binary that doesn't absolutely need it.</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q8</div><div class="eq-question">What's the principle of least privilege? Give anihpj-specific examples.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><p>Every entity gets the MINIMUM permissions needed. Anihpj examples: (1) anihpj Linux user has nologin shell — can run Gunicorn via systemd but can never SSH in. (2) anihpj_user PostgreSQL role only has privileges on anihpj_db — can't see other databases. (3) UFW only opens ports 22, 80, 443 — PostgreSQL (5432) stays on localhost. (4) www-data can read static files but can't read .env or source code.</p></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q9</div><div class="eq-question">How do you make auditd rules persistent across reboots?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code># Add rules to /etc/audit/rules.d/audit.rules:
+-w /etc/passwd -p wa -k passwd_changes
+-w /etc/shadow -p rwa -k shadow_access
+# Then load them:
+sudo augenrules --load
+sudo systemctl restart auditd</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q10</div><div class="eq-question">List 5 unused services that should be removed/disabled on a production web server. Why?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code># Remove/disable if not needed:
+sudo systemctl disable --now telnet    # plaintext remote access
+sudo systemctl disable --now rsh       # legacy remote shell
+sudo systemctl disable --now ftp       # plaintext file transfer
+sudo systemctl disable --now nfs-server # network file system
+sudo systemctl disable --now cups      # printing (on a web server?!)
+
+# Why: Every running service is an attack surface.
+# Each has open ports, potential vulnerabilities, and
+# consumes resources. If you don't need it, disable it.</code></pre></div></details></div>
+        </div>
+        <div class="beyond-exam"><div class="beyond-exam-header"><span class="beyond-icon">🚀</span><h4>Beyond the Exam — Enterprise Hardening</h4></div><div class="beyond-exam-body"><p>Checklists are the start. Enterprise security adds:</p><div class="evo-road"><div class="evo-item"><div class="evo-name">Manual Hardening</div><div class="evo-desc">Checklists, auditd, fail2ban — LFCS foundation</div></div><div class="evo-arrow">→</div><div class="evo-item"><div class="evo-name">Configuration Management</div><div class="evo-desc">Ansible/Chef enforce hardening as code. CIS benchmarks.</div></div><div class="evo-arrow">→</div><div class="evo-item"><div class="evo-name">SIEM + SOC</div><div class="evo-desc">Centralized log analysis, real-time alerts, incident response</div></div></div></div></div></div>
+    </div>
+    <div id="ch33">
+        <div class="chapter-intro"><h3>Chapter 33: Certificates, Keys & Encryption</h3><p>Encryption is the math that keeps <strong>anihpj</strong> user data safe. This chapter dives into the two types of encryption (symmetric vs asymmetric), practical <strong>OpenSSL</strong> commands for working with certificates, <strong>GPG</strong> for encrypting backups before sending them offsite, and an SSH keys deep-dive covering certificate-based authentication for teams.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5 hours</span><span class="meta-tag">🔐 Crypto</span></div></div>
+        <div class="learning-objectives"><h4>🎯 What You'll Learn</h4><ul><li>✅ Understand symmetric vs asymmetric encryption — when to use each</li><li>✅ Generate, inspect, and verify certificates with OpenSSL</li><li>✅ Encrypt files and sign code with GPG</li><li>✅ Master SSH key types, agents, and certificate-based auth</li></ul></div>
+        <div class="lfcs-chapter-relevance"><span class="relevance-label">🎓 LFCS Relevance</span><div class="relevance-domains"><span class="lfcs-domain-badge">Security <span class="lfcs-weight">10%</span></span></div></div>
+        <div class="lfcs-exam-tip"><h5>🎯 Crypto on the LFCS Exam</h5><p>LFCS may ask you to generate a self-signed certificate with OpenSSL, check cert expiry, or use GPG to encrypt a file. Key commands: <code>openssl req -x509</code>, <code>openssl x509 -enddate</code>, <code>gpg -e</code>, <code>gpg -d</code>. Know the difference between .pem (text), .der (binary), .p12 (PKCS#12 bundle with private key).</p></div>
+
+        <div class="section-block" id="s33-1"><h3>33.1 Symmetric vs Asymmetric Encryption</h3>
+            <div class="split-panel">
+                <div class="split-side split-good"><h5>🔑 Symmetric (AES)</h5><p>ONE key for both encrypt AND decrypt. Like a physical key that locks AND unlocks. <strong>Fast</strong> — good for bulk data. <strong>Problem:</strong> how do you share the key securely? Used in HTTPS for the actual data transfer (AES-256-GCM).</p></div>
+                <div class="split-side split-good"><h5>🔐 Asymmetric (RSA/Ed25519)</h5><p>TWO keys: public (encrypt) and private (decrypt). Like a mailbox — anyone can drop mail in (public key), only you can read it (private key). <strong>Slower</strong> but solves key distribution. Used in HTTPS for the initial key exchange.</p></div>
+            </div>
+            <div class="diagram-container"><div class="diagram-title">Hybrid Encryption — How HTTPS Actually Works</div>
+<pre>
+  BROWSER                                          SERVER
+  ────────────────────────────────────────────────────────────────
+  ① Browser gets server's PUBLIC KEY (from certificate)
+
+  ② Browser generates random SESSION KEY (symmetric)
+     ┌──────────────────────────────────────┐
+     │  🔑 Session Key: a8f3b2c1... (256bit)│
+     └──────────────────────────────────────┘
+
+  ③ Browser ENCRYPTS session key with server's PUBLIC KEY
+     ┌──────────────────────────────────────┐
+     │  🔒 Encrypted Session Key            │
+     │  (can only be decrypted with          │
+     │   server's PRIVATE key)              │
+     └──────────────────────────────────────┘
+     ────────────────────────────────────▶  Sent to server
+
+  ④ Server decrypts session key with PRIVATE KEY
+     Now BOTH sides have the same session key!
+
+  ⑤ 🔒 ALL SUBSEQUENT DATA encrypted with AES-256 + session key
+     ┌──────────────────────────────────────┐
+     │  GET /jobs/  →  AES-256 encrypt  →   │
+     │  [encrypted bytes]  ──────────────▶  │
+     │              ←  AES-256 decrypt  ←   │
+     │                 [encrypted bytes]    │
+     └──────────────────────────────────────┘
+
+  💡 Asymmetric (slow) used ONCE for key exchange.
+     Symmetric (fast) used for EVERYTHING after.
+     Best of both worlds: security + performance.
+</pre></div></div>
+
+        <div class="section-block" id="s33-2"><h3>33.2 OpenSSL — Working with Certificates</h3>
+            <table class="compare-table"><thead><tr><th>Command</th><th>What It Does</th></tr></thead><tbody>
+                <tr><td><code>openssl genrsa -out anihpj.key 4096</code></td><td>Generate 4096-bit RSA private key</td></tr>
+                <tr><td><code>openssl req -x509 -new -key anihpj.key -days 365 -out anihpj.crt</code></td><td>Generate self-signed cert (dev/testing only!)</td></tr>
+                <tr><td><code>openssl x509 -in anihpj.crt -text -noout</code></td><td>View all certificate details</td></tr>
+                <tr><td><code>openssl x509 -in anihpj.crt -enddate -noout</code></td><td>Check certificate expiry date only</td></tr>
+                <tr><td><code>openssl s_client -connect anihpj.com:443 -servername anihpj.com</code></td><td>Test TLS connection (shows full chain and cipher)</td></tr>
+                <tr><td><code>openssl s_client -connect anihpj.com:443 2>/dev/null | openssl x509 -noout -dates</code></td><td>Check remote cert expiry (one-liner)</td></tr>
+                <tr><td><code>openssl req -new -key anihpj.key -out anihpj.csr</code></td><td>Generate CSR (Certificate Signing Request)</td></tr>
+            </tbody></table>
+            <div class="scenario-box positive"><h5>🔧 Real-World: Self-Signed Cert for Anihpj Dev Server</h5><p><strong>Situation:</strong> Internal staging server at staging.anihpj.local needs HTTPS but can't get Let's Encrypt (no public DNS).</p><ol><li><strong>Generate key + cert:</strong> <code>openssl req -x509 -newkey rsa:4096 -keyout staging.key -out staging.crt -days 365 -nodes -subj "/CN=staging.anihpj.local"</code></li><li><strong>Configure Nginx:</strong> point ssl_certificate and ssl_certificate_key to the files.</li><li><strong>Trust on dev machines:</strong> Add staging.crt to browser/system trust store. Or just click through the browser warning — it's only dev.</li><li><strong>Verify:</strong> <code>openssl s_client -connect staging.anihpj.local:443</code> → shows your self-signed cert.</li></ol></div></div>
+
+        <div class="section-block" id="s33-3"><h3>33.3 GPG — Encrypting Files and Emails</h3>
+            <table class="compare-table"><thead><tr><th>Command</th><th>What It Does</th></tr></thead><tbody>
+                <tr><td><code>gpg --gen-key</code></td><td>Generate GPG key pair (interactive)</td></tr>
+                <tr><td><code>gpg --list-keys</code></td><td>List your public keys</td></tr>
+                <tr><td><code>gpg -e -r admin@anihpj.com backup.sql</code></td><td>Encrypt file for specific recipient (creates backup.sql.gpg)</td></tr>
+                <tr><td><code>gpg -d backup.sql.gpg > backup.sql</code></td><td>Decrypt file (prompts for your private key passphrase)</td></tr>
+                <tr><td><code>gpg --sign anihpj-v1.0.tar.gz</code></td><td>Sign a file (proves it came from YOU, not tampered with)</td></tr>
+                <tr><td><code>gpg --verify anihpj-v1.0.tar.gz.sig</code></td><td>Verify a signature</td></tr>
+            </tbody></table>
+            <div class="info-box note"><h5>🔬 Use Case: Encrypt Anihpj Backups Before Offsite Transfer</h5><p>You're sending nightly database dumps to an offsite NAS or S3 bucket. If that storage is compromised, your raw SQL dumps expose ALL user data. Encrypt before transfer: <code>pg_dump anihpj_db | gzip | gpg -e -r backup@anihpj.com > /backups/anihpj-$(date +%F).sql.gz.gpg</code>. Now even if someone steals the backup file, they can't read it without the backup@anihpj.com private key and passphrase. The private key lives ONLY on a secure admin machine — never on the server itself.</p></div></div>
+
+        <div class="section-block" id="s33-4"><h3>33.4 SSH Keys — Deep Dive</h3>
+            <table class="compare-table"><thead><tr><th>Key Type</th><th>Size</th><th>Security</th><th>Recommendation</th></tr></thead><tbody>
+                <tr><td><strong>Ed25519</strong></td><td>256-bit</td><td>Excellent (128-bit equivalent)</td><td>⭐ USE THIS — modern, fast, compact</td></tr>
+                <tr><td><strong>RSA</strong></td><td>2048-4096 bit</td><td>Good (3072+ recommended)</td><td>Use only for legacy compatibility</td></tr>
+                <tr><td><strong>ECDSA</strong></td><td>256/384/521 bit</td><td>Good but NIST curves</td><td>Use Ed25519 instead</td></tr>
+                <tr><td><strong>DSA</strong></td><td>1024 bit</td><td>DEPRECATED</td><td>NEVER use — not supported since OpenSSH 7.0</td></tr>
+            </tbody></table>
+            <div class="diagram-container"><div class="diagram-title">SSH Key Workflow — From Generation to Authentication</div>
+<pre>
+  YOUR LAPTOP                              ANIHPJ SERVER
+  ─────────────────────────────────────────────────────────────────
+  ① ssh-keygen -t ed25519 -C "anihpj-deploy"
+     Creates: ~/.ssh/id_ed25519       (PRIVATE — never share!)
+              ~/.ssh/id_ed25519.pub   (PUBLIC — safe to share)
+
+  ② ssh-copy-id deploy@anihpj-server
+     Copies id_ed25519.pub → server's ~/.ssh/authorized_keys
+
+  ③ ssh deploy@anihpj-server
+     ─────────────────────────────────────▶
+     "I want to authenticate as 'deploy'"
+
+     ◀───────────────────────────────────
+     "Prove it. Here's a random challenge."
+
+     ─────────────────────────────────────▶
+     "I signed the challenge with my
+      private key. Here's the signature."
+
+     ◀───────────────────────────────────
+     Server checks: signature + public key
+     in authorized_keys → MATCH! ✅
+     "Welcome, deploy!"
+
+  CERTS (for teams): Instead of copying individual keys to every
+  server, sign user keys with a CA: ssh-keygen -s ca_key -I user_id
+  -n deploy -V +52w user_key.pub. Servers trust the CA — any key
+  signed by the CA can log in. Expiry is enforced. Revoke by
+  listing in revoked_keys file. No more authorized_keys management!
+</pre></div>
+            <div class="info-box note"><h5>🔬 SSH Agent — Store Passphrases So You Don't Type Them 100 Times</h5><p>If your SSH private key has a passphrase (and it should!), you'd normally type it on every connection. <strong>ssh-agent</strong> solves this: it runs in the background, holds your decrypted keys in memory, and provides them to SSH clients on demand. <strong>Workflow:</strong> (1) Start agent: <code>eval $(ssh-agent)</code> — sets environment variables so SSH knows where the agent socket is. (2) Add key: <code>ssh-add ~/.ssh/id_ed25519</code> — you type the passphrase ONCE. (3) Now <code>ssh anihpj-prod</code> works without prompting. <strong>Commands:</strong> <code>ssh-add -l</code> lists loaded keys. <code>ssh-add -D</code> removes all keys (logout cleanup). <strong>Security:</strong> <code>ForwardAgent no</code> in ~/.ssh/config prevents remote servers from using your agent (if the remote server is compromised, attacker can authenticate as you to other servers). <strong>Modern alternative:</strong> macOS Keychain and GNOME Keyring integrate with ssh-agent automatically. On Linux: <code>ssh-add -c</code> requires confirmation for each use.</p></div>
+            <div class="process-steps"><div class="process-step-item"><div class="step-number" style="background:#22c55e;">1</div><h5>Generate Private Key</h5><p><code>openssl genrsa -out anihpj.key 4096</code> — Creates a 4096-bit RSA private key. This is the MOST sensitive file — protect it with chmod 600.</p></div><div class="process-step-item"><div class="step-number" style="background:#3b82f6;">2</div><h5>Create CSR (Certificate Signing Request)</h5><p><code>openssl req -new -key anihpj.key -out anihpj.csr</code> — CSR contains your public key + identity info. Send this to a CA (or certbot).</p></div><div class="process-step-item"><div class="step-number" style="background:#8b5cf6;">3</div><h5>Get Certificate Signed</h5><p>Production: certbot sends CSR to Let's Encrypt, returns signed cert. Dev: <code>openssl req -x509</code> self-signs. Cert proves your identity to browsers.</p></div><div class="process-step-item"><div class="step-number" style="background:#f59e0b;">4</div><h5>Install & Verify</h5><p>Install cert in Nginx. Test: <code>openssl s_client -connect anihpj.com:443</code>. Monitor expiry: <code>openssl x509 -enddate</code>. Auto-renew with certbot.</p></div></div></div>
+
+        <div class="visual-summary"><h4>📊 Chapter 33 Visual Summary</h4><div class="vs-grid">
+            <div class="vs-item"><div class="vs-icon">🔑</div><span class="vs-label">Symmetric</span><span class="vs-detail">AES — one key, fast, bulk data. Used for HTTPS data transfer.</span></div>
+            <div class="vs-item"><div class="vs-icon">🔐</div><span class="vs-label">Asymmetric</span><span class="vs-detail">RSA/Ed25519 — two keys, slow, key exchange. Used for HTTPS handshake.</span></div>
+            <div class="vs-item"><div class="vs-icon">📜</div><span class="vs-label">OpenSSL</span><span class="vs-detail">genrsa, req -x509, s_client, x509 -enddate. The Swiss Army knife of crypto.</span></div>
+            <div class="vs-item"><div class="vs-icon">🔏</div><span class="vs-label">GPG</span><span class="vs-detail">gpg -e to encrypt, gpg -d to decrypt. Encrypt backups before offsite transfer.</span></div>
+        </div></div>
+
+        <div class="lfcs-exam-questions"><h4>Chapter 33 — LFCS Practice Questions</h4>
+            <div class="exam-question-item"><div class="eq-number">Q1</div><div class="eq-question">Generate a 4096-bit RSA private key and a self-signed certificate valid for 365 days for anihpj.com.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>openssl genrsa -out anihpj.key 4096
+openssl req -x509 -new -key anihpj.key -days 365 -out anihpj.crt -subj "/CN=anihpj.com"</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q2</div><div class="eq-question">Check when the SSL certificate for anihpj.com expires. Write the command.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>echo | openssl s_client -connect anihpj.com:443 -servername anihpj.com 2>/dev/null | openssl x509 -noout -enddate</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q3</div><div class="eq-question">What's the difference between symmetric and asymmetric encryption? When is each used in HTTPS?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><p><strong>Symmetric (AES):</strong> ONE key encrypts and decrypts. FAST. Used for the actual data transfer in HTTPS — the session key encrypts all HTTP traffic. <strong>Asymmetric (RSA/Ed25519):</strong> TWO keys — public encrypts, private decrypts. SLOW but solves key distribution. Used ONCE in HTTPS: the browser encrypts the random session key with the server's public key, and the server decrypts it with its private key. The session key is then used for symmetric encryption of all subsequent data.</p></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q4</div><div class="eq-question">Encrypt the file backup.sql with GPG for recipient admin@anihpj.com.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>gpg -e -r admin@anihpj.com backup.sql
+# Creates backup.sql.gpg</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q5</div><div class="eq-question">Decrypt backup.sql.gpg and save the output to backup.sql.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>gpg -d backup.sql.gpg > backup.sql</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q6</div><div class="eq-question">Generate an Ed25519 SSH key specifically for deploying anihpj code.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>ssh-keygen -t ed25519 -C "anihpj-deploy-key"</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q7</div><div class="eq-question">View all details of a certificate file anihpj.crt using OpenSSL.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code>openssl x509 -in anihpj.crt -text -noout</code></pre></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q8</div><div class="eq-question">Which SSH key types are recommended and which are deprecated? Why?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><p><strong>Recommended:</strong> Ed25519 (fast, compact, secure, modern). <strong>Acceptable:</strong> RSA 3072+ bit (compatible but slower, larger keys). <strong>Deprecated:</strong> DSA (removed in OpenSSH 7.0), RSA <2048 bit (brute-forceable). <strong>Avoid:</strong> ECDSA (uses NIST curves with potential backdoor concerns — Ed25519 is strictly better). Always generate: <code>ssh-keygen -t ed25519</code>.</p></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q9</div><div class="eq-question">How does SSH certificate-based authentication differ from regular key authentication?</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><p><strong>Regular keys:</strong> Each user's public key must be copied to EVERY server's authorized_keys file. When someone leaves, you must remove their key from ALL servers. <strong>Certificate-based:</strong> A Certificate Authority (CA) signs user keys. Servers trust the CA, not individual keys. Benefits: (1) Users can have expiring certs (no cleanup needed), (2) Revoke by listing in revoked_keys — one place, (3) No more copying keys — sign once, access all servers. Generate CA: <code>ssh-keygen -t ed25519 -f ca_key</code>. Sign user key: <code>ssh-keygen -s ca_key -I user@anihpj -n deploy -V +52w user_key.pub</code>.</p></div></details></div>
+            <div class="exam-question-item"><div class="eq-number">Q10</div><div class="eq-question">Create a one-liner to check if anihpj.com's SSL certificate expires within 30 days.</div><details><summary>Click to reveal answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ Answer</div><pre><code># Check expiry date:
+EXPIRY=$(echo | openssl s_client -connect anihpj.com:443 -servername anihpj.com 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2)
+# Convert to epoch and compare (30 days = 2592000 seconds):
+EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
+NOW_EPOCH=$(date +%s)
+if [ $((EXPIRY_EPOCH - NOW_EPOCH)) -lt 2592000 ]; then
+    echo "⚠️  Certificate expires in less than 30 days!"
+fi</code></pre></div></details></div>
+        </div>
+        <div class="beyond-exam"><div class="beyond-exam-header"><span class="beyond-icon">🚀</span><h4>Beyond the Exam — Enterprise Crypto</h4></div><div class="beyond-exam-body"><p>OpenSSL and GPG are fundamentals. Enterprise crypto adds:</p><div class="evo-road"><div class="evo-item"><div class="evo-name">OpenSSL/GPG</div><div class="evo-desc">Manual certificate management — LFCS foundation</div></div><div class="evo-arrow">→</div><div class="evo-item"><div class="evo-name">PKI (Public Key Infrastructure)</div><div class="evo-desc">Internal CA, auto-enrollment, CRL distribution</div></div><div class="evo-arrow">→</div><div class="evo-item"><div class="evo-name">HashiCorp Vault</div><div class="evo-desc">Secrets management, dynamic certs, encryption-as-a-service</div></div></div></div></div></div>
+    </div>
+
+    <!-- Part 9 Day in the Life -->
+    <div class="diagram-container" id="day-in-life-part9"><div class="diagram-title">🗓️ Day in the Life: Security Admin for Anihpj</div>
+    <p style="color:#c9d1d9;font-size:0.92em;margin:12px 0;">From morning security check to incident response — here's how Chapters 31-33 work together:</p></div>
+    <div class="case-study-grid">
+        <div class="case-card"><div class="case-icon">🛡️ 8:00</div><h5>Morning Audit</h5><div class="case-stat">Ch 32: auditd + AIDE</div><p><code>ausearch -ts today | aureport --summary</code> — check overnight file access. <code>aide --check</code> — any modified files?</p></div>
+        <div class="case-card"><div class="case-icon">🚫 8:15</div><h5>Check Bans</h5><div class="case-stat">Ch 32: fail2ban</div><p><code>fail2ban-client status sshd</code> → 3 IPs banned overnight. Normal bot activity. No action needed.</p></div>
+        <div class="case-card"><div class="case-icon">🏷️ 9:00</div><h5>Deploy New Code</h5><div class="case-stat">Ch 31: SELinux Contexts</div><p>New static files deployed. <code>restorecon -Rv /var/www/anihpj/staticfiles/</code> ensures correct SELinux contexts.</p></div>
+        <div class="case-card"><div class="case-icon">📜 10:00</div><h5>Check SSL Certs</h5><div class="case-stat">Ch 33: OpenSSL</div><p><code>openssl s_client -connect anihpj.com:443 | openssl x509 -noout -enddate</code> → 45 days left. No renewal needed.</p></div>
+        <div class="case-card"><div class="case-icon">🔏 13:00</div><h5>Offsite Backup</h5><div class="case-stat">Ch 33: GPG</div><p><code>pg_dump | gpg -e -r backup@anihpj.com > backup.sql.gpg</code> — encrypted before leaving the server.</p></div>
+        <div class="case-card"><div class="case-icon">✅ 16:00</div><h5>Verify Everything</h5><div class="case-stat">Ch 31-33: All Tools</div><p><code>getenforce</code>, <code>aa-status</code>, <code>fail2ban-client status</code>, <code>aide --check</code> — all green. Security day complete.</p></div>
+    </div>
+
+    <!-- Part 9 Consolidation -->
+    <div class="highlight-box" style="margin:30px 0;"><strong>🧩 Part 9 Consolidation — Defense in Depth:</strong> SELinux/AppArmor (Ch31) is your last line of defense — even if an attacker compromises the application, MAC policies limit the damage. auditd and AIDE (Ch32) are your surveillance cameras — they record who accessed what and alert you when files change. fail2ban (Ch32) is your automated bouncer — too many failed attempts and you're banned. OpenSSL and GPG (Ch33) secure your data in transit and at rest — certs for HTTPS, encryption for backups. <strong>Security isn't a product — it's a process. These tools are how you implement that process.</strong></div>
     <!-- Part 10 -->
     <div class="chapter-section" id="part10"><h2><span class="chapter-badge">🔴</span> Part 10: Monitoring & Performance</h2></div>
     <div class="chapter-section" id="ch34"><h2><span class="chapter-badge">Ch 34</span> System Monitoring</h2><div class="content-placeholder"><div class="placeholder-icon">📊</div><p>Content coming soon — CPU, memory, disk I/O, network monitoring, system-wide status commands</p></div></div>

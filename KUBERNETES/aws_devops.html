@@ -10213,12 +10213,31 @@ pip install django  # Cached in CodeArtifact after first pull</code></pre>
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!--  CHAPTER 16: CLOUDFORMATION                                          -->
 <!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="chapter-divider" id="ch16"><span class="chapter-badge">Chapter 16</span></div>
+<div class="chapter-intro" id="ch16">
+<h3>Chapter 16: CloudFormation — AWS Infrastructure as Code</h3>
+<p>CloudFormation is AWS's native Infrastructure as Code service. Write a YAML or JSON template describing every resource your application needs, and CloudFormation provisions them in dependency order — with automatic rollback on failure. Master CloudFormation and you master repeatable, version-controlled AWS infrastructure.</p>
+<div class="chapter-meta">
+<span class="meta-tag">🟡 Intermediate</span>
+<span class="meta-tag">⏱️ ~4 hours</span>
+<span class="meta-tag">🎯 Domain 2: Config Mgmt 17%</span>
+<span class="meta-tag">📝 10 Questions</span>
+</div>
+</div>
 
 <div class="section-block" id="s16-1">
 <h3>16.1 CloudFormation Fundamentals</h3>
 
-<p><strong>AWS CloudFormation</strong> is the original AWS IaC service. You write a template (JSON or YAML) describing the resources you want, and CloudFormation provisions and configures them in the correct order, handling dependencies automatically:</p>
+<p><strong>AWS CloudFormation</strong> is the original AWS IaC service. You write a template (JSON or YAML) describing the resources you want, and CloudFormation provisions and configures them in the correct order, handling dependencies automatically.</p>
+
+<div class="eq-explanation">
+<div class="eq-exp-label">🧠 Why Infrastructure as Code Matters</div>
+<p>Before IaC, provisioning AWS resources meant clicking through the console — <strong>click-ops</strong>. This created three critical problems that IaC solves:</p>
+<div class="card-grid cols-3">
+<div class="info-card highlight"><div class="card-icon-lg">🔁</div><h5>Reproducibility</h5><p>Click-ops: "I think I set the security group this way... maybe?" With IaC, every resource is defined in code — deploy the same template twice, get identical infrastructure. Dev, staging, and production are byte-for-byte identical environments.</p></div>
+<div class="info-card"><div class="card-icon-lg">📝</div><h5>Version Control</h5><p>Infrastructure changes become Git commits with diffs, PRs, and reviews. "Who changed the RDS instance type?" → git blame tells you exactly who, when, and why. Rollback is <code>git revert</code> + redeploy — infrastructure history is your backup.</p></div>
+<div class="info-card"><div class="card-icon-lg">🚫</div><h5>No Configuration Drift</h5><p>Click-ops leads to drift: the console says one thing, another engineer changed it manually, and nobody knows what's actually running. IaC templates are the single source of truth — CloudFormation Drift Detection finds and reports any manual changes.</p></div>
+</div>
+</div>
 
 <div class="card-grid cols-3">
 <div class="info-card highlight"><div class="card-icon-lg">📝</div><h5>Template</h5><p>A JSON or YAML file that declaratively describes your infrastructure. The single source of truth — versioned in Git. No manual steps, no click-ops, no configuration drift over time.</p></div>
@@ -10282,6 +10301,15 @@ Outputs:
 </div>
 <p style="color:#60a5fa;font-size:0.9em;"><strong>Example:</strong> Deploy <code>anihpj-security-baseline</code> (CloudTrail, Config, GuardDuty) to all 50 accounts in the Org — update once, all accounts receive the change simultaneously.</p>
 </div>
+
+<div class="eq-explanation">
+<div class="eq-exp-label">🔧 DEEP DIVE: cfn-init — Bootstrapping EC2 Instances</div>
+<p><strong>cfn-init</strong> is CloudFormation's mechanism for configuring EC2 instances at launch. Unlike User Data (which runs once at first boot), cfn-init can detect template changes and reconfigure running instances:</p>
+<div class="split-panel">
+<div class="split-side" style="background:linear-gradient(135deg,#1a1a2e 0%,#0d1117 100%);"><h5 style="color:#f0b429;">Traditional User Data</h5><ul><li>Runs ONLY at first boot (via cloud-init)</li><li>Template updates don't reconfigure running instances</li><li>No built-in signaling — CloudFormation doesn't know when it's done</li><li>If User Data fails silently, CloudFormation thinks the instance is ready</li></ul></div>
+<div class="split-side" style="background:linear-gradient(135deg,#1a2e1a 0%,#101a10 100%);"><h5 style="color:#4ade80;">cfn-init + cfn-signal</h5><ul><li>cfn-init reads Metadata from the CloudFormation stack — can re-run on updates</li><li>cfn-signal tells CloudFormation: "I'm ready" or "I failed"</li><li>CreationPolicy waits for cfn-signal before marking the resource CREATE_COMPLETE</li><li>If cfn-signal reports failure → stack rolls back — no partial deployments</li></ul></div>
+</div>
+</div>
 </div>
 </div>
 
@@ -10297,6 +10325,24 @@ Outputs:
 <div class="info-card"><div class="card-icon-lg">🔀</div><h5>!Select & !Join</h5><p><code>!Select [0, !Split ["/", !Ref Path]]</code> — pick from a list. <code>!Join ["", ["prefix-", !Ref Name]]</code> — concatenate strings.</p></div>
 <div class="info-card"><div class="card-icon-lg">🏷️</div><h5>Pseudo Parameters</h5><p><code>AWS::Region</code>, <code>AWS::AccountId</code>, <code>AWS::StackName</code>, <code>AWS::StackId</code>, <code>AWS::NoValue</code>. Always available, never need to declare, auto-populated by CloudFormation.</p></div>
 <div class="info-card"><div class="card-icon-lg">🔐</div><h5>Dynamic References</h5><p><code>{{resolve:ssm:/anihpj/db-password:1}}</code> — fetch secrets from SSM Parameter Store or Secrets Manager at deploy time. Never hardcode secrets in templates.</p></div>
+</div>
+
+<div class="code-block-wrapper">
+<div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">Intrinsic Functions — Real Examples</span></div>
+<pre><code class="language-yaml"># !Ref — reference a resource or parameter
+SecurityGroups: [!Ref ClusterSecurityGroup]
+
+# !Sub — substitute variables inline
+Name: !Sub "anihpj-${Environment}-${AWS::Region}"
+
+# !Join — concatenate strings with delimiter
+BucketPolicy: !Join ["", ["arn:aws:s3:::", !Ref BucketName]]
+
+# !FindInMap — lookup from Mappings section
+ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+
+# Dynamic Reference — resolve secrets at deploy time
+MasterPassword: '{{resolve:secretsmanager:anihpj-db:SecretString:password}}'</code></pre>
 </div>
 </div>
 
@@ -10369,10 +10415,35 @@ Outputs:
 </div>
 </div>
 
+<!-- Chapter 16: Practice Questions -->
+<div class="exam-questions-section">
+<h4>📝 Chapter 16 — CloudFormation (10 Questions)</h4>
+<div class="exam-question-item"><span class="eq-number">Q1</span><p class="eq-question">What happens by default when a CloudFormation stack creation fails?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Automatic rollback.</strong> All resources created up to the failure point are deleted. The stack status becomes <code>ROLLBACK_COMPLETE</code>. You can disable this behavior by setting <code>OnFailure: DO_NOTHING</code> to preserve resources for debugging.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q2</span><p class="eq-question">What is a CloudFormation Change Set?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>A preview showing exactly which resources will be added, modified, or deleted before applying a stack update. Always review the Change Set in production — it prevents surprises like accidental resource replacement or deletion.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q3</span><p class="eq-question">How do you reference a resource's physical ID in CloudFormation?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><code>!Ref LogicalResourceName</code>. For most resources, this returns the physical ID (e.g., bucket name, instance ID). For parameters, it returns the parameter value. This is the most commonly used intrinsic function.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q4</span><p class="eq-question">What is StackSets used for?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Multi-account, multi-region stack deployment.</strong> Deploy the same template across multiple AWS accounts and regions from a single operation. Common use case: deploy security baseline (IAM roles, Config rules) to all accounts in an AWS Organization.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q5</span><p class="eq-question">How can you prevent accidental deletion of a production CloudFormation stack?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Enable termination protection</strong> on the stack. This prevents deletion via console, CLI, or API until protection is explicitly disabled. Also use <code>DeletionPolicy: Retain</code> on critical resources to preserve them even if the stack IS deleted.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q6</span><p class="eq-question">What does <code>!Sub</code> do in CloudFormation?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Substitutes variables into strings. <code>!Sub "arn:aws:s3:::${BucketName}"</code> replaces <code>${BucketName}</code> with the value of the parameter or resource reference. Supports both inline and mapping syntax for complex substitutions.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q7</span><p class="eq-question">What is CloudFormation Drift Detection?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Detects when actual resource configurations differ from the stack template. Someone manually modified a resource (click-ops) — Drift Detection identifies the mismatch. Run it periodically to ensure your infrastructure matches your declared template.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q8</span><p class="eq-question">How do you deploy a CloudFormation template with IAM resources?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Pass <code>--capabilities CAPABILITY_IAM</code> (for IAM resources) or <code>CAPABILITY_NAMED_IAM</code> (for named IAM resources). This is a safety mechanism — CloudFormation requires explicit acknowledgment when creating IAM resources that could grant permissions.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q9</span><p class="eq-question">What is the difference between <code>DependsOn</code> and <code>!Ref</code> for resource ordering?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><code>!Ref</code> creates an implicit dependency — CloudFormation automatically determines the correct order. <code>DependsOn</code> creates an explicit dependency when CloudFormation can't infer it (e.g., one resource needs another to exist but doesn't reference it directly).</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q10</span><p class="eq-question">How can CloudFormation pass secrets to EC2 instances without hardcoding them?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Use <strong>dynamic references</strong>: <code>{{resolve:ssm:/anihpj/db-password:1}}</code> or <code>{{resolve:secretsmanager:anihpj-db:SecretString}}</code>. CloudFormation resolves the value at deploy time from SSM Parameter Store or Secrets Manager without exposing it in the template.</p></div></details></div>
+</div>
+<div class="cka-practice-drill"><div class="drill-timer">⏱️ 20 min</div><div class="drill-scenario"><h5>🏋️ Drill 16: Provision EKS with CloudFormation</h5><p>Write a CloudFormation template that provisions: VPC (3 AZs, public+private subnets), EKS cluster with managed node group, IAM roles for cluster and nodes. Apply it and verify the cluster with <code>kubectl get nodes</code>.</p></div></div>
+
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!--  CHAPTER 17: AWS CDK                                                 -->
 <!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="chapter-divider" id="ch17"><span class="chapter-badge">Chapter 17</span></div>
+<div class="chapter-intro" id="ch17">
+<h3>Chapter 17: AWS CDK — Infrastructure as REAL Code</h3>
+<p>The AWS Cloud Development Kit lets you define infrastructure using TypeScript, Python, Java, C#, or Go — with loops, conditionals, classes, and unit tests. CDK synthesizes your code into CloudFormation templates behind the scenes. Write infrastructure like you write application code.</p>
+<div class="chapter-meta">
+<span class="meta-tag">🟡 Intermediate</span>
+<span class="meta-tag">⏱️ ~2 hours</span>
+<span class="meta-tag">🎯 Domain 2: Config Mgmt 17%</span>
+<span class="meta-tag">📝 10 Questions</span>
+</div>
+</div>
 
 <div class="section-block" id="s17-1">
 <h3>17.1 CDK vs CloudFormation</h3>
@@ -10412,6 +10483,26 @@ Outputs:
 <div class="info-card highlight"><div class="card-icon-lg">🧱</div><h5>L1 — Cfn* Constructs</h5><p>Direct 1:1 mapping to CloudFormation resources. <code>CfnBucket</code> → <code>AWS::S3::Bucket</code>. All properties must be explicitly set. Verbose but complete control.</p></div>
 <div class="info-card"><div class="card-icon-lg">🏗️</div><h5>L2 — Curated Constructs</h5><p>Higher-level, opinionated wrappers. <code>Bucket</code> auto-generates a unique name, applies best-practice defaults (encryption, versioning). <strong>Use these by default.</strong></p></div>
 <div class="info-card"><div class="card-icon-lg">📦</div><h5>L3 — Patterns</h5><p>Pre-built architectures. <code>ApplicationLoadBalancedFargateService</code> creates ALB + Fargate + task + security groups in one construct. Fastest path to production patterns.</p></div>
+</div>
+
+<div class="eq-explanation">
+<div class="eq-exp-label">🏗️ The CDK App → Stack → Construct Hierarchy</div>
+<div style="background:#0d1117;border:1px solid #30363d;border-radius:12px;padding:20px;margin-top:16px;text-align:center;font-family:monospace;">
+<div style="background:#161b22;border:2px solid #326ce5;border-radius:8px;padding:12px 24px;display:inline-block;margin-bottom:8px;color:#60a5fa;font-weight:700;">App (root container)</div>
+<div style="color:#8b949e;font-size:1.2em;">│ contains</div>
+<div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin:8px 0;">
+<div style="background:#161b22;border:1px solid #f0b429;border-radius:8px;padding:10px 20px;color:#f0b429;font-weight:600;">Stack: Dev</div>
+<div style="background:#161b22;border:1px solid #4ade80;border-radius:8px;padding:10px 20px;color:#4ade80;font-weight:600;">Stack: Prod</div>
+</div>
+<div style="color:#8b949e;font-size:1.2em;">│ each contains</div>
+<div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin:8px 0;">
+<div style="background:rgba(50,108,229,.08);border:1px solid rgba(50,108,229,.3);border-radius:6px;padding:6px 12px;color:#e4e4e7;font-size:0.78em;">Vpc Construct</div>
+<div style="background:rgba(50,108,229,.08);border:1px solid rgba(50,108,229,.3);border-radius:6px;padding:6px 12px;color:#e4e4e7;font-size:0.78em;">Cluster Construct</div>
+<div style="background:rgba(50,108,229,.08);border:1px solid rgba(50,108,229,.3);border-radius:6px;padding:6px 12px;color:#e4e4e7;font-size:0.78em;">NodeGroup Construct</div>
+</div>
+<div style="color:#8b949e;font-size:0.8em;margin-top:8px;">↓ cdk synth</div>
+<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:8px 20px;display:inline-block;color:#8b949e;font-size:0.78em;">CloudFormation Template (JSON)</div>
+</div>
 </div>
 </div>
 
@@ -10476,10 +10567,35 @@ class AnihpjEksStack(Stack):
 </div>
 </div>
 
+<!-- Chapter 17: Practice Questions -->
+<div class="exam-questions-section">
+<h4>📝 Chapter 17 — AWS CDK (10 Questions)</h4>
+<div class="exam-question-item"><span class="eq-number">Q1</span><p class="eq-question">What is the relationship between CDK and CloudFormation?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>CDK <strong>synthesizes</strong> code into CloudFormation templates. <code>cdk synth</code> generates a JSON/YAML template. <code>cdk deploy</code> submits it to CloudFormation. CDK is a higher-level abstraction — it writes CloudFormation for you.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q2</span><p class="eq-question">What are L1, L2, and L3 Constructs in CDK?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>L1 (Cfn*):</strong> 1:1 CloudFormation mapping. <strong>L2:</strong> Curated with defaults and helper methods. <strong>L3:</strong> Patterns — pre-built architectures. Always prefer L2 unless you need properties only available in L1.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q3</span><p class="eq-question">What does <code>cdk bootstrap</code> do?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Creates a dedicated S3 bucket and IAM roles in your AWS account needed for CDK deployments. The bootstrap stack stores assets (Lambda code, Docker images) and provides the execution role for CloudFormation. Run once per account/region.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q4</span><p class="eq-question">How do you write unit tests for CDK infrastructure?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Use <code>cdk.assertions.Template</code> in pytest/jest. Synthesize the stack, then assert: "the template has a resource of type AWS::S3::Bucket with BucketEncryption enabled." This validates infrastructure code without deploying to AWS.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q5</span><p class="eq-question">What is the CDK App → Stack → Construct hierarchy?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>App:</strong> root container (one per application). <strong>Stack:</strong> unit of deployment (maps to CloudFormation stack). <strong>Construct:</strong> building block (resources or groups). An App contains Stacks; Stacks contain Constructs.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q6</span><p class="eq-question">How can CDK enforce security policies across all stacks?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Use <strong>CDK Aspects</strong> — they visit every construct in the tree and can add or modify properties. Example: an Aspect that ensures all S3 buckets have encryption enabled and public access blocked. Also <strong>cdk-nag</strong> for AWS Solutions rules compliance.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q7</span><p class="eq-question">What's the advantage of CDK Pipelines over raw CodePipeline?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>CDK Pipelines automatically defines the pipeline in CDK code, self-mutating — when you update the pipeline definition, the pipeline updates itself. Multi-environment bootstrapping (dev→staging→prod) is built-in with automatic account/region promotion.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q8</span><p class="eq-question">How does CDK handle environment-specific configuration?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Pass context via <code>cdk.json</code> or <code>--context</code> flag. Use <code>this.node.tryGetContext('key')</code> in code. For multi-environment: create separate Stack instances with different <code>env</code> properties (account + region). CDK Pipelines automates this.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q9</span><p class="eq-question">What is <code>cdk diff</code> used for?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Shows the difference between the currently deployed stack and the local CDK code — similar to <code>terraform plan</code> or CloudFormation Change Sets. Critical safety check before <code>cdk deploy</code> to see exactly what will change.</p></div></details></div>
+<div class="exam-question-item"><span class="eq-number">Q10</span><p class="eq-question">Which CDK Construct should you use for deploying Kubernetes manifests to EKS?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><code>cluster.add_manifest()</code> for simple YAML manifests. For Helm charts: use the <code>HelmChart</code> construct or <code>cluster.add_helm_chart()</code>. Both deploy resources after the cluster is provisioned and the kubeconfig is available.</p></div></details></div>
+</div>
+<div class="cka-practice-drill"><div class="drill-timer">⏱️ 20 min</div><div class="drill-scenario"><h5>🏋️ Drill 17: Deploy EKS with CDK</h5><p>Write a Python CDK stack that: creates a VPC, provisions an EKS cluster with managed node group, deploys the anihpj Deployment and Service. Run <code>cdk synth</code>, review the generated CloudFormation template, then <code>cdk deploy</code>.</p></div></div>
+
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!--  CHAPTER 18: TERRAFORM ON AWS                                        -->
 <!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="chapter-divider" id="ch18"><span class="chapter-badge">Chapter 18</span></div>
+<div class="chapter-intro" id="ch18">
+<h3>Chapter 18: Terraform on AWS — Multi-Cloud IaC</h3>
+<p>Terraform by HashiCorp is the industry standard for multi-cloud Infrastructure as Code. Use HCL to define resources across AWS, Azure, GCP, and more — with a single workflow. The Terraform Registry hosts thousands of community modules, including production-grade EKS configurations.</p>
+<div class="chapter-meta">
+<span class="meta-tag">🟡 Intermediate</span>
+<span class="meta-tag">⏱️ ~3 hours</span>
+<span class="meta-tag">🎯 Domain 2: Config Mgmt 17%</span>
+<span class="meta-tag">📝 10 Questions</span>
+</div>
+</div>
 
 <div class="section-block" id="s18-1">
 <h3>18.1 Terraform vs CloudFormation vs CDK</h3>
@@ -10507,9 +10623,25 @@ class AnihpjEksStack(Stack):
 <p>Terraform's workflow follows a strict pattern. Every change goes through the same cycle:</p>
 
 <div class="process-steps">
-<div class="ps-step"><div class="ps-num">1</div><div class="ps-content"><h6>terraform init</h6><p>Initializes the working directory. Downloads required providers (AWS, Kubernetes, Helm). Sets up the backend for state storage (S3 + DynamoDB for locking). Run once per new workspace.</p></div></div>
-<div class="ps-step"><div class="ps-num">2</div><div class="ps-content"><h6>terraform plan</h6><p>Compares desired state (your .tf files) with actual state (the state file). Shows exactly what will be created, modified, or destroyed — <strong>always review before applying.</strong></p></div></div>
-<div class="ps-step"><div class="ps-num">3</div><div class="ps-content"><h6>terraform apply</h6><p>Executes the plan. Provisions, updates, or deletes resources. Updates the state file to reflect the new actual state. Production applies should always use a saved plan file.</p></div></div>
+<div class="ps-step"><div class="ps-num">1</div><div class="ps-content"><h6>terraform init</h6><p>Initializes the working directory. Downloads required providers (AWS, Kubernetes, Helm). Sets up the backend for state storage (S3 + DynamoDB for locking). Run once per new workspace. <strong>Output:</strong> <code>.terraform/</code> directory with provider binaries.</p></div></div>
+<div class="ps-step"><div class="ps-num">2</div><div class="ps-content"><h6>terraform plan</h6><p>Compares desired state (your .tf files) with actual state (the state file). Shows exactly what will be created (+), modified (~), or destroyed (-). <strong>Always review before applying to production.</strong> Output can be saved to a file for later apply.</p></div></div>
+<div class="ps-step"><div class="ps-num">3</div><div class="ps-content"><h6>terraform apply</h6><p>Executes the plan. Provisions, updates, or deletes resources. Updates the state file to reflect the new actual state. <strong>Production applies should always use a saved plan file</strong> (<code>-auto-approve</code> skips confirmation — risky).</p></div></div>
+</div>
+
+<div class="split-panel">
+<div class="split-side split-bad"><h5>⚠️ CloudFormation: No Plan Preview</h5><p>CloudFormation uses Change Sets (must be explicitly created and reviewed). There's no equivalent to <code>terraform plan</code> that runs automatically before apply. Change Sets are the closest but require an extra step.</p></div>
+<div class="split-side split-good"><h5>✅ Terraform: Plan is the Default</h5><p><code>terraform plan</code> runs automatically as part of <code>terraform apply</code> (you see the plan, then confirm). This makes it harder to accidentally apply changes without reviewing them first — a safety advantage over CloudFormation.</p></div>
+</div>
+</div>
+
+<div class="eq-explanation">
+<div class="eq-exp-label">🧩 DEEP DIVE: Terraform Modules & Workspaces</div>
+<p>Terraform modules are reusable infrastructure packages — like functions for infrastructure. Workspaces let you manage multiple environments from the same configuration:</p>
+<div class="card-grid cols-2">
+<div class="info-card highlight"><div class="card-icon-lg">📦</div><h5>Modules — Reusable IaC Packages</h5><p>Encapsulate groups of resources with inputs and outputs. The official <code>terraform-aws-modules/eks/aws</code> module provisions a complete EKS cluster with one module block. Publish to the <strong>Terraform Registry</strong> for team sharing. Compose modules: VPC module → EKS module → anihpj module.</p></div>
+<div class="info-card"><div class="card-icon-lg">🌍</div><h5>Workspaces — Multi-Environment Management</h5><p>Each workspace has its own state file. <code>terraform workspace new dev</code> creates an isolated environment. Use <code>terraform.workspace</code> variable in your config to switch CIDR ranges, instance sizes, or replica counts per environment. Alternative: separate directory per environment (more explicit, preferred for production).</p></div>
+</div>
+</div>
 </div>
 
 <div class="code-block-wrapper">
@@ -10591,7 +10723,16 @@ resource "kubernetes_deployment" "anihpj" {
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!--  CHAPTER 19: AWS CONFIG & SYSTEMS MANAGER                            -->
 <!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="chapter-divider" id="ch19"><span class="chapter-badge">Chapter 19</span></div>
+<div class="chapter-intro" id="ch19">
+<h3>Chapter 19: AWS Config & Systems Manager — Compliance & Operations</h3>
+<p>AWS Config tracks every resource change and validates compliance. Systems Manager lets you manage EC2 instances at scale — run commands, patch OS, and access shells — all without SSH. Together they form the operational backbone of a well-governed AWS environment.</p>
+<div class="chapter-meta">
+<span class="meta-tag">🟡 Intermediate</span>
+<span class="meta-tag">⏱️ ~3 hours</span>
+<span class="meta-tag">🎯 Domain 2: Config Mgmt 17% & Domain 4: Monitoring 15%</span>
+<span class="meta-tag">📝 10 Questions</span>
+</div>
+</div>
 
 <div class="section-block" id="s19-1">
 <h3>19.1 AWS Config — Resource Compliance</h3>
@@ -10602,6 +10743,16 @@ resource "kubernetes_deployment" "anihpj" {
 <div class="info-card highlight"><div class="card-icon-lg">📋</div><h5>Resource Inventory</h5><p>Complete inventory of all AWS resources with configuration history. "What did my security group look like last Tuesday?" Config has the answer — full timeline of every configuration change.</p></div>
 <div class="info-card"><div class="card-icon-lg">✅</div><h5>Config Rules</h5><p>Continuously evaluate resources against compliance rules. AWS-managed rules (<code>S3_BUCKET_PUBLIC_READ_PROHIBITED</code>) or custom Lambda-based rules. Auto-remediate: trigger SSM Automation on non-compliance.</p></div>
 <div class="info-card"><div class="card-icon-lg">📦</div><h5>Conformance Packs</h5><p>Bundles of Config rules + remediations deployed as a single unit. Compliance as code — version the pack in Git. Example: "Operational Best Practices for EKS" conformance pack.</p></div>
+</div>
+
+<div class="eq-explanation">
+<div class="eq-exp-label">🔄 How AWS Config Works — From Resource Change to Compliance</div>
+<div class="timeline-vertical">
+<div class="timeline-item"><h5>1. Record Configuration</h5><p>Every time a resource changes (create, update, delete), Config captures a <strong>configuration snapshot</strong> — the full JSON representation of the resource at that moment. This builds a complete timeline.</p></div>
+<div class="timeline-item"><h5>2. Evaluate Rules</h5><p>Config runs all applicable rules against the new configuration. Managed rules like <code>S3_BUCKET_PUBLIC_READ_PROHIBITED</code> check compliance. Custom Lambda rules can check anything accessible via AWS API.</p></div>
+<div class="timeline-item"><h5>3. Report Compliance</h5><p>Results flow to the compliance dashboard: COMPLIANT (green) or NON_COMPLIANT (red). Aggregated across all accounts and regions if using an aggregator.</p></div>
+<div class="timeline-item"><h5>4. Auto-Remediate (Optional)</h5><p>If a rule has a remediation action, Config triggers the associated SSM Automation runbook. Example: S3 bucket becomes public → auto-trigger <code>AWS-ConfigureS3BucketPublicAccessBlock</code> to block it.</p></div>
+</div>
 </div>
 </div>
 
@@ -10614,6 +10765,23 @@ resource "kubernetes_deployment" "anihpj" {
 <div class="info-card highlight"><div class="card-icon-lg">🏃</div><h5>Run Command</h5><p>Execute scripts or commands on managed instances <strong>without SSH</strong>. IAM-controlled, CloudTrail-audited. Run a script on 1,000 instances simultaneously with rate control and error thresholds.</p></div>
 <div class="info-card"><div class="card-icon-lg">🔧</div><h5>Patch Manager</h5><p>Automate OS patching on a schedule. Define patch baselines, maintenance windows, and patch compliance reporting. Critical for security compliance — prove all instances are patched.</p></div>
 <div class="info-card"><div class="card-icon-lg">🔒</div><h5>Session Manager</h5><p>Browser-based shell access to EC2 instances — <strong>no open inbound ports, no SSH keys, no bastion hosts</strong>. All sessions logged to CloudTrail + S3 + CloudWatch Logs for full audit trail.</p></div>
+</div>
+
+<div class="eq-explanation">
+<div class="eq-exp-label">⚖️ Parameter Store vs Secrets Manager — When to Use Which</div>
+<div class="comparison-table">
+<table>
+<thead><tr><th>Feature</th><th>Parameter Store</th><th>Secrets Manager</th></tr></thead>
+<tbody>
+<tr><td>Cost</td><td><strong>Free</strong> (Standard), $0.05/advanced</td><td>$0.40/secret/month + API charges</td></tr>
+<tr><td>Automatic Rotation</td><td>❌ Manual only</td><td>✅ Built-in Lambda rotation (RDS, Redshift, DocumentDB)</td></tr>
+<tr><td>Cross-Account Access</td><td>❌ No native support</td><td>✅ Resource-based policies</td></tr>
+<tr><td>Max Size</td><td>4 KB (Standard), 8 KB (Advanced)</td><td>64 KB</td></tr>
+<tr><td>JSON Support</td><td>Limited (String only, parse manually)</td><td>✅ Native JSON — store multiple key-values in one secret</td></tr>
+<tr><td>Use Case</td><td>Config values, AMI IDs, feature flags</td><td>Database passwords, API keys, OAuth tokens</td></tr>
+</tbody>
+</table>
+</div>
 </div>
 </div>
 
@@ -10664,7 +10832,16 @@ mainSteps:
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!--  CHAPTER 19B: ELASTIC BEANSTALK                                      -->
 <!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="chapter-divider" id="ch19b"><span class="chapter-badge">Chapter 19B</span></div>
+<div class="chapter-intro" id="ch19b">
+<h3>Chapter 19B: AWS Elastic Beanstalk — Managed Application Platform</h3>
+<p>Elastic Beanstalk is AWS's Platform-as-a-Service — upload your code, and Beanstalk handles capacity provisioning, load balancing, auto-scaling, and health monitoring. It's the fastest path from code to production for traditional web applications, with no container or Kubernetes knowledge required.</p>
+<div class="chapter-meta">
+<span class="meta-tag">🟡 Intermediate</span>
+<span class="meta-tag">⏱️ ~2 hours</span>
+<span class="meta-tag">🎯 Domain 2: Config Mgmt 17%</span>
+<span class="meta-tag">📝 10 Questions</span>
+</div>
+</div>
 
 <div class="section-block" id="s19b-1">
 <h3>19B.1 Elastic Beanstalk Overview</h3>
@@ -10675,6 +10852,14 @@ mainSteps:
 <div class="info-card highlight"><div class="card-icon-lg">🚀</div><h5>PaaS Simplicity</h5><p>Upload code → Beanstalk provisions: EC2 instances, ASG, ALB, security groups, CloudWatch monitoring. Focus on your application, not the infrastructure.</p></div>
 <div class="info-card"><div class="card-icon-lg">🐍</div><h5>Platform Support</h5><p>Python, Node.js, Java, .NET, Go, PHP, Ruby, Docker (single/multi-container). Pre-configured platform with the runtime, proxy (nginx/Apache), and health agent pre-installed.</p></div>
 <div class="info-card"><div class="card-icon-lg">⚖️</div><h5>EB vs ECS vs EKS vs Lambda</h5><p><strong>EB:</strong> PaaS, simplest. <strong>ECS:</strong> container orchestration (AWS-native). <strong>EKS:</strong> full Kubernetes. <strong>Lambda:</strong> serverless. Choose EB when you want PaaS simplicity with managed infrastructure.</p></div>
+</div>
+
+<div class="eq-explanation">
+<div class="eq-exp-label">🤔 Beanstalk or EKS? — The Decision Framework</div>
+<div class="split-panel">
+<div class="split-side split-good"><h5>✅ Choose Beanstalk When:</h5><ul><li><strong>Traditional web app</strong> (Django, Rails, Express) — upload code and go</li><li><strong>No container expertise</strong> — Beanstalk abstracts all infrastructure</li><li><strong>Fast time-to-market</strong> — <code>eb create</code> puts you in production in minutes</li><li><strong>Managed platform updates</strong> — Beanstalk patches the OS and runtime for you</li></ul></div>
+<div class="split-side split-bad"><h5>❌ Choose EKS When:</h5><ul><li><strong>Microservices</strong> with independent scaling, service mesh, custom networking</li><li><strong>GitOps</strong> (ArgoCD/Flux) with declarative cluster state management</li><li><strong>Multi-cloud portability</strong> — Kubernetes runs anywhere</li><li><strong>Full ecosystem</strong> — Helm, operators, CRDs, extensive community tooling</li></ul></div>
+</div>
 </div>
 </div>
 
@@ -10744,12 +10929,23 @@ container_commands:
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!--  CHAPTER 19C: SAM & SERVERLESS DEPLOYMENTS                            -->
 <!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="chapter-divider" id="ch19c"><span class="chapter-badge">Chapter 19C</span></div>
+<div class="chapter-intro" id="ch19c">
+<h3>Chapter 19C: AWS SAM & Serverless Deployments</h3>
+<p>The Serverless Application Model extends CloudFormation with serverless-optimized syntax. Define Lambda functions, API Gateway APIs, and DynamoDB tables in a fraction of the CloudFormation YAML. Integrated with CodeDeploy for canary traffic shifting and automatic rollback on your serverless applications.</p>
+<div class="chapter-meta">
+<span class="meta-tag">🟡 Intermediate</span>
+<span class="meta-tag">⏱️ ~2 hours</span>
+<span class="meta-tag">🎯 Domain 2: Config Mgmt 17% & Domain 1: SDLC 22%</span>
+<span class="meta-tag">📝 10 Questions</span>
+</div>
+</div>
 
 <div class="section-block" id="s19c-1">
 <h3>19C.1 SAM Overview</h3>
 
-<p><strong>AWS SAM</strong> (Serverless Application Model) is a CloudFormation extension optimized for serverless. It provides shorthand syntax for Lambda, API Gateway, and DynamoDB — <code>sam build && sam deploy</code> handles everything:</p>
+<p><strong>AWS SAM</strong> (Serverless Application Model) is a CloudFormation extension optimized for serverless. It provides shorthand syntax for Lambda, API Gateway, and DynamoDB — <code>sam build && sam deploy</code> handles everything.</p>
+
+<p style="color:#8b949e;font-size:0.85em;">SAM reduces a 200-line CloudFormation template to ~25 lines. <code>AWS::Serverless::Function</code> expands to: Lambda function + IAM execution role + CloudWatch Log Group + API Gateway integration + event source mapping — all from one resource declaration. This is why SAM is the standard for serverless IaC on AWS.</p>
 
 <div class="code-block-wrapper">
 <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">SAM Template — anihpj Job API</span></div>
@@ -10780,7 +10976,21 @@ Resources:
 <div class="section-block" id="s19c-2">
 <h3>19C.2 SAM with CodeDeploy — Gradual Deployments</h3>
 
-<p>SAM natively supports CodeDeploy for safe Lambda deployments with traffic shifting and automatic rollback via CloudWatch alarms. Configure <code>DeploymentPreference</code> with canary or linear strategies — SAM handles versioning, aliases, and traffic weights automatically.</p>
+<p>SAM natively supports CodeDeploy for safe Lambda deployments with traffic shifting and automatic rollback via CloudWatch alarms:</p>
+
+<div class="flow-diagram">
+<div class="flow-step"><span class="step-icon">📝</span><span class="step-label">sam build</span><span class="step-detail">Build + package</span></div>
+<div class="flow-arrow">→</div>
+<div class="flow-step"><span class="step-icon">🚀</span><span class="step-label">sam deploy</span><span class="step-detail">Create new Lambda version</span></div>
+<div class="flow-arrow">→</div>
+<div class="flow-step"><span class="step-icon">🐤</span><span class="step-label">10% Traffic</span><span class="step-detail">Canary shift via alias</span></div>
+<div class="flow-arrow">→</div>
+<div class="flow-step"><span class="step-icon">📊</span><span class="step-label">CloudWatch</span><span class="step-detail">Monitor errors/latency</span></div>
+<div class="flow-arrow">→</div>
+<div class="flow-step"><span class="step-icon">✅</span><span class="step-label">100% Traffic</span><span class="step-detail">Promote or auto-rollback</span></div>
+</div>
+
+<p style="margin-top:12px;">Configure <code>DeploymentPreference</code> in the SAM template with canary or linear strategies. SAM auto-creates Lambda versions, configures the alias with weighted routing, and sets up CloudWatch alarms for automatic rollback — all from a single configuration block.</p>
 </div>
 
 <div class="section-block" id="s19c-3">
@@ -10796,44 +11006,39 @@ Resources:
 <div class="section-block" id="s19c-4">
 <h3>19C.4 API Gateway Deep Dive</h3>
 
-<div class="card-grid cols-3">
-<div class="info-card highlight"><div class="card-icon-lg">🔌</div><h5>REST API</h5><p>Full-featured: API keys, usage plans, request/response transformation, caching. Best for: public APIs with monetization or complex request validation.</p></div>
-<div class="info-card"><div class="card-icon-lg">⚡</div><h5>HTTP API</h5><p>Lightweight, 70% cheaper, lower latency. Best for: internal APIs, Lambda proxies, simple routing. No API keys or usage plans — use IAM auth instead.</p></div>
-<div class="info-card"><div class="card-icon-lg">🐤</div><h5>Canary Deployments</h5><p>Deploy to a canary stage, route X% of traffic via stage variables, monitor CloudWatch, promote or rollback. Enables safe API changes with minimal blast radius.</p></div>
+<div class="comparison-table">
+<table>
+<thead><tr><th style="width:14%">Type</th><th>Features</th><th>Best For</th></tr></thead>
+<tbody>
+<tr><td>🔌 <strong>REST API</strong></td><td>API keys, usage plans, request/response transformation, response caching. Full API management features.</td><td>Public APIs with monetization, complex validation, or third-party developer portals</td></tr>
+<tr><td>⚡ <strong>HTTP API</strong></td><td>70% cheaper, lower latency. No API keys or usage plans — use IAM auth or JWT authorizers instead.</td><td>Internal APIs, Lambda proxies, simple routing where cost and speed matter more than features</td></tr>
+<tr><td>🐤 <strong>Canary Deployments</strong></td><td>Deploy to a canary stage, route X% of traffic via stage variables, monitor CloudWatch metrics. Promote or rollback based on results.</td><td>Safe API changes with minimal blast radius — test with real traffic before full rollout</td></tr>
+</tbody>
+</table>
 </div>
 
 <div class="eq-explanation">
 <div class="eq-exp-label">⚡ DEEP DIVE: Step Functions — Serverless Orchestration</div>
 <p><strong>AWS Step Functions</strong> lets you build visual workflows that coordinate multiple AWS services. For DevOps, it's the standard for complex CI/CD orchestration beyond linear pipelines:</p>
-<div class="card-grid cols-3">
-<div class="info-card highlight"><div class="card-icon-lg">🔀</div><h5>State Machines</h5><p>Define workflows as JSON (Amazon States Language). States: Task, Choice, Parallel, Wait, Succeed/Fail. Visual execution in the console — see exactly which step succeeded or failed.</p></div>
-<div class="info-card"><div class="card-icon-lg">⚡</div><h5>Express vs Standard</h5><p><strong>Standard:</strong> exactly-once execution, up to 1 year, audit trail. <strong>Express:</strong> at-least-once, up to 5 minutes, high throughput. Use Standard for approval workflows; Express for event processing.</p></div>
-<div class="info-card"><div class="card-icon-lg">🔌</div><h5>200+ Service Integrations</h5><p>Direct integration with Lambda, ECS, EKS, CodeBuild, SNS, DynamoDB. Example: anihpj CI/CD approval — CodePipeline pauses → Step Function notifies Slack → waits for approval → signals CodePipeline to continue.</p></div>
+
+<div class="split-panel">
+<div class="split-side" style="background:linear-gradient(135deg,#1a1a2e 0%,#0d1117 100%);"><h5 style="color:#f0b429;">🔀 State Machines</h5><p>Define workflows as JSON (Amazon States Language). States: Task, Choice, Parallel, Wait, Succeed/Fail. Visual execution in the console — see exactly which step succeeded or failed. Standard workflows guarantee <strong>exactly-once</strong> execution for up to <strong>1 year</strong>.</p></div>
+<div class="split-side" style="background:linear-gradient(135deg,#1a2e1a 0%,#101a10 100%);"><h5 style="color:#4ade80;">⚡ Express Workflows</h5><p>At-least-once execution, up to 5 minutes, high throughput. Ideal for event processing, streaming data, and high-volume workloads. <strong>Standard = audit trail + long-running. Express = speed + throughput.</strong></p></div>
 </div>
+
+<div class="timeline-vertical">
+<div class="timeline-item"><h5>CodePipeline pauses at approval stage</h5><p>The pipeline reaches a manual approval gate — it needs a human to approve before deploying to production.</p></div>
+<div class="timeline-item"><h5>Step Function triggered by CloudWatch Event</h5><p>A Step Functions state machine starts: it sends a Slack notification with deployment details and Approve/Reject buttons.</p></div>
+<div class="timeline-item"><h5>Wait for approval (up to 7 days)</h5><p>The state machine waits with a Task token. The engineer clicks Approve in Slack, which calls a Lambda that sends the <code>SendTaskSuccess</code> API.</p></div>
+<div class="timeline-item"><h5>Signal CodePipeline to continue</h5><p>Step Function receives the approval, signals CodePipeline via <code>putApprovalResult</code>, and the pipeline proceeds to production deployment.</p></div>
+</div>
+<p style="color:#8b949e;font-size:0.85em;margin-top:12px;">This pattern — CodePipeline + Step Functions + SNS/Slack — is the standard for auditable, multi-step CI/CD approval workflows on AWS. Step Functions has 200+ direct service integrations, allowing it to orchestrate Lambda, ECS, EKS, CodeBuild, SNS, DynamoDB, and more without writing glue code.</p>
 </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════ -->
 <!--  PART 5: PRACTICE DRILLS & EXAM QUESTIONS                        -->
 <!-- ═══════════════════════════════════════════════════════════════ -->
-
-<!-- Chapter 16: Practice Questions -->
-<div class="exam-questions-section">
-<h4>📝 Chapter 16 — CloudFormation (10 Questions)</h4>
-<div class="exam-question-item"><span class="eq-number">Q1</span><p class="eq-question">What happens by default when a CloudFormation stack creation fails?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Automatic rollback.</strong> All resources created up to the failure point are deleted. The stack status becomes <code>ROLLBACK_COMPLETE</code>. You can disable this behavior by setting <code>OnFailure: DO_NOTHING</code> to preserve resources for debugging.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q2</span><p class="eq-question">What is a CloudFormation Change Set?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>A preview showing exactly which resources will be added, modified, or deleted before applying a stack update. Always review the Change Set in production — it prevents surprises like accidental resource replacement or deletion.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q3</span><p class="eq-question">How do you reference a resource's physical ID in CloudFormation?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><code>!Ref LogicalResourceName</code>. For most resources, this returns the physical ID (e.g., bucket name, instance ID). For parameters, it returns the parameter value. This is the most commonly used intrinsic function.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q4</span><p class="eq-question">What is StackSets used for?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Multi-account, multi-region stack deployment.</strong> Deploy the same template across multiple AWS accounts and regions from a single operation. Common use case: deploy security baseline (IAM roles, Config rules) to all accounts in an AWS Organization.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q5</span><p class="eq-question">How can you prevent accidental deletion of a production CloudFormation stack?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Enable termination protection</strong> on the stack. This prevents deletion via console, CLI, or API until protection is explicitly disabled. Also use <code>DeletionPolicy: Retain</code> on critical resources to preserve them even if the stack IS deleted.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q6</span><p class="eq-question">What does <code>!Sub</code> do in CloudFormation?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Substitutes variables into strings. <code>!Sub "arn:aws:s3:::${BucketName}"</code> replaces <code>${BucketName}</code> with the value of the parameter or resource reference. Supports both inline and mapping syntax for complex substitutions.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q7</span><p class="eq-question">What is CloudFormation Drift Detection?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Detects when actual resource configurations differ from the stack template. Someone manually modified a resource (click-ops) — Drift Detection identifies the mismatch. Run it periodically to ensure your infrastructure matches your declared template.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q8</span><p class="eq-question">How do you deploy a CloudFormation template with IAM resources?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Pass <code>--capabilities CAPABILITY_IAM</code> (for IAM resources) or <code>CAPABILITY_NAMED_IAM</code> (for named IAM resources). This is a safety mechanism — CloudFormation requires explicit acknowledgment when creating IAM resources that could grant permissions.</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q9</span><p class="eq-question">What is the difference between <code>DependsOn</code> and <code>!Ref</code> for resource ordering?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><code>!Ref</code> creates an implicit dependency — CloudFormation automatically determines the correct order. <code>DependsOn</code> creates an explicit dependency when CloudFormation can't infer it (e.g., one resource needs another to exist but doesn't reference it directly).</p></div></details></div>
-<div class="exam-question-item"><span class="eq-number">Q10</span><p class="eq-question">How can CloudFormation pass secrets to EC2 instances without hardcoding them?</p><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Use <strong>dynamic references</strong>: <code>{{resolve:ssm:/anihpj/db-password:1}}</code> or <code>{{resolve:secretsmanager:anihpj-db:SecretString}}</code>. CloudFormation resolves the value at deploy time from SSM Parameter Store or Secrets Manager without exposing it in the template.</p></div></details></div>
-</div>
-
-<!-- Chapter 16 Practice Drill -->
-<div class="cka-practice-drill"><div class="drill-timer">⏱️ 20 min</div><div class="drill-scenario"><h5>🏋️ Drill 16: Provision EKS with CloudFormation</h5><p>Write a CloudFormation template that provisions: VPC (3 AZs, public+private subnets), EKS cluster with managed node group, IAM roles for cluster and nodes. Apply it and verify the cluster with <code>kubectl get nodes</code>.</p></div></div>
 
 <!-- Chapter 17: Practice Questions -->
 <div class="exam-questions-section">
@@ -11028,5 +11233,7 @@ Resources:
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-python.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-docker.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-hcl.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-dockerfile.min.js"></script>
 </body>
 </html>

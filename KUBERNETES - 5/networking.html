@@ -6450,6 +6450,10 @@ spec:
                         <div class="info-card"><div class="card-icon-lg">3️⃣</div><h5>Pods See Their Own IP as Others See It</h5><p>A pod sees its own IP (e.g., 10.244.1.5) as its source address. Other pods see the same IP. No NAT within the cluster — IP transparency for logging, tracing, and network policies.</p></div>
                         <div class="info-card"><div class="card-icon-lg">4️⃣</div><h5>Host-Network Pods Communicate Without NAT</h5><p>Pods using <code>hostNetwork: true</code> can communicate with all other pods on all nodes without NAT. These pods use the node's IP but can still reach the pod network.</p></div>
                     </div>
+                    <div class="info-box tip"><h5>💡 Why a Flat, NAT-Less Network? — The Design Philosophy</h5><p>Kubernetes chose a flat network model for a fundamental reason: <strong>IP identity = pod identity.</strong> In traditional networks, NAT hides real IPs — making logging, tracing, and security policies nearly impossible. In Kubernetes, every pod has a unique, routable IP that IS its identity. NetworkPolicies work because pod IPs are stable within the pod's lifetime. Service meshes work because the real source IP is visible. This was a deliberate choice: complexity at the infrastructure layer (CNI) in exchange for simplicity at the application layer (apps just use IPs). The alternative — NAT'd container networks like Docker's default bridge — works for single-host but collapses at cluster scale because IPs are no longer unique or routable across nodes.</p></div>
+                </div>
+
+                    <div class="info-box tip"><h5>💡 Why These 4 Rules Exist — The Design Philosophy Behind Flat Networking</h5><p>These rules weren't chosen arbitrarily. <strong>Rule 1 (no NAT between pods):</strong> If pods were NAT'd, every pod would see traffic from the node's IP — making it impossible to distinguish which pod sent a request. NetworkPolicies would be useless because every request would appear to come from the node. Service meshes would break because mTLS identity is tied to pod IP. Distributed tracing would show all spans originating from node IPs. <strong>Rule 2 (node agents can reach pods):</strong> The kubelet must be able to call each pod's health check endpoint directly — without this, liveness/readiness probes fail. kube-proxy must reach pod IPs to populate Endpoints. Log collectors must reach pod filesystems. <strong>Rule 3 (pods see their real IP):</strong> If a pod saw a different source IP than what other pods see, applications would log incorrect IPs, rate limiters would target wrong clients, and any IP-based authentication would break. <strong>Rule 4 (host-network pods can reach pod network):</strong> Host-network pods (kube-proxy, CNI agents, monitoring daemonsets) need to reach the pod network to do their jobs. Without this, the entire cluster control plane couldn't function.</p></div>
                 </div>
 
                 <div class="section-block" id="s18-2"><h3>18.2 CNI — The Plugin That Makes It Work</h3>
@@ -6476,10 +6480,110 @@ spec:
                         <tr><td><strong>Flannel</strong></td><td>VXLAN/HostGW</td><td>❌</td><td>❌</td><td>❌</td><td>Simple, minimal setup</td></tr>
                         <tr><td><strong>AWS VPC CNI</strong></td><td>Native (ENI IPs)</td><td>❌*</td><td>❌</td><td>❌</td><td>EKS — pod IPs from VPC subnet</td></tr>
                     </table></div>
-                    <div id="s18-2a"><h4>Calico (eBPF + BGP)</h4><p>Calico is the most popular CNI for production Kubernetes. It supports multiple dataplanes: <strong>BGP mode:</strong> Pods get routable IPs — each node advertises its pod CIDR via BGP to the network (routers/switches). No encapsulation — fastest. <strong>IPIP/VXLAN mode:</strong> Encapsulation when BGP isn't available (cloud environments). <strong>eBPF mode:</strong> Replaces kube-proxy entirely with eBPF programs — direct pod-to-pod routing without iptables. WireGuard encryption for pod-to-pod traffic. NetworkPolicy enforcement via iptables or eBPF.</p></div>
-                    <div id="s18-2b"><h4>Cilium (eBPF-Native)</h4><p>Cilium uses eBPF (extended Berkeley Packet Filter) to program the Linux kernel directly — no iptables, no proxies per service. Key features: <strong>Hubble:</strong> Built-in observability showing service maps, latency, and packet drops. <strong>Geneve encapsulation:</strong> More flexible than VXLAN (TLV options). <strong>L7 Network Policies:</strong> Filter by HTTP method, path, headers — not just IP/port. <strong>Cluster Mesh:</strong> Connect multiple K8s clusters. Cilium is the cutting-edge choice for performance and observability.</p></div>
-                    <div id="s18-2c"><h4>Flannel (VXLAN — Simplest Option)</h4><p>Flannel is the simplest CNI — designed to "just work." It creates a VXLAN overlay network: each node gets a /24 subnet, pods get IPs from that subnet, and VXLAN tunnels connect nodes. <strong>Limitations:</strong> No NetworkPolicy support (use Calico on top for that). No encryption. No eBPF. Best for: learning clusters, small dev environments, or as a base layer with Calico for policy.</p></div>
-                    <div id="s18-2d"><h4>Weave Net</h4><p>Weave creates a full mesh overlay between nodes. Each node runs a Weave router that discovers peers and establishes UDP tunnels. Supports NetworkPolicy and encryption. Uses a clever "fast datapath" that bypasses Linux bridge for performance. Smaller community than Calico/Cilium but battle-tested.</p></div>
+                    <div id="s18-2a"><h4>Calico (eBPF + BGP)</h4><p>Calico is the most popular CNI for production Kubernetes. It supports multiple dataplanes depending on your network environment.</p>
+                    <div class="diagram-container"><div class="diagram-title">Calico — Three Dataplane Modes</div>
+<pre>
+  BGP MODE (underlay — fastest):
+  ┌──────────┐  BGP: "I can reach 10.244.1.0/24"  ┌──────────┐
+  │ Node 1   │◀══════════════════════════════════▶│ Node 2   │
+  │10.244.1.x│  Pod IPs routable on physical net   │10.244.2.x│
+  └──────────┘  No encapsulation! Zero overhead.    └──────────┘
+  Requires BGP on routers/switches (or Calico Route Reflectors).
+
+  IPIP/VXLAN MODE (overlay — cloud-friendly):
+  ┌──────────┐  IPIP: pod packet inside IP packet  ┌──────────┐
+  │ Node 1   │═════════════════════════════════════│ Node 2   │
+  │10.244.1.x│  or VXLAN: pod packet inside UDP    │10.244.2.x│
+  └──────────┘  Works on ANY network (no BGP req)  └──────────┘
+
+  eBPF MODE (kernel-native):
+  ┌──────────────────────────────────────────────────────────┐
+  │  Pod A ──▶ eBPF map lookup ──▶ Pod B                    │
+  │  No iptables. No kube-proxy. Direct kernel routing.     │
+  │  WireGuard encryption at kernel level.                  │
+  └──────────────────────────────────────────────────────────┘</pre></div>
+                    </div>
+                    <div id="s18-2b"><h4>Cilium (eBPF-Native)</h4><p>Cilium uses eBPF to program the Linux kernel directly — no iptables, no proxies per service.</p>
+                    <div class="diagram-container"><div class="diagram-title">Cilium — eBPF Data Path & Hubble Observability</div>
+<pre>
+  CILIUM eBPF DATA PATH (kernel-level, no iptables):
+  ┌────────────────────────────────────────────────────────────┐
+  │ POD A (10.244.1.5)          POD B (10.244.2.8)            │
+  │  │                           ▲                            │
+  │  │ packet sent               │ packet received            │
+  │  ▼                           │                            │
+  │ ┌──────────────────────┐     │                            │
+  │ │ eBPF Program (TC hook)│─────┼── Direct kernel routing   │
+  │ │ • Service lookup      │     │  No iptables chain walk   │
+  │ │ • NetworkPolicy check │     │  Per-endpoint LB          │
+  │ │ • Encapsulation       │     │                            │
+  │ │ • Encryption (WG)     │     │                            │
+  │ └──────────────────────┘     │                            │
+  └────────────────────────────────────────────────────────────┘
+
+  HUBBLE OBSERVABILITY (built-in, zero-config):
+  ┌────────────────────────────────────────────────────────────┐
+  │  ┌─────────┐   ┌─────────┐   ┌─────────┐                  │
+  │  │ jobpost │──▶│postgres │──▶│  redis  │                  │
+  │  │ 45ms    │   │ 30ms    │   │  2ms    │                  │
+  │  └─────────┘   └─────────┘   └─────────┘                  │
+  │  Service map + latency + packet drops + HTTP status       │
+  │  L7 POLICIES: allow GET /api/*, deny DELETE /admin/*       │
+  └────────────────────────────────────────────────────────────┘</pre></div>
+                    </div>
+                    <div id="s18-2c"><h4>Flannel (VXLAN — Simplest Option)</h4><p>Flannel is the simplest CNI — designed to "just work" with minimal configuration.</p>
+                    <div class="diagram-container"><div class="diagram-title">Flannel VXLAN — Node Subnet Allocation</div>
+<pre>
+  FLANNEL OVERLAY NETWORK (10.244.0.0/16):
+
+  ┌─────────────────────────┐    ┌─────────────────────────┐
+  │ NODE 1 (192.168.1.10)   │    │ NODE 2 (192.168.1.11)   │
+  │ Pod CIDR: 10.244.1.0/24 │    │ Pod CIDR: 10.244.2.0/24 │
+  │                         │    │                         │
+  │ Pod A: 10.244.1.2       │    │ Pod C: 10.244.2.2       │
+  │ Pod B: 10.244.1.3       │    │ Pod D: 10.244.2.3       │
+  │ ... up to 254 pods      │    │ ... up to 254 pods      │
+  │                         │    │                         │
+  │ flannel.1 (VXLAN dev)   │    │ flannel.1 (VXLAN dev)   │
+  └───────────┬─────────────┘    └───────────┬─────────────┘
+              │                               │
+              └──── VXLAN tunnel ─────────────┘
+                   (UDP port 8472)
+
+  SIMPLE: One DaemonSet, one ConfigMap, pods get IPs.
+  LIMITS: No NetworkPolicy, no encryption, no eBPF.
+  UPGRADE PATH: Keep Flannel for networking + add Calico for policy.</pre></div>
+                    </div>
+                    <div id="s18-2d"><h4>Weave Net</h4><p>Weave creates a full mesh overlay — every node connects directly to every other node via UDP tunnels.</p>
+                    <div class="diagram-container"><div class="diagram-title">Weave Net — Full Mesh Overlay with Fast Datapath</div>
+<pre>
+  WEAVE FULL MESH (every node ↔ every node):
+
+       ┌──────────┐
+       │  Node 1  │
+       │10.32.0.x │
+       └────┬─┬───┘
+            │ │
+     ┌──────┘ └──────┐
+     ▼               ▼
+  ┌──────────┐  ┌──────────┐
+  │  Node 2  │◀─│  Node 3  │  All nodes peer directly!
+  │10.44.0.x │  │10.48.0.x │  No central switch/bridge.
+  └──────────┘  └──────────┘
+
+  WEAVE ROUTER (on each node):
+  ┌────────────────────────────────────────────┐
+  │ • Discovers peers via multicast/broadcast  │
+  │ • Establishes UDP tunnels to all peers     │
+  │ • Encrypts with NaCl (fast, secure)        │
+  │ • Fast datapath: bypasses Linux bridge     │
+  │   (kernel module for wire-speed)           │
+  │ • NetworkPolicy via ODP (Open vSwitch)     │
+  └────────────────────────────────────────────┘
+
+  POD CIDR: 10.32.0.0/12 (default, configurable)
+  Smaller community than Calico/Cilium but battle-tested.</pre></div>
+                    </div>
                     <div class="info-box tip"><h5>💡 CNI IPAM — How Pods Get Their IPs</h5><p><strong>IPAM (IP Address Management)</strong> is the CNI sub-plugin that allocates IPs. <strong>host-local:</strong> Each node gets a /24 subnet, pods get sequential IPs (Flannel default). <strong>calico-ipam:</strong> IP pools with block affinity — each node gets a /26 block (62 pod IPs), allocation is persisted. <strong>AWS VPC IPAM:</strong> Pods get actual VPC IPs from ENI secondary addresses — no overlay needed. <strong>⚠️ IP exhaustion:</strong> Pod stays "ContainerCreating" with "failed to allocate IP." AWS t3.medium = 2 ENIs × 3 IPs = 4 pod IPs (after subtracting 2 primary). Use larger instances or switch CNI for more pods per node.</p></div>
                     <div class="info-box warning"><h5>⚠️ NetworkPolicy — Kubernetes Firewall Fundamentals</h5><p>A NetworkPolicy is an L3/L4 firewall for pods — think "security group per pod." Pods are selected by labels; traffic is controlled by ingress/egress rules specifying: from/to pods (podSelector), namespaces (namespaceSelector), or IP blocks (ipBlock). <strong>⚠️ CRITICAL:</strong> If NO NetworkPolicy selects a pod, ALL traffic is allowed (default-allow). Once ANY policy selects a pod, it becomes default-DENY — only traffic explicitly allowed by policies is permitted. <strong>⚠️ NetworkPolicies are namespace-scoped.</strong> A policy in namespace "anihpj" only affects pods there. <strong>⚠️ The CNI MUST support NetworkPolicy:</strong> Calico ✅, Cilium ✅, Flannel ❌ (add Calico for policy), AWS VPC CNI ❌.</p></div>
                 </div>
@@ -6500,13 +6604,32 @@ spec:
   ⚠️ If firewall blocks UDP port 4789 between nodes → cross-node pod traffic breaks SILENTLY!</pre></div>
                 </div>
 
-                <div class="section-block" id="s18-4"><h3>18.4 [LAB 🛠️] CNI Exploration Lab</h3>
+                <div class="section-block" id="s18-4"><h3>18.4 [LAB 🛠️] CNI Exploration &amp; Troubleshooting Lab</h3>
                     <div class="diagram-box"><pre>
+# === PHASE 1: Identify your CNI ===
 kubectl get pods -n kube-system | grep -E 'calico|cilium|flannel|weave'
 kubectl get nodes -o wide                       # PodCIDR per node
 kubectl describe pod &lt;cni-pod&gt; -n kube-system    # CNI pod details
-ls /etc/cni/net.d/                               # CNI config files (on node)
-ls /opt/cni/bin/                                 # CNI plugin binaries</pre></div>
+
+# === PHASE 2: Inspect CNI configuration (on a node) ===
+ls /etc/cni/net.d/                               # CNI config files (.conf/.conflist)
+cat /etc/cni/net.d/*.conf                        # Read the config
+ls /opt/cni/bin/                                 # CNI plugin binaries
+# Each binary = one CNI command (ADD/DEL/CHECK)
+
+# === PHASE 3: Troubleshooting — pod stuck in ContainerCreating ===
+kubectl describe pod &lt;stuck-pod&gt;                 # Events show CNI errors
+kubectl logs -n kube-system &lt;cni-pod&gt; --tail=50  # CNI pod logs
+# Common errors in logs:
+# "failed to allocate IP" → IP pool exhausted (node CIDR full)
+# "failed to find plugin" → /opt/cni/bin/ missing binary
+# "timeout" → CNI socket unreachable
+
+# === PHASE 4: Check CNI health ===
+kubectl get pods -n kube-system -l k8s-app=calico-node
+kubectl exec -n kube-system &lt;cni-pod&gt; -- &lt;health-check-cmd&gt;
+# Calico: calicoctl node status
+# Cilium: cilium status; cilium connectivity test</pre></div>
                 </div>
 
                 <div class="net-exam-questions"><h4>📝 Chapter 18 — Networking Practice Questions</h4>
@@ -6565,11 +6688,68 @@ kubectl logs -n kube-system &lt;cni-pod&gt; --tail=50
                 </div>
 
                 <div class="section-block" id="s19-2"><h3>19.2 Pod-to-Pod Communication on the Same Node</h3>
-                    <p>Same-node communication is simple: Pod A → veth → cni0 bridge (L2) → veth → Pod B. The cni0 bridge acts as a virtual switch — it learns MAC addresses from ARP and forwards frames directly. No encapsulation, no routing — just local bridge forwarding. This is the fastest pod-to-pod path.</p>
+                    <p>Same-node communication is simple: Pod A → veth → cni0 bridge (L2) → veth → Pod B. The cni0 bridge acts as a virtual switch — it learns MAC addresses from ARP and forwards frames directly.</p>
+                    <div class="diagram-container"><div class="diagram-title">Same-Node Packet Walk-Through — Pod A → Pod B on Node 1</div>
+<pre>
+  POD A (10.244.1.5)                          POD B (10.244.1.6)
+  ┌────────────────┐                          ┌────────────────┐
+  │ 1. App sends   │                          │ 6. Packet      │
+  │    packet to   │                          │    delivered   │
+  │    10.244.1.6  │                          │    to app      │
+  │    ↓           │                          │    ↑           │
+  │    eth0        │                          │    eth0        │
+  └────┬───────────┘                          └────┬───────────┘
+       │ veth (pod side)                           │ veth (pod side)
+  ─────┼───────────────────────────────────────────┼───────────
+       │ veth (host side)                          │ veth (host side)
+  ┌────┴───────────┐                          ┌────┴───────────┐
+  │ 2. Frame enters│                          │ 5. cni0 forwards│
+  │    cni0 bridge │                          │    to dest veth │
+  └────┬───────────┘                          └────┬───────────┘
+       │         ┌──────────────────┐              │
+       └────────▶│ 3. cni0 BRIDGE  │──────────────┘
+                 │    ARP: who has  │  ARP reply: MAC of Pod B
+                 │    10.244.1.6?   │→ learned, frame forwarded
+                 │ 4. MAC table:    │
+                 │    Pod A→vethA   │
+                 │    Pod B→vethB   │
+                 └──────────────────┘
+  No encapsulation needed — pure L2 forwarding. Fastest pod-to-pod path.</pre></div>
                 </div>
 
                 <div class="section-block" id="s19-3"><h3>19.3 Pod-to-Pod Communication Across Nodes</h3>
-                    <p>Cross-node: Pod A (10.244.1.5 on Node 1) → veth → cni0 bridge → route lookup → "10.244.2.0/24 via 192.168.1.11" → VXLAN tunnel → eth0 (Node 2) → VXLAN decap → cni0 bridge → veth → Pod B (10.244.2.8). The routing table entry is critical — the CNI plugin adds routes for remote pod subnets pointing to the destination node's IP.</p>
+                    <p>Cross-node communication requires routing and encapsulation. The CNI plugin adds routes for remote pod subnets pointing to destination node IPs.</p>
+                    <div class="diagram-container"><div class="diagram-title">Cross-Node Packet Walk-Through — Pod A (Node 1) → Pod B (Node 2)</div>
+<pre>
+  NODE 1 (192.168.1.10)                        NODE 2 (192.168.1.11)
+  ┌──────────────────┐                         ┌──────────────────┐
+  │ POD A:10.244.1.5 │                         │ POD B:10.244.2.8 │
+  │ 1. Sends to      │                         │ 7. Packet        │
+  │    10.244.2.8    │                         │    delivered!    │
+  └────────┬─────────┘                         └────────┬─────────┘
+           │ eth0 → veth                                │ eth0 ← veth
+  ┌────────┴─────────┐                         ┌────────┴─────────┐
+  │ 2. cni0 bridge   │                         │ 6. cni0 bridge   │
+  └────────┬─────────┘                         └────────┬─────────┘
+           │ route lookup                               │
+  ┌────────┴─────────┐                         ┌────────┴─────────┐
+  │ 3. ip route:     │                         │ 5. VXLAN decap:  │
+  │ 10.244.2.0/24    │                         │    strip outer   │
+  │ via 192.168.1.11 │                         │    IP+UDP+VXLAN  │
+  │ dev eth0         │                         │    → original pkt│
+  └────────┬─────────┘                         └────────┬─────────┘
+           │                                              │
+  ┌────────┴──────────────────────────────────────────────┴─────────┐
+  │ 4. VXLAN ENCAPSULATION (on wire):                               │
+  │ ┌──────────────┬──────────────┬────────┬────────┬──────────────┐│
+  │ │ Outer Eth    │ Outer IP     │ UDP    │ VXLAN  │ Original Pod ││
+  │ │ Src:Node1MAC │ Src:192.168  │ :4789  │ VNI=1  │ Packet       ││
+  │ │ Dst:Node2MAC │ .1.10        │        │        │ Src:10.244.  ││
+  │ │              │ Dst:192.168  │        │        │ 1.5          ││
+  │ │              │ .1.11        │        │        │ Dst:10.244.  ││
+  │ │ 14B          │ 20B          │ 8B     │ 8B     │ 2.8 + data   ││
+  │ └──────────────┴──────────────┴────────┴────────┴──────────────┘│
+  └─────────────────────────────────────────────────────────────────┘</pre></div>
                 </div>
 
                 <div class="section-block" id="s19-4"><h3>19.4 [LAB 🛠️] Pod Networking Lab</h3>
@@ -6669,10 +6849,39 @@ conntrack -S                   # Conntrack table statistics
                         <tr><td><strong>Headless</strong> (clusterIP:None)</td><td>Pod IPs directly</td><td>No ClusterIP</td><td>StatefulSet peer discovery</td></tr>
                     </table></div>
                     <div class="info-box warning"><h5>⚠️ A Service with no matching pods silently drops traffic</h5><p>No error, no log — just timeouts. Always verify: <code>kubectl get endpoints &lt;svc-name&gt;</code>. If the ENDPOINTS column is empty, the selector matches no pods. Common cause: label mismatch between Service selector and pod labels.</p></div>
+                    <div class="info-box tip"><h5>💡 Endpoints vs EndpointSlices — Why the Old Way Doesn't Scale</h5><p>Originally, every Service had one <strong>Endpoints</strong> object containing ALL pod IPs. Problem: at 5000 pods behind a Service, the Endpoints object was massive (5000 IPs in one resource). Every pod change → update the entire Endpoints → kube-proxy on EVERY node re-reads and rewrites all iptables rules. <strong>EndpointSlices</strong> (GA in 1.21) solves this: the 5000 pod IPs are split into multiple slices (100 IPs each). kube-proxy only watches the slices it needs. Pod changes only trigger updates to the affected slice — not the entire list. This dramatically reduces API server load, network traffic, and kube-proxy CPU at scale. From Kubernetes 1.21+, EndpointSlices are the default and strongly preferred.</p></div>
                 </div>
 
                 <div class="section-block" id="s20-2"><h3>20.2 ClusterIP — Internal-Only Services</h3>
-                    <p>The default Service type. Gets a virtual IP from the service CIDR (e.g., 10.96.0.0/12). This IP exists only in iptables/IPVS rules — it's not bound to any interface. kube-proxy creates DNAT rules on every node: traffic to ClusterIP:Port → random backend pod IP:targetPort.</p>
+                    <p>The default Service type. Gets a virtual IP from the service CIDR (e.g., 10.96.0.0/12). This IP exists only in iptables/IPVS rules — it's not bound to any interface.</p>
+                    <div class="diagram-container"><div class="diagram-title">ClusterIP Service — iptables DNAT Chain Walk-Through</div>
+<pre>
+  CLIENT POD (10.244.1.5) → curl http://jobpost-svc:8000/api/jobs/
+  │
+  │ DNS: jobpost-svc → 10.96.100.50 (ClusterIP)
+  ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │ PREROUTING                                                  │
+  │  → KUBE-SERVICES                                           │
+  │     Match: dst=10.96.100.50, dport=8000                     │
+  │     Action: jump to KUBE-SVC-XXXX                           │
+  │       → KUBE-SVC-XXXX (Service chain)                       │
+  │          │ probability 0.333 → KUBE-SEP-AAA (Pod-1)         │
+  │          │ probability 0.500 → KUBE-SEP-BBB (Pod-2)         │
+  │          │ probability 0.999 → KUBE-SEP-CCC (Pod-3)         │
+  │          │                                                  │
+  │          → KUBE-SEP-AAA (Endpoint chain — Pod 1)             │
+  │             DNAT: 10.96.100.50:8000 → 10.244.1.5:8000       │
+  │                                                              │
+  │  → POSTROUTING (MASQUERADE if needed)                       │
+  └─────────────────────────────────────────────────────────────┘
+
+  BACKEND PODS:                                          Service:
+  ┌──────────┐  ┌──────────┐  ┌──────────┐       jobpost-svc
+  │ Pod-1    │  │ Pod-2    │  │ Pod-3    │       10.96.100.50:8000
+  │10.244.1.5│  │10.244.1.6│  │10.244.2.7│       Selector: app=jobpost
+  │ :8000    │  │ :8000    │  │ :8000    │
+  └──────────┘  └──────────┘  └──────────┘</pre></div>
                 </div>
 
                 <div class="section-block" id="s20-3"><h3>20.3 kube-proxy Modes — iptables vs IPVS vs eBPF</h3>
@@ -6684,14 +6893,40 @@ conntrack -S                   # Conntrack table statistics
                         <tr><td>Session Affinity</td><td>Yes (iptables recent)</td><td>Yes (persistence)</td><td>Yes</td></tr>
                         <tr><td>Update Cost</td><td>Rewrite ALL rules</td><td>Per-service update</td><td>Per-endpoint update</td></tr>
                     </table></div>
-                    <div id="s20-3a"><h4>iptables Mode (Default)</h4><p>kube-proxy creates iptables rules: KUBE-SERVICES → KUBE-SVC-XXXX → KUBE-SEP-XXXX (one per endpoint). Random selection via statistical probability (not true round-robin). <strong>Problem at scale:</strong> 5000 services × 10 endpoints = 50,000 iptables rules. Every rule update rewrites ALL rules — causing connection resets. O(n) rule traversal adds latency.</p></div>
-                    <div id="s20-3b"><h4>IPVS Mode (Scalable)</h4><p>Uses Linux kernel's L4 load balancer (IP Virtual Server). Hash table lookup — O(1). Supports 10+ scheduling algorithms: rr (round-robin), lc (least connection), sh (source hash), dh (destination hash). IPVS handles 100K+ services without degradation. Enable: <code>kube-proxy --proxy-mode=ipvs</code>. Requires IPVS kernel modules: <code>modprobe ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh</code>.</p></div>
-                    <div id="s20-3c"><h4>Userspace Mode (Legacy)</h4><p>kube-proxy runs as a user-space proxy — connections go through kube-proxy process. Round-robin but SLOW (context switches kernel↔user for every packet). Only exists for backward compatibility. Never use in production.</p></div>
+                    <div id="s20-3a"><h4>iptables Mode (Default)</h4><p>kube-proxy creates iptables rules: KUBE-SERVICES → KUBE-SVC-XXXX → KUBE-SEP-XXXX (one per endpoint). Random selection via statistical probability (not true round-robin). <strong>Why O(n):</strong> iptables evaluates rules sequentially — each packet traverses the chain rule by rule until it matches. With 50,000 rules, average traversal = 25,000 rule evaluations per packet. <strong>Problem at scale:</strong> 5000 services × 10 endpoints = 50,000 iptables rules. Every rule update rewrites ALL rules — causing connection resets during the rewrite window.</p></div>
+                    <div id="s20-3b"><h4>IPVS Mode (Scalable)</h4><p>Uses Linux kernel's L4 load balancer (IP Virtual Server). <strong>Why O(1):</strong> IPVS uses a hash table — the kernel hashes the 5-tuple and looks up the backend in constant time, regardless of how many services exist. No rule chains to traverse. Supports 10+ scheduling algorithms: rr (round-robin), lc (least connection), sh (source hash), dh (destination hash). IPVS handles 100K+ services without degradation. Enable: <code>kube-proxy --proxy-mode=ipvs</code>. <strong>The difference at scale:</strong> iptables = 25,000 rule evaluations per packet; IPVS = 1 hash lookup. This is why IPVS is mandatory for large clusters.</p></div>
+                    <div id="s20-3c"><h4>Userspace Mode (Legacy — Never Use in Production)</h4><p>This was kube-proxy's original mode (Kubernetes 1.0 era). Instead of programming the kernel (iptables/IPVS), kube-proxy runs as a user-space TCP proxy. <strong>How it works:</strong> kube-proxy opens a port on the node for each Service. When a client connects to that port, kube-proxy accepts the connection, opens a NEW connection to a backend pod, and manually copies data between the two connections (like netcat relay). <strong>Why it's terrible:</strong> Every packet travels: client → kernel → kube-proxy (user-space) → kernel → backend pod. That's two extra kernel↔user context switches per packet — compared to zero for iptables/IPVS modes. Latency: 10-50× higher. Throughput: limited by single-threaded event loop. <strong>Why it still exists:</strong> Fallback when iptables/IPVS kernel modules aren't available. Useful for debugging with <code>--v=4</code> to see every connection proxied. Never use in production.</p></div>
                     <div id="s20-3d"><h4>eBPF Mode (Cilium — No kube-proxy)</h4><p>Cilium replaces kube-proxy entirely with eBPF programs attached to kernel hooks. Service lookup becomes a direct eBPF map lookup → O(1). Benefits: no iptables rules, no kube-proxy pod, built-in observability (Hubble), per-endpoint load balancing, connection tracking at eBPF level. This is the future of K8s networking.</p></div>
                 </div>
 
                 <div class="section-block" id="s20-4"><h3>20.4 NodePort — Exposing Services on Node IPs</h3>
-                    <p>Opens a port (30000-32767 by default) on EVERY node. Traffic to NodeIP:NodePort → ClusterIP DNAT → backend pod. Rarely used directly in production (use LoadBalancer or Ingress instead). The kube-proxy creates an additional iptables rule in the KUBE-NODEPORTS chain.</p>
+                    <p>Opens a port (30000-32767 by default) on EVERY node. Rarely used directly in production — mainly for dev access or as the underlying mechanism for LoadBalancer Services.</p>
+                    <div class="diagram-container"><div class="diagram-title">NodePort Service — How External Traffic Reaches Pods</div>
+<pre>
+  EXTERNAL CLIENT                      K8S CLUSTER
+  ┌──────────────┐
+  │ curl NodeIP  │──────┐
+  │ :30080       │      │
+  └──────────────┘      │
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │ NODE 1 (192.168.1.10)       NODE 2 (192.168.1.11)           │
+  │                                                              │
+  │ iptables KUBE-NODEPORTS:    iptables KUBE-NODEPORTS:        │
+  │ DNAT :30080 →               DNAT :30080 →                   │
+  │ KUBE-SVC-XXXX (ClusterIP)   KUBE-SVC-XXXX (ClusterIP)       │
+  │   → KUBE-SEP-AAA (Pod-1)      → KUBE-SEP-BBB (Pod-3)        │
+  │      DNAT → 10.244.1.5:8000     DNAT → 10.244.2.7:8000      │
+  │                                                              │
+  │ ┌──────────┐                 ┌──────────┐                   │
+  │ │ Pod-1    │                 │ Pod-3    │                   │
+  │ │:8000     │                 │ :8000    │                   │
+  │ └──────────┘                 └──────────┘                   │
+  └──────────────────────────────────────────────────────────────┘
+
+  # Port 30080 is open on EVERY node — even nodes with no local pods!
+  # Traffic to Node2:30080 is DNAT'd to Pod-3 on Node2 (or cross-node).
+  # NodePort range: 30000-32767 (configurable via --service-node-port-range)</pre></div>
                 </div>
 
                 <div class="section-block" id="s20-5"><h3>20.5 LoadBalancer — Cloud-Native Service Exposure</h3>
@@ -6713,7 +6948,26 @@ conntrack -S                   # Conntrack table statistics
   Pod (10.244.1.5:8000 — gunicorn serving jobpost API)
 
   ⚠️ externalTrafficPolicy=Cluster (default): SNAT hides client IP (pod sees node IP)
-  ✅ externalTrafficPolicy=Local: Preserves client IP but only routes to LOCAL pods</pre></div>
+  ✅ externalTrafficPolicy=Local: Preserves client IP but only routes to LOCAL pods
+
+  HOW SOURCE IP GETS LOST (Cluster mode):
+  1. External client (203.0.113.50) → Cloud LB → Node 1 (192.168.1.10:30080)
+  2. Node 1 DNATs to ClusterIP → randomly picks Pod B on Node 2 (cross-node!)
+  3. Node 1 must forward to Node 2 → Source = Node 1 IP (SNAT), not client IP
+  4. Pod B sees source = 192.168.1.10 (Node 1). Real client IP 203.0.113.50 is GONE.
+
+  HOW LOCAL PRESERVES IT:
+  externalTrafficPolicy: Local → traffic arriving at Node 1 ONLY goes to pods on Node 1.
+  No cross-node hop needed → no SNAT → pod sees real client IP.
+  Trade-off: If Node 1 has no local pods for this Service, traffic is DROPPED.
+
+  REAL-WORLD IMPACT OF LOSING SOURCE IP:
+  • Rate limiting: Pod sees Node IP → rate limits ALL traffic as one client
+  • Geo-IP: Everyone appears to be from your node's subnet — useless for analytics
+  • Audit logs: Can't identify which external user made which request
+  • PCI/HIPAA compliance: Require source IP logging — Cluster mode fails this
+  • Solution: externalTrafficPolicy: Local + pod on every node (DaemonSet)
+  • Alternative: L7 Ingress proxy adds X-Forwarded-For header with real client IP</pre></div>
                 </div>
 
                 <div class="section-block" id="s20-6"><h3>20.6 [LAB 🛠️] Services Lab</h3>
@@ -6778,22 +7032,112 @@ kubectl logs -n kube-system kube-proxy-xxx        # Proxy logs
                 </div>
 
                 <div class="section-block" id="s21-1"><h3>21.1 Why Ingress Exists — Beyond Services</h3>
-                    <p>Services can only route by IP:Port (L4). Ingress enables: <strong>Path-based routing:</strong> /api/* → backend-A, /admin/* → backend-B. <strong>Host-based routing:</strong> api.anihpj.com → one Service, admin.anihpj.com → another. <strong>TLS termination:</strong> One cert at the Ingress for all routes. <strong>⚠️ The Ingress resource alone does NOTHING — it requires an Ingress Controller.</strong></p>
+                    <p>Services route by IP:Port (L4). Ingress adds L7 HTTP routing.</p>
+                    <div class="diagram-container"><div class="diagram-title">Ingress — L7 Routing with One Entry Point</div>
+<pre>
+  INTERNET
+     │
+     ▼
+  ┌──────────────────────────────────────────────────────┐
+  │              INGRESS CONTROLLER (nginx)               │
+  │              TLS Termination at Edge                  │
+  │              Single External IP/LB                    │
+  └──┬────────────────────┬──────────────────┬───────────┘
+     │                    │                  │
+     │ Host: api.anihpj.com   │ Host: admin.anihpj.com
+     │ Path: /api/*           │ Path: /admin/*     Path: /
+     ▼                    ▼                  ▼
+  ┌──────────┐       ┌──────────┐       ┌──────────┐
+  │ jobpost  │       │  admin   │       │ frontend │
+  │ Service  │       │ Service  │       │ Service  │
+  │ :8000    │       │ :8001    │       │ :3000    │
+  └──────────┘       └──────────┘       └──────────┘
+
+  ONE external IP. ONE TLS cert. Routes to MANY Services by host + path.
+  Without Ingress: each Service needs its own LoadBalancer ($$$ + complexity).</pre></div>
+                    <div class="info-box warning"><h5>⚠️ The Ingress resource alone does NOTHING — it requires an Ingress Controller.</h5></div>
                 </div>
 
                 <div class="section-block" id="s21-2"><h3>21.2 Ingress Controllers Compared</h3>
-                    <div id="s21-2a"><h4>NGINX Ingress Controller</h4><p>The most deployed. Watches K8s API for Ingress resources → generates nginx.conf → reloads nginx. Configured via ConfigMap + annotations. Battle-tested, huge community. <strong>Downside:</strong> Every change triggers nginx reload (brief downtime at scale).</p></div>
-                    <div id="s21-2b"><h4>Traefik</h4><p>Auto-discovers services via K8s API. Built-in dashboard, Let's Encrypt integration, middleware chaining (rate limiting, circuit breaker, auth). Dynamic configuration — no reloads. Excellent for smaller teams who want a polished experience.</p></div>
-                    <div id="s21-2c"><h4>HAProxy Ingress</h4><p>The power of HAProxy inside K8s. Excellent L7 routing, advanced health checking, detailed metrics. Dynamic reconfiguration via HAProxy Runtime API — no reloads. Best for teams already familiar with HAProxy.</p></div>
-                    <div id="s21-2d"><h4>AWS ALB Ingress Controller</h4><p>Provisions AWS Application Load Balancers. Integrates with AWS Certificate Manager (TLS), WAF (firewall), Cognito (auth). Each Ingress creates an ALB with listener rules. Best for AWS-native deployments.</p></div>
+                    <div class="compare-table"><table>
+                        <tr><th>Feature</th><th>NGINX</th><th>Traefik</th><th>HAProxy</th><th>AWS ALB</th></tr>
+                        <tr><td>Config Method</td><td>Annotations + ConfigMap</td><td>K8s CRDs + annotations</td><td>ConfigMap + annotations</td><td>Annotations (ALB-specific)</td></tr>
+                        <tr><td>Reconfiguration</td><td>nginx reload (brief downtime)</td><td>Dynamic — no reloads</td><td>Runtime API — no reloads</td><td>AWS API — fully dynamic</td></tr>
+                        <tr><td>TLS</td><td>Secret reference</td><td>Built-in Let's Encrypt</td><td>Secret reference</td><td>AWS Certificate Manager</td></tr>
+                        <tr><td>Dashboard</td><td>❌ (3rd party)</td><td>✅ Built-in</td><td>✅ Statistics page</td><td>✅ AWS Console</td></tr>
+                        <tr><td>Best For</td><td>Universal, max community</td><td>Polish, small teams</td><td>HAProxy shops, L7 power</td><td>AWS-native deployments</td></tr>
+                        <tr><td>Canary/Rate Limiting</td><td>Annotations (canary)</td><td>✅ Middleware</td><td>✅ Via config</td><td>✅ ALB weighted groups</td></tr>
+                    </table></div>
+                    <div id="s21-2a"><h4>NGINX Ingress Controller</h4><p>The most deployed Ingress controller — battle-tested across millions of clusters. Controller pod watches K8s API for Ingress resources → Go template renders nginx.conf → sends HUP signal to reload nginx. Configured entirely via annotations (<code>rewrite-target</code>, <code>ssl-redirect</code>, <code>proxy-body-size</code>, <code>cors-allow-origin</code>) and a ConfigMap for global settings. <strong>Downside:</strong> Every Ingress change triggers an nginx reload — at 100+ Ingresses with frequent changes, reloads cause brief connection drops. Use IngressClass or dynamic-config nginx variants (OpenResty-based) for large-scale deployments.</p></div>
+                    <div id="s21-2b"><h4>Traefik</h4><p>Traefik auto-discovers Services, Ingresses, and IngressRoutes via the K8s API — no reloads needed. Ships with a built-in web dashboard showing real-time traffic, routes, and health. Let's Encrypt integration is native — enable TLS with one annotation. Middleware system supports: rate limiting, circuit breakers, retry, basic auth, headers manipulation, redirects — chainable in any order. Best for teams that want a polished, batteries-included experience with minimal operational overhead.</p></div>
+                    <div id="s21-2c"><h4>HAProxy Ingress</h4><p>Brings HAProxy's legendary L7 routing and performance into Kubernetes. Supports: advanced ACL-based routing, request/response header manipulation, detailed per-backend metrics (queue, connect, response times). Dynamic reconfiguration via HAProxy Runtime API — no reloads, no connection drops. Best for organizations already running HAProxy at the edge who want consistent tooling inside K8s.</p></div>
+                    <div id="s21-2d"><h4>AWS ALB Ingress Controller</h4><p>Instead of running a proxy in the cluster, this controller provisions AWS Application Load Balancers OUTSIDE the cluster. Each Ingress resource → one ALB with listener rules. Integrates natively with: AWS Certificate Manager (TLS certs, auto-renewal), AWS WAF (web application firewall at the edge), AWS Cognito (OIDC/OAuth authentication at the LB level — your app never sees auth). ALB targets pod IPs directly (IP mode) — eliminates the NodePort hop. Best for AWS-native deployments that want to minimize in-cluster components.</p></div>
                 </div>
 
                 <div class="section-block" id="s21-3"><h3>21.3 NGINX Ingress Controller Deep Dive</h3>
-                    <p>Architecture: Ingress Controller pod watches K8s API → Go template renders nginx.conf → nginx reload. Key annotations: <code>rewrite-target</code>, <code>ssl-redirect</code>, <code>proxy-body-size</code>, <code>proxy-read-timeout</code>, <code>cors-allow-origin</code>. <strong>⚠️ Every Ingress change = nginx reload. At 100+ Ingress resources with frequent changes, reloads cause brief downtime. Fix: Use IngressClass to designate which controller handles which Ingress. Multiple controllers can coexist.</strong></p>
+                    <p>Architecture: Ingress Controller pod watches K8s API → Go template renders nginx.conf → nginx reload.</p>
+                    <div class="diagram-container"><div class="diagram-title">NGINX Ingress Controller — Watch Loop and Config Generation</div>
+<pre>
+  ┌──────────┐     ┌─────────────────┐     ┌──────────────────┐
+  │ K8s API  │────▶│ Ingress Ctrl    │────▶│ nginx.conf       │
+  │          │     │ Pod (Go app)    │     │ template (Go tmpl)│
+  │ Ingress  │     │                 │     │                  │
+  │ Service  │     │ Watch Ingress,  │     │ Render:          │
+  │ Endpoints│     │ Service, Secret │     │ server {         │
+  │ Secrets  │     │ changes         │     │   listen 443;    │
+  └──────────┘     └────────┬────────┘     │   server_name..; │
+                            │               │   location /api {│
+                            ▼               │     proxy_pass..;│
+                     ┌──────────────┐       │   }              │
+                     │ nginx reload │       │ }                │
+                     │ (HUP signal) │       └────────┬─────────┘
+                     └──────────────┘                │
+                            │                        ▼
+                            ▼               ┌──────────────────┐
+                     ⚠️ Brief downtime       │ /etc/nginx/      │
+                     during reload           │ nginx.conf       │
+                     (milliseconds)          └──────────────────┘
+
+  Key annotations:
+  nginx.ingress.kubernetes.io/rewrite-target: /
+  nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  nginx.ingress.kubernetes.io/proxy-body-size: 8m
+  nginx.ingress.kubernetes.io/proxy-read-timeout: "60"</pre></div>
                 </div>
 
                 <div class="section-block" id="s21-4"><h3>21.4 TLS with Ingress — cert-manager Integration</h3>
-                    <p>cert-manager automates TLS certificate lifecycle: Ingress annotation <code>cert-manager.io/cluster-issuer</code> → CertificateRequest → ACME HTTP-01 challenge → Let's Encrypt issues cert → stored in K8s Secret → Ingress references Secret. Auto-renewal 30 days before expiry. <strong>⚠️ HTTP-01 requires port 80 publicly accessible. If blocked, use DNS-01 challenge (requires DNS API access).</strong></p>
+                    <p>cert-manager automates TLS certificate lifecycle from request to renewal.</p>
+                    <div class="diagram-container"><div class="diagram-title">cert-manager Workflow — Ingress → Certificate → Let's Encrypt → Secret</div>
+<pre>
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 1. YOU CREATE: Ingress with annotation                           │
+  │    cert-manager.io/cluster-issuer: "letsencrypt-prod"             │
+  │    tls: [{hosts: [jobpost.anihpj.com], secretName: jobpost-tls}]│
+  └──────────────────────────┬───────────────────────────────────────┘
+                             │ cert-manager watches
+                             ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 2. CERT-MANAGER CREATES: CertificateRequest                      │
+  │    → Order (ACME order with Let's Encrypt)                       │
+  │    → Challenge (HTTP-01: serve token at /.well-known/acme-challenge/)│
+  └──────────────────────────┬───────────────────────────────────────┘
+                             │ Let's Encrypt verifies token
+                             ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 3. LET'S ENCRYPT ISSUES: Certificate                             │
+  │    → cert-manager stores in K8s Secret: anihpj-tls               │
+  │    → Secret contains: tls.crt (full chain) + tls.key (private)  │
+  └──────────────────────────┬───────────────────────────────────────┘
+                             │
+                             ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 4. INGRESS REFERENCES: tls: [{secretName: anihpj-tls}]           │
+  │    → nginx loads cert + key → serves HTTPS                      │
+  │    → Auto-renewal: cert-manager renews 30 days before expiry    │
+  └──────────────────────────────────────────────────────────────────┘
+
+  ⚠️ HTTP-01 requires port 80 publicly reachable.
+  Blocked? Use DNS-01: cert-manager creates TXT record via Route53/Cloudflare API.</pre></div>
                 </div>
 
                 <div class="net-exam-questions"><h4>📝 Chapter 21 — Networking Practice Questions</h4>
@@ -6855,15 +7199,77 @@ spec:
                 </div>
 
                 <div class="section-block" id="s22-1"><h3>22.1 Why Gateway API Replaces Ingress</h3>
-                    <p>Ingress has served well for years but has critical limitations: no cross-namespace routing, no weighted traffic splitting, no header-based routing, no team role separation. Gateway API solves all of these with a clean resource model: <strong>GatewayClass</strong> (platform team — "what implementation?"), <strong>Gateway</strong> (cluster admin — "where do requests enter?"), <strong>HTTPRoute</strong> (app developer — "where do requests go?").</p>
+                    <p>Ingress has critical limitations: no cross-namespace routing, no weighted traffic splitting, no header-based routing, no team role separation.</p>
+                    <div class="diagram-container"><div class="diagram-title">Ingress vs Gateway API — Resource Ownership Model</div>
+<pre>
+  INGRESS (everyone edits one resource):
+  ┌─────────────────────────────────────────────┐
+  │  Ingress Resource                           │
+  │  (Platform team & App devs edit same thing) │
+  │  • Host routing • Path routing • TLS config │
+  │  ⚠️ No role separation!                     │
+  └─────────────────────────────────────────────┘
+
+  GATEWAY API (separation of concerns):
+  ┌──────────────────────┐  ← Platform Team (cluster-scoped)
+  │ GatewayClass         │  "This cluster supports Envoy Gateway"
+  └──────────┬───────────┘
+             │ references
+  ┌──────────┴───────────┐  ← Cluster Admin
+  │ Gateway              │  "Listen on :443 with TLS cert X"
+  │ (ns-scoped)          │  "Listen on :80 for HTTP"
+  └──────────┬───────────┘
+             │ parentRefs
+  ┌──────────┴───────────┐  ← App Developer (their namespace)
+  │ HTTPRoute            │  "Route /api/* → jobpost-svc (90/10)"
+  │ (ns-scoped)          │  App devs manage their OWN routes!
+  └──────────┬───────────┘
+             │
+  ┌──────────┴───────────┐  ← Opt-in cross-namespace access
+  │ ReferenceGrant       │  "Ns B allows Ns A to reference its
+  │ (in target namespace)│   Services" — explicit opt-in only</pre></div>
                 </div>
 
                 <div class="section-block" id="s22-2"><h3>22.2 Gateway API Resource Model — The Full Hierarchy</h3>
-                    <p><strong>GatewayClass:</strong> Cluster-scoped. Defines the controller (istio, envoy-gateway, nginx-gateway). <strong>Gateway:</strong> Defines listeners (ports, protocols, TLS). <strong>HTTPRoute:</strong> Matches requests (path, headers, query params, method) and routes to backend Services with optional weights and filters. <strong>ReferenceGrant:</strong> Explicit permission for cross-namespace routing — prevents namespace A from accidentally routing to namespace B.</p>
+                    <div class="diagram-container"><div class="diagram-title">Gateway API — Complete Resource Tree with Relationships</div>
+<pre>
+  GatewayClass (cluster-scoped)
+  │  spec.controllerName: "gateway.envoyproxy.io/gatewayclass-controller"
+  │
+  └──▶ Gateway (namespace: anihpj)
+       │  spec.listeners:
+       │    - {name: https, port: 443, protocol: HTTPS,
+       │       tls: {mode: Terminate, certificateRefs: [anihpj-tls]}}
+       │    - {name: http, port: 80, protocol: HTTP}
+       │
+       └──▶ HTTPRoute (namespace: anihpj)
+            │  spec.parentRefs: [{name: anihpj-gateway}]
+            │  spec.rules:
+            │    - matches: [{path: {type: PathPrefix, value: /api}}]
+            │      backendRefs:
+            │        - {name: jobpost-v1, port: 8000, weight: 90}
+            │        - {name: jobpost-v2, port: 8000, weight: 10}
+            │    - matches: [{path: {type: PathPrefix, value: /admin}}]
+            │      backendRefs:
+            │        - {name: admin, port: 8001}
+            │
+            └──▶ ReferenceGrant (namespace: database-ns)
+                 │  "Allow HTTPRoutes in anihpj namespace to
+                 │   reference Services in database-ns namespace"</pre></div>
                 </div>
 
                 <div class="section-block" id="s22-3"><h3>22.3 Gateway API Implementations</h3>
-                    <p><strong>Envoy Gateway:</strong> CNCF project, xDS-based dynamic config (no reloads). <strong>Istio:</strong> Full service mesh + Gateway API. <strong>NGINX Gateway Fabric:</strong> nginx-based, production-grade. <strong>Cilium:</strong> eBPF-native, no sidecars needed. <strong>Traefik:</strong> Built-in dashboard + middleware. <strong>Kong:</strong> Plugin ecosystem. Choose based on: existing stack (Istio users get Gateway API for free), performance needs (Cilium eBPF), operational simplicity (Envoy Gateway).</p>
+                    <div class="info-box tip"><h5>💡 xDS — The Protocol That Makes Dynamic Reconfiguration Possible</h5><p>Envoy-based gateways (Envoy Gateway, Istio, Contour) use the <strong>xDS (Discovery Service) protocol</strong> to dynamically update proxy configuration without reloads. xDS is a family of gRPC streaming APIs: <strong>LDS</strong> (Listener Discovery — "what ports to listen on"), <strong>RDS</strong> (Route Discovery — "which routes to which backends"), <strong>CDS</strong> (Cluster Discovery — "what backends exist"), <strong>EDS</strong> (Endpoint Discovery — "which IP:port for each backend"). The control plane streams configuration to Envoy over a persistent gRPC connection. When a backend pod starts/dies, only the EDS update is sent — Envoy adjusts its load balancing pool without dropping connections. This is fundamentally different from nginx's file-based reload model. xDS is why Envoy-based solutions can handle thousands of configuration changes per second without downtime.</p></div>
+                    <div class="compare-table"><table>
+                        <tr><th>Implementation</th><th>Data Plane</th><th>Key Strength</th><th>Maturity</th><th>eBPF?</th></tr>
+                        <tr><td><strong>Envoy Gateway</strong></td><td>Envoy</td><td>CNCF project, pure xDS, no reloads</td><td>GA (2024)</td><td>❌</td></tr>
+                        <tr><td><strong>Istio</strong></td><td>Envoy</td><td>Full mesh + Gateway API, ALL route types</td><td>Production</td><td>❌</td></tr>
+                        <tr><td><strong>NGINX Gateway Fabric</strong></td><td>NGINX</td><td>Familiar nginx, production-grade</td><td>GA (2024)</td><td>❌</td></tr>
+                        <tr><td><strong>Cilium</strong></td><td>eBPF (kernel)</td><td>Sidecarless, kernel-native routing</td><td>Production</td><td>✅</td></tr>
+                        <tr><td><strong>Traefik</strong></td><td>Traefik</td><td>Dashboard, middleware, easiest start</td><td>Production</td><td>❌</td></tr>
+                        <tr><td><strong>Kong</strong></td><td>Kong/OpenResty</td><td>Plugin ecosystem (300+ plugins)</td><td>Production</td><td>❌</td></tr>
+                    </table></div>
+                    <p><strong>Choosing:</strong> Already using Istio for service mesh? → Gateway API comes free. Want maximum performance? → Cilium eBPF eliminates sidecar overhead. Want simplicity? → Envoy Gateway or Traefik. Need plugins? → Kong. Familiar with nginx? → NGINX Gateway Fabric.</p>
                 </div>
 
                 <div class="section-block" id="s22-4"><h3>22.4 Gateway API in Practice — anihpj Canary Deployment</h3>
@@ -6963,14 +7369,49 @@ spec:
                     <p>Without a mesh, every team re-implements: retries, timeouts, circuit breaking, mTLS, distributed tracing, metrics. A service mesh extracts these into the infrastructure layer. <strong>Data plane:</strong> Sidecar proxies (Envoy/Linkerd-proxy) handle all traffic. <strong>Control plane:</strong> Istiod/Linkerd controller distributes configuration. <strong>How interception works:</strong> An init container runs iptables rules to redirect ALL pod traffic through the sidecar proxy (port 15001 for Istio).</p>
                     <div class="info-box warning"><h5>⚠️ If the sidecar crashes, the pod is completely isolated</h5><p>The init container redirects ALL traffic through the sidecar. If the sidecar stops, iptables rules still redirect to a dead proxy → all connections fail. The pod appears "Running" but has zero network connectivity. This is the #1 service mesh debugging gotcha.</p></div>
                     <div class="info-box tip"><h5>💡 How Sidecar Injection Works — Step by Step</h5><p>(1) Namespace labeled <code>istio-injection=enabled</code> → Istio mutating webhook triggers on pod creation. (2) Webhook modifies pod spec: adds init container (runs iptables redirect), adds Envoy sidecar container, mounts certificates. (3) Init container runs first: <code>iptables -t nat -A PREROUTING -p tcp -j REDIRECT --to-port 15001</code> (redirects ALL inbound/outbound pod traffic to Envoy). (4) Init container also redirects DNS to Envoy for service discovery. (5) Application container starts — all its traffic is transparently intercepted. (6) Envoy sidecar connects to Istiod (control plane) via xDS, receives certificates (SPIFFE X.509), routing rules, and policies. The app NEVER knows it's being proxied — it makes HTTP calls as usual.</p></div>
+                    <div class="info-box tip"><h5>💡 SPIFFE — The Identity Framework Behind mTLS</h5><p><strong>SPIFFE (Secure Production Identity Framework for Everyone)</strong> is the CNCF standard that gives every service a cryptographic identity. In Istio, every sidecar gets a <strong>SPIFFE X.509 certificate</strong> with an identity like: <code>spiffe://cluster.local/ns/anihpj/sa/jobpost</code> (cluster/namespace/serviceAccount). This identity is NOT tied to IP or hostname — it's tied to the Kubernetes ServiceAccount. When jobpost calls postgres, the postgres sidecar verifies: "Is spiffe://cluster.local/ns/anihpj/sa/jobpost allowed to call me?" Certificates are automatically rotated (default: every 24 hours) by Istiod. The private key never leaves the pod. <strong>Why this matters:</strong> mTLS isn't just encryption — it's cryptographically proving WHO is calling. Without SPIFFE, mTLS just proves "someone with a valid cert is calling." With SPIFFE, it proves "the jobpost service in namespace anihpj is calling." This is the foundation of zero-trust: every request is authenticated, not just encrypted.</p></div>
                 </div>
 
                 <div class="section-block" id="s23-2"><h3>23.2 Service Mesh Capabilities</h3>
-                    <p><strong>mTLS:</strong> Automatic, transparent mutual TLS between all services. <strong>Traffic management:</strong> Retries, timeouts, circuit breaking, fault injection. <strong>Traffic splitting:</strong> Canary deployments, blue/green, A/B testing. <strong>Observability:</strong> Automatic metrics (RED — Rate/Errors/Duration), distributed tracing (Jaeger/Zipkin), service graphs (Kiali/Linkerd dashboard). <strong>Istio vs Linkerd vs Cilium:</strong> Istio = maximum features, higher complexity. Linkerd = simpler, Rust-based proxy, lower overhead. Cilium = eBPF-native, no sidecars at all (sidecarless mesh).</p>
+                    <p><strong>mTLS:</strong> Automatic, transparent mutual TLS between all services. <strong>Traffic splitting:</strong> Canary deployments, blue/green, A/B testing.</p>
+                    <div class="info-box tip"><h5>💡 Traffic Management — Retries, Timeouts, Circuit Breaking, Fault Injection Explained</h5><p>These four features are the building blocks of resilient microservices — and the mesh provides them without application code changes. <strong>Retries:</strong> If a backend returns a transient error (connection refused, 503), the sidecar automatically retries up to N times with exponential backoff. The app code doesn't need try/catch/retry logic. <strong>⚠️ Retries AMPLIFY load:</strong> If every service retries 3× on failure, total requests can triple during an outage. Always configure retry budgets (max retries × request rate). <strong>Timeouts:</strong> How long the sidecar waits before giving up. Without timeouts, a slow backend can exhaust all your gunicorn workers waiting for responses. Set timeouts slightly below your application's tolerance (e.g., 25s mesh timeout for a 30s app timeout). <strong>Circuit Breaking:</strong> If a backend returns N consecutive 5xx errors, the circuit "opens" — the sidecar immediately returns 503 without even sending the request. This protects the failing backend from overload while it recovers. After a cooldown, the breaker "half-opens" — allows one test request through. <strong>Fault Injection:</strong> Intentionally inject delays or errors to test resilience. "What happens if postgres takes 5 seconds to respond?" Inject a 5s delay for 10% of traffic and observe. This is chaos engineering built into the mesh — test failure scenarios safely in production.</p></div>
+                    <div class="info-box tip"><h5>💡 RED Metrics — How the Mesh Gives You Observability for Free</h5><p><strong>RED</strong> stands for the three golden signals of service health: <strong>Rate</strong> (requests per second — is traffic normal?), <strong>Errors</strong> (percentage of failed requests — are users seeing 5xx?), <strong>Duration</strong> (latency — is the service getting slower?). The sidecar proxy (Envoy/Linkerd) automatically collects these for EVERY request without code changes. They're exported to Prometheus, visualized in Grafana/Kiali as service graphs with color-coded health (green=healthy, red=errors, orange=latency). <strong>The power:</strong> Deploy a mesh → instantly get: per-service RPS, error rate, p50/p95/p99 latency, request volume by HTTP status code. This is "zero-code observability."</p></div>
+                    <p><strong>Istio vs Linkerd vs Cilium:</strong> Istio = maximum features, higher complexity. Linkerd = simpler, Rust-based proxy, lower overhead. Cilium = eBPF-native, no sidecars at all (sidecarless mesh).</p>
                 </div>
 
                 <div class="section-block" id="s23-3"><h3>23.3 Service Mesh in the anihpj Stack</h3>
-                    <p>With Istio: jobpost pod gets Envoy sidecar, postgres pod gets Envoy sidecar. mTLS automatically encrypts all traffic between them — Django connects to postgres:5432 as always, but the sidecars transparently upgrade to mTLS. Canary: 5% of traffic to new jobpost version, circuit breaker protects postgres from cascading failures (max 5 concurrent connections, ejection on 5 consecutive 5xx errors). Tracing: every request gets a trace ID propagated through headers — Jaeger shows the full path: nginx → jobpost → postgres → redis.</p>
+                    <div class="diagram-container"><div class="diagram-title">anihpj with Istio — mTLS, Canary, Circuit Breaker, Tracing</div>
+<pre>
+  INGRESS GATEWAY (Istio) — TLS termination + routing
+  │
+  ├──▶ JOBOOST POD                             POSTGRES POD
+  │    ┌─────────────┐                          ┌─────────────┐
+  │    │  jobpost    │──HTTP──▶┌─────────────┐│  postgres   │
+  │    │  container  │         │  ENVOY      ││  container  │
+  │    │  localhost  │◀──HTTP──│  SIDECAR    ││  :5432      │
+  │    │  :8000      │         │             ││             │
+  │    └─────────────┘         │ • mTLS 🔒   │└─────────────┘
+  │                            │ • Circuit   │
+  │  90% → jobpost-v1          │   Breaker   │  REDIS POD
+  │  10% → jobpost-v2 (canary) │ • Retries   │  ┌─────────────┐
+  │                            │ • Timeout   │  │   redis     │
+  │                            │ • Tracing   │  │  container  │
+  │                            │ • Metrics   │  └─────────────┘
+  │                            └──────┬──────┘
+  │                                   │
+  │  ┌────────────────────────────────┼──────────────────────┐
+  │  │        TELEMETRY               ▼                      │
+  │  │  Prometheus ← metrics    "GET /api/jobs/ → 200 (45ms)│
+  │  │  Jaeger     ← traces     Trace: nginx(10ms)→          │
+  │  │  Kiali      ← graph      jobpost(45ms)→postgres(30ms)│
+  │  │  Grafana    ← dashboard  →redis(2ms)"                │
+  │  └──────────────────────────────────────────────────────┘
+  └─────────────────────────────────────────────────────────────
+
+  CIRCUIT BREAKER (protecting postgres):
+  maxConnections: 5     → max 5 concurrent DB connections
+  consecutive5xx: 5     → eject after 5 straight failures
+  ejectionTime: 30s     → wait 30s before retrying backend</pre></div>
                 </div>
 
                 <div class="section-block" id="s23-4"><h3>23.4 [LAB 🛠️] Service Mesh Lab</h3>
@@ -7010,8 +7451,245 @@ istioctl authn tls-check jobpost-xxx.anihpj postgres.anihpj.svc.cluster.local
         </section>
         </section>
         <section class="chapter-section" id="part7">
-            <h2><span>☁️ Part 7: Cloud Networking</span><span class="chapter-badge">Ch 24-26</span></h2>
-            <div class="content-placeholder"><div class="placeholder-icon">☁️</div><p>Part 7 content coming soon — VPC, Cloud LB, Hybrid Connectivity.</p></div>
+            <h2><span>☁️ Part 7: Cloud Networking — VPCs, Subnets &amp; Hybrid Connectivity</span><span class="chapter-badge">Ch 24-26</span></h2>
+
+            <!-- ═══ Chapter 24: Virtual Private Cloud (VPC) Fundamentals ═══ -->
+            <div id="ch24">
+                <div class="chapter-intro">
+                    <h3>Chapter 24: Virtual Private Cloud (VPC) Fundamentals</h3>
+                    <p>A <strong>Virtual Private Cloud (VPC)</strong> is your own logically isolated section of the cloud — a virtual data center where you control IP addressing, subnets, routing, and security. Every cloud resource (EC2, RDS, EKS) lives inside a VPC. Understanding VPC design is essential for building secure, scalable cloud architectures.</p>
+                    <div class="chapter-meta"><span class="meta-tag">🟡 Intermediate</span><span class="meta-tag">⏱️ ~2 hours</span><span class="meta-tag">☁️ Cloud</span><span class="meta-tag">🏗️ Architecture</span></div>
+                </div>
+
+                <div class="section-block" id="s24-1"><h3>24.1 What Is a VPC?</h3>
+                    <p>A VPC is defined by a <strong>CIDR block</strong> (e.g., 10.0.0.0/16 = 65,536 IPs), divided into <strong>subnets</strong> (e.g., 10.0.1.0/24 = 256 IPs per subnet) across <strong>Availability Zones</strong> for high availability. Route tables control traffic flow between subnets and to the internet. Gateways (Internet Gateway, NAT Gateway) provide internet access.</p>
+                    <div class="diagram-container"><div class="diagram-title">AWS VPC Architecture — anihpj Production Design</div>
+<pre>
+                    AWS VPC: 10.0.0.0/16
+
+  ┌──────────────────────────────┐  ┌──────────────────────────────┐
+  │  PUBLIC SUBNET (10.0.1.0/24) │  │  PUBLIC SUBNET (10.0.2.0/24) │
+  │  ┌──────────┐ ┌───────────┐ │  │  ┌──────────┐ ┌───────────┐ │
+  │  │ Bastion  │ │ NAT GW    │ │  │  │ NAT GW   │ │  ALB     │ │
+  │  │ Host     │ │ (AZ-a)    │ │  │  │ (AZ-b)   │ │ (public)  │ │
+  │  └──────────┘ └─────┬─────┘ │  │  └─────┬────┘ └─────┬─────┘ │
+  └─────────────────────┼───────┘  └────────┼────────────┼───────┘
+                        │                   │            │
+  ┌─────────────────────┼───────────────────┼────────────┼───────┐
+  │  PRIVATE SUBNET (10.0.10.0/24 — AZ-a)   │            │       │
+  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ │            │       │
+  │  │EKS Node │ │EKS Node │ │   RDS    │◀─┘ (route to NAT)     │
+  │  │(jobpost)│ │(jobpost)│ │PostgreSQL│                        │
+  │  └──────────┘ └──────────┘ └──────────┘                        │
+  └────────────────────────────────────────────────────────────────┘
+
+  Internet Gateway ──▶ 0.0.0.0/0 (public subnets)
+  NAT Gateway ──▶ 0.0.0.0/0 (private subnets → outbound internet only)</pre></div>
+                </div>
+
+                <div class="section-block" id="s24-2"><h3>24.2 Public vs Private Subnets — The Great Divide</h3>
+                    <p>The fundamental security boundary: <strong>Public subnet:</strong> Route to Internet Gateway — resources CAN receive inbound internet traffic. <strong>Private subnet:</strong> Route to NAT Gateway — outbound-only internet access.</p>
+                    <div class="diagram-container"><div class="diagram-title">Public vs Private Subnet — Route Table Comparison</div>
+<pre>
+  PUBLIC SUBNET ROUTE TABLE:              PRIVATE SUBNET ROUTE TABLE:
+  ┌──────────────────────────────┐        ┌──────────────────────────────┐
+  │ 10.0.0.0/16 → local         │        │ 10.0.0.0/16 → local         │
+  │ 0.0.0.0/0   → IGW           │        │ 0.0.0.0/0   → NAT Gateway   │
+  └──────────────────────────────┘        └──────────────────────────────┘
+  ✅ Resources CAN have public IPs        ❌ Resources have private IPs only
+  ✅ Internet CAN initiate connections     ✅ Resources can initiate OUTBOUND
+  ✅ Traffic flows: Internet ↔ Subnet     ❌ Internet CANNOT initiate inbound
+                                           💡 NAT GW translates private IP→public
+
+  RULE OF THUMB: Public = Load Balancers, Bastions. Private = Everything else.
+  NAT Gateway: ~$0.045/GB + $0.045/hr. Use VPC Endpoints to reduce costs!</pre></div>
+                </div>
+
+                <div class="section-block" id="s24-3"><h3>24.3 Security Groups vs Network ACLs</h3>
+                    <div class="compare-table"><table>
+                        <tr><th>Feature</th><th>Security Group (SG)</th><th>Network ACL (NACL)</th></tr>
+                        <tr><td>Scope</td><td>Instance/ENI level</td><td>Subnet level</td></tr>
+                        <tr><td>State</td><td>Stateful (return traffic auto-allowed)</td><td>Stateless (must allow return traffic)</td></tr>
+                        <tr><td>Rules</td><td>Allow only</td><td>Allow AND Deny</td></tr>
+                        <tr><td>Evaluation</td><td>All rules evaluated before decision</td><td>Rules evaluated in order (lowest number first)</td></tr>
+                        <tr><td>Default</td><td>Deny all inbound, allow all outbound</td><td>Allow all inbound + outbound</td></tr>
+                    </table></div>
+                    <div class="info-box tip"><h5>💡 How They Work Together</h5><p>Traffic hits the NACL FIRST (at the subnet boundary), then the Security Group (at the instance). Both must allow the traffic. NACLs are your first line of defense — use them to block known bad IPs at the subnet level. SGs are your per-instance firewall — use them to allow specific application ports. SGs can reference other SGs as sources (e.g., "allow all traffic from the EKS-node SG").</p></div>
+                </div>
+
+                <div class="section-block" id="s24-4"><h3>24.4 ENIs (Elastic Network Interfaces) — Cloud NICs Explained</h3>
+                    <p>An <strong>ENI</strong> is a virtual NIC — MAC address, private IP(s), Security Groups attached.</p>
+                    <div class="diagram-container"><div class="diagram-title">EC2 with 2 ENIs — Node Primary + Pod Secondary IPs (AWS VPC CNI)</div>
+<pre>
+  EC2 INSTANCE (t3.medium — EKS worker node)
+  ┌────────────────────────────────────────────────────────────┐
+  │  ┌──────────────────────┐    ┌──────────────────────┐     │
+  │  │ PRIMARY ENI (eth0)   │    │ SECONDARY ENI (eth1) │     │
+  │  │ Primary IP:          │    │ Primary IP:          │     │
+  │  │ 10.0.10.25 (node)    │    │ 10.0.10.30           │     │
+  │  │ Secondary IPs:       │    │ Secondary IPs:       │     │
+  │  │ 10.0.10.26 (pod-1)   │    │ 10.0.10.31 (pod-3)   │     │
+  │  │ 10.0.10.27 (pod-2)   │    │ 10.0.10.32 (pod-4)   │     │
+  │  └──────────────────────┘    └──────────────────────┘     │
+  │  Total pod IPs: 4 (2 ENIs × 3 IPs - 2 primary = 4 pods)  │
+  └────────────────────────────────────────────────────────────┘
+
+  INSTANCE   │ ENIs │ IPs/ENI │ Max Pods
+  ───────────┼──────┼─────────┼──────────
+  t3.medium  │  2   │    3    │   4  ⚠️
+  t3.large   │  3   │   12    │  34
+  m5.large   │  3   │   10    │  28
+  c5.4xlarge │  8   │   30    │ 234
+  ⚠️ t3.medium = only 4 pods! Use larger instances or Calico/Cilium.</pre></div>
+                </div>
+
+                <div class="section-block" id="s24-5"><h3>24.5 VPC Peering, Transit Gateway, and PrivateLink</h3>
+                    <div class="card-grid cols-2">
+                        <div class="info-card"><div class="card-icon-lg">🔗</div><h5>VPC Peering</h5><p>Direct connection between two VPCs using AWS backbone. Non-transitive — VPC A peered with B, B peered with C does NOT mean A can reach C. Works across accounts and regions. Doesn't scale beyond a few VPCs — the mesh of peering connections becomes unmanageable.</p></div>
+                        <div class="info-card"><div class="card-icon-lg">⭐</div><h5>Transit Gateway</h5><p>Hub-and-spoke model — connects thousands of VPCs through a central hub. Transitive by design — all VPCs can communicate through the TGW. Supports VPN and Direct Connect attachments. The modern way to connect multi-VPC architectures.</p></div>
+                        <div class="info-card"><div class="card-icon-lg">🔒</div><h5>PrivateLink</h5><p>Expose a service (behind an NLB) to other VPCs without traffic leaving the AWS backbone — no internet, no VPC peering. Consumer creates an endpoint ENI in their VPC → traffic flows to producer's NLB. Used for SaaS (vendor exposes API via PrivateLink) and internal shared services.</p></div>
+                        <div class="info-card"><div class="card-icon-lg">🛡️</div><h5>Gateway Endpoints</h5><p>Free, highly available endpoints for S3 and DynamoDB. Instead of traffic going through NAT Gateway ($$$ per GB), it goes through the gateway endpoint directly to S3/DynamoDB over AWS backbone — no internet, no NAT charges. Always use these for production workloads.</p></div>
+                    </div>
+                </div>
+
+                <div class="net-exam-questions"><h4>📝 Chapter 24 — Networking Practice Questions</h4>
+                    <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What is a VPC? What are its core components?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>A VPC is a logically isolated section of the cloud defined by a CIDR block (e.g., 10.0.0.0/16). Core components: Subnets (IP ranges in AZs), Route Tables (traffic direction), Internet Gateway (public internet access), NAT Gateway (outbound internet for private subnets), Security Groups (instance firewall), NACLs (subnet firewall). This is your virtual data center — every cloud resource lives in a VPC.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What's the difference between a public subnet and a private subnet?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Public subnet:</strong> Route table has a route to an Internet Gateway (0.0.0.0/0 → IGW). Resources can have public IPs and receive inbound internet traffic. <strong>Private subnet:</strong> No route to IGW. Resources use NAT Gateway for outbound internet only. Cannot receive inbound internet traffic directly. Rule: LBs in public, everything else in private.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Compare Security Groups and Network ACLs. When would you use each?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>SGs: Stateful, instance-level, allow-only rules. NACLs: Stateless, subnet-level, allow+deny rules, evaluated in order. <strong>Use NACLs:</strong> Block known malicious IPs at subnet boundary, enforce org-wide deny rules. <strong>Use SGs:</strong> Per-instance application firewall, reference other SGs (allow EKS-node SG to talk to RDS SG). Both must allow traffic — NACL first, then SG.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What is an ENI? How does AWS EKS use ENIs for pod networking?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>An ENI is a virtual NIC with its own MAC, IP(s), and SGs. <strong>EKS (AWS VPC CNI):</strong> Pods get IPs from ENI secondary IP addresses — not from an overlay. Each instance type has ENI limits: t3.medium = 2 ENIs × 3 IPs = 6, minus 2 primary = 4 pod IPs max. For more pods: larger instances, prefix delegation, or switch to Calico/Cilium with overlay. The benefit: pod IPs are real VPC IPs — no encapsulation overhead.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What is the difference between VPC Peering, Transit Gateway, and PrivateLink?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Peering:</strong> 1:1 VPC connection, non-transitive (A→B + B→C ≠ A→C). Good for 2-3 VPCs. <strong>Transit Gateway:</strong> Hub-and-spoke, transitive, supports 1000s of VPCs + VPN + Direct Connect. <strong>PrivateLink:</strong> Expose a single service (behind NLB) to other VPCs without any VPC-to-VPC connectivity — traffic stays on AWS backbone. Use PrivateLink for shared services; TGW for full network connectivity.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">Your private subnet instances can't reach the internet. The NAT Gateway is running. What's wrong?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>(1) Route table: private subnet needs 0.0.0.0/0 → NAT Gateway (not IGW!). (2) NAT Gateway must be in a PUBLIC subnet (needs IGW route to reach internet). (3) Security Group on the instance must allow outbound traffic. (4) NACL must allow outbound (ephemeral ports 1024-65535). (5) NAT Gateway may have been deleted/stopped. Check: <code>aws ec2 describe-route-tables</code>, verify the NAT Gateway's subnet has IGW route.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What is a Gateway Endpoint? Why should you always use one for S3/DynamoDB?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Gateway Endpoints provide private connectivity to S3 and DynamoDB without internet access. Without them, traffic from private subnets to S3 goes through NAT Gateway → internet → S3 (charging NAT per-GB fees). With a Gateway Endpoint, traffic goes directly to S3 over AWS backbone — FREE. Add a route: S3 prefix list → Gateway Endpoint. Always use for production — saves significant NAT Gateway costs on S3-heavy workloads (images, logs, backups).</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">Design the network layout for anihpj on AWS: EKS cluster, RDS, ElastiCache, public-facing API.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>VPC: 10.0.0.0/16. Public subnets (2 AZs): ALB (internet-facing). Private app subnets (2 AZs): EKS worker nodes. Private data subnets (2 AZs): RDS + ElastiCache. Route tables: Public → IGW. Private app → NAT GW. Private data → NAT GW. Security: EKS-node SG allows from ALB SG. RDS SG allows from EKS-node SG. VPC endpoints: S3 (container images), ECR (image pulls). PrivateLink: none needed. TGW: connect to shared-services VPC for monitoring/logging.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">Why do Security Groups support referencing other Security Groups as sources?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Instead of hardcoding IPs in SG rules (which change when instances restart), you can reference another SG as the source: "allow traffic from the EKS-node SG." This is dynamic — any instance with that SG is allowed, regardless of its IP. Critical for auto-scaling groups and K8s clusters where node IPs change constantly. Example: RDS SG allows port 5432 from source: sg-eks-nodes. Any EC2 instance with that SG can connect.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">You need to expose a service in VPC A to VPC B without connecting the VPCs. How?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Use <strong>AWS PrivateLink</strong>. In VPC A (producer): Create an NLB in front of your service. Create a VPC Endpoint Service pointing to that NLB. In VPC B (consumer): Create a VPC Endpoint (Interface type) pointing to the Endpoint Service. Traffic flows: consumer → endpoint ENI in VPC B → AWS backbone → NLB in VPC A → service. No VPC peering. No internet. No overlapping CIDR issues. The service is accessed via a private DNS name or the endpoint's private IP.</p></div></details></div>
+                </div>
+            </div>
+
+            <!-- ═══ Chapter 25: Cloud Load Balancers — Beyond the Basics ═══ -->
+            <div id="ch25">
+                <div class="chapter-intro">
+                    <h3>Chapter 25: Cloud Load Balancers — Beyond the Basics</h3>
+                    <p>Cloud providers offer managed load balancers that go far beyond simple round-robin. AWS ALB/NLB, GCP HTTP(S) LB, and Azure Load Balancer provide automatic scaling, TLS termination, path-based routing, and deep integration with cloud-native services.</p>
+                    <div class="chapter-meta"><span class="meta-tag">🟡 Intermediate</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">⚖️ Load Balancing</span></div>
+                </div>
+
+                <div class="section-block" id="s25-1"><h3>25.1 Layer 4 vs Layer 7 Cloud Load Balancers</h3>
+                    <div class="compare-table"><table>
+                        <tr><th>Feature</th><th>AWS NLB (L4)</th><th>AWS ALB (L7)</th><th>GCP TCP LB (L4)</th><th>GCP HTTP(S) LB (L7)</th></tr>
+                        <tr><td>Works at</td><td>TCP/UDP/TLS</td><td>HTTP/HTTPS</td><td>TCP/UDP</td><td>HTTP/HTTPS</td></tr>
+                        <tr><td>Routing</td><td>IP:Port (5-tuple)</td><td>Path, Host, Headers</td><td>IP:Port</td><td>URL map (path/host)</td></tr>
+                        <tr><td>TLS</td><td>Passthrough (or terminate)</td><td>Terminate (ACM)</td><td>Passthrough</td><td>Terminate (managed certs)</td></tr>
+                        <tr><td>Static IP</td><td>✅ (per AZ)</td><td>❌ (changes)</td><td>✅</td><td>✅ (global anycast)</td></tr>
+                        <tr><td>WebSocket</td><td>✅ (TCP)</td><td>✅</td><td>✅</td><td>✅</td></tr>
+                        <tr><td>gRPC</td><td>✅ (TCP)</td><td>✅</td><td>✅</td><td>✅ (HTTP/2)</td></tr>
+                        <tr><td>Best For</td><td>Non-HTTP, static IP, extreme perf</td><td>HTTP APIs, microservices</td><td>Non-HTTP, simple</td><td>Global HTTP, CDN-like</td></tr>
+                    </table></div>
+                    <div class="info-box tip"><h5>💡 NLB + ALB — The Power Combination</h5><p>Many AWS architectures use NLB → ALB: NLB provides a static IP (important for IP allowlisting, DNS A records), forwards to ALB which does HTTP routing. NLB handles TCP/TLS at wire speed; ALB handles L7 routing. This gives you: static IP + path-based routing + WAF + Cognito auth — all in one architecture.</p></div>
+                    <div class="diagram-container"><div class="diagram-title">NLB → ALB Architecture — Static IP + HTTP Routing</div>
+<pre>
+  INTERNET → NLB (static IP 34.120.45.67, TCP proxy)
+               │
+               ▼
+             ALB (internal, HTTP routing)
+               │  /api/* → jobpost target group
+               │  /admin/* → admin target group
+               │  TLS termination (ACM cert)
+               │  WAF + Cognito auth
+               ▼
+         ┌──────┐ ┌──────┐ ┌──────┐
+         │Pod-1 │ │Pod-2 │ │Pod-3 │
+         └──────┘ └──────┘ └──────┘</pre></div>
+                </div>
+
+                <div class="section-block" id="s25-2"><h3>25.2 [LAB 🛠️] VPC &amp; LB Lab</h3>
+                    <div class="diagram-box"><pre>
+# Design anihpj VPC on paper:
+# VPC CIDR, subnets per AZ, route tables, gateways
+
+# Create an ALB pointing to EKS NodePort:
+kubectl expose deployment jobpost --type=NodePort --port=8000
+# Ingress → ALB via AWS Load Balancer Controller
+
+# Verify:
+curl http://&lt;alb-dns&gt;/api/jobs/
+aws elbv2 describe-target-health --target-group-arn &lt;arn&gt;</pre></div>
+                </div>
+
+                <div class="net-exam-questions"><h4>📝 Chapter 25 — Networking Practice Questions</h4>
+                    <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What's the difference between AWS NLB and ALB? When would you use each?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>NLB (L4):</strong> TCP/UDP/TLS, preserves source IP, static IP per AZ, extreme performance. Use for: non-HTTP workloads, static IP requirements, TLS passthrough, gaming/UDP. <strong>ALB (L7):</strong> HTTP/HTTPS only, path/host routing, WAF integration, Cognito auth. Use for: REST APIs, microservices, any HTTP workload needing L7 features. Both can target pods directly in EKS (IP mode).</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">Why combine NLB and ALB? What does this architecture give you?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>NLB → ALB gives you: NLB provides static IP (critical for DNS A records and IP allowlisting), wire-speed TCP/TLS handling. ALB provides HTTP routing, WAF, Cognito, path-based routing. NLB handles the internet-facing side (stable, fast); ALB handles the application side (flexible, feature-rich). In EKS, this is a common production pattern for internet-facing services.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">How does AWS ALB integrate with EKS? What is IP mode?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>AWS Load Balancer Controller watches K8s Ingress resources and provisions ALBs. <strong>IP mode:</strong> ALB targets pod IPs directly (via ENI secondary IPs) — no NodePort hop needed. Traffic: ALB → pod IP (directly). This eliminates the extra network hop and preserves source IP. Requires AWS VPC CNI (pods have VPC-routable IPs). ALB health checks target pods directly on their container port.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What is GCP's global HTTP(S) Load Balancer? How is it different from AWS ALB?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>GCP's global HTTP(S) LB is a single anycast IP that routes traffic to the nearest healthy backend globally — it's a CDN-like LB. AWS ALB is regional (per-region IP). GCP also provides: Cloud CDN integrated, Google-managed TLS certs, URL maps for routing, Cloud Armor for WAF. For global applications, GCP's LB is simpler (one IP, global) while AWS requires Route53 latency-based routing + multiple regional ALBs.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">How do cloud LBs handle health checks? What happens when a backend fails?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>LB sends periodic health check requests (configurable path, interval, threshold). If N consecutive checks fail, backend is marked unhealthy and removed from rotation. Existing connections may be dropped or completed (depends on LB type and deregistration delay). In EKS: ALB health checks target pods directly. The readinessProbe controls whether a pod receives traffic via the Service/Endpoints. Both must pass: pod readiness + LB health check.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What is TLS termination at the cloud LB? What are the trade-offs?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The cloud LB decrypts TLS (using AWS Certificate Manager or uploaded certs), then forwards plain HTTP to backends. <strong>Pros:</strong> Simplified backend certificates (one cert at LB, not per instance), integrated with cloud cert management (auto-renewal), WAF can inspect decrypted traffic. <strong>Cons:</strong> Traffic is plaintext between LB and backend (network sniffing possible), compliance may require end-to-end encryption. Mitigate with: VPC-only traffic, security groups, or re-encrypt at backend (double TLS).</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">Your ALB returns 503 Service Unavailable. The EKS pods are running. What's wrong?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Health checks are failing. Check: (1) ALB health check path correct? (2) Health check port matches container port? (3) Security Group on EKS nodes allows traffic from ALB SG? (4) Pod readiness probe passing? (5) Target group shows "unhealthy" — check the reason code in AWS console. Common: health check path returns 404 (wrong path), security group blocks ALB → node traffic, or pod is not ready (readinessProbe failing).</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">How do you make an internal-only ALB (not internet-facing)?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Set <code>scheme: internal</code> (instead of <code>internet-facing</code>). The ALB gets private IPs only — accessible from within the VPC, peered VPCs, or via Transit Gateway. Use for: internal APIs, microservice communication that needs L7 routing, services that shouldn't be internet-accessible. In EKS: the Ingress annotation <code>alb.ingress.kubernetes.io/scheme: internal</code> creates an internal ALB.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">What is connection draining (deregistration delay) on a cloud LB?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>When a backend is deregistered (scaling in, deployment, health failure), the LB stops sending NEW connections but keeps EXISTING connections open for a configurable time (default 300s). This allows in-flight requests to complete gracefully. In EKS: during rolling updates, the old pod is deregistered from the target group, LB drains connections, then pod is terminated. Too short = dropped connections. Too long = slow deployments. Set based on your max request duration.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">Compare cloud load balancer architecture: AWS, GCP, and Azure. What are the key differences?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>AWS:</strong> Separate NLB (L4) and ALB (L7) — you pick. Regional. <strong>GCP:</strong> Global HTTP(S) LB is L7, single anycast IP, routes to nearest region. TCP/UDP LB is regional. <strong>Azure:</strong> Load Balancer (L4), Application Gateway (L7 with WAF), Front Door (global HTTP). Key difference: GCP's global LB is truly global (one IP) — AWS requires Route53 + multiple regional ALBs for the same effect. Azure Front Door is similar to GCP's global LB.</p></div></details></div>
+                </div>
+            </div>
+
+            <!-- ═══ Chapter 26: Hybrid Cloud Networking ═══ -->
+            <div id="ch26">
+                <div class="chapter-intro">
+                    <h3>Chapter 26: Hybrid Cloud Networking — Connecting On-Prem to Cloud</h3>
+                    <p>Most enterprises don't go all-cloud overnight. They operate in a <strong>hybrid model</strong> — some workloads on-premises, some in the cloud. Connecting these environments securely requires VPNs or dedicated connections. This chapter covers Site-to-Site VPN, Direct Connect, and hybrid architecture patterns.</p>
+                    <div class="chapter-meta"><span class="meta-tag">🟡 Intermediate</span><span class="meta-tag">⏱️ ~1 hour</span><span class="meta-tag">🔗 Hybrid</span></div>
+                </div>
+
+                <div class="section-block" id="s26-1"><h3>26.1 VPNs — IPsec and WireGuard</h3>
+                    <p><strong>Site-to-Site VPN</strong> connects your office network to a cloud VPC over an encrypted tunnel across the public internet.</p>
+                    <div class="diagram-container"><div class="diagram-title">Site-to-Site VPN — Office to Cloud VPC via IPsec Tunnel</div>
+<pre>
+  OFFICE (192.168.0.0/16)              AWS VPC (10.0.0.0/16)
+  ┌──────────────────────┐    IPsec    ┌──────────────────────┐
+  │ On-Prem Router       │═══╪══╪══╪═══│ Virtual Private GW   │
+  │ (Customer Gateway)   │   AES-256  │ (VGW)                │
+  │ Public: 203.x.x.x    │   Tunnel   │ Public: 52.x.x.x      │
+  └──────────┬───────────┘            └──────────┬───────────┘
+             │                                   │
+  ┌──────────┴───────────┐            ┌──────────┴───────────┐
+  │ DB: 192.168.1.50     │            │ EKS Node: 10.0.10.25 │
+  └──────────────────────┘            └──────────────────────┘
+
+  IPSEC: IKE (key exchange) → ESP (encrypted data tunnel)
+  WIREGUARD: Curve25519 + ChaCha20, 4K lines, in-kernel since Linux 5.6
+  AWS VPN: 1.25 Gbps/tunnel, 2 tunnels per connection (redundant)</pre></div>
+                </div>
+
+                <div class="section-block" id="s26-2"><h3>26.2 Direct Connect / Cloud Interconnect</h3>
+                    <p><strong>Direct Connect</strong> is a dedicated physical fiber connection from your data center to the cloud provider — no internet, consistent latency, guaranteed bandwidth.</p>
+                    <div class="diagram-container"><div class="diagram-title">VPN vs Direct Connect — Internet vs Dedicated Fiber</div>
+<pre>
+  VPN (public internet):                 DIRECT CONNECT (private fiber):
+  Office ══ ISP ══ Internet ══ VPC       Office ═════ Fiber ═════ VPC
+  Latency: 20-100ms (variable)           Latency: 2-5ms (consistent)
+  BW: 1.25 Gbps max                      BW: 1/10/100 Gbps
+  SLA: None                              SLA: 99.99%
+
+  ANIHPJ HYBRID: DB on-prem (compliance), EKS in cloud (compute)
+  ┌──────────────────────┐    Direct Connect 5ms   ┌──────────────────────┐
+  │ PostgreSQL (primary) │═════════════════════════│ EKS (jobpost API)    │
+  │ 192.168.1.50:5432    │                         │ 10.0.10.x pods       │
+  └──────────────────────┘                         └──────────────────────┘
+  Cost: ~$0.30/hr (1 Gbps port) + ~$0.02/GB egress (vs $0.09/GB internet)</pre></div>
+                </div>
+
+                <div class="net-exam-questions"><h4>📝 Chapter 26 — Networking Practice Questions</h4>
+                    <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What is Site-to-Site VPN? How does IPsec create a secure tunnel?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Site-to-Site VPN connects two networks (office ↔ cloud VPC) over an encrypted IPsec tunnel. <strong>Phase 1 (IKE):</strong> Authenticate endpoints and negotiate encryption parameters → creates a secure control channel. <strong>Phase 2 (ESP):</strong> Negotiates the actual data encryption tunnel. All traffic between the two networks is encrypted using AES. Runs over the public internet but the contents are unreadable. AWS managed VPN: create Virtual Private Gateway, Customer Gateway, VPN Connection.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What's the difference between IPsec and WireGuard? When would you choose each?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>IPsec:</strong> Veteran (1995), complex (400K+ lines), widely supported by network hardware. <strong>WireGuard:</strong> Modern (2018), simple (4K lines), in-kernel, faster, modern crypto (Curve25519). <strong>Choose IPsec:</strong> When you need hardware VPN appliance support, compliance requirements mandate IPsec, or you're connecting to cloud managed VPN services. <strong>Choose WireGuard:</strong> For software-to-software VPNs, maximum performance, simpler configuration, modern Linux/container environments. WireGuard is in the Linux kernel since 5.6.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">What is AWS Direct Connect? When would you use it instead of VPN?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Direct Connect is a dedicated physical fiber connection from your data center to AWS (via a Direct Connect location). <strong>Use when:</strong> (1) You need consistent latency (not variable internet). (2) Bandwidth > 1.25 Gbps (VPN limit). (3) Regulatory compliance prohibits internet transit. (4) You want to reduce data egress costs. (5) SLA-backed uptime (99.99%) is required. <strong>Cost:</strong> Port hours + data transfer out. For most startups, VPN is sufficient. Direct Connect makes sense at enterprise scale or for latency-sensitive workloads.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What is Transit Gateway? How does it simplify hybrid networking?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Transit Gateway is a hub-and-spoke network transit center. Instead of mesh-peering VPCs individually, all VPCs connect to the TGW. TGW also supports VPN and Direct Connect attachments — so on-prem networks connect through the SAME hub. One TGW replaces: N×(N-1)/2 VPC peering connections, multiple VPN connections, and Direct Connect per VPC. TGW route tables control which VPCs can talk to each other. This is the standard architecture for multi-VPC, hybrid-cloud deployments.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">Design a hybrid architecture: on-prem database + cloud compute for anihpj.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>On-prem: PostgreSQL database (compliance requires data on-prem). Cloud: EKS cluster running jobpost API. Connectivity: Direct Connect (1 Gbps) from on-prem DC to AWS. TGW connects DC (via Direct Connect) to EKS VPC. EKS pods connect to on-prem DB via TGW route. Latency: ~5ms (Direct Connect is consistent; internet VPN could be 30-100ms variable). Backup: DMS replicates on-prem DB to RDS read replica for DR. DNS: Route53 resolver endpoints forward on-prem domain queries.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What is BGP? How does it relate to Direct Connect and VPN?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>BGP (Border Gateway Protocol) is the routing protocol of the internet — it exchanges route information between networks. <strong>In Direct Connect:</strong> You establish BGP peering between your on-prem router and AWS. You advertise your on-prem prefixes; AWS advertises VPC prefixes. Both sides learn routes dynamically. <strong>In VPN:</strong> BGP (dynamic) or static routes can be used. BGP is preferred because routes update automatically when networks change. AWS managed VPN supports BGP by default.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">Your on-prem database is slow when accessed from EKS. You have a Site-to-Site VPN. What can you do?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>(1) <strong>Upgrade to Direct Connect:</strong> VPN runs over internet → variable latency. Direct Connect = consistent ~5ms. (2) <strong>Move database closer:</strong> Replicate on-prem DB to RDS in the same region as EKS → sub-ms latency. (3) <strong>Connection pooling:</strong> Use PgBouncer or RDS Proxy to minimize TCP handshake overhead across the VPN. (4) <strong>Query optimization:</strong> The network amplifies bad queries — N+1 queries that are fine at 1ms are terrible at 30ms. (5) <strong>Increase VPN bandwidth:</strong> Multiple tunnels with ECMP for higher aggregate throughput.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">What are the security considerations for hybrid cloud networking?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Security considerations: (1) VPN/Direct Connect traffic should be encrypted (IPsec/WireGuard for VPN; Direct Connect is private but not encrypted by default — add MACsec or application TLS). (2) Network segmentation: Use TGW route tables to limit which VPCs can reach on-prem. (3) Least privilege: Only allow necessary ports (5432 for DB, not full access). (4) Monitoring: VPC Flow Logs + on-prem firewall logs to detect anomalies. (5) DNS: Route53 Resolver endpoints prevent DNS rebinding attacks. (6) Authentication: Don't rely on network security alone — use TLS + certificates for all cross-prem traffic.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">What is AWS Client VPN? How is it different from Site-to-Site VPN?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Site-to-Site VPN:</strong> Connects entire NETWORKS (office → VPC). Configured between routers/firewalls. Always on. <strong>Client VPN:</strong> Connects individual USERS/DEVICES (laptop → VPC). Users install a VPN client, authenticate with certificates or SSO (SAML/OIDC). Used for: remote developers accessing private resources, admin access to private subnets. Managed OpenVPN-compatible service. Charges per active connection + per hour.</p></div></details></div>
+                    <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">What are the key differences between AWS Direct Connect, GCP Cloud Interconnect, and Azure ExpressRoute?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>All three provide dedicated physical connectivity to the cloud. <strong>Direct Connect:</strong> 1/10/100 Gbps, BGP routing, partners available (Equinix, etc.). <strong>Cloud Interconnect:</strong> Dedicated (10/100 Gbps) or Partner (50 Mbps-10 Gbps via provider). <strong>ExpressRoute:</strong> Microsoft's offering — also connects to Microsoft 365/Azure AD. Key differences: GCP offers partner interconnect at lower speeds; Azure uniquely connects to M365; AWS has widest partner ecosystem. All support BGP, VLANs, and SLA-backed uptime. The choice depends on your primary cloud provider.</p></div></details></div>
+                </div>
+            </div>
+        </section>
         </section>
         <section class="chapter-section" id="part8">
             <h2><span>⚡ Part 8: Advanced Topics</span><span class="chapter-badge">Ch 27-29</span></h2>
