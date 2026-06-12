@@ -17334,7 +17334,930 @@
 
     <!-- ═══ PART 3 — CATEGORIES 2-5: Stubs ═══ -->
     <section class="chapter-section" id="sc-cat2"><h2><span>🚀 Category 2: App Deployment (S21–S40)</span><span class="chapter-badge">20 Scenarios</span></h2></section>
-    <section class="chapter-section" id="sc-cat3"><h2><span>📊 Category 3: Observability (S41–S55)</span><span class="chapter-badge">15 Scenarios</span></h2></section>
+    <section class="chapter-section" id="sc-cat3"><h2><span>📊 Category 3: Observability (S41–S55)</span><span class="chapter-badge">15 Scenarios</span></h2>
+
+        <!-- ═══════════════ S41: Liveness Probe Too Aggressive ═══════════════ -->
+        <div class="scenario-block" id="sc-s41">
+            <div class="sc-header">
+                <div class="sc-badge">41</div>
+                <div class="sc-header-content">
+                    <div class="sc-num">SCENARIO 41 <span class="sc-status debug">🐛 DEBUG</span></div>
+                    <h4>Liveness Probe Too Aggressive — Pod Killed Before App Starts</h4>
+                    <div class="sc-desc"><strong>🖥️ Cluster:</strong> kubeadm (ksw→1) &nbsp;|&nbsp; <strong>Difficulty:</strong> 🟡 Intermediate &nbsp;|&nbsp; <strong>Time:</strong> 8 min &nbsp;|&nbsp; <strong>Bug:</strong> Liveness probe kills slow-starting pod → CrashLoopBackOff</div>
+                </div>
+            </div>
+            <div class="sc-body">
+
+                <div class="app-story"><strong>📖 Story:</strong> You deploy <code>anihpj-api</code> on the kubeadm cluster. The Django app takes ~55 seconds to boot (migrations, cache warm). But the liveness probe starts checking after 15 seconds and kills the pod before it finishes starting. <code>kubectl get pods</code> shows CrashLoopBackOff — even though the app code is perfectly fine.</div>
+
+                <!-- STEP 1: Deploy -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">1</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">🚀 Step 1: Deploy the Buggy Pod</h4>
+                        <p>Save this manifest as <code>s41-bug.yaml</code> and apply it. Notice the liveness probe is too aggressive — it starts checking before the app boots.</p>
+                        <div class="code-block"><div class="code-header"><span class="code-lang">s41-bug.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s41-code-1')">📋 Copy</button></div><pre><code id="s41-code-1" class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-api-s41
+  labels:
+    app: anihpj-api
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "Boot starting at $$(date)..."
+      sleep 55           # Django needs 55s to boot
+      echo "App ready at $$(date)"
+      nginx -g "daemon off;"
+    ports:
+    - containerPort: 80
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 15   # Probe starts at 15s
+      periodSeconds: 10         # Check every 10s
+      failureThreshold: 2       # Kill after 2 failures
+</code></pre></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s41-bug.yaml</div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: Observe -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">2</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">👀 Step 2: Observe the Failure</h4>
+                        <p>Watch the pod. It runs, gets killed, restarts, gets killed again — a classic CrashLoopBackOff loop.</p>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -w
+<span class="output">NAME              READY   STATUS             RESTARTS   AGE
+anihpj-api-s41    0/1     Running            0          3s
+anihpj-api-s41    0/1     Running            1          28s      # ← KILLED at ~25s!
+anihpj-api-s41    0/1     CrashLoopBackOff   1          45s
+anihpj-api-s41    0/1     Running            2          62s      # ← KILLED again
+anihpj-api-s41    0/1     CrashLoopBackOff   2          80s</span></div>
+                        <p><strong>🔴 Visible Symptom:</strong> RESTARTS count climbs every ~60 seconds. Pod never reaches READY 1/1.</p>
+                    </div>
+                </div>
+
+                <!-- STEP 3: Debug -->
+                <div class="sc-step">
+                    <div class="sc-step-num debug">3</div>
+                    <div class="sc-step-content">
+                        <h4 class="debug">🔍 Step 3: Debug — What Is Going On?</h4>
+                        <p>Use <code>kubectl describe pod</code> and <code>kubectl logs --previous</code> to investigate.</p>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod anihpj-api-s41 | grep -A5 Liveness
+<span class="output">Liveness:     http-get http://:80/ delay=15s timeout=1s period=10s #success=1 #failure=2
+  Warning  Unhealthy  28s  kubelet  Liveness probe failed: Get "http://10.244.1.5:80/": dial tcp 10.244.1.5:80: connect: connection refused</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl logs anihpj-api-s41 --previous
+<span class="output">Boot starting at Thu Jun 12 10:30:15 UTC 2026...
+# ← nginx never started — killed at ~25s into sleep 55</span></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> Liveness probe starts at <strong>15s</strong> — but the app needs <strong>55s</strong> to boot</div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> <code>failureThreshold: 2</code> + <code>periodSeconds: 10</code> = pod killed after just <strong>25s</strong> (15 + 10)</div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> No <code>startupProbe</code> — Kubernetes doesn't know the app is still booting</div>
+                        <div class="li-finding root-cause"><strong>🎯 Root Cause:</strong> The liveness probe assumes the app starts in ≤15s. In reality it needs 55s. Without a startup probe to gate the liveness check, Kubernetes kills the pod mid-boot.</div>
+                    </div>
+                </div>
+
+                <!-- STEP 4: Answer -->
+                <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('s41-answer')">🔍 Show Full Answer &amp; Expected Command Outputs</button>
+                <div class="sc-answer" id="s41-answer">
+                    <h5>📋 The Answer</h5>
+                    <p><strong>What happened:</strong> Liveness probe failureThreshold (2) × periodSeconds (10) = 20s of failures allowed. With initialDelaySeconds: 15, the second failure occurs at ~25s. The pod hasn't finished sleeping 55s yet, so nginx isn't listening — connection refused → liveness fails → kubelet kills the container.</p>
+                    <h5>🔄 The K8s Lifecycle Logic</h5>
+                    <div class="tenet-flow">
+                        <div class="tenet-step"><div class="step-num">0s</div><div class="step-label">Pod created</div></div>
+                        <div class="tenet-step"><div class="step-num">15s</div><div class="step-label">Liveness starts</div></div>
+                        <div class="tenet-step"><div class="step-num">25s</div><div class="step-label">1st failure</div></div>
+                        <div class="tenet-step"><div class="step-num">35s</div><div class="step-label">2nd failure → KILL</div></div>
+                        <div class="tenet-step"><div class="step-num">55s</div><div class="step-label">App would be ready (never reached!)</div></div>
+                    </div>
+                    <h5>✅ Expected Command Outputs (Bug Confirmation)</h5>
+                    <div class="cmd-output"><span class="prompt">$</span> kubectl get pod anihpj-api-s41
+<span class="output">NAME              READY   STATUS             RESTARTS      AGE
+anihpj-api-s41    0/1     CrashLoopBackOff   4 (42s ago)   3m12s</span></div>
+                    <div class="cmd-output"><span class="prompt">$</span> kubectl get events --field-selector involvedObject.name=anihpj-api-s41 --sort-by='.lastTimestamp' | tail -5
+<span class="output">Warning  Unhealthy   Liveness probe failed: connection refused
+Normal   Killing     Container anihpj-api-s41 failed liveness probe, will be restarted
+Warning  BackOff     Back-off restarting failed container</span></div>
+                </div>
+
+                <!-- STEP 5: Fix -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">4</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">🔧 Step 5: Fix — Add a Startup Probe</h4>
+                        <p>Add a <code>startupProbe</code>. Kubernetes <strong>disables liveness and readiness probes</strong> until the startup probe succeeds. This gives the app its full 55s boot window.</p>
+                        <button class="sc-fix-toggle" onclick="toggleScenarioAnswer('s41-fix')" style="color:#3fb950;border-color:rgba(63,185,80,0.25);background:rgba(63,185,80,0.08);">✅ Show Fix YAML</button>
+                        <div class="sc-answer" id="s41-fix">
+                            <div class="code-block"><div class="code-header"><span class="code-lang">s41-fixed.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s41-code-2')">📋 Copy</button></div><pre><code id="s41-code-2" class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-api-s41
+  labels:
+    app: anihpj-api
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "Boot starting..."
+      sleep 55
+      echo "App ready"
+      nginx -g "daemon off;"
+    ports:
+    - containerPort: 80
+    startupProbe:              # ← NEW: Gates liveness probe
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 0
+      periodSeconds: 2         # Check every 2s
+      failureThreshold: 30     # 30 × 2s = 60s window to boot
+    livenessProbe:             # Liveness DISABLED until startup succeeds
+      httpGet:
+        path: /
+        port: 80
+      initialDelaySeconds: 0   # 0 — startup probe gates this
+      periodSeconds: 10
+      failureThreshold: 3
+</code></pre></div>
+                            <div class="sc-resolution"><h4>✅ Resolution Applied</h4><p>The startup probe gives the app <strong>60 seconds</strong> (30 failures × 2s period) to boot. Only AFTER the startup probe succeeds does the liveness probe begin checking. The pod reaches <strong>1/1 Ready</strong> and stays stable.</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 6: Verify -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">5</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">✅ Step 6: Verify the Fix</h4>
+                        <p>Apply the fixed manifest and confirm the pod stays Running.</p>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-api-s41 --force --grace-period=0 && kubectl apply -f s41-fixed.yaml</div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -w
+<span class="output">NAME              READY   STATUS    RESTARTS   AGE
+anihpj-api-s41    0/1     Running   0          2s
+anihpj-api-s41    1/1     Running   0          58s     # ← READY! No restart loop</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod anihpj-api-s41 | grep -E "Startup|Liveness"
+<span class="output">Startup:      http-get http://:80/ delay=0s timeout=1s period=2s #success=1 #failure=30
+Liveness:     http-get http://:80/ delay=0s timeout=1s period=10s #success=1 #failure=3</span></div>
+                        <p><strong>🔑 Key Takeaway:</strong> Every slow-starting app (<em>any</em> app that takes >30s to boot) MUST have a <code>startupProbe</code>. Without it, the liveness probe will kill the pod mid-boot. Use <code>failureThreshold × periodSeconds</code> to calculate the boot window.</p>
+                    </div>
+                </div>
+
+                <!-- CLEANUP -->
+                <div class="sc-step">
+                    <div class="sc-step-num" style="background:linear-gradient(135deg,#6e7681,#8b949e)">7</div>
+                    <div class="sc-step-content">
+                        <h4 style="color:#8b949e">🧹 Step 7: Cleanup</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-api-s41 --force --grace-period=0</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ═══════════════ S42: Readiness Probe Wrong Path Typo ═══════════════ -->
+        <!-- S42 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S43: Startup Probe Django Boot ═══════════════ -->
+        <!-- S43 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S44: Readiness Probe Never Ready ═══════════════ -->
+        <div class="scenario-block" id="sc-s44">
+            <div class="sc-header">
+                <div class="sc-badge">44</div>
+                <div class="sc-header-content">
+                    <div class="sc-num">SCENARIO 44 <span class="sc-status debug">🐛 DEBUG</span></div>
+                    <h4>Readiness Probe Never Succeeds — Running Pod Gets No Traffic</h4>
+                    <div class="sc-desc"><strong>🖥️ Cluster:</strong> minikube (ksw→6) &nbsp;|&nbsp; <strong>Difficulty:</strong> 🟡 Intermediate &nbsp;|&nbsp; <strong>Time:</strong> 8 min &nbsp;|&nbsp; <strong>Bug:</strong> Readiness probe checks wrong file → pod stays NotReady → Service has no endpoints</div>
+                </div>
+            </div>
+            <div class="sc-body">
+
+                <div class="app-story"><strong>📖 Story:</strong> You deploy anihpj-web with a readiness probe that checks for a marker file <code>/tmp/ready</code>. The file is never created. The pod runs fine (nginx is serving), but the readiness probe always fails. The Service has <strong>zero endpoints</strong> — no traffic reaches the pod.</div>
+
+                <!-- STEP 1: Deploy -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">1</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">🚀 Step 1: Deploy Pod + Service</h4>
+                        <div class="code-block"><div class="code-header"><span class="code-lang">s44-bug.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s44-code-1')">📋 Copy</button></div><pre><code id="s44-code-1" class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-web-s44
+  labels:
+    app: anihpj-web
+spec:
+  containers:
+  - name: web
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+    readinessProbe:
+      exec:
+        command:
+        - test
+        - -f
+        - /tmp/ready          # ← File NEVER created!
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anihpj-web-svc
+spec:
+  selector:
+    app: anihpj-web
+  ports:
+  - port: 80
+    targetPort: 80
+</code></pre></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s44-bug.yaml</div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: Observe -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">2</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">👀 Step 2: Observe — Running But Not Ready</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods
+<span class="output">NAME             READY   STATUS    RESTARTS   AGE
+anihpj-web-s44   0/1     Running   0          2m15s</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get endpoints anihpj-web-svc
+<span class="output">NAME             ENDPOINTS   AGE
+anihpj-web-svc   &lt;none&gt;      2m20s</span></div>
+                        <p><strong>🔴 Visible Symptom:</strong> Pod is <code>Running</code> but <strong>0/1 READY</strong>. Service has <strong>no endpoints</strong>. Any request to the Service returns "connection refused".</p>
+                    </div>
+                </div>
+
+                <!-- STEP 3: Debug -->
+                <div class="sc-step">
+                    <div class="sc-step-num debug">3</div>
+                    <div class="sc-step-content">
+                        <h4 class="debug">🔍 Step 3: Debug — Why Is Pod Not Ready?</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod anihpj-web-s44 | grep -A8 Readiness
+<span class="output">Readiness:    exec [test -f /tmp/ready] delay=5s timeout=1s period=5s #success=1 #failure=3
+  Warning  Unhealthy  2m10s  kubelet  Readiness probe failed: command "test -f /tmp/ready" exited with code 1</span></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> Readiness probe runs <code>test -f /tmp/ready</code> — exited with <strong>code 1</strong> (file not found)</div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> Nginx IS running and serving — the pod is healthy, just the probe is misconfigured</div>
+                        <div class="li-finding root-cause"><strong>🎯 Root Cause:</strong> The readiness probe checks for a file that <strong>no process creates</strong>. Since the file never exists, the probe fails forever. The Service only routes to Ready pods → zero endpoints → zero traffic.</div>
+                    </div>
+                </div>
+
+                <!-- STEP 4: Answer -->
+                <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('s44-answer')">🔍 Show Full Answer &amp; Expected Command Outputs</button>
+                <div class="sc-answer" id="s44-answer">
+                    <h5>📋 The Answer</h5>
+                    <p><strong>What happened:</strong> The readiness probe's <code>exec</code> command checks for a non-existent file. Exit code 1 = failure. After <code>failureThreshold: 3</code> consecutive failures, the pod is marked NotReady. Services only send traffic to Ready pods → the Service endpoints list stays empty.</p>
+                    <div class="cmd-output"><span class="prompt">$</span> kubectl exec anihpj-web-s44 -- ls /tmp/ready
+<span class="output">ls: /tmp/ready: No such file or directory
+command terminated with exit code 2</span></div>
+                </div>
+
+                <!-- STEP 5: Fix -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">4</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">🔧 Step 5: Fix — Switch to HTTP Readiness Probe</h4>
+                        <p>Replace the failing exec probe with an HTTP probe that checks the actual application endpoint.</p>
+                        <button class="sc-fix-toggle" onclick="toggleScenarioAnswer('s44-fix')" style="color:#3fb950;border-color:rgba(63,185,80,0.25);background:rgba(63,185,80,0.08);">✅ Show Fix</button>
+                        <div class="sc-answer" id="s44-fix">
+                            <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-web-s44 --force --grace-period=0</div>
+                            <div class="code-block"><div class="code-header"><span class="code-lang">s44-fixed.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s44-code-2')">📋 Copy</button></div><pre><code id="s44-code-2" class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-web-s44
+  labels:
+    app: anihpj-web
+spec:
+  containers:
+  - name: web
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+    readinessProbe:
+      httpGet:                # ← Changed from exec to httpGet
+        path: /
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 3
+</code></pre></div>
+                            <div class="sc-resolution"><h4>✅ Resolution Applied</h4><p>The HTTP readiness probe checks <code>GET /</code> on port 80 — nginx responds immediately. The pod becomes Ready within ~10s. The Service populates its endpoints and traffic flows.</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 6: Verify -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">5</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">✅ Step 6: Verify the Fix</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s44-fixed.yaml && sleep 15 && kubectl get pods
+<span class="output">NAME             READY   STATUS    RESTARTS   AGE
+anihpj-web-s44   1/1     Running   0          21s</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get endpoints anihpj-web-svc
+<span class="output">NAME             ENDPOINTS        AGE
+anihpj-web-svc   10.244.2.15:80   3m45s</span></div>
+                        <p><strong>🔑 Key Takeaway:</strong> <code>exec</code> probes must point to commands that actually succeed. If the file/script doesn't exist or returns non-zero, the probe fails forever. Prefer <code>httpGet</code> probes for HTTP services — they check real app health, not filesystem state.</p>
+                    </div>
+                </div>
+
+                <!-- CLEANUP -->
+                <div class="sc-step">
+                    <div class="sc-step-num" style="background:linear-gradient(135deg,#6e7681,#8b949e)">7</div>
+                    <div class="sc-step-content">
+                        <h4 style="color:#8b949e">🧹 Step 7: Cleanup</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-web-s44 --force --grace-period=0 && kubectl delete svc anihpj-web-svc</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ═══════════════ S45: kubectl logs --previous ═══════════════ -->
+        <!-- S45 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S46: kubectl exec / kubectl debug ═══════════════ -->
+        <!-- S46 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S47: kubectl describe events ═══════════════ -->
+        <!-- S47 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S48: OOMKilled — Memory Limit Too Low ═══════════════ -->
+        <div class="scenario-block" id="sc-s48">
+            <div class="sc-header">
+                <div class="sc-badge">48</div>
+                <div class="sc-header-content">
+                    <div class="sc-num">SCENARIO 48 <span class="sc-status debug">🐛 DEBUG</span></div>
+                    <h4>Memory Limit Too Low — Pod Gets OOMKilled</h4>
+                    <div class="sc-desc"><strong>🖥️ Cluster:</strong> kubeadm (ksw→1) &nbsp;|&nbsp; <strong>Difficulty:</strong> 🔴 Advanced &nbsp;|&nbsp; <strong>Time:</strong> 8 min &nbsp;|&nbsp; <strong>Bug:</strong> Container exceeds memory limit → OOMKilled by kernel</div>
+                </div>
+            </div>
+            <div class="sc-body">
+
+                <div class="app-story"><strong>📖 Story:</strong> The anihpj-api pod keeps getting killed with exit code 137. You check <code>kubectl describe</code> and see "OOMKilled". The memory limit is set too low for the application's actual usage. You need to identify the memory usage pattern and fix the limit.</div>
+
+                <!-- STEP 1: Deploy -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">1</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">🚀 Step 1: Deploy the Memory-Constrained Pod</h4>
+                        <p>The pod has a tight 100Mi memory limit. The container runs a script that progressively allocates memory — it will inevitably exceed the limit and get OOMKilled.</p>
+                        <div class="code-block"><div class="code-header"><span class="code-lang">s48-bug.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s48-code-1')">📋 Copy</button></div><pre><code id="s48-code-1" class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-api-s48
+  labels:
+    app: anihpj-api
+spec:
+  containers:
+  - name: api
+    image: alpine:3.19
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "Starting with 100Mi limit..."
+      # Simulate memory leak: allocate 5Mi every 3 seconds
+      i=1
+      while true; do
+        dd if=/dev/zero of=/tmp/buf_$$i bs=1M count=5 2>/dev/null
+        echo "Allocated block $$i (5Mi) — total $$((i * 5))Mi"
+        i=$$((i + 1))
+        sleep 3
+      done
+    resources:
+      limits:
+        memory: "100Mi"         # ← Too small!
+      requests:
+        memory: "50Mi"
+</code></pre></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s48-bug.yaml</div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: Observe -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">2</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">👀 Step 2: Observe the OOMKill</h4>
+                        <p>Watch the pod. After ~60 seconds (100Mi / 5Mi per 3s ≈ 20 allocations × 3s), it gets OOMKilled.</p>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -w
+<span class="output">NAME              READY   STATUS      RESTARTS   AGE
+anihpj-api-s48    1/1     Running     0          5s
+anihpj-api-s48    0/1     OOMKilled   0          65s     # ← OOMKilled!
+anihpj-api-s48    1/1     Running     1          72s     # ← Restarts
+anihpj-api-s48    0/1     OOMKilled   1          130s    # ← Killed again</span></div>
+                        <p><strong>🔴 Visible Symptom:</strong> Pod alternates between <code>Running</code> and <code>OOMKilled</code>. RESTARTS incrementing. Exit code 137 (128 + 9 SIGKILL).</p>
+                    </div>
+                </div>
+
+                <!-- STEP 3: Debug -->
+                <div class="sc-step">
+                    <div class="sc-step-num debug">3</div>
+                    <div class="sc-step-content">
+                        <h4 class="debug">🔍 Step 3: Debug — Confirm OOMKill</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod anihpj-api-s48 | grep -E "State|Reason|Exit|OOM"
+<span class="output">    State:          Waiting
+      Reason:       CrashLoopBackOff
+    Last State:     Terminated
+      Reason:       OOMKilled
+      Exit Code:    137</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl logs anihpj-api-s48 --previous | tail -3
+<span class="output">Allocated block 19 (5Mi) — total 95Mi
+Allocated block 20 (5Mi) — total 100Mi
+# ← OOMKilled here — exceeded 100Mi limit</span></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> <code>Reason: OOMKilled</code> — the kernel's OOM killer terminated the container</div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> <code>Exit Code: 137</code> = 128 + 9 (SIGKILL) — container was forcibly killed</div>
+                        <div class="li-finding root-cause"><strong>🎯 Root Cause:</strong> Memory limit (100Mi) is lower than the application's actual memory usage (~100Mi+). When the container exceeds the limit, the kernel OOM-kills it. The pod restarts but the same cycle repeats.</div>
+                    </div>
+                </div>
+
+                <!-- STEP 4: Answer -->
+                <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('s48-answer')">🔍 Show Full Answer &amp; Expected Command Outputs</button>
+                <div class="sc-answer" id="s48-answer">
+                    <h5>📋 The Answer</h5>
+                    <p><strong>What happened:</strong> Each <code>dd</code> call allocates 5Mi. After 20 iterations (60s), memory usage hits ~100Mi. The kernel OOM-kills the container because it exceeds <code>limits.memory: 100Mi</code>. Exit code 137 confirms SIGKILL by OOM.</p>
+                    <div class="cmd-output"><span class="prompt">$</span> kubectl top pod anihpj-api-s48
+<span class="output">NAME              CPU(cores)   MEMORY(bytes)
+anihpj-api-s48    5m           98Mi          # ← climbing toward 100Mi limit</span></div>
+                </div>
+
+                <!-- STEP 5: Fix -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">4</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">🔧 Step 5: Fix — Increase Memory Limit</h4>
+                        <p>Raise the memory limit to 256Mi to give the application enough headroom.</p>
+                        <button class="sc-fix-toggle" onclick="toggleScenarioAnswer('s48-fix')" style="color:#3fb950;border-color:rgba(63,185,80,0.25);background:rgba(63,185,80,0.08);">✅ Show Fix</button>
+                        <div class="sc-answer" id="s48-fix">
+                            <div class="code-block"><div class="code-header"><span class="code-lang">s48-fixed.yaml (key changes)</span><button class="copy-btn" onclick="copyToClipboard(this,'s48-code-2')">📋 Copy</button></div><pre><code id="s48-code-2" class="language-yaml">    resources:
+      limits:
+        memory: "256Mi"        # ← Raised from 100Mi to 256Mi
+      requests:
+        memory: "128Mi"        # ← Raised from 50Mi to 128Mi
+</code></pre></div>
+                            <div class="sc-resolution"><h4>✅ Resolution Applied</h4><p>The pod now has a 256Mi limit — well above the 100Mi the app needs. The container runs without OOMKill. For production, also add <code>kubectl top</code> monitoring to catch memory trends before they cause OOM.</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 6: Verify -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">5</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">✅ Step 6: Verify the Fix</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-api-s48 --force --grace-period=0 && kubectl apply -f s48-fixed.yaml
+<span class="prompt">$</span> sleep 120 && kubectl get pods
+<span class="output">NAME              READY   STATUS    RESTARTS   AGE
+anihpj-api-s48    1/1     Running   0          2m10s     # ← No OOMKill!</span></div>
+                        <p><strong>🔑 Key Takeaway:</strong> <code>OOMKilled</code> with exit code 137 always means the container hit its memory limit. Use <code>kubectl top</code> to monitor actual usage, <code>kubectl describe</code> to confirm the reason, and <code>--previous</code> logs to see what happened before the kill. Set limits based on real metrics, not guesses.</p>
+                    </div>
+                </div>
+
+                <!-- CLEANUP -->
+                <div class="sc-step">
+                    <div class="sc-step-num" style="background:linear-gradient(135deg,#6e7681,#8b949e)">7</div>
+                    <div class="sc-step-content">
+                        <h4 style="color:#8b949e">🧹 Step 7: Cleanup</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-api-s48 --force --grace-period=0</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ═══════════════ S49: Service Selector Mismatch ═══════════════ -->
+        <div class="scenario-block" id="sc-s49">
+            <div class="sc-header">
+                <div class="sc-badge">49</div>
+                <div class="sc-header-content">
+                    <div class="sc-num">SCENARIO 49 <span class="sc-status debug">🐛 DEBUG</span></div>
+                    <h4>Service Selector Mismatch — Port-Forward Fails, No Endpoints</h4>
+                    <div class="sc-desc"><strong>🖥️ Cluster:</strong> minikube (ksw→6) &nbsp;|&nbsp; <strong>Difficulty:</strong> 🟡 Intermediate &nbsp;|&nbsp; <strong>Time:</strong> 8 min &nbsp;|&nbsp; <strong>Bug:</strong> Service selector doesn't match pod labels → zero endpoints → port-forward fails</div>
+                </div>
+            </div>
+            <div class="sc-body">
+
+                <div class="app-story"><strong>📖 Story:</strong> You need to test the anihpj-api locally using <code>kubectl port-forward</code>. But port-forward to the Service fails with "no endpoints available". You check: pod is Running, service exists — so why can't you connect?</div>
+
+                <!-- STEP 1: Deploy -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">1</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">🚀 Step 1: Deploy Pod with Mismatched Service</h4>
+                        <div class="code-block"><div class="code-header"><span class="code-lang">s49-bug.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s49-code-1')">📋 Copy</button></div><pre><code id="s49-code-1" class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-api-s49
+  labels:
+    app: anihpj-api           # ← Pod has label app=anihpj-api
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anihpj-api-svc
+spec:
+  selector:
+    app: anihpj-backend        # ← BUG: Selector is app=anihpj-backend (NOT anihpj-api!)
+  ports:
+  - port: 8080
+    targetPort: 80
+</code></pre></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s49-bug.yaml</div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: Observe -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">2</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">👀 Step 2: Observe — Port-Forward Fails</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl port-forward svc/anihpj-api-svc 8080:8080
+<span class="output">Error from server (NotFound): pods "anihpj-api-svc" not found
+# Or in newer versions:
+error: couldn't find port via service: no endpoints available for service "anihpj-api-svc"</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get endpoints anihpj-api-svc
+<span class="output">NAME             ENDPOINTS   AGE
+anihpj-api-svc   &lt;none&gt;      3m10s</span></div>
+                        <p><strong>🔴 Visible Symptom:</strong> Service has <strong>no endpoints</strong>. Port-forward to the Service fails. But the pod is Running 1/1!</p>
+                    </div>
+                </div>
+
+                <!-- STEP 3: Debug -->
+                <div class="sc-step">
+                    <div class="sc-step-num debug">3</div>
+                    <div class="sc-step-content">
+                        <h4 class="debug">🔍 Step 3: Debug — Find the Label Mismatch</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods --show-labels
+<span class="output">NAME              READY   STATUS    RESTARTS   AGE   LABELS
+anihpj-api-s49    1/1     Running   0          4m    app=anihpj-api</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get svc anihpj-api-svc -o jsonpath='{.spec.selector}'
+<span class="output">{"app":"anihpj-backend"}</span></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> Pod label: <code>app=anihpj-api</code></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> Service selector: <code>app=anihpj-backend</code></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> Labels don't match → Service can't find the pod → <strong>no endpoints</strong></div>
+                        <div class="li-finding root-cause"><strong>🎯 Root Cause:</strong> The Service selector <code>app: anihpj-backend</code> doesn't match any pod label (<code>app: anihpj-api</code>). The Service endpoints controller finds zero matching pods → endpoints list stays empty → port-forward fails.</div>
+                    </div>
+                </div>
+
+                <!-- STEP 4: Answer -->
+                <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('s49-answer')">🔍 Show Full Answer &amp; Expected Command Outputs</button>
+                <div class="sc-answer" id="s49-answer">
+                    <h5>📋 The Answer</h5>
+                    <p><strong>What happened:</strong> <code>kubectl port-forward svc/...</code> resolves the Service to its endpoints. With no endpoints, the command fails. The pod is healthy — the Service just can't see it. This is a classic CKAD debugging task.</p>
+                    <div class="cmd-output"><span class="prompt">$</span> kubectl describe svc anihpj-api-svc | grep -E "Selector|Endpoints"
+<span class="output">Selector:          app=anihpj-backend
+Endpoints:         &lt;none&gt;</span></div>
+                </div>
+
+                <!-- STEP 5: Fix -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">4</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">🔧 Step 5: Fix — Align the Selector</h4>
+                        <p>Patch the Service selector to match the pod label.</p>
+                        <button class="sc-fix-toggle" onclick="toggleScenarioAnswer('s49-fix')" style="color:#3fb950;border-color:rgba(63,185,80,0.25);background:rgba(63,185,80,0.08);">✅ Show Fix</button>
+                        <div class="sc-answer" id="s49-fix">
+                            <div class="cmd-output"><span class="prompt">$</span> kubectl patch svc anihpj-api-svc -p '{"spec":{"selector":{"app":"anihpj-api"}}}'</div>
+                            <div class="sc-resolution"><h4>✅ Resolution Applied</h4><p>The Service selector now matches the pod label. The endpoints controller immediately discovers the pod and populates the endpoints list. Port-forward now works.</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 6: Verify -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">5</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">✅ Step 6: Verify the Fix</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get endpoints anihpj-api-svc
+<span class="output">NAME             ENDPOINTS         AGE
+anihpj-api-svc   10.244.1.89:80    6m</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl port-forward svc/anihpj-api-svc 8080:8080 &
+<span class="prompt">$</span> curl -s http://localhost:8080 | head -2
+<span class="output">&lt;!DOCTYPE html&gt;
+&lt;html&gt;...</span></div>
+                        <p><strong>🔑 Key Takeaway:</strong> "No endpoints" ALWAYS means the Service selector doesn't match any running pod's labels. Use <code>--show-labels</code> on pods and <code>jsonpath='{.spec.selector}'</code> on the Service to compare. Fix by aligning either the pod label or the Service selector. The <code>kubectl patch</code> command is fastest for the CKAD exam.</p>
+                    </div>
+                </div>
+
+                <!-- CLEANUP -->
+                <div class="sc-step">
+                    <div class="sc-step-num" style="background:linear-gradient(135deg,#6e7681,#8b949e)">7</div>
+                    <div class="sc-step-content">
+                        <h4 style="color:#8b949e">🧹 Step 7: Cleanup</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-api-s49 --force --grace-period=0 && kubectl delete svc anihpj-api-svc</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ═══════════════ S50: Network Debug Checklist ═══════════════ -->
+        <!-- S50 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S51: kubectl cp ═══════════════ -->
+        <!-- S51 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S52: Bad Image Tag — ImagePullBackOff ═══════════════ -->
+        <div class="scenario-block" id="sc-s52">
+            <div class="sc-header">
+                <div class="sc-badge">52</div>
+                <div class="sc-header-content">
+                    <div class="sc-num">SCENARIO 52 <span class="sc-status debug">🐛 DEBUG</span></div>
+                    <h4>Bad Image Tag — ImagePullBackOff</h4>
+                    <div class="sc-desc"><strong>🖥️ Cluster:</strong> kind-cka-lab (ksw→2) &nbsp;|&nbsp; <strong>Difficulty:</strong> 🟢 Novice &nbsp;|&nbsp; <strong>Time:</strong> 5 min &nbsp;|&nbsp; <strong>Bug:</strong> Deployment references non-existent image tag → ErrImagePull → ImagePullBackOff</div>
+                </div>
+            </div>
+            <div class="sc-body">
+
+                <div class="app-story"><strong>📖 Story:</strong> You deploy anihpj-api with image <code>nginx:9.9.9</code> — a tag that doesn't exist. The pod can't pull the image. This is one of the most common Kubernetes errors and a guaranteed CKAD exam topic.</div>
+
+                <!-- STEP 1: Deploy -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">1</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">🚀 Step 1: Deploy with Bad Image</h4>
+                        <div class="code-block"><div class="code-header"><span class="code-lang">s52-bug.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s52-code-1')">📋 Copy</button></div><pre><code id="s52-code-1" class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-api-s52
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anihpj-api-s52
+  template:
+    metadata:
+      labels:
+        app: anihpj-api-s52
+    spec:
+      containers:
+      - name: api
+        image: nginx:9.9.9           # ← This tag does NOT exist!
+        ports:
+        - containerPort: 80
+</code></pre></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s52-bug.yaml</div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: Observe -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">2</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">👀 Step 2: Observe — ImagePullBackOff</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -w
+<span class="output">NAME                              READY   STATUS         RESTARTS   AGE
+anihpj-api-s52-7d9f8c6b4-xk2m9   0/1     ErrImagePull   0          12s
+anihpj-api-s52-7d9f8c6b4-xk2m9   0/1     ImagePullBackOff 0         45s</span></div>
+                        <p><strong>🔴 Visible Symptom:</strong> Pod status alternates between <code>ErrImagePull</code> and <code>ImagePullBackOff</code>. The pod never reaches Running. RESTARTS stays at 0 (container never started).</p>
+                    </div>
+                </div>
+
+                <!-- STEP 3: Debug -->
+                <div class="sc-step">
+                    <div class="sc-step-num debug">3</div>
+                    <div class="sc-step-content">
+                        <h4 class="debug">🔍 Step 3: Debug — Read the Events</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod -l app=anihpj-api-s52 | grep -A5 Events:
+<span class="output">Events:
+  Type     Reason          Age   From     Message
+  ----     ------          ----  ----     -------
+  Normal   Scheduled       90s   default-scheduler  Successfully assigned
+  Warning  Failed          85s   kubelet  Failed to pull image "nginx:9.9.9": rpc error: code = NotFound desc = failed to pull and unpack image: ... not found
+  Warning  Failed          70s   kubelet  Error: ErrImagePull
+  Normal   BackOff         55s   kubelet  Back-off pulling image "nginx:9.9.9"
+  Warning  Failed          55s   kubelet  Error: ImagePullBackOff</span></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> <code>Failed to pull image "nginx:9.9.9": ... not found</code></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> kubelet retries with exponential backoff — hence the "BackOff" in the status</div>
+                        <div class="li-finding root-cause"><strong>🎯 Root Cause:</strong> Image tag <code>nginx:9.9.9</code> doesn't exist on the container registry. The kubelet can't pull it. After repeated failures, it backs off (waits longer between retries).</div>
+                    </div>
+                </div>
+
+                <!-- STEP 4: Answer -->
+                <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('s52-answer')">🔍 Show Full Answer &amp; Expected Command Outputs</button>
+                <div class="sc-answer" id="s52-answer">
+                    <h5>📋 The Answer</h5>
+                    <p><strong>What happened:</strong> Kubernetes tries to pull the image from the configured registry. Image <code>nginx:9.9.9</code> returns 404 Not Found. The kubelet logs a Warning event and retries with increasing delay (exponential backoff: 10s → 20s → 40s → 80s → ... up to 5 min).</p>
+                    <h5>🔄 The Image Pull Flow</h5>
+                    <div class="tenet-flow">
+                        <div class="tenet-step"><div class="step-num">1</div><div class="step-label">Pod scheduled</div></div>
+                        <div class="tenet-step"><div class="step-num">2</div><div class="step-label">kubelet tries pull</div></div>
+                        <div class="tenet-step"><div class="step-num">3</div><div class="step-label">Registry: 404 Not Found</div></div>
+                        <div class="tenet-step"><div class="step-num">4</div><div class="step-label">ErrImagePull</div></div>
+                        <div class="tenet-step"><div class="step-num">5</div><div class="step-label">BackOff → Retry in 10s</div></div>
+                    </div>
+                    <div class="cmd-output"><span class="prompt">$</span> kubectl get events --field-selector type=Warning --sort-by='.lastTimestamp' | tail -5
+<span class="output">Warning  Failed     Failed to pull image "nginx:9.9.9": not found
+Warning  BackOff    Back-off pulling image "nginx:9.9.9"</span></div>
+                </div>
+
+                <!-- STEP 5: Fix -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">4</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">🔧 Step 5: Fix — Correct the Image Tag</h4>
+                        <p>Edit the deployment to use a valid image tag.</p>
+                        <button class="sc-fix-toggle" onclick="toggleScenarioAnswer('s52-fix')" style="color:#3fb950;border-color:rgba(63,185,80,0.25);background:rgba(63,185,80,0.08);">✅ Show Fix</button>
+                        <div class="sc-answer" id="s52-fix">
+                            <div class="cmd-output"><span class="prompt">$</span> kubectl set image deploy/anihpj-api-s52 api=nginx:1.25-alpine</div>
+                            <div class="sc-resolution"><h4>✅ Resolution Applied</h4><p>The image tag <code>nginx:1.25-alpine</code> exists. kubelet pulls it successfully. The pod starts and reaches Running state. For the CKAD exam, <code>kubectl set image</code> is the fastest way to fix image tag issues.</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 6: Verify -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">5</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">✅ Step 6: Verify the Fix</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods -l app=anihpj-api-s52
+<span class="output">NAME                              READY   STATUS    RESTARTS   AGE
+anihpj-api-s52-6f8b9c7d4-pl9m2   1/1     Running   0          24s</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl rollout status deploy/anihpj-api-s52
+<span class="output">deployment "anihpj-api-s52" successfully rolled out</span></div>
+                        <p><strong>🔑 Key Takeaway:</strong> <code>ErrImagePull</code> / <code>ImagePullBackOff</code> is ALWAYS an image problem: wrong tag, private registry without credentials, or typo in the image name. Use <code>kubectl describe pod</code> to read the exact error message from the registry. Fix with <code>kubectl set image</code> or <code>kubectl edit</code>.</p>
+                    </div>
+                </div>
+
+                <!-- CLEANUP -->
+                <div class="sc-step">
+                    <div class="sc-step-num" style="background:linear-gradient(135deg,#6e7681,#8b949e)">7</div>
+                    <div class="sc-step-content">
+                        <h4 style="color:#8b949e">🧹 Step 7: Cleanup</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete deploy anihpj-api-s52</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ═══════════════ S53: Event Monitoring ═══════════════ -->
+        <!-- S53 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S54: Container Lifecycle ═══════════════ -->
+        <!-- S54 will be populated — see ckad_test_prep_toc.txt -->
+
+        <!-- ═══════════════ S55: Insufficient CPU — Pod Pending Forever ═══════════════ -->
+        <div class="scenario-block" id="sc-s55">
+            <div class="sc-header">
+                <div class="sc-badge">55</div>
+                <div class="sc-header-content">
+                    <div class="sc-num">SCENARIO 55 <span class="sc-status debug">🐛 DEBUG</span></div>
+                    <h4>Resource Request Too Large — Pod Stuck Pending</h4>
+                    <div class="sc-desc"><strong>🖥️ Cluster:</strong> kind-cka-lab (ksw→2) &nbsp;|&nbsp; <strong>Difficulty:</strong> 🟢 Novice &nbsp;|&nbsp; <strong>Time:</strong> 5 min &nbsp;|&nbsp; <strong>Bug:</strong> Pod requests more CPU than any node has → stuck Pending forever</div>
+                </div>
+            </div>
+            <div class="sc-body">
+
+                <div class="app-story"><strong>📖 Story:</strong> You deploy anihpj-api with a CPU request of <code>100</code> (100 cores!). No node in your kind cluster has that much CPU. The pod sits in <code>Pending</code> forever. This is a classic CKAD scenario: identify why a pod won't schedule.</div>
+
+                <!-- STEP 1: Deploy -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">1</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">🚀 Step 1: Deploy the Impossible Pod</h4>
+                        <div class="code-block"><div class="code-header"><span class="code-lang">s55-bug.yaml</span><button class="copy-btn" onclick="copyToClipboard(this,'s55-code-1')">📋 Copy</button></div><pre><code id="s55-code-1" class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: anihpj-api-s55
+  labels:
+    app: anihpj-api
+spec:
+  containers:
+  - name: api
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+    resources:
+      requests:
+        cpu: "100"              # ← 100 CPUs!!! No node has this.
+        memory: "64Mi"
+      limits:
+        cpu: "100"
+        memory: "128Mi"
+</code></pre></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s55-bug.yaml</div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: Observe -->
+                <div class="sc-step">
+                    <div class="sc-step-num deploy">2</div>
+                    <div class="sc-step-content">
+                        <h4 class="deploy">👀 Step 2: Observe — Pod Stuck Pending</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl get pods
+<span class="output">NAME              READY   STATUS    RESTARTS   AGE
+anihpj-api-s55    0/1     Pending   0          5m</span></div>
+                        <p><strong>🔴 Visible Symptom:</strong> Pod is <code>Pending</code> — not running, not failing, just stuck. RESTARTS = 0 (container never created). The pod waits indefinitely.</p>
+                    </div>
+                </div>
+
+                <!-- STEP 3: Debug -->
+                <div class="sc-step">
+                    <div class="sc-step-num debug">3</div>
+                    <div class="sc-step-content">
+                        <h4 class="debug">🔍 Step 3: Debug — Why Won't It Schedule?</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod anihpj-api-s55 | grep -A10 Events:
+<span class="output">Events:
+  Type     Reason            Age    From               Message
+  ----     ------            ----   ----               -------
+  Warning  FailedScheduling  5m30s  default-scheduler  0/3 nodes are available: 3 Insufficient cpu.
+  Warning  FailedScheduling  5m10s  default-scheduler  0/3 nodes are available: 3 Insufficient cpu.</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe nodes | grep -A5 "Allocated resources:" | grep -E "cpu|Name:"
+<span class="output">Name:               kind-cka-lab-control-plane
+  cpu                650m (16%)    0 (0%)
+Name:               kind-cka-lab-worker
+  cpu                350m (8%)     0 (0%)
+Name:               kind-cka-lab-worker2
+  cpu                300m (7%)     0 (0%)</span></div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> Pod requests <strong>100 CPUs</strong> — but every node has <strong>≤4 CPUs</strong> total</div>
+                        <div class="lookat-item"><span class="li-check fail">❌</span> <code>0/3 nodes are available: 3 Insufficient cpu</code> — the scheduler tried all 3 nodes, all failed</div>
+                        <div class="li-finding root-cause"><strong>🎯 Root Cause:</strong> The pod's CPU request (100) exceeds the allocatable CPU on every node in the cluster. The scheduler can't find a node that satisfies the request → pod stays Pending forever. Note: <code>100</code> means 100 CPU cores, not 100 millicores (which would be <code>100m</code>).</div>
+                    </div>
+                </div>
+
+                <!-- STEP 4: Answer -->
+                <button class="sc-answer-toggle" onclick="toggleScenarioAnswer('s55-answer')">🔍 Show Full Answer &amp; Expected Command Outputs</button>
+                <div class="sc-answer" id="s55-answer">
+                    <h5>📋 The Answer</h5>
+                    <p><strong>What happened:</strong> <code>cpu: "100"</code> (without the <code>m</code> suffix) means 100 full CPU cores. The kind nodes each have 4 vCPUs from Docker but only ~3.9 allocatable. 100 > 4 → no node eligible → pending forever.</p>
+                    <h5>⚠️ CPU Unit Confusion</h5>
+                    <div class="tenet-flow">
+                        <div class="tenet-step"><div class="step-num">100m</div><div class="step-label">0.1 CPU core<br>(correct for most apps)</div></div>
+                        <div class="tenet-step"><div class="step-num">1</div><div class="step-label">1 CPU core</div></div>
+                        <div class="tenet-step"><div class="step-num">100</div><div class="step-label">100 CPU cores<br>(the bug — meant 100m)</div></div>
+                    </div>
+                </div>
+
+                <!-- STEP 5: Fix -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">4</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">🔧 Step 5: Fix — Use Millicores</h4>
+                        <p>Change CPU requests to millicores. Also always set reasonable values based on actual app needs.</p>
+                        <button class="sc-fix-toggle" onclick="toggleScenarioAnswer('s55-fix')" style="color:#3fb950;border-color:rgba(63,185,80,0.25);background:rgba(63,185,80,0.08);">✅ Show Fix</button>
+                        <div class="sc-answer" id="s55-fix">
+                            <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-api-s55 --force --grace-period=0</div>
+                            <div class="code-block"><div class="code-header"><span class="code-lang">s55-fixed.yaml (key changes)</span><button class="copy-btn" onclick="copyToClipboard(this,'s55-code-2')">📋 Copy</button></div><pre><code id="s55-code-2" class="language-yaml">    resources:
+      requests:
+        cpu: "100m"             # ← 0.1 CPU core — every node has this
+        memory: "64Mi"
+      limits:
+        cpu: "500m"             # ← 0.5 CPU core — reasonable ceiling
+        memory: "128Mi"
+</code></pre></div>
+                            <div class="sc-resolution"><h4>✅ Resolution Applied</h4><p>The pod now requests 100 millicores (0.1 CPU) — well within any node's capacity. The scheduler immediately places it. For the CKAD exam, always verify your CPU units: <code>100</code> ≠ <code>100m</code>.</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 6: Verify -->
+                <div class="sc-step">
+                    <div class="sc-step-num answer">5</div>
+                    <div class="sc-step-content">
+                        <h4 class="answer">✅ Step 6: Verify the Fix</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl apply -f s55-fixed.yaml && kubectl get pods
+<span class="output">NAME              READY   STATUS    RESTARTS   AGE
+anihpj-api-s55    1/1     Running   0          8s</span></div>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl describe pod anihpj-api-s55 | grep -A3 "Requests:"
+<span class="output">    Requests:
+      cpu:      100m
+      memory:   64Mi</span></div>
+                        <p><strong>🔑 Key Takeaway:</strong> Pod stuck in <code>Pending</code> with <code>FailedScheduling</code> events = resource request too high for available nodes. Use <code>kubectl describe pod</code> to see the scheduling failure reason. Check node capacity with <code>kubectl describe nodes</code>. Fix by lowering the request. Remember: <strong>100</strong> = 100 cores, <strong>100m</strong> = 0.1 core.</p>
+                    </div>
+                </div>
+
+                <!-- CLEANUP -->
+                <div class="sc-step">
+                    <div class="sc-step-num" style="background:linear-gradient(135deg,#6e7681,#8b949e)">7</div>
+                    <div class="sc-step-content">
+                        <h4 style="color:#8b949e">🧹 Step 7: Cleanup</h4>
+                        <div class="cmd-output"><span class="prompt">$</span> kubectl delete pod anihpj-api-s55 --force --grace-period=0</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </section>
     <section class="chapter-section" id="sc-cat4"><h2><span>🔐 Category 4: Config &amp; Security (S56–S80)</span><span class="chapter-badge">25 Scenarios</span></h2></section>
     <section class="chapter-section" id="sc-cat5"><h2><span>🌐 Category 5: Services &amp; Networking (S81–S100)</span><span class="chapter-badge">20 Scenarios</span></h2></section>
 
