@@ -16676,6 +16676,118 @@ Step 6: CREATE post-incident ticket → DBA team
 
 </section>
 
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  PART 12: ADVANCED ARCHITECTURE & EXAM PREP                         -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section id="part12">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!--  CHAPTER 39: DEPLOYMENT ARCHITECTURE PATTERNS                        -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div class="chapter-intro" id="ch39">
+<div class="chapter-meta"><span class="chapter-num">Ch 39</span><span class="chapter-domain">ARCHITECTURE</span></div>
+<h3>Deployment Architecture Patterns</h3>
+<p>Production deployments go far beyond simple rolling updates. This chapter covers Blue/Green with DNS failover, Canary with weighted routing, multi-region active-active architectures, the Strangler Fig pattern for monolith decomposition, and event-driven architectures that scale independently. These are the patterns that separate Associate from Professional.</p>
+<div class="chapter-meta">
+<span class="meta-tag">🔴 Advanced</span>
+<span class="meta-tag">⏱️ ~3 hours</span>
+<span class="meta-tag">🎯 Domain 3: Resilient 20% + Domain 1: SDLC 22%</span>
+<span class="meta-tag">📝 10 Questions</span>
+</div>
+</div>
+
+<div class="section-block" id="s39-1">
+<h3>39.1 Blue/Green Deployment — Instant Rollback Pattern</h3>
+<p>Blue/Green runs two identical environments simultaneously. Traffic is switched all at once via DNS or load balancer. The old environment stays warm — rollback is instant (~30 seconds) by switching traffic back.</p>
+
+<div class="code-block-wrapper">
+<div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">Route 53 Weighted Routing — Blue/Green DNS Switch</span></div>
+<pre><code class="language-text"># BEFORE CUTOVER:
+  🔵 Blue ALB (us-east-1):  weight=100  → all traffic
+  🟢 Green ALB (us-east-1): weight=0    → no traffic
+
+# AFTER CUTOVER:
+  🔵 Blue ALB:  weight=0    → no traffic (kept warm)
+  🟢 Green ALB: weight=100  → all traffic
+
+# ROLLBACK (if Green fails):
+  🔵 Blue ALB:  weight=100  → instant recovery
+  🟢 Green ALB: weight=0    → traffic removed
+  DNS TTL=60s → max 60s propagation delay</code></pre>
+</div>
+
+<div class="card-grid cols-2">
+<div class="info-card highlight"><h5>✅ Blue/Green Advantages</h5><p>Instant rollback (~30s), zero downtime, full testing on production-like Green before cutover, simple mental model.</p></div>
+<div class="info-card"><h5>⚠️ Blue/Green Trade-offs</h5><p>2× infrastructure cost during cutover, database schema changes must be backward-compatible (Blue and Green share same DB), DNS propagation takes TTL seconds.</p></div>
+</div>
+</div>
+
+<div class="section-block" id="s39-2">
+<h3>39.2 Canary Deployment — Risk-Minimized Rollout</h3>
+<p>Canary shifts traffic gradually (e.g., 5% → 25% → 50% → 100%), monitoring for errors at each step. CodeDeploy automates this with CloudWatch alarm integration for auto-rollback.</p>
+
+<div class="diagram-box"><pre>
+CANARY TRAFFIC SHIFT — Time-Based Progression
+═══════════════════════════════════════════════
+ T+0m:  v1=100%, v2=0%    (deploy v2, no traffic)
+ T+5m:  v1=95%,  v2=5%    (canary starts)
+ T+15m: v1=75%,  v2=25%   (increase if metrics OK)
+ T+30m: v1=50%,  v2=50%
+ T+45m: v1=0%,   v2=100%  (full rollout)
+
+🚨 IF ERROR RATE SPIKES: CodeDeploy auto-rollback → v2=0%</pre></div>
+</div>
+
+<div class="section-block" id="s39-3">
+<h3>39.3 Multi-Region Active-Active Architecture</h3>
+<p>Both regions serve traffic simultaneously with bidirectional data sync. Users are routed to the nearest region via latency-based DNS. If a region fails, traffic automatically shifts.</p>
+
+<div class="split-panel">
+<div class="split-side split-good"><h5>Active-Active</h5><p>Both regions fully scaled. DynamoDB Global Tables (multi-master) or Aurora Global DB for data. Route 53 latency-based routing. RTO: &lt;1 minute. Cost: ~2× single region.</p></div>
+<div class="split-side"><h5>Active-Passive</h5><p>Primary serves all traffic. Secondary on standby (Pilot Light or Warm Standby). One-way replication. Failover: promote secondary, update DNS. RTO: 1-15 minutes. Cost: ~1.3×.</p></div>
+</div>
+</div>
+
+<div class="section-block" id="s39-4">
+<h3>39.4 Strangler Fig Pattern — Incremental Migration</h3>
+<p>Incrementally replace a monolith with microservices by "strangling" it piece by piece. Route specific API paths to new services while the monolith handles everything else. Over time, the monolith shrinks to nothing.</p>
+
+<div class="diagram-box"><pre>
+Phase 1: MONOLITH handles ALL routes (/api/*)
+Phase 2: Extract /api/auth → Auth microservice. API Gateway routes /api/auth to new service.
+Phase 3: Extract /api/jobs → Jobs microservice. Monolith handles remaining routes.
+Phase N: Monolith is empty → decommissioned. All routes served by microservices.</pre></div>
+</div>
+
+<!-- Chapter 39 Practice Questions -->
+<div class="exam-questions-section">
+<h4>📝 Chapter 39 — Deployment Architecture Patterns (10 Questions)</h4>
+
+<div class="exam-question-item"><span class="eq-number">Q1</span><p class="eq-question">What is the Strangler Fig pattern?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>A migration strategy to incrementally replace a monolith with microservices. You "strangle" the monolith piece by piece, routing individual features to new services while the monolith handles everything else.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>Strangler Fig is the DOP-C02-preferred migration pattern over Big Bang. The exam always favors incremental approaches for production migrations. Domain 1 (SDLC, 22%) + Domain 3 (Resilient, 20%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q2</span><p class="eq-question">How does Blue/Green at the DNS level differ from ALB target group swap?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>DNS (Route 53):</strong> Weighted routing swaps traffic at DNS level. Can span regions. ~60s propagation. <strong>ALB target group swap:</strong> Instant traffic shift within same region. Can't span regions. Both achieve zero-downtime cutover.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>DNS Blue/Green enables cross-region deployments — deploy Green in a different region for DR testing. ALB target group swap is faster but region-locked. Domain 3 (Resilient, 20%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q3</span><p class="eq-question">What's the difference between synchronous and asynchronous microservice communication?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Synchronous (REST/gRPC):</strong> Caller waits for response. Tight coupling. <strong>Asynchronous (SQS/EventBridge/SNS):</strong> Caller sends event, continues processing. Loose coupling.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>Use synchronous when user is waiting (payment, login). Use asynchronous when action can happen later (email, analytics). Domain 1 (SDLC, 22%) tests this via scenario-based questions.</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q4</span><p class="eq-question">What makes multi-region active-active different from active-passive?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p><strong>Active-Active:</strong> Both regions serve traffic with bidirectional data sync. RTO &lt;1min. <strong>Active-Passive:</strong> Only primary serves; secondary on standby. RTO 1-15min.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>Active-Active requires bidirectional data sync (Global Tables, Global DB). Active-Passive is simpler (one-way replication) but slower failover. Domain 3 (Resilient, 20%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q5</span><p class="eq-question">What is EKS Anywhere and when do you use it?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Run EKS-compatible K8s on your own hardware (vSphere/bare metal). Use when data must stay on-premises, at edge locations, or in air-gapped environments.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>EKS Anywhere = you manage everything (hardware, control plane, upgrades). Exam signal: "data sovereignty" or "air-gapped environment." Domain 3 (Resilient, 20%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q6</span><p class="eq-question">How does event-driven architecture improve scalability?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Producers and consumers are decoupled via event bus/queue. Each scales independently. Queues absorb traffic spikes, preventing cascading failures.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>Without events: Service A calls Service B directly → if B is slow, A blocks → cascading failure. With events: A publishes to SQS → returns immediately. B processes at own pace. Domain 5 (Incident, 14%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q7</span><p class="eq-question">What are the challenges of event-driven architectures?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Eventual consistency, duplicate events, debugging complexity, schema evolution, and ordering challenges.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>Solutions: Duplicate events → DynamoDB dedup with event ID. Debugging → X-Ray distributed tracing. Ordering → SQS FIFO with MessageGroupId. Schema evolution → EventBridge Schema Registry. Domain 5 (Incident, 14%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q8</span><p class="eq-question">How does AWS Outposts extend EKS on-premises?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>AWS delivers physical racks to your data center. EKS control plane runs in AWS region, worker nodes on Outposts. Same EKS API, IAM, ECR. Requires stable connection to region.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>Outposts is NOT "AWS in a box" — control plane stays in the region. Sub-ms latency to local apps. Requires Service Link connection. Domain 3 (Resilient, 20%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q9</span><p class="eq-question">How do you handle data synchronization in multi-region active-active?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Aurora Global DB (&lt;1s lag), DynamoDB Global Tables (multi-master), S3 CRR (async, 15min RPO), ElastiCache Global Datastore (cross-region Redis).</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>Choose based on RPO: &lt;1s → Aurora Global DB. Multi-master writes → DynamoDB Global Tables. Async file replication → S3 CRR. Domain 3 (Resilient, 20%).</p></div></details></div>
+
+<div class="exam-question-item"><span class="eq-number">Q10</span><p class="eq-question">What is data gravity and why does it matter for architecture?</p><details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><div class="eq-answer-label">✅ ANSWER</div><p>Large datasets attract applications because moving data is expensive (egress costs). Keep compute near data. Use CDN for global reads. Data gravity often dictates where services run.</p></div><div class="eq-explanation"><div class="eq-exp-label">📖 EXPLANATION</div><p>100TB at $0.09/GB egress = ~$9,000 just to transfer. Keep compute in the same AZ/region as data. Domain 3 (Resilient, 20%) + Domain 6 (Security/cost, 12%).</p></div></details></div>
+</div>
+
+<div class="cka-practice-drill"><div class="drill-timer">⏱️ 30 min</div><div class="drill-scenario"><h5>🏋️ Drill 39: Design Deployment Strategy for anihpj</h5><p>Design a Blue/Green deployment for anihpj using Route 53 weighted routing across two EKS clusters. Define the DNS cutover process, rollback procedure, and database migration strategy. Identify which anihpj services would benefit from event-driven architecture and which should remain synchronous.</p></div></div>
+
+</section>
+
     </main>
 
     <!-- ═══════════════════════════════════════════════════════════════ -->
