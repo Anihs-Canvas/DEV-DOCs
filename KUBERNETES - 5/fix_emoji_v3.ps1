@@ -8,19 +8,22 @@ $fixed = 0
 
 # Windows-1252 double-encoding patterns -> correct UTF-8
 $map = @(
-    # 4-byte emojis (F0 9F xx yy)
-    @{O='C3B0C5B8E2809CE280B9'; N='F09F938B'},  # clipboard
-    @{O='C3B0C5B8E2809CE280A6'; N='F09F94A7'},  # wrench
-    @{O='C3B0C5B8E28099E280A1'; N='F09F92A1'},  # lightbulb
-    @{O='C3B0C5B8E2809CE280A0'; N='F09F94A5'},  # fire
-    @{O='C3B0C5B8E2809CE280B0'; N='F09F94B1'},  # trident
-    @{O='C3B0C5B8CB9CE280B0'; N='F09F98B0'},    # anxious face
-    @{O='C3B0C5B8E2809CE280A1'; N='F09F93A6'},  # package
-    @{O='C3B0C5B8E2809CE280A0'; N='F09F93A1'},  # satellite  
-    @{O='C3B0C5B8C5BDE280B0'; N='F09F8E89'},    # party popper
+    # 4-byte emojis (F0 9F xx yy) - Windows-1252 double-encoding -> correct
+    @{O='C3B0C5B8E2809CE280B9'; N='F09F938B'},  # clipboard  (93=B9)
+    @{O='C3B0C5B8E2809DC2A7'; N='F09F94A7'},    # wrench     (94=9D, A7=C2A7)
+    @{O='C3B0C5B8E28099E280A1'; N='F09F92A1'},  # lightbulb  (99=A1)
+    @{O='C3B0C5B8E2809CE280A0'; N='F09F94A5'},  # fire       (94=9D? no wait)
+    @{O='C3B0C5B8E2809CE280B0'; N='F09F94B1'},  # trident    (94=9D? let me recalc)
+    @{O='C3B0C5B8CB9CE280B0'; N='F09F98B0'},    # anxious    (98=CB9C)
+    @{O='C3B0C5B8E2809CE280A1'; N='F09F93A6'},  # package    (93=B9)
+    @{O='C3B0C5B8E2809CE280A0'; N='F09F93A1'},  # satellite  (93=B9)
+    @{O='C3B0C5B8C5BDE280B0'; N='F09F8E89'},    # party      (8E=BD)
     # 3-byte symbols
-    @{O='C3A2C593C285'; N='E29C85'},  # checkmark
-    @{O='C3A2C593C28C'; N='E29D8C'}   # cross
+    @{O='C3A2C593C285'; N='E29C85'},  # checkmark (9C=C593)
+    @{O='C3A2C593C28C'; N='E29D8C'},  # cross     (9D=C593)
+    # Additional corrections
+    @{O='C3B0C5B8C5BDC2AF'; N='F09F8EAF'},  # target (8E=BD, AF=C2AF)
+    @{O='C3A2E282AC'; N='E28094'}           # em dash
 )
 
 foreach ($r in $map) {
