@@ -7198,12 +7198,267 @@
 <span class="output" style="color:#3fb950;"># Current shell limits — check against limits.conf ✅</span></div>
                 <p>The ulimit → limits.conf workflow: set values in limits.conf, restart session, verify with ulimit. This is the standard way to configure resource limits on every Linux distribution.</p>
             </div>
-        </div> — each with symptom, 15 categorized causes (5 most likely + 5 less likely + 5 new system), diagnostic commands, solutions, and personal advice. Patterned after the 5+5+5 cause-card format.</p>
+        </div>
+
+        <!-- Q193 -->
+        <div class="mcq-block" id="q193" data-correct="C">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q193 of 200</div>
+            <div class="mcq-question">How do you verify that <strong>PAM limits are enabled</strong> and actually being applied?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) PAM limits are always enabled — no verification is needed</div>
+                <div class="mcq-option">B) Check <code>/etc/pam.d/limits.conf</code> exists — that's all that's required</div>
+                <div class="mcq-option">C) Verify <code>session required pam_limits.so</code> is present in <code>/etc/pam.d/common-session</code> (Debian/Ubuntu) or <code>/etc/pam.d/system-auth</code> (RHEL). Without this line, limits.conf is completely IGNORED. Test by setting a limit, logging out/in, and checking with <code>ulimit -a</code></div>
+                <div class="mcq-option">D) PAM is only for authentication — it doesn't affect resource limits</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a193')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a193">
+                <div class="answer-label">✅ Correct Answer: C</div>
+                <p>Without the <code>pam_limits.so</code> line, limits.conf is dead configuration. This is the #1 reason "I set limits.conf but nothing changed!" — the PAM module isn't loaded. SSH, login, and su all use PAM, so limits apply to all login methods.</p>
+                <div class="explanation-label">💻 Live Shell</div>
+                <div class="cmd-output"><span class="prompt">$</span> <span style="color:#79c0ff;">grep pam_limits /etc/pam.d/common-session</span><br>
+<span class="output">session  required  pam_limits.so</span><br>
+<span class="output" style="color:#3fb950;"># PAM limits module is active ✅</span><br>
+<br>
+<span class="prompt">$</span> <span style="color:#79c0ff;">ssh localhost 'ulimit -n'</span><br>
+<span class="output">4096</span><br>
+<span class="output" style="color:#3fb950;"># Limit applied via SSH (uses PAM) ✅</span></div>
+                <p>PAM is the gatekeeper for all login-based access control. Understanding PAM configuration is essential for troubleshooting "my limits aren't working" issues on any Linux system.</p>
+            </div>
+        </div>
+
+        <!-- Q194 -->
+        <div class="mcq-block" id="q194" data-correct="D">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q194 of 200</div>
+            <div class="mcq-question">What resource limits should a <strong>production web application user</strong> typically have?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) Unlimited everything — let the kernel manage resources</div>
+                <div class="mcq-option">B) Only nofile needs tuning — everything else uses safe defaults</div>
+                <div class="mcq-option">C) Set everything to 65536 — that's the standard production value</div>
+                <div class="mcq-option">D) <strong>App user:</strong> nofile=8192 (database connections + sockets), nproc=4096 (workers + threads). <strong>Database user:</strong> nofile=65536 (many client connections), memlock=unlimited (shared_buffers). Always measure first, then set limits ~2× observed peak usage</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a194')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a194">
+                <div class="answer-label">✅ Correct Answer: D</div>
+                <p>Resource limits should match the workload. Database servers need very high nofile (each connection is a file descriptor). App servers need moderate nofile. Always measure peak usage with <code>lsof | wc -l</code> before setting limits — don't guess.</p>
+                <div class="explanation-label">📝 Production Limit Recommendations</div>
+                <div class="diagram-container"><div class="diagram-title">Recommended Resource Limits by Role</div><pre>
+  ROLE           nofile    nproc     memlock      NOTES
+  ────────────  ────────  ────────  ───────────  ──────────────────
+  App server     8192      4096      default      ~100 conns + overhead
+  Database      65536      16384     unlimited    Each connection = 1 FD
+  Cache (Redis) 65536      4096      unlimited    Many client connections
+  Proxy (Nginx) 65536      8192      default      Worker × connections
+  Admin users    4096      4096      default      Interactive use only
+</pre></div>
+                <p>Data-driven limits prevent production outages. The #1 cause of "too many open files" errors is insufficient nofile limits on database or proxy servers. This is infrastructure that applies to every application stack.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════ 5.4 ACLs ═══════════════ -->
+    <section class="chapter-section" id="cat5-4">
+        <h2><span>5.4 Access Control Lists (ACLs)</span><span class="chapter-badge">Q195-Q198</span></h2>
+
+        <!-- Q195 -->
+        <div class="mcq-block" id="q195" data-correct="B">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q195 of 200</div>
+            <div class="mcq-question">What are <strong>ACLs (Access Control Lists)</strong> and what problem do they solve?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) ACLs replace Unix permissions entirely — they're a completely different system</div>
+                <div class="mcq-option">B) ACLs extend the traditional owner-group-others model by allowing <strong>per-user and per-group permissions beyond just the owning user/group</strong>. Example: give bob read access while the owning group is developers. <code>getfacl</code> reads, <code>setfacl</code> writes. Requires filesystem mounted with <code>acl</code> option</div>
+                <div class="mcq-option">C) ACLs only work on NFS filesystems — local filesystems use standard permissions</div>
+                <div class="mcq-option">D) ACLs are a Windows feature — they don't exist on Linux</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a195')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a195">
+                <div class="answer-label">✅ Correct Answer: B</div>
+                <p>ACLs solve the "I need to give one specific user access but they're not in the group" problem. Without ACLs, you'd need to create a new group, add both users, and chgrp the file. ACLs do it in one <code>setfacl</code> command.</p>
+                <div class="explanation-label">💻 Live Shell</div>
+                <div class="cmd-output"><span class="prompt">$</span> <span style="color:#79c0ff;">setfacl -m u:bob:rw config.yaml</span><br>
+<span class="prompt">$</span> <span style="color:#79c0ff;">getfacl config.yaml</span><br>
+<span class="output"># file: config.yaml</span><br>
+<span class="output"># owner: alice</span><br>
+<span class="output"># group: developers</span><br>
+<span class="output">user::rw-</span><br>
+<span class="output">user:bob:rw-</span><br>
+<span class="output">group::r--</span><br>
+<span class="output">mask::rw-</span><br>
+<span class="output">other::---</span><br>
+<span class="output" style="color:#3fb950;"># bob has rw- even though he's not in the developers group ✅</span></div>
+                <p>ACLs are essential for complex permission scenarios. The LFCS exam expects you to know how to read, set, and troubleshoot ACLs. Most modern filesystems (ext4, XFS) have ACLs enabled by default.</p>
+            </div>
+        </div>
+
+        <!-- Q196 -->
+        <div class="mcq-block" id="q196" data-correct="A">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q196 of 200</div>
+            <div class="mcq-question">How do you <strong>add and remove ACL entries</strong> with setfacl?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) <code>setfacl -m u:alice:rw file</code> (modify/add user). <code>setfacl -m g:devs:rx dir</code> (group). <code>setfacl -x u:alice file</code> (remove user entry). <code>setfacl -b file</code> (remove ALL ACLs). <code>setfacl -R</code> for recursive application</div>
+                <div class="mcq-option">B) Edit <code>/etc/acl.conf</code> — ACLs are configured in a central file</div>
+                <div class="mcq-option">C) ACLs are set via <code>chmod +acl</code> — it's an extension of the chmod command</div>
+                <div class="mcq-option">D) ACLs can only be set during file creation — they can't be modified later</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a196')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a196">
+                <div class="answer-label">✅ Correct Answer: A</div>
+                <p>setfacl syntax: <code>-m</code> (modify), <code>-x</code> (remove specific), <code>-b</code> (remove all). The <code>u:</code> prefix is for users, <code>g:</code> for groups. <code>-R</code> applies recursively — essential for directory trees. <code>ls -l</code> shows a <code>+</code> sign when ACLs are present.</p>
+                <div class="explanation-label">💻 Live Shell</div>
+                <div class="cmd-output"><span class="prompt">$</span> <span style="color:#79c0ff;">ls -l config.yaml</span><br>
+<span class="output">-rw-r-----+ 1 alice developers 1024 Jun 14 config.yaml</span><br>
+<span style="color:#6e7681;font-style:italic"># The + at the end means ACLs are present!</span><br>
+<br>
+<span class="prompt">$</span> <span style="color:#79c0ff;">setfacl -m g:auditors:r config.yaml</span><br>
+<span class="prompt">$</span> <span style="color:#79c0ff;">setfacl -x u:bob config.yaml</span><br>
+<span class="output" style="color:#3fb950;"># ACLs updated — auditors added, bob removed ✅</span></div>
+                <p>ACL management is a core sysadmin skill. The <code>+</code> in ls output is the quick way to spot ACLs. Always use <code>getfacl</code> (not ls) to see the complete permission picture.</p>
+            </div>
+        </div>
+
+        <!-- Q197 -->
+        <div class="mcq-block" id="q197" data-correct="D">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q197 of 200</div>
+            <div class="mcq-question">What are <strong>default ACLs</strong> and how do they enable automatic permission inheritance?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) Default ACLs are applied system-wide — they affect all files on the server</div>
+                <div class="mcq-option">B) Default ACLs are the same as regular ACLs — there's no inheritance concept</div>
+                <div class="mcq-option">C) Default ACLs only work on the root filesystem — they don't apply to data volumes</div>
+                <div class="mcq-option">D) <code>setfacl -m d:g:devs:rwx /opt/anihpj/uploads/</code> sets a <strong>default ACL</strong>. Every NEW file and subdirectory created inside inherits these permissions automatically. Existing files are NOT affected — use <code>setfacl -R</code> to apply retroactively</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a197')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a197">
+                <div class="answer-label">✅ Correct Answer: D</div>
+                <p>Default ACLs solve the "new files don't get the right permissions" problem. Without them, every new file needs manual ACL setting. With default ACLs, the directory enforces permissions automatically on all future content.</p>
+                <div class="explanation-label">💻 Live Shell</div>
+                <div class="cmd-output"><span class="prompt">$</span> <span style="color:#79c0ff;">setfacl -m d:g:developers:rwx /opt/anihpj/uploads/</span><br>
+<span class="prompt">$</span> <span style="color:#79c0ff;">getfacl /opt/anihpj/uploads/</span><br>
+<span class="output"># file: /opt/anihpj/uploads/</span><br>
+<span class="output">user::rwx</span><br>
+<span class="output">group::r-x</span><br>
+<span class="output">other::r-x</span><br>
+<span class="output">default:user::rwx</span><br>
+<span class="output">default:group::r-x</span><br>
+<span class="output">default:group:developers:rwx</span><br>
+<span class="output" style="color:#3fb950;"># New files will inherit developers:rwx ✅</span></div>
+                <p>Default ACLs are essential for shared directories. Set them once on the top-level directory, and every new upload, log, or config file gets the correct permissions automatically. This is production-grade file permission management.</p>
+            </div>
+        </div>
+
+        <!-- Q198 -->
+        <div class="mcq-block" id="q198" data-correct="B">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q198 of 200</div>
+            <div class="mcq-question">How would you use <strong>ACLs for a multi-admin web application</strong> with granular access control?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) Use Unix groups only — ACLs are unnecessary complexity for web apps</div>
+                <div class="mcq-option">B) <strong>①</strong> App directory: owner=anihpj, group=developers (rwx). <strong>②</strong> Config files: setfacl to give read-only to auditor user. <strong>③</strong> Uploads directory: default ACL for developers group (rwx inheritance). <strong>④</strong> Deploy script: ACL granting execute to deployer user specifically. Each role gets exactly what it needs — no more</div>
+                <div class="mcq-option">C) Give everyone full access — trust your team</div>
+                <div class="mcq-option">D) ACLs should only be used for system directories — application directories use standard permissions</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a198')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a198">
+                <div class="answer-label">✅ Correct Answer: B</div>
+                <p>ACLs enable true least-privilege access control. Auditors get read-only. Developers get write access to uploads. Deployers get execute on scripts. No one gets more than they need. This is the professional approach to multi-admin file permissions.</p>
+                <div class="explanation-label">📝 ACL Strategy for Web Applications</div>
+                <div class="diagram-container"><div class="diagram-title">Granular Permissions with ACLs</div><pre>
+  DIRECTORY/FILE        STANDARD PERMS    ACL ADDITIONS           WHO BENEFITS
+  ────────────────────  ────────────────  ──────────────────────  ────────────
+  /opt/anihpj/          anihpj:devs:r-x  g:auditors:r-x          Auditors
+  /opt/anihpj/config/   anihpj:devs:r-x  u:deployer:r-x          CI/CD system
+  /opt/anihpj/uploads/  anihpj:devs:rwx  d:g:devs:rwx (inherit)  All developers
+  deploy.sh             anihpj:devs:r-x  u:deployer:--x          Deployer only
+</pre></div>
+                <p>ACLs complete the Linux permissions toolkit. Combined with standard Unix permissions, groups, and sudo, they enable precise, auditable access control for any application stack.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════ 5.5 LDAP Authentication ═══════════════ -->
+    <section class="chapter-section" id="cat5-5">
+        <h2><span>5.5 LDAP User &amp; Group Accounts</span><span class="chapter-badge">Q199-Q200</span></h2>
+
+        <!-- Q199 -->
+        <div class="mcq-block" id="q199" data-correct="C">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q199 of 200</div>
+            <div class="mcq-question">What is <strong>LDAP</strong> and why is it used for centralized authentication?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) LDAP is a database for storing application data — it replaces PostgreSQL</div>
+                <div class="mcq-option">B) LDAP is only for email servers — general Linux systems use local accounts</div>
+                <div class="mcq-option">C) LDAP (Lightweight Directory Access Protocol) provides a <strong>centralized directory</strong> for users, groups, and authentication. One LDAP server can authenticate users across hundreds of Linux servers. Implementations: OpenLDAP, FreeIPA, Microsoft Active Directory. Linux connects via SSSD or nslcd</div>
+                <div class="mcq-option">D) LDAP stores passwords in plaintext for fast authentication</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a199')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a199">
+                <div class="answer-label">✅ Correct Answer: C</div>
+                <p>LDAP eliminates the nightmare of managing local accounts on hundreds of servers. Create a user once in LDAP, and they can log into every server. Change a password once, and it updates everywhere. This is enterprise identity management.</p>
+                <div class="explanation-label">📝 Centralized Auth Architecture</div>
+                <div class="diagram-container"><div class="diagram-title">LDAP — One Identity, Many Servers</div><pre>
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    LDAP SERVER                              │
+  │  ┌──────────────────────────────────────────────────────┐   │
+  │  │ Users: alice, bob, charlie                           │   │
+  │  │ Groups: developers, admins, auditors                 │   │
+  │  │ Passwords: stored as hashes (SSHA, etc.)             │   │
+  │  └──────────────────────────────────────────────────────┘   │
+  └──────────────────────┬──────────────────────────────────────┘
+                         │
+         ┌───────────────┼───────────────┐
+         ▼               ▼               ▼
+  ┌──────────┐   ┌──────────┐   ┌──────────┐
+  │ Server 1 │   │ Server 2 │   │ Server N │
+  │ (SSSD)   │   │ (SSSD)   │   │ (SSSD)   │
+  │ alice can│   │ alice can│   │ alice can│
+  │ log in!  │   │ log in!  │   │ log in!  │
+  └──────────┘   └──────────┘   └──────────┘
+  /etc/nsswitch.conf: passwd: files sss → check local THEN LDAP
+</pre></div>
+                <p>LDAP is enterprise-standard identity management. The LFCS exam tests basic LDAP integration concepts. For production deployments, FreeIPA provides a complete solution with LDAP + Kerberos + certificate management.</p>
+            </div>
+        </div>
+
+        <!-- Q200 -->
+        <div class="mcq-block" id="q200" data-correct="A">
+            <div class="mcq-number"><span class="domain-pill d5">UsersGroups</span> Q200 of 200</div>
+            <div class="mcq-question">How does <strong>SSSD connect Linux to LDAP</strong> for transparent authentication?</div>
+            <div class="mcq-options">
+                <div class="mcq-option">A) SSSD (System Security Services Daemon) connects to LDAP and caches credentials. Configure <code>/etc/sssd/sssd.conf</code> with LDAP server URI and search base. Set <code>/etc/nsswitch.conf</code> to <code>passwd: files sss</code>. Then <code>getent passwd alice</code> returns both local AND LDAP users transparently. <code>id alice</code> shows resolved groups</div>
+                <div class="mcq-option">B) SSSD replaces /etc/passwd entirely — local accounts are migrated to LDAP</div>
+                <div class="mcq-option">C) SSSD only works with Microsoft Active Directory — not with OpenLDAP</div>
+                <div class="mcq-option">D) SSSD requires a GUI configuration tool — it can't be configured from the command line</div>
+            </div>
+            <button class="mcq-toggle-btn" onclick="toggleAnswer('a200')">👁️ Show Answer &amp; Explanation</button>
+            <div class="mcq-answer" id="a200">
+                <div class="answer-label">✅ Correct Answer: A</div>
+                <p>SSSD is the modern bridge between Linux and enterprise identity providers. It handles authentication, caches credentials (so users can log in even if the LDAP server is temporarily down), and integrates with nsswitch for transparent user resolution.</p>
+                <div class="explanation-label">💻 Live Shell</div>
+                <div class="cmd-output"><span class="prompt">$</span> <span style="color:#79c0ff;">cat /etc/sssd/sssd.conf</span><br>
+<span class="output">[sssd]</span><br>
+<span class="output">domains = example.com</span><br>
+<span class="output">[domain/example.com]</span><br>
+<span class="output">id_provider = ldap</span><br>
+<span class="output">auth_provider = ldap</span><br>
+<span class="output">ldap_uri = ldap://192.168.1.50</span><br>
+<span class="output">ldap_search_base = dc=example,dc=com</span><br>
+<br>
+<span class="prompt">$</span> <span style="color:#79c0ff;">getent passwd alice</span><br>
+<span class="output">alice:*:2001:2001:Alice:/home/alice:/bin/bash</span><br>
+<span class="output" style="color:#3fb950;"># alice resolved via LDAP through SSSD — not in /etc/passwd! ✅</span></div>
+                <p>SSSD is the standard way to connect Linux to enterprise identity providers. It provides offline authentication (credential caching), integrates with nsswitch, and supports multiple identity sources simultaneously. This is enterprise Linux administration.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- PART 2: 100 TROUBLESHOOTING ISSUES -->
+    <!-- ═══════════════════════════════════════════ -->
+    <div class="part-banner part2">
+        <h2>🔧 Part 2: 100 Troubleshooting Issues</h2>
+        <p class="part-subtitle">Real-world Linux system failure scenarios — each with symptom, 15 categorized causes (5 most likely + 5 less likely + 5 new system), diagnostic commands, solutions, and personal advice. Patterned after the 5+5+5 cause-card format.</p>
         <div class="part-stats">
             <div class="part-stat"><span class="ps-num">100</span><span class="ps-label">Issues</span></div>
             <div class="part-stat"><span class="ps-num">5</span><span class="ps-label">Categories</span></div>
             <div class="part-stat"><span class="ps-num">15</span><span class="ps-label">Causes per Issue</span></div>
         </div>
+    </div>
     </div>
             <div class="part-stat"><span class="ps-num">5</span><span class="ps-label">Categories</span></div>
             <div class="part-stat"><span class="ps-num">15</span><span class="ps-label">Causes per Issue</span></div>
