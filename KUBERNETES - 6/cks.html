@@ -16972,7 +16972,7 @@ kubectl auth can-i update nodes --as=system:node:worker01  # Should say "no" for
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 9 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -17047,6 +17047,67 @@ roleRef:
                     <div class="eq-answer"><div class="eq-answer-label">Answer</div>
                     <p>The <strong>impersonate</strong> verb allows <code>kubectl --as=&lt;other-user&gt;</code>. Detection: audit logs show both the ORIGINAL user and the IMPERSONATED user. Query: <code>cat audit.log | jq 'select(.user.extra."authentication.k8s.io/original-username" != null)'</code>. This shows all requests where impersonation was used. The original username is preserved in the audit event annotations.</p>
                     </div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q5</span>
+                    <div class="eq-question">RBAC is deny-by-default. A user complains they can't list pods. What command debugs this, and what's the most common mistake?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p>Debug: <code>kubectl auth can-i list pods --as=&lt;user&gt; -n &lt;ns&gt;</code>. Most common mistakes: forgetting <code>-n</code> flag, using wrong namespace, confusing subresources (pods/log needs separate permission), or not waiting for RBAC propagation. Use <code>kubectl auth can-i --list --as=&lt;sa&gt; -n &lt;ns&gt;</code> to see all permissions for an identity.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Kubernetes RBAC has no explicit "deny" rules — if no Role grants the permission, it's denied. The <code>kubectl auth can-i</code> command is the fastest debugging tool. Always test BOTH an allowed verb AND a denied verb when verifying RBAC on the exam.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q6</span>
+                    <div class="eq-question">You create a Role with <code>resources: ["*"]</code> and <code>verbs: ["*"]</code>. Is this equivalent to cluster-admin? What's the blast radius difference?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>No, it's NOT equivalent.</strong> A Role with wildcards is still NAMESPACE-SCOPED — the subject can do anything within that one namespace but cannot touch other namespaces or cluster-scoped resources (nodes, PVs, namespaces). cluster-admin is a ClusterRoleBinding to the built-in <code>cluster-admin</code> ClusterRole with <code>*/*/*</code> across everything. Blast radius: one namespace vs. entire cluster.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This distinction is critical for CKS. A namespace-admin role is dangerous but contained. cluster-admin is complete cluster takeover. On the exam: (1) never bind cluster-admin unless explicitly required, (2) never use wildcards even within a namespace, (3) a Role with wildcards can still delete all pods, secrets, and configmaps in that namespace.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q7</span>
+                    <div class="eq-question">Explain RBAC aggregation labels. How does the built-in "view" ClusterRole auto-expand when a new CustomResourceDefinition is created?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p>The built-in ClusterRoles <code>view</code>, <code>edit</code>, and <code>admin</code> use aggregation labels. When you create a ClusterRole with label <code>rbac.authorization.k8s.io/aggregate-to-view: "true"</code>, its rules are automatically merged into the <code>view</code> ClusterRole by the kube-controller-manager. CRD authors use this so users with "view" access automatically get read access to new custom resources without manually editing the view role.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Aggregation labels: <code>aggregate-to-view</code>, <code>aggregate-to-edit</code>, <code>aggregate-to-admin</code>. On the CKS exam, you may need to create a ClusterRole that aggregates into view so monitoring tools automatically get read access to your CRDs. The aggregation happens automatically — no need to modify the view role itself.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q8</span>
+                    <div class="eq-question">A pod's ServiceAccount has <code>get secrets</code> via RBAC, but <code>automountServiceAccountToken: false</code>. Can the pod still read secrets via the API? Why or why not?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>No.</strong> <code>automountServiceAccountToken: false</code> means the SA token is NOT mounted at <code>/var/run/secrets/kubernetes.io/serviceaccount/token</code>. Without a token, the pod cannot authenticate to the API server — RBAC permissions are irrelevant. The RBAC grant exists on paper but the pod has no way to present its identity. This is defense in depth: RBAC controls WHAT you can do; token mounting controls WHETHER you can try.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This tests the interaction between RBAC and SA tokens. On the CKS exam, use BOTH controls: (1) RBAC to limit permissions, AND (2) <code>automountServiceAccountToken: false</code> on pods that don't need API access. Even if RBAC grants broad permissions, without a mounted token the pod can't use them.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q9</span>
+                    <div class="eq-question">A CI/CD pipeline needs to: update Deployments in "staging" AND create Secrets in "staging" (for TLS certs). It should read nothing else. Write the exact Role YAML.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-yaml">apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cicd-deployer
+  namespace: staging
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create", "update", "patch"]
+# No "get" or "list" on secrets — CI/CD creates but cannot READ existing secrets</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Least privilege means surgical verb selection. CI/CD needs UPDATE deployments but not DELETE. It needs CREATE secrets for new TLS certs but NOT GET (can't read existing database passwords). Every verb must be justified by a specific pipeline step. This granularity is exactly what the CKS exam tests.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q10</span>
+                    <div class="eq-question">An attacker compromises a pod and discovers its SA token. The SA has <code>get secrets</code> in "prod". What's the maximum damage, and what 3 RBAC-related fixes would have prevented it?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>Maximum damage:</strong> Attacker reads every Secret in "prod" — database passwords, API keys, TLS private keys, OAuth secrets. Can then pivot to databases, external APIs, and forge TLS certificates.</p>
+                    <p><strong>3 fixes:</strong> (1) <code>automountServiceAccountToken: false</code> — no token to steal. (2) Remove <code>get secrets</code> RBAC — the pod doesn't need API-level secret access; use env vars or mounted secrets instead. (3) External secret store (Vault) — secrets never exist in Kubernetes Secrets at all; the SA can only request its OWN secrets from Vault via a sidecar, not read cluster-wide secrets.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This scenario combines multiple CKS domains. Blast radius = what the SA can do (RBAC) × whether it has a token (automount) × what data exists in accessible resources (Secrets). On the exam, apply ALL three fixes for defense in depth — never rely on just one control.</p></div></details>
                 </div>
             </div>
 
@@ -17822,7 +17883,7 @@ kubectl auth can-i create pods -n prod --as=system:serviceaccount:prod:anihpj-sa
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 10 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -17888,6 +17949,143 @@ spec:
 kubectl auth can-i --list -n anihpj-prod --as=system:serviceaccount:anihpj-prod:anihpj-sa
 # Lists ALL permissions for that SA</code></pre>
                     </div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q5</span>
+                    <div class="eq-question">What's the difference between a ServiceAccount token (JWT) and a client certificate for authentication? Which is preferred for pods and why?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>SA Token (JWT):</strong> A signed JSON Web Token auto-mounted into pods. Contains claims (namespace, SA name, expiry). Automatically rotated by kubelet. Bound to a specific pod via projected tokens (K8s 1.21+). <strong>Client Certificate:</strong> An X.509 certificate used by kubectl and control plane components. Longer-lived, no automatic rotation. <strong>Pods use SA tokens</strong> because: (1) automatic provisioning — no manual cert generation, (2) automatic rotation — kubelet handles expiry, (3) pod-bound tokens prevent token reuse if the pod is deleted.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Kubernetes 1.21+ introduced bound tokens: each token is tied to a specific pod UID. If the pod is deleted, the token becomes invalid even if not yet expired. This is a critical security improvement over legacy tokens that were valid until expiry regardless of pod state. The CKS exam tests knowledge of token types and when to use each.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q6</span>
+                    <div class="eq-question">You have 50 pods in a namespace. Only 5 of them need API access. What's the most efficient way to disable token mounting for the other 45 pods?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p>Set <code>automountServiceAccountToken: false</code> on the <strong>ServiceAccount</strong> itself. Every pod using that SA inherits the setting. For the 5 pods that need API access, create a separate SA with <code>automountServiceAccountToken: true</code> (the default). This is more efficient than setting it on each of the 45 individual pod specs and ensures new pods automatically get the secure default.</p>
+<pre><code class="language-yaml">apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: no-api-sa
+  namespace: prod
+automountServiceAccountToken: false  # All pods using this SA get no token</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The CKS exam rewards efficiency. Setting <code>automountServiceAccountToken: false</code> at the SA level is a single change that affects all pods using that SA. Setting it on each pod spec is error-prone — one forgotten pod is a security gap. Always think at the SA level for token mounting decisions.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q7</span>
+                    <div class="eq-question">What is a projected ServiceAccount token and how does it differ from the legacy token mounted at <code>/var/run/secrets/kubernetes.io/serviceaccount/</code>? Write a pod spec using projected tokens.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>Legacy token:</strong> Mounted as a Secret, valid until the Secret is deleted, NOT pod-bound. <strong>Projected token:</strong> Created via TokenRequest API, bound to a specific pod UID, has configurable TTL, auto-rotated by kubelet.</p>
+<pre><code class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-pod
+spec:
+  serviceAccountName: anihpj-sa
+  containers:
+  - name: app
+    image: nginx
+    volumeMounts:
+    - name: token
+      mountPath: /var/run/secrets/tokens
+      readOnly: true
+  volumes:
+  - name: token
+    projected:
+      sources:
+      - serviceAccountToken:
+          path: token
+          expirationSeconds: 3600     # 1-hour TTL
+          audience: api               # Bound to this audience</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Projected tokens (K8s 1.21+, GA in 1.24) are the modern standard. Key advantages: (1) pod-bound — token dies with the pod, (2) configurable TTL — set short lifetimes for sensitive pods, (3) audience-bound — token only works for specified audiences. On the CKS exam, use projected tokens with short expiration for pods that need temporary API access.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q8</span>
+                    <div class="eq-question">You discover that pods in namespace "legacy" are using ServiceAccounts that have <code>automountServiceAccountToken: true</code> but none of them need API access. Write the single command to find all such pods, and the fix.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-bash"># Find pods with mounted tokens in namespace "legacy"
+kubectl get pods -n legacy -o json | jq '.items[] | select(.spec.automountServiceAccountToken != false) | {name: .metadata.name, sa: .spec.serviceAccountName, automount: .spec.automountServiceAccountToken}'
+
+# Fix: Patch the default ServiceAccount in that namespace
+kubectl patch serviceaccount default -n legacy -p '{"automountServiceAccountToken": false}'
+
+# Or create a dedicated SA for the namespace
+kubectl create sa no-api -n legacy
+kubectl patch sa no-api -n legacy -p '{"automountServiceAccountToken": false}'
+# Then update deployments to use this SA</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a common CKS audit task. The jq query filters for pods that haven't explicitly disabled automount. The <code>default</code> SA in every namespace has automount enabled by default. Patching the default SA is the fastest fix but may break legitimate API access. A safer approach: create a dedicated no-api SA and gradually migrate pods to it.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q9</span>
+                    <div class="eq-question">An attacker steals a pod's SA token file from <code>/var/run/secrets/kubernetes.io/serviceaccount/token</code> and exfiltrates it. They use it from an external server to query the Kubernetes API. What two Kubernetes features prevent this attack?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>1. Pod-bound tokens (projected tokens):</strong> The token is bound to the pod's UID. When the API server receives a request with this token, it verifies the pod still exists. If the original pod was deleted (even if you created a new one with the same name), the token is rejected. <strong>2. Token audience validation:</strong> The token's <code>aud</code> claim must match the API server's expected audience. An attacker can't reuse a token meant for the API server against a different service. <strong>3. Short TTL:</strong> Projected tokens can have expiration as low as 600 seconds — the stolen token expires quickly.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Legacy SA tokens (pre-1.21) had no pod binding — they were valid until the Secret was deleted, regardless of pod state. This was a significant security weakness. The CKS exam tests knowledge of projected tokens and their security properties. For production clusters, always use projected tokens with the shortest acceptable TTL.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q10</span>
+                    <div class="eq-question">You need to create a ServiceAccount for a monitoring agent that: can read pod metrics from the metrics API, cannot read Secrets, cannot create/modify anything, and has its token auto-rotated. Write the SA, ClusterRole, ClusterRoleBinding, and the pod spec with projected token.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-yaml">apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monitoring-agent
+  namespace: monitoring
+automountServiceAccountToken: false  # We use projected tokens instead
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-metrics-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monitoring-metrics
+subjects:
+- kind: ServiceAccount
+  name: monitoring-agent
+  namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: pod-metrics-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: monitoring-agent
+  namespace: monitoring
+spec:
+  serviceAccountName: monitoring-agent
+  containers:
+  - name: agent
+    image: monitoring-agent:v1
+    volumeMounts:
+    - name: sa-token
+      mountPath: /var/run/secrets/tokens
+      readOnly: true
+  volumes:
+  - name: sa-token
+    projected:
+      sources:
+      - serviceAccountToken:
+          path: token
+          expirationSeconds: 7200
+          audience: https://kubernetes.default.svc</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the complete "least privilege monitoring agent" pattern tested on CKS. Key decisions: (1) SA has automount disabled because we use projected tokens. (2) ClusterRole is scoped to ONLY pods and metrics — no secrets, no configmaps, no write verbs. (3) ClusterRoleBinding is cluster-wide because the agent needs to see pods in all namespaces. (4) Projected token has 2-hour TTL — long enough for monitoring but short enough to limit stolen token risk.</p></div></details>
                 </div>
             </div>
 
@@ -18559,7 +18757,7 @@ kubectl auth can-i --list -n prod --as=system:serviceaccount:prod:isolated-sa
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 11 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -18599,6 +18797,86 @@ sudo userdel -r old-admin  # Remove old admin account</code></pre>
                     <div class="eq-answer"><div class="eq-answer-label">Answer</div>
                     <p><strong>Node Authorizer</strong> (authorization): Allows kubelets to READ their own node, pods, secrets, and configmaps. Without it, kubelets need broad RBAC permissions. <strong>NodeRestriction</strong> (admission): Restricts kubelets to MODIFY only their OWN node and assigned pods. You CAN have Node Authorizer without NodeRestriction — kubelets can still modify other nodes' objects. You SHOULD have BOTH for complete security.</p>
                     </div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q5</span>
+                    <div class="eq-question">A kubelet on worker01 is compromised. With NodeRestriction enabled, what specific actions can the attacker NOT perform? List at least 4 blocked actions.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p>NodeRestriction on worker01's kubelet blocks: (1) <strong>Modify node02's labels/taints</strong> — can't disrupt scheduling on other nodes. (2) <strong>Update pods on node02</strong> — can't tamper with other workloads. (3) <strong>Modify its OWN node labels to attract pods</strong> — can't hijack pods from other nodes via label manipulation. (4) <strong>Update Node object annotations</strong> — can't inject malicious metadata. (5) <strong>Modify any pod not assigned to worker01</strong> — lateral movement blocked.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>NodeRestriction enforces that a kubelet can ONLY modify: (a) the Node object for its own node, (b) Pod objects bound to its node. Everything else is rejected at admission time. This limits the blast radius of a kubelet compromise to a single node. Without NodeRestriction, a compromised kubelet becomes a cluster-wide attack vector.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q6</span>
+                    <div class="eq-question">What kernel hardening settings should be applied to Kubernetes nodes? List the sysctl parameters and their security purpose.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <table style="width:100%; border-collapse: collapse; margin: 10px 0;">
+                        <thead><tr style="border-bottom: 2px solid #326ce5;"><th style="text-align:left; padding: 8px; color: #93c5fd;">sysctl Parameter</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Value</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Purpose</th></tr></thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;"><code>net.ipv4.ip_forward</code></td><td style="padding: 8px;">0 (on non-router nodes)</td><td style="padding: 8px;">Prevent node from routing packets — limits lateral movement</td></tr>
+                            <tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;"><code>net.ipv4.conf.all.rp_filter</code></td><td style="padding: 8px;">1</td><td style="padding: 8px;">Reverse path filtering — drops spoofed packets</td></tr>
+                            <tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;"><code>net.ipv4.tcp_syncookies</code></td><td style="padding: 8px;">1</td><td style="padding: 8px;">Prevent SYN flood DoS attacks</td></tr>
+                            <tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;"><code>kernel.kptr_restrict</code></td><td style="padding: 8px;">2</td><td style="padding: 8px;">Hide kernel pointers — prevent kernel exploit development</td></tr>
+                            <tr><td style="padding: 8px;"><code>kernel.dmesg_restrict</code></td><td style="padding: 8px;">1</td><td style="padding: 8px;">Restrict kernel log access to root only</td></tr>
+                        </tbody>
+                    </table></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Node hardening is tested in the "System Hardening" CKS domain (10%). These kernel parameters are checked by CIS benchmarks. On the exam, you apply them via <code>/etc/sysctl.d/99-kubernetes.conf</code> and run <code>sysctl --system</code>. Combined with <code>--protect-kernel-defaults=true</code> on the kubelet, pods cannot override these settings.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q7</span>
+                    <div class="eq-question">You need to restrict which IP ranges can access the kubelet API (port 10250). Write the iptables rules and explain where they should be applied.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-bash"># Allow control plane to reach kubelet (required for logs, exec, metrics)
+iptables -A INPUT -p tcp --dport 10250 -s 10.0.0.0/24 -j ACCEPT
+# Allow node's own pods (via CNI) — optional, CNI may bypass iptables
+iptables -A INPUT -p tcp --dport 10250 -s 10.244.0.0/16 -j ACCEPT
+# Drop everything else
+iptables -A INPUT -p tcp --dport 10250 -j DROP
+# Make persistent
+iptables-save > /etc/iptables/rules.v4</code></pre>
+                    <p>Apply on EVERY node. The kubelet API on port 10250 handles pod exec, logs, and metrics — it must be accessible from the control plane but NOT from other nodes or the internet.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Kubelet API security is a CIS benchmark requirement (CIS 4.2.x). The API server communicates with kubelets on port 10250. If this port is exposed, attackers can exec into pods, retrieve logs, and access metrics. iptables rules are the node-level firewall. Combined with <code>--anonymous-auth=false</code> and <code>--authorization-mode=Webhook</code> on the kubelet, this provides defense in depth.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q8</span>
+                    <div class="eq-question">What is the KubeletConfiguration file, where is it located, and what security-critical fields does it contain?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p>The KubeletConfiguration file (default: <code>/var/lib/kubelet/config.yaml</code>) controls ALL kubelet behavior. Security-critical fields:</p>
+<pre><code class="language-yaml">apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+authentication:
+  anonymous:
+    enabled: false          # No anonymous access
+  webhook:
+    enabled: true           # API server validates kubelet requests
+authorization:
+  mode: Webhook             # Delegate authz to API server
+readOnlyPort: 0             # Disable unauthenticated read-only port
+protectKernelDefaults: true # Prevent pod sysctl modifications
+rotateCertificates: true    # Auto-rotate kubelet client certs
+serverTLSBootstrap: true    # Auto-request serving certs</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The KubeletConfiguration is the single most important file for node security. On the CKS exam, when hardening a node, start here. The path varies by cluster setup — use <code>ps aux | grep kubelet | grep config</code> to find the actual config file path. After changes, run <code>systemctl restart kubelet</code>.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q9</span>
+                    <div class="eq-question">A node running Kubernetes also runs a legacy monitoring agent as root. What's the risk, and how would you isolate the monitoring agent from the Kubernetes components?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>Risk:</strong> A compromised monitoring agent running as root can read kubelet credentials, static pod manifests (<code>/etc/kubernetes/manifests/</code>), PKI certificates, and audit logs — full node compromise.</p>
+                    <p><strong>Isolation:</strong> (1) Run the agent as a non-root user with minimal Linux capabilities. (2) Use AppArmor/SELinux to confine the agent to its own directories. (3) Run it as a pod with restrictive securityContext instead of a systemd service. (4) Use <code>chmod 600</code> on all Kubernetes files and ensure they're owned by root:root so the non-root agent can't read them.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Shared nodes are a real-world scenario. When Kubernetes and other services share a node, the other services become part of your attack surface. The CKS approach: containerize everything possible, use filesystem permissions to protect Kubernetes files, and use Mandatory Access Control (AppArmor/SELinux) as a second layer.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q10</span>
+                    <div class="eq-question">You edit <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code> to add NodeRestriction and change authorization-mode. After the restart, nodes show NotReady. What went wrong, and how do you fix it?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>Most likely:</strong> You set <code>--authorization-mode=Node,RBAC</code> but the Node authorizer can't identify kubelets because: (a) kubelet certificates don't have the correct organization (<code>system:nodes</code>), or (b) the kubelet username doesn't match <code>system:node:&lt;nodename&gt;</code> format.</p>
+                    <p><strong>Fix:</strong> Check kubelet cert: <code>openssl x509 -in /var/lib/kubelet/pki/kubelet-client-current.pem -text -noout | grep Subject</code>. Must show <code>O=system:nodes, CN=system:node:&lt;nodename&gt;</code>. If using <code>--anonymous-auth=false</code> on the API server, ensure kubelets have valid certificates — anonymous kubelet traffic is blocked.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the #1 disaster when hardening the API server. The Node authorizer requires kubelets to identify as <code>system:node:&lt;nodename&gt;</code> in the <code>system:nodes</code> group. If kubelet certificates don't match this pattern, ALL kubelets fail authorization, nodes go NotReady, and new pods can't be scheduled. Always verify kubelet certificate format before restarting the API server.</p></div></details>
                 </div>
             </div>
 
@@ -19129,7 +19407,7 @@ cat /etc/kubernetes/manifests/kube-apiserver.yaml | grep "authorization-mode"
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 12 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -19172,6 +19450,102 @@ kubectl get nodes  # All should show Ready with new version</code></pre>
                     <div class="eq-answer"><div class="eq-answer-label">Answer</div>
                     <p>kubeadm writes NEW static pod manifests to <code>/etc/kubernetes/manifests/</code> with updated image tags (e.g., v1.29.5 → v1.30.0). The kubelet detects the changed files and restarts each static pod ONE AT A TIME in this order: etcd → API server → controller-manager → scheduler. During API server restart (~30 seconds), kubectl is temporarily unavailable — this is expected. Existing workload pods are NOT affected because they run on worker nodes, not as static pods.</p>
                     </div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q5</span>
+                    <div class="eq-question">Before any cluster upgrade, what's the SINGLE most critical prerequisite? Provide the exact command and explain why skipping it is catastrophic.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>etcd snapshot backup.</strong> If the upgrade corrupts etcd or the new version has a data-incompatible change, the snapshot is your ONLY recovery path. Without it, all cluster state (pods, services, secrets, RBAC, PVs) is permanently lost.</p>
+<pre><code class="language-bash">ETCDCTL_API=3 etcdctl --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save /backup/etcd-pre-upgrade-$(date +%Y%m%d-%H%M).db
+# Verify the snapshot
+etcdctl snapshot status /backup/etcd-pre-upgrade-*.db --write-out=table</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the most important habit for any cluster operation, not just upgrades. On the CKS exam, you'll be asked to perform an upgrade — if you don't snapshot etcd first and something goes wrong, you fail the task. The snapshot takes seconds but saves hours of recovery. Always verify the snapshot with <code>snapshot status</code> before proceeding.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q6</span>
+                    <div class="eq-question">You need to upgrade a worker node without disrupting production traffic. Write the complete drain → upgrade → uncordon sequence with all required flags.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-bash"># 1. Cordon the node (no new pods scheduled)
+kubectl cordon worker01
+# 2. Drain with flags:
+# --ignore-daemonsets: DaemonSet pods are OK, they'll stay
+# --delete-emptydir-data: Accept data loss for emptydir volumes
+# --force: Force delete pods not managed by a controller
+kubectl drain worker01 --ignore-daemonsets --delete-emptydir-data --force
+# 3. Upgrade kubelet + kubectl
+apt-get install -y kubelet=1.30.x-* kubectl=1.30.x-*
+systemctl daemon-reload
+systemctl restart kubelet
+# 4. Verify kubelet is running
+systemctl status kubelet
+# 5. Uncordon (allow new pods)
+kubectl uncordon worker01
+# 6. Verify node is Ready
+kubectl get node worker01</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Drain → Upgrade → Uncordon is the standard node maintenance workflow. Key flags: <code>--ignore-daemonsets</code> prevents drain from hanging (DaemonSet pods recreate immediately), <code>--delete-emptydir-data</code> acknowledges data loss risk, <code>--force</code> handles pods without controllers. On the CKS exam, always drain before upgrading a worker node.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q7</span>
+                    <div class="eq-question">After upgrading the control plane to v1.30, you discover that the <code>--insecure-port</code> flag was removed. Your monitoring tool relied on port 8080 for health checks. How do you adapt?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p>The insecure port was removed in Kubernetes 1.24. Use authenticated health endpoints instead:</p>
+<pre><code class="language-bash"># /healthz (authenticated) — check if API server is alive
+kubectl get --raw /healthz
+# /livez — more granular health check (individual components)
+kubectl get --raw /livez?verbose
+# /readyz — readiness check
+kubectl get --raw /readyz
+
+# For monitoring tools, use a ServiceAccount token:
+curl -k -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+  https://kubernetes.default.svc/healthz</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>API server health endpoints were redesigned in K8s 1.24+. The insecure port (8080) is gone forever. All health checks now require authentication via the secure port (6443). On the CKS exam, if asked to set up monitoring after an upgrade, use <code>kubectl get --raw /healthz</code> (uses your kubeconfig) or create a dedicated SA for monitoring tools.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q8</span>
+                    <div class="eq-question">After upgrading, you re-run kube-bench and see new FAILs. Why might an upgrade introduce new CIS failures, and what's your remediation process?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p>Upgrades can introduce new CIS failures because: (1) New Kubernetes versions add new CIS checks that didn't exist before. (2) Default values for flags may change (e.g., a flag that defaulted to secure is now insecure). (3) Deprecated flags are removed, and your manifests may still reference them.</p>
+                    <p><strong>Process:</strong> (1) Run <code>kube-bench run --targets master</code> after each upgrade. (2) Compare results to pre-upgrade baseline. (3) For each new FAIL, check the CIS benchmark changelog. (4) Apply the fix and re-test. (5) Document new false-positive WARNs.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>CIS benchmarks are version-specific — kube-bench v0.9.0 targets Kubernetes 1.30, while v0.7.0 targeted 1.25. Upgrading Kubernetes without upgrading kube-bench means you're checking against the wrong benchmark. Always use the kube-bench version that matches your Kubernetes version. On the CKS exam, post-upgrade kube-bench is a common task.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q9</span>
+                    <div class="eq-question"><code>kubeadm upgrade apply</code> fails midway with "etcd cluster is unhealthy." You have a pre-upgrade etcd snapshot. Walk through the recovery process.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-bash"># 1. Stop the API server (prevents writes during restore)
+mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/
+# 2. Restore etcd from snapshot
+ETCDCTL_API=3 etcdctl snapshot restore /backup/etcd-pre-upgrade.db \
+  --data-dir=/var/lib/etcd-restored \
+  --name=cp-node-1 \
+  --initial-cluster=cp-node-1=https://10.0.0.1:2380 \
+  --initial-advertise-peer-urls=https://10.0.0.1:2380
+# 3. Point etcd to restored data
+# Edit /etc/kubernetes/manifests/etcd.yaml:
+#   Change --data-dir=/var/lib/etcd to --data-dir=/var/lib/etcd-restored
+# 4. Restart API server
+mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/
+# 5. Verify cluster state
+kubectl get nodes
+kubectl get pods -A</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the worst-case upgrade scenario. The key insight: stop writes FIRST (move API server manifest), then restore etcd, then restart. If you restore etcd while the API server is writing, you'll have inconsistent state. On the CKS exam, etcd backup and restore is a core competency tested in multiple scenarios. Always snapshot before any destructive operation.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q10</span>
+                    <div class="eq-question">A critical CVE (e.g., CVE-2023-44487 — HTTP/2 Rapid Reset) is announced. Your cluster is vulnerable. Describe the complete patching process including verification.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>1. Assess:</strong> Check your version: <code>kubectl version --short</code>. Compare against the CVE advisory to confirm vulnerability. <strong>2. Plan:</strong> Check available patches — usually a patch release (v1.30.1 → v1.30.2). <strong>3. Backup:</strong> etcd snapshot. <strong>4. Upgrade control plane:</strong> <code>kubeadm upgrade apply v1.30.2</code>. <strong>5. Upgrade workers:</strong> Drain → upgrade kubelet → uncordon. <strong>6. Verify:</strong> (a) <code>kubectl get nodes</code> — all Ready with new version, (b) Check API server is no longer vulnerable: attempt the exploit or check the flag/behavior change, (c) Run kube-bench to ensure no new CIS failures. <strong>7. Document:</strong> Record the change in your compliance log.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Security patch management is a CKS exam competency. The process is identical to a regular upgrade but driven by CVE urgency. Key difference: security patches should be applied to the control plane FIRST (it's the most exposed), then workers. Always verify the vulnerability is actually fixed after patching — don't assume. The CKS exam may give you a scenario with a known CVE and ask you to remediate.</p></div></details>
                 </div>
             </div>
 
@@ -20690,7 +21064,7 @@ Feb 14 03:17:42 node-01 sudo: k8s-alice : COMMAND=/usr/bin/kubectl delete namesp
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 13 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -20726,6 +21100,109 @@ sudo systemctl restart sshd</code></pre>
                     <div class="eq-answer"><div class="eq-answer-label">Answer</div>
                     <p>AIDE (Advanced Intrusion Detection Environment) creates a database of file checksums and detects changes. <code>aide --init</code> initializes the database. <code>aide --check</code> compares current files against the database and reports any modifications. Critical for detecting tampering with Kubernetes binaries, config files, and certificates. The CKS exam explicitly tests AIDE knowledge.</p>
                     </div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q5</span>
+                    <div class="eq-question">You run <code>ss -tulnp</code> on a worker node and see port 21 (FTP), port 25 (SMTP), and port 111 (portmapper) listening. What's the risk, and what's the exact remediation for each?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <table style="width:100%; border-collapse: collapse;">
+                        <thead><tr style="border-bottom: 2px solid #326ce5;"><th style="text-align:left; padding: 8px; color: #93c5fd;">Port/Service</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Risk</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Remediation</th></tr></thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">21 (FTP)</td><td style="padding: 8px;">Plaintext file transfer; can exfiltrate sensitive files</td><td style="padding: 8px;"><code>systemctl stop vsftpd; systemctl disable vsftpd; apt remove vsftpd</code></td></tr>
+                            <tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">25 (SMTP)</td><td style="padding: 8px;">Open relay; attacker sends spam/phishing from your node</td><td style="padding: 8px;"><code>systemctl stop postfix; systemctl disable postfix</code></td></tr>
+                            <tr><td style="padding: 8px;">111 (portmapper)</td><td style="padding: 8px;">NFS dependency; enables remote filesystem access</td><td style="padding: 8px;"><code>systemctl stop rpcbind; systemctl disable rpcbind</code></td></tr>
+                        </tbody>
+                    </table></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Every open port is an attack surface. Kubernetes worker nodes should have the absolute minimum: kubelet (10250), containerd, and SSH (22). FTP on port 21 is a plaintext protocol — attackers can sniff credentials or exfiltrate etcd snapshots. SMTP allows spam relay. Portmapper enables NFS which can be exploited for container escape via mounts.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q6</span>
+                    <div class="eq-question">How do you disable IPv6 on a Kubernetes node, and why might you want to do this? What's the command and the persistent configuration?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-bash"># Temporarily disable
+sysctl -w net.ipv6.conf.all.disable_ipv6=1
+sysctl -w net.ipv6.conf.default.disable_ipv6=1
+# Persist across reboots
+echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.d/99-kubernetes.conf
+echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.d/99-kubernetes.conf
+sysctl --system</code></pre>
+                    <p><strong>Why:</strong> If your cluster uses IPv4-only networking, IPv6 is an unnecessary attack surface. Attackers can use IPv6 to bypass IPv4-only firewall rules or exploit dual-stack vulnerabilities. The CKS exam expects you to minimize attack surface — unused protocols should be disabled.</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is part of OS hardening. The principle: if you're not using it, disable it. IPv6, Bluetooth, wireless, CUPS (printing), and Avahi (mDNS) are all unnecessary on server nodes. Each disabled protocol reduces your attack surface by one vector. The change must be persisted in <code>/etc/sysctl.d/</code> to survive reboots.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q7</span>
+                    <div class="eq-question">What Linux kernel modules are commonly blacklisted on Kubernetes nodes? Write the modprobe blacklist configuration and explain why each module is dangerous.</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-bash">cat << EOF > /etc/modprobe.d/kubernetes-blacklist.conf
+# Network filesystems — container escape via mounts
+blacklist nfs
+blacklist nfsv3
+blacklist nfsv4
+# Obsolete/unnecessary filesystems
+blacklist cramfs       # Compressed ROM — rarely needed
+blacklist freevxfs     # Veritas — ancient
+blacklist jffs2        # Flash filesystem — embedded devices only
+blacklist hfs          # Apple — not on Linux servers
+blacklist hfsplus
+blacklist squashfs     # Read-only compressed — unless used for containers
+blacklist udf          # Optical disc
+# Unnecessary network protocols
+blacklist dccp         # Datagram Congestion Control — rarely used
+blacklist sctp         # Stream Control Transmission — unless explicitly needed
+blacklist rds          # Reliable Datagram Sockets — Oracle RAC only
+blacklist tipc         # Transparent Inter-Process Communication — cluster IPC
+EOF</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>CIS benchmark Section 3 covers kernel module blacklisting. The CKS exam tests: (1) NFS modules must be blacklisted to prevent container escape via NFS mounts, (2) unused filesystems reduce the kernel attack surface (fewer parsers = fewer vulnerabilities), (3) unused network protocols eliminate entire protocol stacks from the attack surface. Verify with <code>lsmod | grep -E "nfs|cramfs|dccp"</code>.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q8</span>
+                    <div class="eq-question">You need to enable Automatic Kernel Page Table Isolation (KPTI) and ASLR on a Kubernetes node. How do you verify they're active, and what do they protect against?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <p><strong>KPTI (Meltdown mitigation):</strong> Isolates kernel and user page tables to prevent Meltdown attacks where a user-space process reads kernel memory.</p>
+<pre><code class="language-bash"># Check if KPTI is enabled
+dmesg | grep -i "Kernel/User page tables isolation"
+# Or: cat /sys/devices/system/cpu/vulnerabilities/meltdown</code></pre>
+                    <p><strong>ASLR (Address Space Layout Randomization):</strong> Randomizes memory addresses to make buffer overflow exploits harder.</p>
+<pre><code class="language-bash"># Check ASLR value (0=none, 1=partial, 2=full)
+sysctl kernel.randomize_va_space
+# Expected: 2 (full randomization)</code></pre></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>These kernel protections are last-line defenses. If a container escapes and gets code execution on the host, KPTI prevents reading kernel memory, and ASLR makes exploitation harder. On the CKS exam, CIS Section 3 covers kernel hardening. Always verify these are enabled on every node with <code>sysctl kernel.randomize_va_space</code> and <code>dmesg | grep isolation</code>.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q9</span>
+                    <div class="eq-question">A node has unnecessary user accounts (bob, alice, monitoring) with shell access. How do you audit and lock these accounts? What's the security risk of leaving them active?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+<pre><code class="language-bash"># Find all users with shell access
+cat /etc/passwd | grep -E "/bin/(bash|sh|zsh)" | grep -v root
+# Lock unnecessary accounts
+usermod -L bob
+usermod -L alice
+# Or remove the shell entirely
+usermod -s /sbin/nologin bob
+usermod -s /sbin/nologin alice
+# Remove user if not needed
+userdel -r monitoring</code></pre>
+                    <p><strong>Risk:</strong> Each user account with a shell is a potential SSH entry point. Weak passwords, leaked private keys, or social engineering can give an attacker interactive access. Kubernetes nodes should have ONLY root and a single administrative user (with key-only SSH).</p></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>User account management is a CIS benchmark requirement. The CKS exam tests: (1) remove unnecessary users, (2) lock remaining non-root accounts, (3) ensure no users besides root have UID 0. On a Kubernetes node, only the cluster administrator needs SSH access — developers should never SSH to nodes.</p></div></details>
+                </div>
+                <div class="exam-question-item">
+                    <span class="eq-number">Q10</span>
+                    <div class="eq-question">You install AIDE on a Kubernetes node and initialize the database. Two weeks later, <code>aide --check</code> reports that <code>/usr/bin/kubelet</code> has changed. Walk through your incident response — what do you check and in what order?</div>
+                    <details><summary>Show Answer</summary>
+                    <div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                    <div class="process-steps" style="flex-direction: column;">
+                        <div class="process-step"><div class="step-number">1</div><div class="step-content"><h5>Verify it's expected</h5><p>Was there a recent upgrade? <code>apt list --installed | grep kubelet</code>. Compare the timestamp: <code>stat /usr/bin/kubelet</code>. If it matches an apt upgrade, this is a false positive.</p></div></div>
+                        <div class="process-step"><div class="step-number">2</div><div class="step-content"><h5>Check file hash</h5><p><code>sha256sum /usr/bin/kubelet</code> and compare with the official release hash from <code>https://dl.k8s.io/v1.30.x/bin/linux/amd64/kubelet.sha256</code>.</p></div></div>
+                        <div class="process-step"><div class="step-number">3</div><div class="step-content"><h5>Isolate the node</h5><p>If the hash doesn't match: <code>kubectl cordon &lt;node&gt;; kubectl drain &lt;node&gt; --ignore-daemonsets --force</code>. Prevent the potentially-compromised kubelet from affecting workloads.</p></div></div>
+                        <div class="process-step"><div class="step-number">4</div><div class="step-content"><h5>Forensic analysis</h5><p>Check: <code>ausearch -f /usr/bin/kubelet</code> (auditd), <code>journalctl -u kubelet --since "2 weeks ago"</code>, <code>last</code> (who logged in), <code>cat /var/log/auth.log | grep Accepted</code>.</p></div></div>
+                        <div class="process-step"><div class="step-number">5</div><div class="step-content"><h5>Rebuild and rotate</h5><p>Replace kubelet binary from trusted source. Rotate all node certificates. Update AIDE database: <code>aide --update</code>.</p></div></div>
+                    </div></div>
+                    <div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>AIDE alerts are high-priority because a changed kubelet binary could mean an attacker replaced it with a backdoored version that exfiltrates secrets or allows unauthorized pod access. The CKS exam tests incident response for file integrity alerts. Always isolate FIRST, then investigate — never assume it's a false positive until proven.</p></div></details>
                 </div>
             </div>
 
@@ -21938,7 +22415,7 @@ journalctl -k --since "5 minutes ago" | grep apparmor | grep DENIED
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 14 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -21985,6 +22462,36 @@ ssh node01 aa-status | grep anihpj
                     <p><strong>Enforce:</strong> Violations are BLOCKED and logged. <strong>Complain:</strong> Violations are only LOGGED (not blocked). Use complain mode when testing a new profile to see what would be blocked without actually breaking the application. Check logs: <code>dmesg | grep apparmor</code> or <code>aa-logprof</code>. Switch: <code>aa-complain &lt;profile&gt;</code> → <code>aa-enforce &lt;profile&gt;</code>.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">Write an AppArmor profile that denies a container access to <code>/etc/kubernetes/</code>, <code>/proc/sysrq-trigger</code>, and <code>/sys/kernel/</code>. Why are these paths dangerous?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-text">profile k8s-hardened flags=(attach_disconnected) {
+  #include &lt;abstractions/base&gt;
+  deny /etc/kubernetes/** rwxlkm,
+  deny /proc/sysrq-trigger rw,
+  deny /sys/kernel/** rw,
+  /app/** r,
+  /tmp/** rw,
+}</code></pre><p><strong>Danger:</strong> <code>/etc/kubernetes/</code> contains PKI certs and kubeconfig — reading these enables API server impersonation. <code>/proc/sysrq-trigger</code> allows emergency reboot/shutdown commands. <code>/sys/kernel/</code> exposes kernel parameters that can disable security features.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>AppArmor denies take priority over allows. These <code>deny</code> rules form a safety net: even if the container somehow gains root and hostPath access to <code>/etc/kubernetes/</code>, AppArmor blocks the read. This is defense in depth — AppArmor is the last gate before the kernel.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">A pod with an AppArmor profile in enforce mode is crashing. Logs show no AppArmor denials. What debugging steps do you take?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>(1) Switch the profile to complain mode: <code>aa-complain &lt;profile&gt;</code>. (2) Recreate the pod and let it run. (3) Check AppArmor logs: <code>dmesg | grep -i apparmor | grep -i audit</code>. (4) Use <code>aa-logprof</code> to analyze logs and suggest profile additions. (5) If the pod still crashes with no AppArmor denials, the issue is NOT AppArmor — check pod events: <code>kubectl describe pod</code>, check if the profile is loaded: <code>aa-status | grep &lt;profile&gt;</code>, verify the annotation is correct.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Complain mode is the AppArmor debugging tool. It logs all would-be denials without blocking them, letting you see the complete picture of what the container needs. <code>aa-logprof</code> is interactive and will suggest new rules. Always test profiles in complain mode before enforcing them.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">AppArmor vs SELinux — what's the practical difference for CKS? Which one runs on the exam, and how do you check which MAC system is active?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>AppArmor:</strong> Path-based MAC. Profiles are simple text files referencing file paths. Default on Ubuntu/Debian. The CKS exam uses Ubuntu nodes → AppArmor is the tested MAC system. <strong>SELinux:</strong> Label-based MAC. Every file and process has a label. Default on RHEL/CentOS. More complex but more granular than AppArmor.</p><p><strong>Check active MAC:</strong> <code>aa-status</code> (AppArmor) or <code>getenforce</code> (SELinux). If <code>aa-status</code> returns "apparmor module is loaded" → AppArmor. If <code>getenforce</code> returns "Enforcing" → SELinux.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The CKS exam explicitly tests AppArmor, not SELinux, because the exam environment uses Ubuntu. Know how to: (1) write and load AppArmor profiles, (2) apply them to pods via annotation or securityContext, (3) debug with complain mode and aa-logprof. If you encounter a RHEL-based question, it will specify SELinux explicitly.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">How do you make AppArmor profiles survive a node reboot? Where are profiles stored, and what command ensures they persist?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>AppArmor profiles are stored in <code>/etc/apparmor.d/</code>. They are automatically loaded at boot by the <code>apparmor</code> systemd service which reads all profiles from this directory. No additional persistence configuration is needed — simply place your profile file in <code>/etc/apparmor.d/</code> (e.g., <code>/etc/apparmor.d/k8s-anihpj</code>) and it will be loaded on next boot.</p><pre><code class="language-bash"># To load immediately without rebooting:
+apparmor_parser -r /etc/apparmor.d/k8s-anihpj
+# Verify persistence:
+aa-status | grep k8s-anihpj  # Shows loaded profiles
+# After reboot, check again — profile should still be loaded</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>On the CKS exam, you may need to create a profile and ensure it survives a reboot. The key: profiles in <code>/etc/apparmor.d/</code> are auto-loaded. If you create a profile elsewhere and load it with <code>apparmor_parser</code>, it won't survive reboot unless you copy it to <code>/etc/apparmor.d/</code>. Always place production profiles in the standard directory.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">Write the pod securityContext (not annotation) that applies an AppArmor profile named "anihpj-restricted" to container "app". What Kubernetes version is required?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: v1
+kind: Pod
+metadata:
+  name: secured-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    securityContext:
+      appArmorProfile:
+        type: Localhost
+        localhostProfile: anihpj-restricted</code></pre><p><strong>Requires Kubernetes 1.30+</strong> (GA in 1.30). Before 1.30, use the annotation method. The securityContext approach is preferred because: (1) it's validated by the API server, (2) it's part of the PodSecurity standards, (3) it's visible in <code>kubectl describe pod</code>.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The securityContext field for AppArmor graduated to GA in Kubernetes 1.30. On the CKS exam, if the cluster is 1.30+, use this method. For older clusters, use the annotation: <code>container.apparmor.security.beta.kubernetes.io/app: localhost/anihpj-restricted</code>. The exam may test both methods depending on the cluster version provided.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">An attacker compromises a container and runs <code>cat /etc/kubernetes/pki/ca.crt</code> via a hostPath mount. AppArmor is in complain mode. What do you see in the logs, and why is complain mode NOT sufficient for production?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>In complain mode, the access SUCCEEDS but is logged. You'd see in <code>dmesg</code>:</p><pre><code class="language-text">audit: type=1400 apparmor="ALLOWED" operation="open" profile="k8s-anihpj" 
+name="/etc/kubernetes/pki/ca.crt" pid=12345 comm="cat" 
+requested_mask="r" denied_mask="r"</code></pre><p><strong>Why complain mode is insufficient:</strong> The attacker successfully reads the CA certificate. They can now use it to forge client certificates or validate stolen etcd certs. Complain mode LOGS attacks but doesn't STOP them. Production MUST use enforce mode. Complain mode is for development and testing ONLY.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This scenario illustrates the critical difference between detection and prevention. Complain mode is detection-only — useful for building profiles but useless for stopping attacks. The CKS exam expects you to: (1) use complain mode to develop and test profiles, (2) switch to enforce mode BEFORE considering a node production-ready. Never leave production profiles in complain mode.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -22983,7 +23490,7 @@ subprocess.call(["/bin/sh", "-i"])  # Spawn interactive shell</code></pre>
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 15 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -23030,6 +23537,36 @@ subprocess.call(["/bin/sh", "-i"])  # Spawn interactive shell</code></pre>
 kubectl get pod &lt;pod&gt; -o jsonpath='{.spec.containers[0].securityContext.seccompProfile}'</code></pre>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">Write a custom Seccomp profile that blocks the <code>mount</code>, <code>unshare</code>, and <code>reboot</code> syscalls. What container escape techniques does this prevent?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-json">{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    {
+      "names": ["mount", "umount2", "unshare", "reboot", "kexec_load"],
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}</code></pre><p><strong>Prevents:</strong> (1) <code>mount</code> — can't mount host filesystems, (2) <code>unshare</code> — can't create new namespaces (key to container escape), (3) <code>reboot</code> — can't DOS the node by rebooting, (4) <code>kexec_load</code> — can't load a new kernel (advanced persistence).</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Mount and unshare are the two most dangerous syscalls for container escape. Mount lets an attacker mount the host filesystem. Unshare lets an attacker leave the container's namespaces. Blocking these doesn't break normal applications (they don't need to mount filesystems or unshare namespaces). This is the CKS pattern: block dangerous syscalls that apps don't legitimately need.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What syscalls does RuntimeDefault Seccomp block? How is it different from Unconfined?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Unconfined:</strong> Blocks NOTHING. Every syscall the kernel supports is available. This is the DEFAULT setting — if you don't specify a seccompProfile, your container is Unconfined. <strong>RuntimeDefault:</strong> Uses the container runtime's built-in default profile. Docker/containerd's default blocks ~60 syscalls including: <code>reboot</code>, <code>kexec_load</code>, <code>add_key</code>, <code>request_key</code>, <code>delete_module</code>, <code>init_module</code>, and several obsolete syscalls. It ALLOWS ~300 common syscalls needed by typical applications.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>RuntimeDefault is the "set it and forget it" Seccomp option. It provides immediate protection against a class of kernel exploits without breaking applications. On the CKS exam, if asked to harden a pod and you're short on time, set <code>seccompProfile.type: RuntimeDefault</code> — it's the single highest-impact, lowest-risk security setting.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">Where are custom Seccomp profiles stored on a node, and how does the kubelet find them? What path must you use?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Custom profiles are stored in <code>/var/lib/kubelet/seccomp/</code>. The kubelet reads profiles from this directory. The pod spec references them as <code>localhostProfile: &lt;filename&gt;</code> (without the path). Example: if the profile is at <code>/var/lib/kubelet/seccomp/custom.json</code>, the pod spec uses:</p><pre><code class="language-yaml">securityContext:
+  seccompProfile:
+    type: Localhost
+    localhostProfile: custom.json  # Just the filename, not the full path</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The <code>/var/lib/kubelet/seccomp/</code> directory is the standard location. The kubelet prepends this path automatically. Profile files must be readable by the kubelet (usually root:root, 0644). On the CKS exam, if the kubelet can't find your profile, verify it's in this exact directory and the filename matches exactly (case-sensitive).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">A pod with RuntimeDefault Seccomp is crashing with "operation not permitted" when trying to change file timestamps. Which syscall is being blocked, and how do you fix it without removing Seccomp entirely?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The syscall is likely <code>utimensat</code> or <code>futimesat</code> — some Seccomp profiles block timestamp manipulation syscalls. Fix: create a custom profile that allows these specific syscalls while keeping all other RuntimeDefault restrictions:</p><pre><code class="language-json">{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    {"names": ["utimensat", "futimesat", "write", "read", "openat", "close", "fstat", "mmap", "mprotect", "munmap", "brk", "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "ioctl", "access", "pipe2", "select", "sched_yield", "mremap", "msync", "mincore", "madvise", "shmget", "shmat", "shmctl", "dup2", "pause", "nanosleep", "getpid", "socket", "connect", "accept", "sendto", "recvfrom", "sendmsg", "recvmsg", "bind", "listen", "getsockname", "getpeername", "setsockopt", "getsockopt", "clone", "fork", "execve", "exit", "wait4", "kill", "uname", "fcntl", "flock", "fsync", "ftruncate", "getdents", "getcwd", "chdir", "fchdir", "rename", "mkdir", "rmdir", "creat", "link", "unlink", "symlink", "readlink", "chmod", "fchmod", "chown", "fchown", "lchown", "umask", "gettimeofday", "getrlimit", "getrusage", "sysinfo", "times", "ptrace", "getuid", "syslog", "getgid", "setuid", "setgid", "geteuid", "getegid", "setpgid", "getppid", "getpgid", "setsid", "setreuid", "setregid", "getgroups", "setgroups", "setresuid", "getresuid", "setresgid", "getresgid", "getpgid", "setfsuid", "setfsgid", "getsid", "capget", "capset", "rt_sigpending", "rt_sigtimedwait", "rt_sigqueueinfo", "sigaltstack", "utimensat", "futimesat"], "action": "SCMP_ACT_ALLOW"}
+  ]
+}</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the Seccomp debugging workflow: (1) identify the blocked syscall from logs (<code>dmesg | grep seccomp</code>), (2) create a custom profile that whitelists the needed syscall, (3) apply and test. Never disable Seccomp entirely — always create a custom profile. The CKS exam tests your ability to write and debug custom Seccomp profiles.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">What's the relationship between Seccomp, AppArmor, and PodSecurity? If all three are applied to a pod, in what order are they evaluated?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>They operate at different layers and are evaluated at different stages: <strong>PodSecurity (Admission):</strong> Evaluated BEFORE the pod is created. Checks if the pod spec meets the policy. If it fails, the pod is rejected. <strong>AppArmor (LSM):</strong> Evaluated at RUNTIME when the process accesses files. Operates at the Linux Security Module hook. <strong>Seccomp (Syscall Filter):</strong> Evaluated at RUNTIME when a syscall is made. Operates at the syscall entry point (before the kernel processes it).</p><p><strong>Order at runtime:</strong> Process makes syscall → Seccomp evaluates (if blocked, syscall fails) → AppArmor evaluates (if file access is blocked, operation fails). They are independent and complementary.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>These three controls form a layered defense: PodSecurity stops insecure pods from being created (Gate 4 — Admission). AppArmor limits what files a running container can access (Gate — LSM hooks). Seccomp limits what syscalls a container can make (Gate — syscall interface). On the CKS exam, use ALL three for defense in depth.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">You discover that <code>/proc/sys/kernel/unprivileged_userns_clone</code> is set to 1 on all worker nodes. What's the container escape risk, and how do you fix it?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Risk:</strong> When enabled, unprivileged users (including root inside a container) can create new user namespaces. A container escape technique uses <code>unshare -U</code> to create a user namespace where the container process becomes root on the HOST. Combined with other exploits, this leads to full node compromise.</p><pre><code class="language-bash"># Fix immediately
+echo 0 > /proc/sys/kernel/unprivileged_userns_clone
+# Persist
+echo "kernel.unprivileged_userns_clone = 0" >> /etc/sysctl.d/99-security.conf
+sysctl --system
+# Verify
+sysctl kernel.unprivileged_userns_clone  # Should be 0</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Unprivileged user namespaces are a well-known container escape vector. They were the basis of CVE-2022-0492 (cgroups escape) and several others. Kubernetes 1.25+ sets this to 0 by default. On the CKS exam, check <code>sysctl kernel.unprivileged_userns_clone</code> on every node — if it's 1, it's a finding you must fix. Combine with Seccomp blocking <code>unshare</code> for defense in depth.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -23927,7 +24464,7 @@ sha256sum /usr/bin/kubelet  # Compare with official checksum</code></pre></div>
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 16 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -23961,6 +24498,27 @@ sha256sum /usr/bin/kubelet  # Compare with official checksum</code></pre></div>
                     <p>AIDE detects file integrity violations. A modified kubelet binary means either: (a) a legitimate upgrade (verify with package manager: <code>dpkg -V kubelet</code>), or (b) an attacker replaced the binary with a backdoored version. If not a known upgrade: IMMEDIATELY cordon and drain the node, isolate it from the network, capture forensic evidence, and rebuild from a known-good image. This is a potential node compromise.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What Kubernetes-specific ports MUST be open on a worker node? List them with their default port numbers and which component uses each.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><table style="width:100%; border-collapse: collapse;"><thead><tr style="border-bottom: 2px solid #326ce5;"><th style="text-align:left; padding: 8px; color: #93c5fd;">Port</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Component</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Purpose</th></tr></thead><tbody><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">10250</td><td style="padding: 8px;">kubelet</td><td style="padding: 8px;">API server → kubelet (logs, exec, metrics)</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">10255</td><td style="padding: 8px;">kubelet (read-only)</td><td style="padding: 8px;">Should be DISABLED (readOnlyPort: 0)</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">30000-32767</td><td style="padding: 8px;">kube-proxy</td><td style="padding: 8px;">NodePort services</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">8472</td><td style="padding: 8px;">CNI (Flannel)</td><td style="padding: 8px;">VXLAN overlay (varies by CNI)</td></tr><tr><td style="padding: 8px;">22</td><td style="padding: 8px;">SSH</td><td style="padding: 8px;">Administrative access</td></tr></tbody></table></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Worker nodes need minimal open ports. Everything else should be firewalled. The kubelet read-only port (10255) exposes pod info without authentication — it must be disabled. NodePort range (30000-32767) is needed only if you use NodePort services. On the CKS exam, run <code>ss -tlnp</code> and verify only these ports are listening.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">How do you verify the integrity of installed Kubernetes packages? Write the exact command and explain what output indicates tampering.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># Debian/Ubuntu
+ dpkg -V kubelet kubeadm kubectl
+# Output: nothing = all good. If files are modified:
+# ??5?????? c /etc/kubernetes/admin.conf  (config file changed — expected)
+# ??5??????   /usr/bin/kubelet           (BINARY changed — INVESTIGATE!)
+# RHEL/CentOS
+rpm -V kubelet kubeadm kubectl
+# Key: S=size, M=mode, 5=MD5, D=device, L=symlink, U=user, G=group, T=mtime</code></pre><p>Missing output = all files pass verification. Any output for binaries (<code>/usr/bin/*</code>) is suspicious. Config files (<code>/etc/*</code>) changing is expected after edits.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Package integrity verification is complementary to AIDE. <code>dpkg -V</code> checks files against the package manager's database (which should be trusted). AIDE checks against its own baseline (which could be compromised if the baseline was created after tampering). Use BOTH — package verification for known-good comparison, AIDE for ongoing monitoring.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">A node has a GPU (NVIDIA) requiring a kernel module. How do you balance the need for the GPU module with the principle of minimizing kernel modules?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Keep the NVIDIA module but blacklist ALL other unnecessary modules. Create a whitelist approach: (1) Identify required modules: <code>lsmod | grep nvidia</code>. (2) Blacklist everything else: create <code>/etc/modprobe.d/blacklist-all.conf</code> with all non-essential modules. (3) Set <code>kernel.modules_disabled=1</code> AFTER loading NVIDIA (can't be undone without reboot, but prevents future module injection). (4) Document the exception with business justification for auditors.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Security is about risk management, not absolute rules. GPU workloads need kernel modules — that's a legitimate business requirement. The principle is: load ONLY what's required, blacklist everything else, and lock down future changes. On the CKS exam, don't blindly blacklist everything — read the scenario. If a pod needs GPU access, blacklisting NVIDIA breaks the workload and you fail the task.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">How do you set up a cron job to run AIDE daily and email results? Write the crontab entry and explain the AIDE flags.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># Crontab entry (runs at 3 AM daily)
+0 3 * * * /usr/bin/aide --check | mail -s "AIDE Report $(hostname) $(date +\%Y-\%m-\%d)" security@anihpj.com
+# Flags:
+# --check: Compare current filesystem against database
+# --update: Update database after legitimate changes
+# --init: Initialize new database
+# --compare: Compare two databases
+# After legitimate changes (upgrades), update:
+aide --update && cp /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Automated AIDE checks are a CIS benchmark recommendation. The daily cron job provides continuous file integrity monitoring. After any legitimate system change (package upgrade, config edit), run <code>aide --update</code> to update the baseline — otherwise tomorrow's check will report false positives. On the CKS exam, know when to use <code>--check</code> (audit) vs <code>--update</code> (after changes).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">A node's cloud IAM role has <code>s3:*</code> and <code>ec2:*</code> permissions. What's the security risk for Kubernetes workloads, and how do you mitigate it without changing the node role?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Risk:</strong> Any pod on this node can reach the cloud metadata service (169.254.169.254) and obtain these IAM credentials. A compromised pod can delete S3 buckets, terminate EC2 instances, or exfiltrate data.</p><p><strong>Mitigation without changing node role:</strong> (1) Block metadata service from pods: iptables rule to DROP 169.254.169.254, or NetworkPolicy egress block. (2) Use IRSA (IAM Roles for Service Accounts) — pods use their own IAM roles, not the node's. (3) Set <code>automountServiceAccountToken: false</code> — pods can't authenticate to cloud APIs without explicit credentials. (4) AppArmor profile denying network access to 169.254.169.254.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the Capital One breach scenario. The cloud metadata service is the #1 cloud security risk for Kubernetes. Even if the node role is over-privileged, you can prevent pods from accessing it. On the CKS exam: (1) always block 169.254.169.254 from pods, (2) use IRSA for pod-level IAM, (3) never rely on node-level IAM for pod permissions.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">After hardening a node by removing packages, blacklisting modules, and applying sysctl settings, how do you comprehensively verify the node is production-ready? List your verification checklist.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><div class="process-steps" style="flex-direction: column;"><div class="process-step"><div class="step-number">1</div><div class="step-content"><h5>Service verification</h5><p><code>systemctl status kubelet containerd</code> — both must be active/running. <code>kubectl get node &lt;name&gt;</code> — must show Ready.</p></div></div><div class="process-step"><div class="step-number">2</div><div class="step-content"><h5>Port audit</h5><p><code>ss -tlnp</code> — only kubelet (10250), SSH (22), and containerd should listen.</p></div></div><div class="process-step"><div class="step-number">3</div><div class="step-content"><h5>Module audit</h5><p><code>lsmod | grep -v -E "overlay|br_netfilter|iptable|ip_vs|nf_|xt_"</code> — verify no unnecessary modules.</p></div></div><div class="process-step"><div class="step-number">4</div><div class="step-content"><h5>AIDE baseline</h5><p><code>aide --init && cp /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz</code> — establish clean baseline.</p></div></div><div class="process-step"><div class="step-number">5</div><div class="step-content"><h5>Scheduling test</h5><p><code>kubectl run test --image=nginx -n default; kubectl get pod test -o wide</code> — must be Running on the hardened node.</p></div></div><div class="process-step"><div class="step-number">6</div><div class="step-content"><h5>kube-bench re-run</h5><p><code>kube-bench run --targets node</code> — all CIS checks for nodes should PASS.</p></div></div></div></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This verification checklist is exactly what the CKS exam expects after a hardening task. Don't just make changes — VERIFY them. The most common exam failure: hardening a node but breaking kubelet → node goes NotReady → no points awarded even if the hardening was correct. Always verify the node is still Ready and can schedule pods.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -24697,7 +25255,7 @@ spec:
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 17 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -24732,6 +25290,30 @@ kubectl label ns prod-ns pod-security.kubernetes.io/enforce-version=v1.30</code>
                     <p>Baseline prevents KNOWN privilege escalations (privileged containers, hostPath, hostNetwork). Restricted adds STRONGER pod hardening (requires non-root, requires Seccomp, drops ALL capabilities). Pods that pass Baseline but fail Restricted: (1) A pod running as root with RuntimeDefault Seccomp — Baseline allows root, Restricted doesn't. (2) A pod without capabilities.drop=ALL — Baseline doesn't require capability dropping, Restricted does.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">Write the PSS labels that audit, warn, AND enforce the Baseline standard on the "anihpj-prod" namespace. What's the purpose of all three?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash">kubectl label ns anihpj-prod pod-security.kubernetes.io/enforce=baseline
+kubectl label ns anihpj-prod pod-security.kubernetes.io/audit=baseline
+kubectl label ns anihpj-prod pod-security.kubernetes.io/warn=baseline
+kubectl label ns anihpj-prod pod-security.kubernetes.io/enforce-version=v1.30</code></pre><p><strong>Purpose:</strong> enforce (blocks), audit (logs to audit log), warn (shows kubectl warning). All three together provide defense in depth: even if enforce is accidentally removed, audit and warn still provide visibility.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The three-label pattern is the CKS best practice. <code>enforce</code> provides the actual security. <code>audit</code> creates an audit trail for compliance. <code>warn</code> provides immediate feedback to developers. On the exam, always apply all three — it shows you understand defense in depth for policy enforcement.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">A namespace has enforce=restricted. A pod with <code>runAsNonRoot: false</code> is submitted. What happens? What about a pod with <code>runAsNonRoot: true</code> but no seccompProfile?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>runAsNonRoot: false → REJECTED.</strong> The pod is blocked at admission time with: <code>violates PodSecurity "restricted:v1.30": "runAsNonRoot != true"</code>.</p><p><strong>runAsNonRoot: true, no seccompProfile → REJECTED.</strong> Restricted requires either <code>seccompProfile.type: RuntimeDefault</code> or <code>seccompProfile.type: Localhost</code>. If neither is specified, the pod is rejected with: <code>violates PodSecurity "restricted:v1.30": "seccompProfile"</code>. The API server does NOT auto-apply RuntimeDefault — it must be explicit in the pod spec.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a common CKS exam trap. Restricted does not auto-apply defaults — it requires EXPLICIT security configurations. If you omit seccompProfile, the pod is rejected even if you intended RuntimeDefault. Always explicitly set <code>seccompProfile.type: RuntimeDefault</code> alongside <code>runAsNonRoot: true</code> when targeting Restricted namespaces.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What is the difference between PSS (Pod Security Standards) and PSA (Pod Security Admission)? Which is the policy definition and which is the enforcement mechanism?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>PSS (Pod Security Standards):</strong> The POLICY DEFINITIONS — Privileged, Baseline, Restricted. These are documents that define what's allowed at each level. <strong>PSA (Pod Security Admission):</strong> The ENFORCEMENT MECHANISM — a built-in admission controller that enforces PSS. PSA reads the namespace labels and rejects pods that violate the specified standard. Think of it as: PSS = the law, PSA = the police.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This distinction is tested on CKS. You can't "install PSS" — you enable PSA (the admission controller) and then apply PSS labels to namespaces. The admission controller <code>PodSecurity</code> must be in <code>--enable-admission-plugins</code>. If PSA isn't enabled, the PSS labels on namespaces have zero effect.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">A namespace has enforce=restricted. A DaemonSet for node monitoring needs <code>hostNetwork: true</code> to collect node metrics. How do you handle this without removing Restricted from the namespace?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Option 1: Place the DaemonSet in a separate namespace (e.g., <code>node-monitoring</code>) with enforce=privileged but strong RBAC and NetworkPolicy. Option 2: Use <code>pod-security.kubernetes.io/enforce=privileged</code> on the monitoring namespace but add compensating controls: AppArmor profile, custom Seccomp, readOnlyRootFilesystem. Option 3: Use a mutating admission webhook (Kyverno) to exempt specific pods from PSA enforcement. The key: you CANNOT make exceptions within a Restricted namespace — PSS is all-or-nothing per namespace.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>PSS is intentionally rigid — no exceptions within a namespace. This forces proper namespace segmentation. Privileged workloads go in privileged namespaces with compensating controls. On the CKS exam, the answer to "how to allow this privileged pod in a Restricted namespace" is always: "create a separate namespace with appropriate controls."</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">Write the pod securityContext that satisfies ALL Restricted requirements. Include runAsNonRoot, seccompProfile, capabilities, and readOnlyRootFilesystem.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 3000
+  fsGroup: 2000
+  seccompProfile:
+    type: RuntimeDefault
+containers:
+- name: app
+  image: nginx
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the golden pod securityContext for CKS. Every field serves a purpose: <code>runAsNonRoot</code> prevents root, <code>seccompProfile</code> restricts syscalls, <code>allowPrivilegeEscalation: false</code> prevents setuid binaries, <code>capabilities.drop: [ALL]</code> strips all Linux capabilities, <code>readOnlyRootFilesystem</code> prevents writing to the container image. Memorize this block — it's used in multiple CKS tasks.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">You notice that after applying enforce=baseline to the "default" namespace, existing pods still run but new pods that violate Baseline are rejected. Why are existing pods not affected?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>PSA only evaluates pods at <strong>creation time</strong> (CREATE and UPDATE operations). Existing pods were created before the label was applied and are grandfathered in. They continue to run even if they violate the policy. PSA does NOT enforce against already-running pods. This is why gradual rollout (audit → warn → enforce) is critical — you need time to fix existing pods before enforcement blocks their restarts.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the most important operational detail about PSA. On the CKS exam: (1) applying enforce=restricted does NOT kill running pods, (2) but if those pods restart (node failure, rolling update, eviction), they will be BLOCKED from restarting, (3) always fix existing pods BEFORE applying enforce. Use <code>kubectl get pods -n &lt;ns&gt; -o json | jq '.items[] | select(...violates...)'</code> to identify pods that need fixing.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -25318,7 +25900,7 @@ spec:
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 18 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -25361,6 +25943,86 @@ spec:
                     <p>Pod-level <code>runAsUser</code> sets the default UID for ALL containers that don't override it. Container-level <code>runAsUser</code> overrides the pod-level setting for that specific container. If both are set, the container-level wins. If neither is set, the container runs as the USER specified in the Docker image (usually root if not specified).</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What is <code>allowPrivilegeEscalation: false</code> and what specific attack does it prevent? How does it interact with <code>no_new_privs</code> in the kernel?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>allowPrivilegeEscalation: false</code> prevents a process from gaining more privileges than its parent. It sets the kernel's <code>no_new_privs</code> flag. This means: (1) setuid binaries are ignored — even if <code>/usr/bin/sudo</code> has setuid root, running it won't give root. (2) The process can never transition to a new AppArmor/SELinux label. (3) Seccomp cannot be relaxed — the process stays confined. (4) Capabilities cannot be added via <code>prctl(PR_CAPBSET_DROP)</code>.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is one of the most important securityContext fields for CKS. Even if an attacker finds a setuid binary or kernel exploit, <code>no_new_privs</code> prevents privilege escalation. It's a one-way door — once set, it can never be unset for the process lifetime. Always pair with <code>runAsNonRoot: true</code> for complete privilege containment.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">A pod needs to bind to port 80 (privileged port) but must run as non-root. What's the solution that doesn't violate CKS Restricted requirements?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Add <code>NET_BIND_SERVICE</code> capability to the container. This is a safe capability that specifically allows binding to ports below 1024 without granting any other network privileges:</p><pre><code class="language-yaml">securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop: ["ALL"]
+    add: ["NET_BIND_SERVICE"]</code></pre><p>This works because Linux allows processes with <code>CAP_NET_BIND_SERVICE</code> to bind to privileged ports regardless of UID. It's far safer than running as root.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the practical CKS approach: when a pod legitimately needs a Linux capability, add ONLY that specific capability after dropping ALL. NET_BIND_SERVICE is safe because it only enables port binding — it doesn't grant packet capture, interface modification, or firewall manipulation. This is the difference between "least capability" (good) and "running as root" (bad).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What's the difference between <code>fsGroup</code>, <code>runAsGroup</code>, and <code>supplementalGroups</code>? When would you use each?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>runAsGroup:</strong> The primary GID the container process runs as. Set at pod or container level. <strong>fsGroup:</strong> The GID that owns ALL files in mounted volumes. Kubernetes recursively chowns volume files to this GID before starting the container. <strong>supplementalGroups:</strong> Additional GIDs the container process belongs to. Useful for accessing shared filesystems with group permissions.</p><p>Use case: container runs as UID 1000, needs write access to a shared NFS volume owned by GID 2000 → set <code>fsGroup: 2000</code> so the volume files are group-writable.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>These three fields control Linux group membership at different levels. <code>fsGroup</code> is unique to Kubernetes — it solves the problem of volume permissions when containers run as non-root. Without fsGroup, mounted volumes owned by root would be unwritable by non-root containers. On the CKS exam, if a non-root pod can't write to a volume, check fsGroup first.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">Write the securityContext for a pod that needs to: read the host's timezone file, drop all capabilities except CHOWN for volume initialization, and prevent any privilege escalation. Include the volume mount.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: v1
+kind: Pod
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+  containers:
+  - name: app
+    image: myapp:latest
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+        add: ["CHOWN"]
+      readOnlyRootFilesystem: true
+    volumeMounts:
+    - name: timezone
+      mountPath: /etc/localtime
+      readOnly: true
+  volumes:
+  - name: timezone
+    hostPath:
+      path: /etc/localtime
+      type: File</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a realistic CKS scenario: a pod needs minimal host access (timezone) and a limited capability (CHOWN for volume initialization). The security is maximized: non-root, no privilege escalation, read-only root FS, all capabilities dropped except CHOWN. The hostPath is limited to a single file (type: File) rather than a directory — this is more secure than a directory mount.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">You set <code>readOnlyRootFilesystem: true</code> on a pod and it crashes because the application needs to write to <code>/tmp</code> and <code>/var/cache</code>. How do you fix this without disabling readOnlyRootFilesystem?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Mount <code>emptyDir</code> volumes at the writable paths. The root filesystem stays read-only, but these specific directories are backed by writable tmpfs volumes:</p><pre><code class="language-yaml">containers:
+- name: app
+  securityContext:
+    readOnlyRootFilesystem: true
+  volumeMounts:
+  - name: tmp
+    mountPath: /tmp
+  - name: cache
+    mountPath: /var/cache
+volumes:
+- name: tmp
+  emptyDir: {}
+- name: cache
+  emptyDir: {}</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the standard pattern for making applications work with readOnlyRootFilesystem. emptyDir volumes provide writable temporary storage that is ephemeral (cleared on pod restart). The key security benefit: the attacker can write to /tmp but can't modify the application binary at <code>/usr/bin/app</code> or system libraries at <code>/lib/</code>. On the CKS exam, if an app crashes with "read-only filesystem" errors, add emptyDir mounts for the writable paths.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">You audit a cluster and find 80% of pods have NO securityContext at all. Write the Kyverno ClusterPolicy that would reject any pod without runAsNonRoot and readOnlyRootFilesystem.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-security-context
+spec:
+  validationFailureAction: Enforce
+  rules:
+  - name: check-run-as-non-root
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+    validate:
+      message: "runAsNonRoot must be true"
+      pattern:
+        spec:
+          containers:
+          - securityContext:
+              runAsNonRoot: true
+  - name: check-read-only-root
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+    validate:
+      message: "readOnlyRootFilesystem must be true"
+      pattern:
+        spec:
+          containers:
+          - securityContext:
+              readOnlyRootFilesystem: true</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Policy-as-code (Kyverno/OPA) is the CKS approach to enforcing security at scale. Instead of manually verifying 80% of pods, you write a policy that rejects insecure pods automatically. Kyverno policies can also MUTATE pods to add defaults (e.g., auto-add RuntimeDefault seccomp). On the CKS exam, if asked to "enforce security across all namespaces," the answer involves admission controllers, not manual verification.</p></div></details></div>
+            </div>
+
+            <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -25920,7 +26582,7 @@ kubectl get secrets --all-namespaces -o json | kubectl replace -f -
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 19 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -25964,6 +26626,52 @@ resources:
                     <p>Add <code>key2</code> with a new secret to the providers list (FIRST position). Run <code>kubectl get secrets -A -o json | kubectl replace -f -</code> to re-encrypt all secrets with key2. Keep key1 in second position for reading old secrets. If you remove key1 before re-encryption, secrets still encrypted with key1 become PERMANENTLY UNREADABLE — the API server cannot decrypt them. Always keep old keys until re-encryption is verified complete.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">The EncryptionConfiguration YAML is created but the API server can't read it. What two things must you configure in the API server manifest BESIDES the flag?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>You need a <strong>volume</strong> (hostPath) and a <strong>volumeMount</strong> in the API server manifest:</p><pre><code class="language-yaml"># In /etc/kubernetes/manifests/kube-apiserver.yaml:
+spec:
+  containers:
+  - name: kube-apiserver
+    command:
+    - --encryption-provider-config=/etc/kubernetes/encryption/encryption-config.yaml
+    volumeMounts:
+    - name: encryption-config
+      mountPath: /etc/kubernetes/encryption
+      readOnly: true
+  volumes:
+  - name: encryption-config
+    hostPath:
+      path: /etc/kubernetes/encryption-config.yaml
+      type: File</code></pre><p>The flag alone is not enough — the file must be accessible inside the API server container via a volume mount.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the #1 CKS exam trap for encryption configuration. Adding the flag without the volume mount results in "file not found" and the API server silently falls back to no encryption. Always verify with <code>kubectl get --raw /healthz/etcd</code> — if encryption is active, etcd health shows the encryption provider status.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What Kubernetes resources can be encrypted at rest? Beyond Secrets, what else should you consider encrypting?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>EncryptionConfiguration supports: <code>secrets</code>, <code>configmaps</code>, <code>serviceaccounts</code>, <code>tokenreviews</code>, <code>tokenrequests</code>, and custom resources. Beyond secrets, consider encrypting: (1) <strong>ConfigMaps</strong> — often contain semi-sensitive data like DB connection strings, feature flags, (2) <strong>ServiceAccount tokens</strong> — the token Secret contains a JWT that can be used to authenticate, (3) <strong>Custom resources</strong> — if you store sensitive app config in CRDs.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>While Secrets are the primary target, ConfigMaps often contain sensitive data that developers mistakenly put there (thinking "it's just config"). The CKS exam expects you to encrypt at minimum Secrets, but consider encrypting ConfigMaps if they contain sensitive values. Note: encrypting all resources increases CPU usage on the API server.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">How do you verify that encryption at rest is working without accessing etcd directly? What API endpoint confirms encryption status?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># Check encryption status via API server health endpoint
+kubectl get --raw /healthz/etcd
+# Output includes: "ok" if etcd is healthy
+
+# Check encryption config
+kubectl get --raw /livez/poststarthook/start-kube-apiserver-admission-initializer
+
+# Verify a specific secret is encrypted (indirect method)
+kubectl create secret generic verify-enc --from-literal=test=value
+kubectl get secret verify-enc -o jsonpath='{.data.test}' | base64 -d
+# Should decode to "value" — encryption is at the etcd level, not the API level</code></pre><p>There is no direct API endpoint that says "encryption is active." The verification method is to create a secret and check etcd directly. Or verify the API server has the flag: <code>ps aux | grep encryption-provider-config</code>.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Encryption is transparent to kubectl — you always see decrypted data. The only way to verify encryption is working is to: (1) check the API server has <code>--encryption-provider-config</code>, (2) check the config file exists and has valid keys, (3) read raw etcd data and confirm it's garbled. On the CKS exam, the task typically asks you to "verify encryption" — this means reading etcd directly.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">You encrypt Secrets with aescbc. A developer complains that <code>kubectl get secret my-secret -o yaml</code> shows the data as base64-encoded plaintext. Is encryption broken?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>No, encryption is NOT broken.</strong> Encryption at rest protects data in etcd, not in transit via kubectl. When you run <code>kubectl get secret</code>, the API server reads the encrypted data from etcd, DECRYPTS it, and sends the plaintext over TLS to your kubectl. Base64 is encoding, not encryption — it's how Secrets are always represented in the API. The data IS encrypted in etcd, but kubectl always shows the decrypted value (base64-encoded for display).</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a common misunderstanding. Encryption at rest protects the data AT REST (on disk, in etcd). When accessed via the API server with proper authentication, the data is decrypted and served. The threat model: an attacker who steals the etcd disk or gains direct etcd access CANNOT read the data. An attacker with kubectl and RBAC access CAN read it (because they're authenticated).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">You need to encrypt Secrets AND ConfigMaps with different encryption keys. Write the EncryptionConfiguration that uses key-secrets for Secrets and key-configmaps for ConfigMaps.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+- resources: ["secrets"]
+  providers:
+  - aescbc:
+      keys:
+      - name: key-secrets
+        secret: &lt;base64-32-byte-key-1&gt;
+  - identity: {}
+- resources: ["configmaps"]
+  providers:
+  - aescbc:
+      keys:
+      - name: key-configmaps
+        secret: &lt;base64-32-byte-key-2&gt;
+  - identity: {}</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Each resource group in EncryptionConfiguration can have its own set of encryption providers and keys. This is defense in depth: if key-configmaps is compromised, Secrets are still protected by key-secrets. On the CKS exam, you may need to configure different encryption for different resource types — this is the pattern.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">After a security incident, you suspect the encryption key was compromised. Walk through the complete key rotation and re-encryption process to ensure all secrets are protected with a new key.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><div class="process-steps" style="flex-direction: column;"><div class="process-step"><div class="step-number">1</div><div class="step-content"><h5>Generate new key</h5><p><code>head -c 32 /dev/urandom | base64</code> — save as new-key.txt.</p></div></div><div class="process-step"><div class="step-number">2</div><div class="step-content"><h5>Update config</h5><p>Add new key as FIRST provider. Keep old (compromised) key as second provider for decryption of existing secrets.</p></div></div><div class="process-step"><div class="step-number">3</div><div class="step-content"><h5>Restart API server</h5><p>Wait for API server to restart with new config (30-60s).</p></div></div><div class="process-step"><div class="step-number">4</div><div class="step-content"><h5>Re-encrypt ALL secrets</h5><p><code>kubectl get secrets -A -o json | kubectl replace -f -</code>. This reads each secret (decrypted with old key) and writes it back (encrypted with new key).</p></div></div><div class="process-step"><div class="step-number">5</div><div class="step-content"><h5>Remove compromised key</h5><p>Delete the old key from providers list. Restart API server. Now only the new key can decrypt anything.</p></div></div><div class="process-step"><div class="step-number">6</div><div class="step-content"><h5>Revoke compromised key</h5><p>Securely delete the old key material. Revoke any cloud KMS grants.</p></div></div></div></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Key rotation after a compromise follows the same process as routine rotation, but with urgency. The critical step is #4: re-encrypting ALL secrets. Until this completes, secrets encrypted with the compromised key are still vulnerable (if the attacker has etcd access). On the CKS exam, know the difference between routine rotation (keep old key for decryption) and post-compromise rotation (remove old key after all data is re-encrypted).</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -26381,7 +27089,7 @@ vault write auth/kubernetes/role/anihpj-django \
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 20 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -26417,6 +27125,18 @@ vault kv get secret/anihpj/prod
 vault kv get -field=django-secret-key secret/anihpj/prod  # Get single field</code></pre>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">How does Vault's dynamic secret engine for databases work? What security advantage does it provide over static secrets?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Vault connects to the database as a privileged user and creates a temporary, per-request database credential. Each pod gets a UNIQUE username/password that: (1) is valid for a short TTL (e.g., 1 hour), (2) is automatically revoked when the TTL expires, (3) has scoped permissions (e.g., read-only on specific tables). <strong>Advantage over static secrets:</strong> even if an attacker steals the credential, it expires quickly and can only access what's explicitly granted. No long-lived shared database password exists anywhere.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Dynamic secrets are Vault's killer feature for CKS. Instead of storing a shared PostgreSQL password that never changes, each pod instance gets its own temporary credential. On the exam, if asked about "credential rotation" or "preventing lateral movement after credential theft," dynamic secrets are the answer.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">Compare Vault Agent Sidecar Injector vs Vault CSI Provider. Which one requires application changes, and which is transparent to the app?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Vault Agent Sidecar:</strong> Injects a Vault agent container alongside your app. Secrets are written to a shared memory volume (<code>/vault/secrets/</code>). The app reads secrets from FILES. Requires some app awareness (knowing the file path). <strong>Vault CSI Provider:</strong> Uses the Kubernetes CSI (Container Storage Interface) to mount secrets as a volume. Secrets appear as files in the pod but NO sidecar container is needed. Completely transparent to the app. CSI is the newer, preferred approach on CKS because it's simpler and uses fewer resources.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Both methods keep secrets out of etcd. The difference is implementation: Sidecar = extra container + shared volume, CSI = kernel-level volume mount. On the CKS exam, CSI Provider is the modern recommended approach. But you should know both exist — older clusters may use the sidecar method.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">Write the Vault policy that allows an anihpj pod to read ONLY its own database password at <code>secret/anihpj/prod</code> and nothing else.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-hcl">path "secret/data/anihpj/prod" {
+  capabilities = ["read"]
+}
+# Deny everything else
+path "*" {
+  capabilities = ["deny"]
+}</code></pre><p>Bind this policy to a Vault role that maps to the <code>anihpj-sa</code> ServiceAccount in the <code>prod</code> namespace. The pod can only read <code>secret/anihpj/prod</code> — it cannot read <code>secret/other-app/prod</code> or write any secret.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Vault policies follow the least privilege principle — exactly like Kubernetes RBAC. Each application should have its own Vault policy scoped to its own secret paths. On the CKS exam, you may need to write a Vault policy or explain how Vault RBAC maps to Kubernetes RBAC. The key concept: Vault policies are path-based (file-system-like), not resource-based (like K8s RBAC).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">What is Vault's Kubernetes auth method, and what Kubernetes API does Vault call to validate a pod's identity?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Vault calls <strong>TokenReview</strong> API (<code>POST /apis/authentication.k8s.io/v1/tokenreviews</code>) to validate the pod's ServiceAccount JWT. The flow: (1) Pod sends its SA JWT to Vault. (2) Vault forwards the JWT to the Kubernetes API server's TokenReview endpoint. (3) API server validates the JWT signature and returns the SA identity (namespace, name, UID, groups). (4) Vault maps this identity to a Vault role. (5) Vault issues a Vault token scoped to that role's policies.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is Kubernetes-native authentication for external systems. Vault trusts the API server's token validation. The pod never needs a separate Vault credential — its Kubernetes identity IS its Vault identity. On the CKS exam, understand that Vault's Kubernetes auth method eliminates the need for static Vault tokens in pods.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">An External Secrets Operator SecretStore fails to connect to AWS Secrets Manager with "AccessDenied." Where do you check the IAM permissions: on the node role, the pod's IRSA role, or the ESO controller's SA?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Check the <strong>ESO controller's ServiceAccount IRSA role</strong> (or the SecretStore's referenced credentials). ESO uses its own identity to fetch secrets from external providers. It does NOT use the node's IAM role or the application pod's SA. The flow: ESO controller → authenticates to AWS using its SA's IRSA → fetches secret from Secrets Manager → creates Kubernetes Secret → application pod reads the K8s Secret (no direct AWS access needed by the app pod).</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a common ESO debugging question. The SecretStore configuration determines which credentials ESO uses. In AWS, this is typically IRSA mapped to the ESO ServiceAccount. On the CKS exam: (1) ESO controller SA needs IAM permissions to read secrets, (2) application pods do NOT need IAM permissions, (3) node role is irrelevant for ESO.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">You need to migrate 50 Kubernetes Secrets from plaintext etcd storage to Vault with zero application downtime. Describe the migration strategy using External Secrets Operator.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><ol><li><strong>Set up Vault + ESO:</strong> Deploy ESO, create SecretStore pointing to Vault.</li><li><strong>Import secrets to Vault:</strong> Export each K8s Secret → import to Vault: <code>kubectl get secret &lt;name&gt; -o jsonpath='{.data}' | while read k v; do vault kv put secret/app/$k $(echo $v | base64 -d); done</code>.</li><li><strong>Create ExternalSecrets:</strong> For each secret, create an ExternalSecret resource that maps Vault paths to K8s Secret keys. ESO syncs the secrets.</li><li><strong>Update Deployments:</strong> Change <code>secretKeyRef</code> references to point to the ESO-managed Secret names (same names, just now ESO-managed).</li><li><strong>Verify:</strong> Deploy to staging first. Confirm pods start and function. Rolling update to production.</li><li><strong>Cleanup:</strong> After verification, delete the original manually-created Secrets (ESO now owns them).</li></ol></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a real CKS scenario: migrating from native K8s Secrets to an external provider. The key design decision: ESO creates K8s Secrets that look identical to manually-created ones — same names, same keys. Applications don't need to change how they consume secrets (<code>secretKeyRef</code> still works). The only difference is the Secret is now synced from Vault instead of manually created.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -26842,7 +27562,7 @@ version = 2
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 21 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -26882,6 +27602,52 @@ spec:
                     <p>Use sandboxed runtimes for: (1) Untrusted workloads (user-uploaded code, multi-tenant environments), (2) Workloads processing sensitive data where container escape would be catastrophic, (3) CI/CD pipelines running arbitrary build code. The tradeoff is performance — gVisor has ~5-10% overhead, Kata has ~15-20% overhead vs native runc.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What happens if you specify <code>runtimeClassName: gvisor</code> but gVisor is not installed on the target node? How do you prevent scheduling to incompatible nodes?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The pod gets stuck in <code>ContainerCreating</code> with error: <code>failed to create shim task: runtime "runsc" not found</code>. Prevention: (1) Use <code>nodeSelector</code> with a label like <code>sandbox-runtime: gvisor</code> that only exists on nodes with gVisor installed. (2) Use <code>nodeAffinity</code> with <code>requiredDuringScheduling</code>. (3) Label nodes automatically at provisioning time: <code>kubectl label node &lt;name&gt; sandbox-runtime=gvisor</code>. (4) Verify the RuntimeClass handler name matches the containerd config.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the #1 operational issue with RuntimeClasses. The scheduler doesn't know which nodes have which runtimes — it only checks the RuntimeClass resource exists. You MUST use nodeSelector/affinity to ensure sandboxed pods land on compatible nodes. On the CKS exam, if a sandboxed pod won't start, check: (a) RuntimeClass handler name, (b) containerd config, (c) nodeSelector.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">How do you configure containerd to support gVisor? Write the containerd config section and explain the handler name mapping.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-toml"># /etc/containerd/config.toml
+version = 2
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+    SystemdCgroup = true</code></pre><p>The RuntimeClass <code>handler: runsc</code> maps to the containerd runtime name <code>runsc</code> in the config. Kubernetes passes the handler name to containerd, containerd looks it up in its config, and launches the pod with the matching runtime binary (<code>/usr/bin/runsc</code> for gVisor).</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The handler name in RuntimeClass must match the runtime name in containerd config EXACTLY. Common mistake: naming the RuntimeClass handler "gvisor" but containerd has it as "runsc" — these must match. On the CKS exam, you may need to verify containerd config and RuntimeClass are consistent.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">Can you apply Seccomp profiles to a gVisor-sandboxed pod? What's the interaction between gVisor's sentry kernel and Kubernetes Seccomp?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Kubernetes Seccomp is NOT applied inside gVisor.</strong> gVisor's sentry kernel implements its OWN syscall filtering that is separate from the host kernel's Seccomp. When you specify a Seccomp profile on a gVisor pod: (1) The host Seccomp filters gVisor's own limited syscalls (gVisor only makes ~50 safe syscalls). (2) The application's full set of syscalls is intercepted by gVisor's sentry kernel in userspace — Seccomp never sees them. In most cases, you don't need Seccomp on gVisor pods because gVisor itself provides stronger isolation than Seccomp.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>gVisor renders Seccomp unnecessary because the application never makes direct syscalls to the host. All syscalls are intercepted and handled by gVisor's user-space kernel, which implements its own security policies. On the CKS exam: if you're already using gVisor, you don't NEED to also apply Seccomp — it's redundant. But it doesn't hurt to have both (defense in depth).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What container escape techniques does gVisor protect against that runc does NOT? List at least 3 specific vulnerabilities that gVisor would have prevented.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>gVisor protects against kernel exploit-based container escapes because the application's syscalls never reach the host kernel. Specifically: (1) <strong>CVE-2019-5736 (runc escape):</strong> Overwrites runc binary via /proc/self/exe — gVisor has no /proc/self/exe to the host runc. (2) <strong>CVE-2022-0492 (cgroups escape):</strong> Release agent escape via cgroups — gVisor's sentry kernel doesn't expose cgroups to the container. (3) <strong>Dirty COW (CVE-2016-5195):</strong> Kernel race condition — gVisor runs in userspace, kernel exploits don't apply.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The fundamental difference: runc shares the host kernel with containers. A kernel exploit in a runc container can compromise the entire node. gVisor runs the application in a sandboxed userspace kernel — even if the application exploits "the kernel," it's only exploiting gVisor's sentry, not the host. This is the strongest container isolation available without hardware virtualization (Kata/VMs).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">Write a Kyverno policy that mutates any pod in the "untrusted" namespace to use <code>runtimeClassName: gvisor</code> automatically.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: enforce-gvisor-untrusted
+spec:
+  rules:
+  - name: set-gvisor-runtime
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+          namespaces: [untrusted]
+    mutate:
+      patchStrategicMerge:
+        spec:
+          runtimeClassName: gvisor</code></pre><p>Any pod submitted to the "untrusted" namespace is automatically mutated to use gVisor. Developers don't need to remember to set it — the policy handles it transparently.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Policy automation is the CKS approach to security at scale. Instead of relying on developers to remember <code>runtimeClassName: gvisor</code>, a Kyverno policy enforces it automatically. This is a mutation (changing the pod spec) rather than validation (rejecting the pod). On the CKS exam, prefer mutation policies for security defaults — they reduce friction while maintaining security.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">What's the difference between gVisor's ptrace platform and kvm platform? Which provides better isolation?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>ptrace (default):</strong> gVisor's sentry uses Linux ptrace to intercept syscalls. Works everywhere but ~10% overhead. <strong>kvm:</strong> gVisor uses hardware virtualization (KVM) to create a sandboxed address space. Better isolation (ring-1 vs ring-0 attacker can't escape) but requires KVM support. kvm platform blocks speculative execution attacks (Spectre/Meltdown) that ptrace platform might be vulnerable to. For CKS: kvm platform is recommended for highest-security workloads.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is advanced gVisor configuration. On the CKS exam, you probably won't need to configure the platform, but you should know: (1) ptrace is the default and works everywhere, (2) kvm provides stronger isolation but requires hardware virtualization support on the node, (3) the platform is configured in containerd's config.toml under the gVisor runtime section.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">A multi-tenant cluster runs workloads from different customers. What isolation strategy combines RuntimeClass with NetworkPolicy and PSS? Design the namespace configuration.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># Namespace setup for a tenant "tenant-a"
+kubectl create ns tenant-a
+# 1. Pod Security: enforce Restricted
+kubectl label ns tenant-a pod-security.kubernetes.io/enforce=restricted
+# 2. Network isolation: default-deny NetworkPolicy
+kubectl apply -f - &lt;&lt;EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: tenant-a}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+EOF
+# 3. Runtime isolation: auto-inject gVisor via Kyverno
+# (policy from Q8 above — matches namespace tenant-a)
+# 4. RBAC: tenant users only have access to their namespace
+kubectl create role tenant-a-admin --verb=* --resource=* -n tenant-a
+kubectl create rolebinding tenant-a-admin --role=tenant-a-admin --user=tenant-a-user -n tenant-a</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Multi-tenant isolation requires layered defenses: PSS (can't run privileged pods), NetworkPolicy (can't talk to other tenants), gVisor (can't escape container via kernel exploits), RBAC (can't access other namespaces). No single control is sufficient. On the CKS exam, when asked about multi-tenancy, always propose at least 3 layers of defense.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -27337,7 +28103,7 @@ spec:
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 22 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -27362,6 +28128,33 @@ spec:
     mode: STRICT  # PERMISSIVE allows plaintext fallback, STRICT requires mTLS</code></pre>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">What is SPIFFE and how does Istio use it for pod identity in mTLS? What does a SPIFFE ID look like for a Kubernetes pod?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>SPIFFE (Secure Production Identity Framework For Everyone) is an identity standard. Istio issues each pod a SPIFFE ID in the format: <code>spiffe://cluster.local/ns/&lt;namespace&gt;/sa/&lt;serviceaccount&gt;</code>. Example: <code>spiffe://cluster.local/ns/anihpj-prod/sa/anihpj-api</code>. This ID is embedded in the X.509 certificate the sidecar proxy presents during mTLS. The receiving sidecar validates: (1) the cert is signed by the mesh CA, (2) the SPIFFE ID matches the expected identity, (3) any AuthorizationPolicy allows traffic from that identity.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>SPIFFE is the identity layer of zero-trust networking. Every pod gets a unique, cryptographically-verifiable identity based on its ServiceAccount. This enables RBAC-style authorization at the network level: "allow traffic from SA anihpj-api in namespace prod to SA postgres in namespace database." On the CKS exam, understand that SPIFFE IDs replace IP-based trust with identity-based trust.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">Write an Istio AuthorizationPolicy that allows ONLY the <code>anihpj-api</code> ServiceAccount in namespace <code>prod</code> to send traffic to <code>postgres</code> ServiceAccount in namespace <code>database</code> on port 5432.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: postgres-access
+  namespace: database
+spec:
+  selector:
+    matchLabels:
+      app: postgres
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals:
+        - cluster.local/ns/prod/sa/anihpj-api
+    to:
+    - operation:
+        ports: ["5432"]</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>AuthorizationPolicy is Istio's Layer 7 RBAC for network traffic. The <code>principals</code> field uses SPIFFE IDs to identify source workloads. This is much stronger than IP-based NetworkPolicy because it can't be spoofed — the identity is cryptographically verified via mTLS. On the CKS exam, combine NetworkPolicy (L3/4) with AuthorizationPolicy (L7) for defense in depth.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What's the difference between Istio's PERMISSIVE and STRICT mTLS modes? When would you use PERMISSIVE mode in production?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>PERMISSIVE:</strong> Accepts BOTH mTLS and plaintext traffic. Used during migration when not all pods have sidecars yet. <strong>STRICT:</strong> REJECTS all non-mTLS traffic. Every pod must have a sidecar proxy. PERMISSIVE mode is a migration tool, not a production security posture. In production, use STRICT for all namespaces with sensitive data. The only valid use of PERMISSIVE is during a phased rollout where you're adding sidecars to existing workloads incrementally.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>PERMISSIVE is NOT a security control — it's a migration aid. If you leave namespaces in PERMISSIVE mode, an attacker who bypasses the sidecar (hostNetwork pod, compromised node) can send plaintext traffic that's accepted. On the CKS exam, if asked to "enable mTLS," the answer includes STRICT mode. PERMISSIVE is only acceptable during the rollout phase.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">How does Istio's sidecar proxy (Envoy) handle TLS certificate rotation? What happens if the cert expires during a connection?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Istio's Citadel (now istiod) issues short-lived certificates (default 24 hours) and the sidecar proxy automatically renews them BEFORE expiry. The flow: (1) Sidecar requests a new cert from istiod when >50% of TTL remains. (2) istiod issues a new cert signed by the mesh CA. (3) Envoy hot-reloads the cert without dropping existing connections. (4) Existing TLS sessions continue with the old cert until natural termination. New connections use the new cert immediately. No connection drops during rotation.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Automatic certificate rotation is one of Istio's key security features. Unlike manual TLS where cert expiry causes outages, Istio handles rotation transparently. On the CKS exam, understand that mTLS in a service mesh eliminates the operational burden of certificate management — it's fully automated.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What happens to pod-to-pod traffic if istiod (control plane) goes down? Do existing mTLS connections keep working?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Existing connections: YES, they keep working.</strong> Envoy sidecars operate independently of the control plane for the data path. mTLS is performed sidecar-to-sidecar using already-cached certificates. <strong>New connections: YES, they still work</strong> as long as certificates haven't expired (24-hour default TTL). <strong>What fails:</strong> New sidecar injection (no istiod to mutate pods), certificate renewal (certs expire after 24h → new mTLS connections fail), configuration updates (new AuthorizationPolicies aren't propagated). The control plane is critical for management but not for the data path.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the "data plane survives control plane failure" design principle. It's a key architecture concept for CKS. The sidecar proxies form a peer-to-peer mesh that functions independently of the control plane. On the exam, this is important for high-availability planning: a control plane outage is a security degradation (no cert renewal, no policy updates) but not a service outage.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">Compare service mesh mTLS (Istio/Linkerd) with manual mTLS using cert-manager. What are the tradeoffs?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><table style="width:100%; border-collapse: collapse;"><thead><tr style="border-bottom: 2px solid #326ce5;"><th style="text-align:left; padding: 8px; color: #93c5fd;">Aspect</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Service Mesh</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Manual mTLS (cert-manager)</th></tr></thead><tbody><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">Setup</td><td style="padding: 8px;">Install mesh, inject sidecars</td><td style="padding: 8px;">Generate certs, mount Secrets, configure app</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">Rotation</td><td style="padding: 8px;">Automatic, transparent</td><td style="padding: 8px;">cert-manager auto-rotates Secret, but app must reload</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">App changes</td><td style="padding: 8px;">None (sidecar handles TLS)</td><td style="padding: 8px;">App must support mTLS (code changes)</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">Granularity</td><td style="padding: 8px;">Per-pod identity (SPIFFE)</td><td style="padding: 8px;">Per-service identity (shared cert)</td></tr><tr><td style="padding: 8px;">Complexity</td><td style="padding: 8px;">Higher (sidecar overhead)</td><td style="padding: 8px;">Lower (no sidecar)</td></tr></tbody></table></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Service mesh is the CKS-recommended approach for mTLS because it's transparent to applications and provides per-pod identity. Manual mTLS is simpler but requires application changes and provides coarser identity (per-service, not per-pod). On the exam, choose service mesh for greenfield deployments and cert-manager for lightweight mTLS where the mesh overhead isn't acceptable.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">How do you enable automatic sidecar injection in a namespace? Write the command and explain when pods get the sidecar.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash">kubectl label namespace anihpj-prod istio-injection=enabled
+# Or for revision-specific injection:
+kubectl label namespace anihpj-prod istio.io/rev=stable</code></pre><p>Pods get the sidecar at CREATION time. Existing pods are NOT retroactively injected. To inject existing pods, you must restart them: <code>kubectl rollout restart deployment -n anihpj-prod</code>. The sidecar injection is performed by a mutating admission webhook that runs when the pod is created — it adds the <code>istio-proxy</code> container and <code>istio-init</code> init container to the pod spec.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Sidecar injection is a mutating admission webhook — it happens at Gate 4 (Admission). The namespace label tells Istio's webhook to modify pods in that namespace. On the CKS exam, you may need to: (1) enable injection on a namespace, (2) verify injection with <code>kubectl get pod -o jsonpath='{.spec.containers[*].name}'</code> (should include <code>istio-proxy</code>), (3) troubleshoot failed injection by checking the webhook configuration.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">A pod with an Istio sidecar can reach <code>postgres.database.svc.cluster.local:5432</code> but the connection fails with "TLS error: bad certificate." The destination pod also has a sidecar. What's the likely cause?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Most likely: <strong>mTLS mode mismatch.</strong> The source namespace has PERMISSIVE mode (allows plaintext) but the destination namespace has STRICT mode (requires mTLS). The source sidecar sends plaintext (because PERMISSIVE allows it), the destination sidecar expects mTLS → rejects. Fix: set both namespaces to STRICT, or at minimum set the destination to STRICT and the source will auto-negotiate mTLS if both have sidecars.</p><p>Other causes: (1) Istio CA certificates expired or not trusted, (2) clock skew between nodes (cert validity period check fails), (3) different trust domains (source and destination in different meshes with different CAs).</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>mTLS debugging is a common CKS scenario. The key insight: even in PERMISSIVE mode, if BOTH pods have sidecars, Istio will attempt mTLS. But explicit PERMISSIVE + STRICT mismatch across namespaces can cause confusion. On the exam, always check PeerAuthentication settings in BOTH namespaces when debugging mTLS issues. Use <code>istioctl authn tls-check &lt;pod&gt;</code> to see the actual TLS mode per connection.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -28459,7 +29252,7 @@ violation[{"msg": msg}] {
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 23 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -28492,6 +29285,48 @@ violation[{"msg": msg}] {
                     <p>Trivy finds KNOWN vulnerabilities (CVEs in public databases). It cannot detect: zero-day exploits, intentionally malicious code, or backdoors. Cosign verifies PROVENANCE — it proves the image was built by YOUR CI pipeline and hasn't been tampered with. Trivy = "is this image vulnerable?" Cosign = "is this image really ours?" You need both because scanning catches known bugs and signing catches supply chain attacks.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">You scan <code>nginx:1.25</code> and find CVE-2023-44487 (HTTP/2 Rapid Reset) rated CRITICAL. What's the FIRST thing you should do, and how do you find the fixed version?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>First:</strong> Check if the CVE actually affects your deployment. Many CVEs are in libraries your app doesn't use. <strong>Find fix:</strong> <code>trivy image --format json nginx:1.25 | jq '.Results[].Vulnerabilities[] | select(.VulnerabilityID=="CVE-2023-44487") | .FixedVersion'</code>. Then check if a newer nginx tag includes the fix: <code>trivy image nginx:1.25.1 | grep CVE-2023-44487</code>. If a fix exists, update the image. <strong>If no fix:</strong> Mitigate via WAF, NetworkPolicy, or disabling HTTP/2 on the Ingress.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Vulnerability triage is a CKS competency. Not every CRITICAL CVE is exploitable in your context. Check: (1) is the vulnerable library actually loaded? (2) is the attack vector reachable? (3) is a fixed version available? The CKS exam expects you to demonstrate this triage process, not just report CVEs blindly.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">How do you integrate Trivy into a CI/CD pipeline to BLOCK deployment of images with CRITICAL vulnerabilities? Write the pipeline step.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># In CI/CD pipeline (GitHub Actions example)
+- name: Scan image for vulnerabilities
+  run: |
+    trivy image --severity CRITICAL --exit-code 1 --no-progress $IMAGE
+    # --exit-code 1: Returns exit code 1 if CRITICAL CVEs found
+    # Pipeline stops if exit code != 0
+- name: Scan for HIGH vulnerabilities (warning only)
+  run: |
+    trivy image --severity HIGH --exit-code 0 --no-progress $IMAGE
+    # --exit-code 0: Never fails the build, just reports</code></pre><p>Key flags: <code>--exit-code 1</code> makes Trivy fail the build if vulnerabilities are found. <code>--severity CRITICAL</code> only blocks on critical issues. <code>--ignore-unfixed</code> can be used to only block on fixable CVEs.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>CI/CD integration is where image scanning adds real security value — it prevents vulnerable images from ever reaching production. The CKS exam tests your understanding of the "shift left" principle: catch vulnerabilities at build time, not runtime. Use <code>--exit-code 1</code> for blocking gates and <code>--exit-code 0</code> for informational scans.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What's the difference between Trivy Operator (cluster scanning) and trivy CLI (image scanning)? When would you use each?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Trivy CLI:</strong> Scans images at build time or on-demand. Use in CI/CD pipelines. Manual or scripted. <strong>Trivy Operator:</strong> Runs as a Kubernetes operator that continuously scans ALL running images in the cluster. Creates VulnerabilityReport CRDs per workload. Detects new CVEs in already-deployed images. Use for continuous runtime monitoring — a CVE discovered today in an image deployed last month will be detected. Both are needed: CLI for prevention (build time), Operator for detection (runtime).</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the prevention vs detection distinction. CLI scanning prevents vulnerable images from being deployed. Operator scanning detects vulnerabilities in images that are already running (because new CVEs are published daily). On the CKS exam, the answer to "how to continuously monitor for new CVEs" is Trivy Operator (or equivalent).</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">How does Trivy detect vulnerabilities? What databases does it query, and how often should you update them?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Trivy compares the software bill of materials (SBOM) of an image against vulnerability databases: (1) <strong>OS packages:</strong> Compares against distribution-specific advisories (Alpine SecDB, Red Hat OVAL, Debian Security Tracker, Ubuntu CVE Tracker). (2) <strong>Language libraries:</strong> Compares against language-specific databases (GitHub Advisory Database for Go/Python/Node.js, Maven for Java). (3) <strong>Infrastructure as Code:</strong> Compares against misconfiguration policies. Trivy automatically downloads and caches databases. Update with <code>trivy image --update-db</code> or set <code>TRIVY_DB_REPOSITORY</code> for air-gapped environments. Update at least daily — new CVEs are published continuously.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>The CKS exam tests this concept: scanning is only as good as the vulnerability database. An outdated Trivy DB misses new CVEs. On the exam, always run <code>--update-db</code> before scanning. For air-gapped environments, you may need to configure a local mirror of the Trivy database.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">Scan a Kubernetes manifest file for misconfigurations before deploying. Write the Trivy command and explain what types of issues it detects.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># Scan Kubernetes manifests for misconfigurations
+trivy config ./k8s-manifests/
+# Or scan a specific file
+trivy config deployment.yaml
+# Issues detected:
+# - Privileged containers (should be false)
+# - runAsNonRoot not set
+# - readOnlyRootFilesystem not set
+# - Capabilities not dropped
+# - hostPath volumes
+# - Containers running as root
+# - Memory/CPU limits not set</code></pre><p>Trivy detects Kubernetes security misconfigurations based on built-in policies aligned with CIS benchmarks and Pod Security Standards.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p><code>trivy config</code> extends Trivy beyond image scanning to infrastructure-as-code scanning. This is the "shift left" approach: catch security issues in your YAML before they reach the cluster. On the CKS exam, you may be asked to scan a directory of manifests and identify/fix security issues — this is the tool for that.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">A pod is running <code>nginx:1.21</code> (2 years old). Trivy Operator reports 45 CVEs. You update to <code>nginx:1.25</code> but still see 12 CVEs. What's the explanation, and what's your remediation plan?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>Explanation:</strong> (1) Some CVEs are in shared base image layers (e.g., Debian packages) that are present in both versions. (2) Newer versions fix application CVEs but may still have OS-level CVEs. (3) Some CVEs are unfixed — no patch exists yet. <strong>Plan:</strong> (1) Switch to a minimal base image (<code>nginx:alpine</code> or <code>nginx:distroless</code>) — smaller attack surface = fewer CVEs. (2) For unfixed CVEs: assess exploitability, apply compensating controls (WAF, NetworkPolicy, AppArmor). (3) Monitor for the fix release and update when available.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>CVE management is about risk reduction, not perfection. Zero CVEs is an unrealistic goal. The CKS approach: (1) minimize base image size to reduce attack surface, (2) fix what you can, (3) add compensating controls for what you can't fix, (4) continuously monitor. On the exam, you may need to recommend a minimal base image and explain why it reduces CVE count.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">You need to scan images in an air-gapped environment (no internet). How do you configure Trivy to use a local vulnerability database?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># 1. On an internet-connected machine, download the DB
+trivy image --download-db-only
+# DB is cached at ~/.cache/trivy/db/
+
+# 2. Copy the DB to the air-gapped environment
+scp -r ~/.cache/trivy/db/ airgap-node:~/.cache/trivy/db/
+
+# 3. Or host DB on an internal server
+# Set environment variable:
+export TRIVY_DB_REPOSITORY=https://internal-server/trivy-db
+
+# 4. Run scan without updating (uses cached DB)
+trivy image --skip-db-update nginx:1.25
+
+# 5. For Java/Go dependency DBs, also cache:
+trivy image --download-java-db-only</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Air-gapped scanning is a CKS exam scenario. The key flags: <code>--download-db-only</code> (download DB without scanning), <code>--skip-db-update</code> (scan with cached DB), <code>TRIVY_DB_REPOSITORY</code> (point to internal mirror). On the exam, if you can't reach the internet, check if the Trivy DB is pre-loaded in the environment or if you need to configure an internal repository.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -29965,7 +30800,7 @@ kyverno apply /path/to/policies --cluster --policy-report</code></pre>
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 24 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -29983,6 +30818,70 @@ kyverno apply /path/to/policies --cluster --policy-report</code></pre>
                     <p><strong>Fail:</strong> If the webhook server is unreachable, the admission request is REJECTED (fail-closed). More secure — prevents bypass by taking down the webhook. <strong>Ignore:</strong> If the webhook server is unreachable, the admission request proceeds as if the webhook doesn't exist (fail-open). Risky — an attacker could DoS the webhook server to bypass all its policies. Always use Fail for security-critical webhooks.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Write a ValidatingWebhookConfiguration that intercepts ALL pod CREATE/UPDATE operations and sends them to a webhook service <code>opa.default.svc</code> on <code>/v1/admit</code>.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata: {name: opa-validator}
+webhooks:
+- name: opa.default.svc
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE", "UPDATE"]
+    resources: ["pods"]
+    scope: Namespaced
+  clientConfig:
+    service:
+      name: opa
+      namespace: default
+      path: /v1/admit
+      port: 443
+    caBundle: &lt;base64-encoded-CA-cert&gt;
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  failurePolicy: Fail</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the baseline webhook configuration for CKS. Key fields: <code>rules</code> (what to intercept), <code>clientConfig</code> (where to send), <code>failurePolicy</code> (Fail = secure), <code>sideEffects: None</code> (required for dry-run support). The CA bundle must be the base64-encoded PEM certificate of the webhook server's TLS. On the exam, you may need to create this from scratch or debug a broken one.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What is the <code>sideEffects</code> field and why must it be set to <code>None</code> for most admission webhooks? What happens if it's set incorrectly?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>sideEffects</code> declares whether the webhook has side effects beyond the admission decision. <code>None</code> means the webhook only returns an admission decision — no external API calls, no database writes. If set to <code>None</code>, the API server can call the webhook during dry-run requests (<code>--dry-run=server</code>). If set incorrectly (e.g., "None" but the webhook actually writes to a database), dry-run requests will incorrectly trigger side effects. If the webhook HAS side effects, you MUST set <code>sideEffects: Some</code> or <code>sideEffects: NoneOnDryRun</code>. The API server won't call webhooks with side effects during dry-runs.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p><code>sideEffects</code> is a safety mechanism. On the CKS exam, webhooks that only validate (like OPA) should have <code>sideEffects: None</code>. Webhooks that log to external systems should have <code>sideEffects: Some</code>. Incorrect declaration causes unexpected behavior with dry-run or causes the API server to reject the webhook configuration entirely.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What's the <code>namespaceSelector</code> in a webhook config, and how would you use it to only apply a validating webhook to namespaces labeled <code>env: prod</code>?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">webhooks:
+- name: prod-validator.default.svc
+  namespaceSelector:
+    matchLabels:
+      env: prod
+  # OR exclude specific namespaces:
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values: [kube-system, kube-public]</code></pre><p><code>namespaceSelector</code> limits which namespaces the webhook applies to. Without it, the webhook applies to ALL namespaces. On the exam, use this to scope webhooks to production namespaces and exclude system namespaces.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Scoping is critical for production use. A webhook that validates all pods in all namespaces can break system components (kube-system pods may not meet your policies). Always exclude <code>kube-system</code> and <code>kube-public</code> from custom webhooks unless you specifically need to validate them.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">Explain the order of execution: built-in admission plugins, mutating webhooks, and validating webhooks. What happens if a mutating webhook modifies a field that a validating webhook checks?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Order: (1) Built-in MUTATING admission plugins (e.g., NamespaceLifecycle, ServiceAccount), (2) External MUTATING webhooks (alphabetically by name), (3) Built-in VALIDATING admission plugins (e.g., PodSecurity), (4) External VALIDATING webhooks (alphabetically by name). If a mutating webhook modifies a field, the validating webhook sees the MODIFIED object. This is intentional: validating webhooks validate the final state, including mutations. If you don't want a mutation to affect validation, validate the field in a MUTATING webhook (which runs before validating).</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This ordering is critical for debugging. If your OPA policy is rejecting a pod that looks fine in the original YAML, check if a mutating webhook (like Istio sidecar injection) modified the pod before OPA saw it. Use <code>kubectl get pod -o yaml</code> to see the final mutated spec. On the CKS exam, understand that mutations happen before validations.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">A webhook with <code>failurePolicy: Fail</code> is causing ALL pod creations to fail because the webhook server is down. How do you recover without deleting the webhook permanently?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># Option 1: Patch failurePolicy to Ignore temporarily
+kubectl patch validatingwebhookconfiguration &lt;name&gt; --type=json \
+  -p='[{"op":"replace","path":"/webhooks/0/failurePolicy","value":"Ignore"}]'
+# Fix the webhook server, then change back to Fail
+
+# Option 2: Delete the webhook (save the YAML first)
+kubectl get validatingwebhookconfiguration &lt;name&gt; -o yaml > webhook-backup.yaml
+kubectl delete validatingwebhookconfiguration &lt;name&gt;
+# Fix the server, then reapply: kubectl apply -f webhook-backup.yaml</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a real production incident scenario. When a security webhook fails, it takes down the entire admission chain. Option 1 (patch to Ignore) is faster and preserves the webhook config. Option 2 (delete + reapply) is safer because you can verify the webhook config is intact before reapplying. On the CKS exam, you may face a cluster where "nothing can be created" — check webhook status first.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">What is the ImagePolicyWebhook admission plugin and how does it differ from a ValidatingWebhookConfiguration for image validation?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>ImagePolicyWebhook:</strong> A BUILT-IN admission plugin specifically for image validation. Enabled via <code>--enable-admission-plugins=...,ImagePolicyWebhook</code> with <code>--admission-control-config-file</code> pointing to a config file. It sends image attributes (name, tag, digest) to an external webhook that approves/denies. <strong>ValidatingWebhookConfiguration:</strong> A general-purpose external webhook that can validate ANY resource, including pods and their images. More flexible but requires more setup. ImagePolicyWebhook is simpler if you ONLY need image validation; a ValidatingWebhookConfiguration is better if you need complex pod-level policies.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is a CKS distinction. ImagePolicyWebhook is a single-purpose, built-in plugin for approving images. It's less flexible than a full admission webhook but easier to configure for simple "allow/deny image" use cases. On the exam, you may be asked to configure either — know both exist and when to use each.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">You have 3 validating webhooks and 2 mutating webhooks. A pod creation request arrives. In what order are they called, and what happens if webhook #2 rejects the pod after webhook #1 already mutated it?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Order: Mutating webhooks #1, #2 (alphabetically) → Validating webhooks #1, #2, #3 (alphabetically). If validating webhook #2 rejects the pod: (1) The pod is NOT created. (2) The mutation from mutating webhooks is discarded — it never reaches etcd. (3) The API server returns the rejection error to the client. (4) Other validating webhooks (#3) are NOT called (short-circuit on first rejection). (5) The client can fix the issue and resubmit — the mutating webhooks will run again on the new request. Mutations only persist if the request is ultimately accepted.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the complete admission flow. Key insight: mutations are "tentative" until the request is accepted. If a later validating webhook rejects, the mutations are rolled back. Also, validating webhooks short-circuit — the first rejection stops the chain. On the CKS exam, this ordering is tested when debugging why a pod modification isn't taking effect.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">Write a MutatingWebhookConfiguration that injects a <code>seccompProfile: RuntimeDefault</code> into every pod in namespace "secure" that doesn't already have one. What's the advantage of mutation over validation for this use case?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata: {name: seccomp-injector}
+webhooks:
+- name: seccomp.default.svc
+  namespaceSelector:
+    matchLabels:
+      security: strict
+  rules:
+  - apiGroups: [""]
+    operations: ["CREATE"]
+    resources: ["pods"]
+  clientConfig:
+    service:
+      name: seccomp-webhook
+      namespace: default
+    caBundle: &lt;ca-cert&gt;
+  failurePolicy: Ignore  # Don't block pods if webhook is down
+  sideEffects: None</code></pre><p><strong>Advantage of mutation:</strong> Developers don't need to remember to add Seccomp — the webhook adds it automatically. Validation would REJECT pods without Seccomp, creating friction. Mutation is transparent and ensures compliance without developer effort. Use mutation for defaults, validation for hard requirements.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Mutation vs validation is a key design choice. Mutate when you want to AUTO-APPLY a security setting. Validate when you want to ENFORCE that the developer explicitly sets it (or a specific value). On the CKS exam, use mutation for security defaults (Seccomp, securityContext) and validation for hard policies (no privileged pods, must use specific registry).</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -30917,7 +31816,7 @@ repos:
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 25 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -30940,6 +31839,88 @@ violation[{"msg": msg}] {
                     <p><strong>Conftest</strong> runs Rego policies against YAML files in CI/CD (pre-deployment). <strong>Gatekeeper</strong> runs Rego policies as an admission controller inside Kubernetes (at deployment time). Use conftest to catch violations BEFORE they reach the cluster (shift-left). Use Gatekeeper to enforce policies at the admission gate (defense-in-depth). Both use the same Rego language. Conftest input path: <code>input.spec.template.spec...</code>. Gatekeeper input path: <code>input.review.object.spec...</code>.</p>
                     </div></details>
                 </div>
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Write a Gatekeeper ConstraintTemplate + Constraint that requires all pods to have <code>runAsNonRoot: true</code>. Include both resources.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml"># ConstraintTemplate
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata: {name: k8srequirednonroot}
+spec:
+  crd:
+    spec:
+      names: {kind: K8sRequiredNonRoot}
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8srequirednonroot
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not container.securityContext.runAsNonRoot == true
+        msg := sprintf("container %v must set runAsNonRoot: true", [container.name])
+      }
+---
+# Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredNonRoot
+metadata: {name: require-run-as-non-root}
+spec:
+  match:
+    kinds: [{apiGroups: [""], kinds: ["Pod"]}]</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Gatekeeper uses a two-resource model: ConstraintTemplate (defines the Rego policy logic) and Constraint (applies the policy with parameters). This separation allows reuse — one ConstraintTemplate can have multiple Constraints with different parameters. On the CKS exam, you create the template first, then the constraint.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What's kubesec and what does a score of 7 mean? What specific checks does it perform on a pod spec?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>kubesec scores pod security from 0-10. A score of 7 means the pod has good security but could be improved. It checks: <code>runAsNonRoot</code>, <code>readOnlyRootFilesystem</code>, <code>allowPrivilegeEscalation</code>, <code>capabilities.drop</code>, <code>seccompProfile</code>, <code>hostPID</code>, <code>hostNetwork</code>, <code>privileged</code>, resource limits. Each check adds or deducts points. Critical deductions: privileged:true (-30), hostPID:true (-20), no capabilities drop (-10). Additions: runAsNonRoot (+2), readOnlyRootFS (+2), drop ALL capabilities (+2). A score of 10 requires ALL security features enabled.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>kubesec is a quick security scoring tool for CI/CD. On the CKS exam, you may be asked to scan a pod spec and identify what's causing a low score. The scoring breakdown tells you exactly which fields to add. A score below 3 is critically insecure; above 7 is production-ready.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">Write a Rego policy for conftest that blocks pods using the <code>:latest</code> tag.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-rego">package main
+deny[msg] {
+  container := input.spec.containers[_]
+  endswith(container.image, ":latest")
+  msg := sprintf("container %v uses :latest tag", [container.name])
+}
+deny[msg] {
+  container := input.spec.containers[_]
+  not contains(container.image, ":")
+  msg := sprintf("container %v has no tag (defaults to :latest)", [container.name])
+}</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>:latest tags are mutable — they can change without notice, bypassing image scanning and signing. The second rule catches images with NO tag, which also default to :latest. On the CKS exam, always enforce specific tags or digests. Use conftest in CI/CD to catch this before deployment.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What's kube-linter and how does it differ from Trivy? Which one scans live clusters vs YAML files?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><strong>kube-linter:</strong> Scans Kubernetes YAML manifests for security misconfigurations and best practices. Runs in CI/CD or against files. Checks: securityContext, resource limits, liveness probes, etc. <strong>Trivy:</strong> Scans container IMAGES for known vulnerabilities (CVEs) and also scans YAML configs. kube-linter is YAML-only; Trivy is image + YAML. kube-linter focuses on Kubernetes best practices; Trivy focuses on vulnerability databases. Use BOTH: kube-linter for config hygiene, Trivy for CVE detection.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>These tools are complementary. kube-linter catches "this pod runs as root" (config error). Trivy catches "nginx:1.25 has CVE-2024-XXXX" (vulnerability). On the CKS exam, you may use both — scan the manifest with kube-linter, scan the image with Trivy.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">Write a Gatekeeper ConstraintTemplate that blocks pods from using any container image registry EXCEPT <code>anihpj.azurecr.io</code>.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata: {name: k8sallowedrepos}
+spec:
+  crd:
+    spec:
+      names: {kind: K8sAllowedRepos}
+      validation:
+        openAPIV3Schema:
+          properties:
+            repos:
+              type: array
+              items: {type: string}
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8sallowedrepos
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not startswith(container.image, input.parameters.repos[_])
+        msg := sprintf("container %v uses disallowed registry: %v", [container.name, container.image])
+      }</code></pre><p>Constraint: <code>parameters: {repos: ["anihpj.azurecr.io/"]}</code></p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Registry allowlisting is a supply chain security control. By restricting images to your private registry, you ensure: (1) all images have been scanned before being pushed to the registry, (2) no one can deploy images directly from Docker Hub, (3) every image is signed by your CI pipeline. On the CKS exam, this is a common Gatekeeper policy task.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">You scan a pod YAML with kubesec and get 2/10. The deductions show: privileged:true (-30), hostNetwork:true (-20), no seccompProfile (-5). Write the corrected pod securityContext to achieve 9+/10.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-yaml">securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+# Remove: privileged: true, hostNetwork: true, hostPID: true</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>This is the CKS pattern: start with the kubesec deductions, fix each one, rescan. privileged:true alone can take a score from 10 to 2. hostNetwork and hostPID are almost as bad. The corrected securityContext above should score 9+/10 (only missing resource limits which kubesec also checks but are optional for security). On the exam, iteratively fix and rescan.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">How does conftest integrate into a CI/CD pipeline? Write the pipeline step that fails the build if ANY Rego policy violation is found.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><pre><code class="language-bash"># In CI/CD (GitHub Actions / Jenkins)
+conftest test deployment.yaml --policy policies/ --fail-on-warn
+# --fail-on-warn: Fails if even a warning-level violation is found
+# Exit code 1 = policy violation, pipeline stops
+
+# Test multiple files
+conftest test k8s-manifests/*.yaml --policy policies/
+
+# Structured output for reporting
+conftest test deployment.yaml --policy policies/ --output json | \
+  jq '.[] | select(.failures | length > 0)'</code></pre></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>CI/CD integration is the "shift-left" approach. conftest should run BEFORE any image is built or deployed. If policies fail, the pipeline stops. On the CKS exam, the supply chain security domain (20%) heavily tests CI/CD integration — know how to add security gates to pipelines.</p></div></details></div>
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">Compare OPA Gatekeeper vs Kyverno for admission control. What are the key differences in architecture, language, and use case?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><table style="width:100%; border-collapse: collapse;"><thead><tr style="border-bottom: 2px solid #326ce5;"><th style="text-align:left; padding: 8px; color: #93c5fd;">Aspect</th><th style="text-align:left; padding: 8px; color: #93c5fd;">OPA Gatekeeper</th><th style="text-align:left; padding: 8px; color: #93c5fd;">Kyverno</th></tr></thead><tbody><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">Language</td><td style="padding: 8px;">Rego (declarative policy language)</td><td style="padding: 8px;">YAML (Kubernetes-native)</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">Architecture</td><td style="padding: 8px;">ConstraintTemplate + Constraint</td><td style="padding: 8px;">ClusterPolicy (single resource)</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">Learning curve</td><td style="padding: 8px;">Higher (Rego syntax)</td><td style="padding: 8px;">Lower (YAML, K8s-like)</td></tr><tr style="border-bottom: 1px solid #1e3a5f;"><td style="padding: 8px;">Mutation</td><td style="padding: 8px;">Separate product (OPA, not Gatekeeper)</td><td style="padding: 8px;">Built-in (generate/mutate rules)</td></tr><tr><td style="padding: 8px;">CKS Exam</td><td style="padding: 8px;">Gatekeeper is more commonly referenced</td><td style="padding: 8px;">Growing in popularity</td></tr></tbody></table></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Both are CNCF projects and valid CKS answers. Gatekeeper is more mature with a larger ecosystem. Kyverno is simpler (no Rego required) and supports mutation natively. On the CKS exam: if the question mentions "Rego" or "ConstraintTemplate," the answer is Gatekeeper. If it mentions "ClusterPolicy" or "YAML-based policies," it's Kyverno. Know both architectures.</p></div></details></div>
             </div>
 
             <!-- ═══ AMPLIFICATION: Exam Readiness ═══ -->
@@ -31596,7 +32577,7 @@ cosign verify \
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 26 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -32329,7 +33310,7 @@ cosign verify-attestation --key cosign.pub \
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 27 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -33120,7 +34101,7 @@ current-context: default</code></pre>
                 </div>
             </details>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 28 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -33791,7 +34772,7 @@ falco -v     # Shows rule evaluation details for each event</code></pre>
                 <p>Falco is heavily tested on the CKS exam. Know: (1) <strong>Rule structure:</strong> <code>rule</code>, <code>desc</code>, <code>condition</code>, <code>output</code>, <code>priority</code>, <code>tags</code>. (2) <strong>Key fields:</strong> <code>spawned_process</code>, <code>container.name</code>, <code>proc.name</code>, <code>proc.cmdline</code>, <code>fd.name</code>, <code>user.name</code>, <code>k8s.ns.name</code>, <code>k8s.pod.name</code>. (3) <strong>append vs override:</strong> append ADDS to the existing condition (safe for exceptions). override REPLACES the entire rule (must include original logic). (4) <strong>Edit rules</strong> in <code>/etc/falco/falco_rules.local.yaml</code> — NEVER edit the default rules file directly. (5) <strong>Verify:</strong> <code>falco --dry-run</code> validates syntax, <code>falco --list | grep &lt;rule&gt;</code> confirms rules are loaded.</p>
             </div>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 29 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -34340,7 +35321,7 @@ for CI). (3) No admission control blocked images from untrusted registries.
                 <p>The CKS exam may present an incident scenario and ask you to respond. Know: (1) <strong>Never delete first:</strong> isolate with labels + NetworkPolicy, capture forensics, THEN delete. (2) <strong>Forensic capture:</strong> <code>kubectl get pod -o yaml</code>, <code>kubectl exec -- env</code>, <code>kubectl exec -- ps aux</code>, <code>kubectl logs</code>, audit log queries. (3) <strong>Containment:</strong> remove pod labels to drop from Service, apply emergency deny-all NetworkPolicy. (4) <strong>Eradication:</strong> delete pod, revoke SA token, rotate secrets. (5) <strong>Post-incident:</strong> document timeline, root cause analysis, update Falco rules and admission policies.</p>
             </div>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 30 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -34818,7 +35799,7 @@ spec:
                 <p>The CKS exam may ask you to enforce immutability. Know: (1) <code>securityContext.readOnlyRootFilesystem: true</code> on every container. (2) Mount <code>emptyDir: {}</code> volumes for writable paths (<code>/tmp</code>, <code>/var/run</code>). (3) Use <code>persistentVolumeClaim</code> for persistent writable data (<code>/app/media</code>). (4) The Restricted PSS profile enforces readOnlyRootFilesystem automatically — label namespace with <code>pod-security.kubernetes.io/enforce=restricted</code>. (5) Verify: <code>kubectl exec pod -- touch /test</code> → should fail with "Read-only file system."</p>
             </div>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 31 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -36149,7 +37130,7 @@ kubectl port-forward svc/prometheus-server 9090:80 -n monitoring
                 <a href="#part8" class="chapter-nav-link next">Part 8: Hands-On →</a>
             </div>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 32 — CKS Practice Questions</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -38127,7 +39108,7 @@ kubectl logs -n falco daemonset/falco | grep "Shell in anihpj"</code></pre>
             </div>
 
             <!-- ═══════════ CKS PRACTICE QUESTIONS ═══════════ -->
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 33 — CKS Practice Questions</h4>
 
                 <div class="exam-question-item">
@@ -39250,7 +40231,7 @@ spec:
             </div>
 
             <!-- ═══════════ CKS PRACTICE QUESTIONS ═══════════ -->
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 34 — CKS Practice Questions</h4>
 
                 <div class="exam-question-item">
@@ -40285,7 +41266,7 @@ kubectl apply -f argocd/application-anihpj.yaml
             </div>
 
             <!-- ═══════════ CKS PRACTICE QUESTIONS ═══════════ -->
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 35 — CKS Practice Questions</h4>
 
                 <div class="exam-question-item">
@@ -40880,7 +41861,7 @@ You may use the Kubernetes documentation at kubernetes.io/docs.
             </div>
 
             <!-- ═══════════ CKS PRACTICE QUESTIONS ═══════════ -->
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 36 — CKS Exam Strategy Practice Questions</h4>
 
                 <div class="exam-question-item">
@@ -42294,7 +43275,7 @@ sudo cat /var/log/kubernetes/audit.log | jq 'select(.objectRef.subresource=="exe
                 <a href="#ch38" class="chapter-nav-link next">Chapter 38: Last-Mile Quick Reference →</a>
             </div>
 
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 37 — CKS Practice Questions (Mock Exam Speed Round)</h4>
                 <div class="exam-question-item">
                     <span class="eq-number">Q1</span>
@@ -42975,7 +43956,7 @@ systemctl status falco    # If running as systemd service</code></pre>
             </details>
 
             <!-- ═══════════ CKS PRACTICE QUESTIONS ═══════════ -->
-            <div class="cka-exam-questions">
+            <div class="cks-exam-questions">
                 <h4>📝 Chapter 38 — Last-Mile Quick Reference Practice</h4>
 
                 <div class="exam-question-item">
