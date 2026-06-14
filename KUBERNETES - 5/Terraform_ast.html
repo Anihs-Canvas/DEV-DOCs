@@ -5778,6 +5778,26 @@ resource "aws_cloudtrail" "audit" {
     "= 5.42.0"        = EXACT version (most locked down)
 </pre>
                 </div>
+
+                <p style="color:#c9d1d9;font-size:0.95em;line-height:1.7;margin-top:16px;">The <strong>pessimistic constraint operator</strong> (<code>~&gt;</code>) is the most common choice in production because it balances stability with flexibility. It says: "I trust provider maintainers to follow semantic versioning — give me all patches and minor updates, but block the next major version." This is critical because <strong>major version bumps introduce breaking changes</strong>: resource renames, removed attributes, changed defaults. Without <code>~&gt;</code>, a <code>terraform init -upgrade</code> could silently pull in a major version that breaks your entire configuration.</p>
+
+                <div class="info-box warning" style="margin-top:12px;">
+                    <h5>⚠️ The "Only Rightmost Component" Rule</h5>
+                    <p><code>~&gt; 5.0</code> allows 5.1, 5.99 — but NOT 6.0. <code>~&gt; 5.0.0</code> allows 5.0.1, 5.0.99 — but NOT 5.1.0. The <strong>rightmost specified component</strong> is the only one that can increment. Everything to its left is locked. This is the exact rule the exam tests: <code>~&gt; 1.2.3</code> means <code>&gt;= 1.2.3, &lt; 1.3.0</code>. Memorize this pattern.</p>
+                </div>
+
+                <div class="code-block-wrapper" style="margin-top:12px;">
+                    <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">How .terraform.lock.hcl Interacts with Version Constraints</span></div>
+<pre><code class="language-hcl"># Your constraints: version = "~> 5.0"  → allows 5.x (not 6.0)
+# Lock file records EXACT version: 5.82.0 + checksums per platform
+
+# Team flow:
+# terraform init → reads ~> 5.0, checks lock file → downloads EXACTLY 5.82.0
+# If checksums differ → ERROR (tampering detected!)
+# terraform init -upgrade → checks registry for newest matching ~> 5.0 → updates lock
+
+# Lock file prevents SURPRISE upgrades. -upgrade makes them INTENTIONAL.</code></pre>
+                </div>
             </div>
 
             <div id="s6-4" class="section-block">
@@ -5803,6 +5823,8 @@ resource "aws_s3_bucket" "dr" {
   bucket   = "anihpj-assets-dr"
 }</code></pre>
                 </div>
+
+                <p style="color:#c9d1d9;font-size:0.95em;line-height:1.7;margin-top:16px;">Multi-region deployments are a <strong>production necessity</strong>, not just disaster recovery. Use provider aliases when: (1) <strong>DR/failover</strong> — keep data copies in a separate region. (2) <strong>Latency optimization</strong> — deploy to us-east-1 and eu-west-1 for different user bases. (3) <strong>Cross-account architectures</strong> — separate AWS accounts per environment, each needing <code>assume_role</code> with its own provider config. (4) <strong>Global services</strong> — CloudFront (us-east-1 only), Route 53 (global), and IAM (global) may need different regions than your compute. The default provider (no alias) is always your primary — every resource without <code>provider = aws.alias</code> uses it automatically.</p>
             </div>
 
             <div id="s6-5" class="section-block">
@@ -5818,6 +5840,19 @@ resource "aws_s3_bucket" "dr" {
                         <tr><td><strong>Docker</strong></td><td><code>docker</code></td><td>80 Million+</td><td>Containers, images, networks, volumes</td></tr>
                     </tbody>
                 </table>
+
+                <p style="color:#c9d1d9;font-size:0.95em;line-height:1.7;margin-top:16px;">Each provider has a <strong>resource prefix</strong> that determines which API it targets. AWS resources start with <code>aws_</code>, Azure uses <code>azurerm_</code>, Google Cloud uses <code>google_</code>. The Kubernetes provider uses <code>kubernetes_</code> — note that it manages resources <em>inside</em> a cluster (pods, deployments, services), not the cluster itself. To create the cluster, use the cloud-specific provider: <code>aws_eks_cluster</code>, <code>azurerm_kubernetes_cluster</code>, or <code>google_container_cluster</code>. This separation — cluster creation vs cluster content — is a fundamental Terraform pattern you'll use in every production deployment.</p>
+
+                <div class="card-grid cols-2" style="margin-top:16px;">
+                    <div class="info-card" style="border-left:4px solid #f59e0b;">
+                        <h5>☁️ AWS Provider (hashicorp/aws)</h5>
+                        <p style="font-size:0.85em;color:#a1a1aa;">The most downloaded provider — 4B+ downloads. Manages 1000+ resource types across 200+ AWS services. From VPC networking to Lambda serverless, RDS databases to EKS clusters, S3 storage to IAM security — if AWS offers it as a service, the AWS provider has a resource for it. The provider is so large it's split into multiple service packages internally, but you interact with it through a single unified provider binary.</p>
+                    </div>
+                    <div class="info-card" style="border-left:4px solid #326ce5;">
+                        <h5>☸️ Kubernetes Provider (hashicorp/kubernetes)</h5>
+                        <p style="font-size:0.85em;color:#a1a1aa;">Manages resources <em>inside</em> an existing cluster. It talks directly to the K8s API server — you provide kubeconfig credentials. Use it to create Deployments, Services, ConfigMaps, Secrets, Ingresses, Namespaces, RBAC rules, and more. Combined with the Helm provider, you can deploy entire application stacks. The provider does NOT create the cluster — that's done by <code>aws_eks_cluster</code> or equivalent.</p>
+                    </div>
+                </div>
             </div>
 
             <div id="s6-7" class="section-block">
@@ -6238,6 +6273,13 @@ mount -t efs ${mount.id}:/ ${mount.path}
   }
 }</code></pre>
                 </div>
+
+                <p style="color:#c9d1d9;font-size:0.95em;line-height:1.7;margin-top:16px;">The null provider is Terraform's <strong>escape hatch for arbitrary actions</strong>. It creates a resource that doesn't correspond to any real infrastructure — its sole purpose is to run provisioners at specific points in the dependency graph. The <strong>triggers map</strong> is the key: when any trigger value changes, the null_resource is marked for recreation, causing its provisioners to re-run. Without triggers, the null_resource runs once and never again — which defeats the purpose. Common patterns include: (1) <strong>Database migrations</strong> after RDS creation (trigger on DB endpoint), (2) <strong>Cache warming</strong> after Redis deployment, (3) <strong>API calls</strong> to external systems that have no Terraform provider. The null_resource exists because Terraform is fundamentally about managing infrastructure state, not running scripts — but sometimes you genuinely need both.</p>
+
+                <div class="info-box warning" style="margin-top:12px;">
+                    <h5>⚠️ Null Resource + Provisioner = Fragile</h5>
+                    <p>If the provisioner fails, the null_resource is <strong>tainted</strong> and will be destroyed/recreated on the next apply. This can cascade: a failed migration script taints the null_resource, which triggers re-running the migration, which might fail again. Always test provisioner commands in isolation before embedding them in Terraform. Consider whether a CI/CD pipeline step would be a safer alternative for script execution than a Terraform provisioner.</p>
+                </div>
             </div>
 
             <div id="s7-8" class="section-block">
@@ -6252,9 +6294,9 @@ resource "random_password" "db_pass" {
   length  = 32
 }</code></pre>
                 </div>
-            </div>
 
-            <div id="s7-9" class="section-block">
+                <p style="color:#c9d1d9;font-size:0.95em;line-height:1.7;margin-top:16px;">The time provider solves a critical problem: <strong>time-based rotation of secrets and resources</strong>. Without it, passwords set at creation time stay forever — a security anti-pattern. <code>time_rotating</code> generates a new timestamp every <code>rotation_days</code>, which you use as a <code>keepers</code> key on <code>random_password</code>. When the keeper changes, the password regenerates. But here's the crucial detail: <strong>changing the password in Terraform does NOT automatically update it in the running application</strong>. Your app must be designed to fetch passwords dynamically (from Vault, Secrets Manager, or env vars reloaded on restart). The time provider triggers the rotation — your app handles the consumption. For anihpj/jobpost, combine with <code>aws_secretsmanager_secret_version</code> to push the new password to AWS, then configure Django to read from Secrets Manager at startup.</p>
+            </div>
                 <h3>7.9 TLS Provider — Certificates for anihpj HTTPS</h3>
                 <div class="code-block-wrapper">
                     <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">TLS Provider — Self-Signed Dev Certificate</span></div>
@@ -6268,6 +6310,8 @@ resource "tls_self_signed_cert" "anihpj" {
   allowed_uses = ["key_encipherment", "digital_signature"]
 }</code></pre>
                 </div>
+
+                <p style="color:#c9d1d9;font-size:0.95em;line-height:1.7;margin-top:16px;">The TLS provider generates <strong>cryptographic keys and certificates</strong> within Terraform — no external CA required. It's primarily used for development and internal services where a full PKI isn't justified. For anihpj/jobpost, it creates self-signed certificates for local HTTPS testing. In production, you'd replace these with ACM certificates (AWS) or certificates from a proper CA. The provider supports RSA and ECDSA algorithms, self-signed and CA-signed certificates, and CSR generation. Key use cases: (1) <strong>Local dev HTTPS</strong> — self-signed cert for Docker/Kind clusters, (2) <strong>Internal mTLS</strong> — service-to-service encryption within a VPC, (3) <strong>SSH key pairs</strong> — programmatic generation for EC2 access (though <code>aws_key_pair</code> is better for AWS). Note: self-signed certificates will trigger browser security warnings — they're for development only, not production user-facing endpoints.</p>
             </div>
 
             <!-- Provider Decision Matrix -->
@@ -12608,6 +12652,85 @@ instance_type = lookup({ dev="t3.micro"; staging="t3.small"; prod="t3.large" }, 
             <p style="color:#a1a1aa;text-align:center;margin-top:12px;font-size:0.9em;"><strong>Pro Tip:</strong> Domain 5 (~10%) tests mostly module sources and versioning. Know the 6 source types cold, especially Registry format and <code>?ref=</code> for Git. Module best practices (single responsibility, small interfaces) are secondary but show up in scenario questions.</p>
         </div>
 
+        <!-- NEW: Part 5 Quick Reference -->
+        <div class="toc-section" style="margin-top:32px;">
+            <h2 style="text-align:center;color:#93c5fd;font-size:1.6em;">📊 Part 5 Quick Reference — Modules at a Glance</h2>
+
+            <div class="card-grid cols-3" style="margin-top:20px;">
+                <div class="info-card" style="border-left:4px solid #326ce5;">
+                    <div class="card-icon-lg" style="font-size:1.8em;">🧩</div>
+                    <h5>Module Basics</h5>
+                    <p style="font-size:0.82em;line-height:1.6;color:#a1a1aa;">
+                        <strong>Module = directory with .tf files</strong><br>
+                        <strong>Root module</strong>: your main directory<br>
+                        <strong>Child module</strong>: called via <code>module "name"</code><br>
+                        <strong>Inputs</strong> = variables (parameters)<br>
+                        <strong>Outputs</strong> = exposed values (return)<br>
+                        <strong>Standard structure</strong>: main.tf, variables.tf, outputs.tf, README.md
+                    </p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #22c55e;">
+                    <div class="card-icon-lg" style="font-size:1.8em;">🔗</div>
+                    <h5>Module Sources</h5>
+                    <p style="font-size:0.82em;line-height:1.6;color:#a1a1aa;">
+                        <strong>1. Local</strong>: <code>"./modules/vpc"</code><br>
+                        <strong>2. Registry</strong>: <code>"namespace/module/prov"</code><br>
+                        <strong>3. GitHub</strong>: <code>"github.com/org/repo"</code><br>
+                        <strong>4. Git</strong>: <code>"git::https://..."</code><br>
+                        <strong>5. S3/HTTP</strong>: archived packages<br>
+                        <strong>6. Private Registry</strong>: TFC organization-scoped
+                    </p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #8b5cf6;">
+                    <div class="card-icon-lg" style="font-size:1.8em;">✅</div>
+                    <h5>Best Practices</h5>
+                    <p style="font-size:0.82em;line-height:1.6;color:#a1a1aa;">
+                        <strong>Single responsibility</strong>: one thing well<br>
+                        <strong>Small interface</strong>: 3-5 input variables<br>
+                        <strong>Pin versions</strong>: <code>~> X.Y</code> everywhere<br>
+                        <strong>Output contracts</strong>: stable, documented<br>
+                        <strong>README per module</strong>: inputs, outputs, examples<br>
+                        <strong>Test independently</strong>: each module standalone
+                    </p>
+                </div>
+            </div>
+
+            <div class="card-grid cols-2" style="margin-top:16px;">
+                <div class="info-card" style="border-left:4px solid #ef4444;">
+                    <h5>⚠️ Top 5 Module Exam Traps</h5>
+                    <ol style="color:#c9d1d9;font-size:0.85em;line-height:1.9;padding-left:18px;">
+                        <li><strong>"module outputs are accessed via module.X.Y"</strong> — not <code>var.X</code> or <code>data.X</code></li>
+                        <li><strong>"Local modules can't be versioned"</strong> — only Registry/Git modules support <code>version</code></li>
+                        <li><strong>"Root module = any directory with .tf files"</strong> — yes, even your main.tf directory</li>
+                        <li><strong>"Registry modules need provider pinning too"</strong> — add <code>required_providers</code> in the module</li>
+                        <li><strong>"for_each on modules requires Terraform 0.13+"</strong> — older versions only support count</li>
+                    </ol>
+                </div>
+                <div class="info-card" style="border-left:4px solid #22c55e;">
+                    <h5>🔑 Module Commandments</h5>
+                    <ol style="color:#c9d1d9;font-size:0.85em;line-height:1.9;padding-left:18px;">
+                        <li><strong>Root orchestrates, modules implement</strong> — no resource blocks in root</li>
+                        <li><strong>Outputs are the contract</strong> — change internals, keep outputs stable</li>
+                        <li><strong>Compose, don't nest deeply</strong> — max 2-3 levels of nesting</li>
+                        <li><strong>Use the Registry first</strong> — 4000+ modules, don't reinvent</li>
+                        <li><strong>Tag your releases</strong> — <code>git tag v1.0.0</code> enables <code>?ref=v1.0.0</code></li>
+                    </ol>
+                </div>
+            </div>
+
+            <div class="visual-summary" style="margin-top:16px;">
+                <h4>📊 Part 5 Numbers to Memorize</h4>
+                <div class="vs-grid">
+                    <div class="vs-item"><span class="vs-icon">6</span><span class="vs-label">Module Source Types</span><span class="vs-detail">Local, Registry, GitHub, Git, S3/HTTP, Private Registry</span></div>
+                    <div class="vs-item"><span class="vs-icon">4000+</span><span class="vs-label">Registry Modules</span><span class="vs-detail">Public modules on registry.terraform.io</span></div>
+                    <div class="vs-item"><span class="vs-icon">1B+</span><span class="vs-label">VPC Module DLs</span><span class="vs-detail">terraform-aws-modules/vpc/aws is #1</span></div>
+                    <div class="vs-item"><span class="vs-icon">3-5</span><span class="vs-label">Ideal Input Count</span><span class="vs-detail">Small interfaces make reusable modules</span></div>
+                    <div class="vs-item"><span class="vs-icon">~10%</span><span class="vs-label">Exam Weight</span><span class="vs-detail">~6 questions on Terraform Associate (004)</span></div>
+                    <div class="vs-item"><span class="vs-icon">10</span><span class="vs-label">anihpj Modules</span><span class="vs-detail">Networking, Compute, Container, K8s, DB, Storage, Cache, DNS, IAM, Monitor</span></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══════════════════════════════════════════════════════ -->
         <!-- PART 6: TERRAFORM CLOUD & ENTERPRISE                    -->
         <!-- ═══════════════════════════════════════════════════════ -->
@@ -13891,6 +14014,84 @@ terraform plan -out=tfplan</code></pre></div><p>Run triggers auto-chain workspac
             <tr><td colspan="2"><strong>Domain 6 Total</strong></td><td><strong>~10% (~6 questions)</strong></td><td><strong>20 Practice Qs completed</strong></td></tr>
             </table>
             <p style="color:#a1a1aa;text-align:center;margin-top:12px;font-size:0.9em;"><strong>Pro Tip:</strong> Domain 6 (~10%) focuses on TFC features you can't do with the CLI. The 3 run modes, Sentinel levels, and remote execution vs local are the most-tested topics. Remember: CLI-driven mode still runs remotely — you just trigger it from your laptop.</p>
+        </div>
+
+        <!-- NEW: Part 6 Quick Reference -->
+        <div class="toc-section" style="margin-top:32px;">
+            <h2 style="text-align:center;color:#93c5fd;font-size:1.6em;">📊 Part 6 Quick Reference — Terraform Cloud at a Glance</h2>
+
+            <div class="card-grid cols-3" style="margin-top:20px;">
+                <div class="info-card" style="border-left:4px solid #326ce5;">
+                    <div class="card-icon-lg" style="font-size:1.8em;">☁️</div>
+                    <h5>TFC Platform</h5>
+                    <p style="font-size:0.82em;line-height:1.6;color:#a1a1aa;">
+                        <strong>Remote execution</strong>: plans/apply run in cloud<br>
+                        <strong>Managed state</strong>: no S3/DynamoDB setup needed<br>
+                        <strong>Secure credentials</strong>: never leave TFC<br>
+                        <strong>VCS integration</strong>: PR triggers speculative plans<br>
+                        <strong>3 run modes</strong>: VCS, API, CLI-driven<br>
+                        <strong>Cost estimation</strong>: before every apply
+                    </p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #ef4444;">
+                    <div class="card-icon-lg" style="font-size:1.8em;">🛡️</div>
+                    <h5>Sentinel Policies</h5>
+                    <p style="font-size:0.82em;line-height:1.6;color:#a1a1aa;">
+                        <strong>Advisory</strong>: warning only, apply proceeds<br>
+                        <strong>Soft-Mandatory</strong>: can override with approval<br>
+                        <strong>Hard-Mandatory</strong>: NO override — apply blocked<br>
+                        <strong>Runs BEFORE apply</strong>: policy-as-code guardrails<br>
+                        <strong>Common rules</strong>: cost limits, encryption, tagging
+                    </p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #22c55e;">
+                    <div class="card-icon-lg" style="font-size:1.8em;">👥</div>
+                    <h5>Collaboration</h5>
+                    <p style="font-size:0.82em;line-height:1.6;color:#a1a1aa;">
+                        <strong>4 RBAC roles</strong>: Owner, Admin, Write, Read<br>
+                        <strong>Team tokens</strong>: survive personnel changes<br>
+                        <strong>Run triggers</strong>: chain workspace executions<br>
+                        <strong>Projects</strong>: group workspaces, scope permissions<br>
+                        <strong>Private registry</strong>: share modules within org<br>
+                        <strong>OIDC/SSO</strong>: no static cloud keys needed
+                    </p>
+                </div>
+            </div>
+
+            <div class="card-grid cols-2" style="margin-top:16px;">
+                <div class="info-card" style="border-left:4px solid #f59e0b;">
+                    <h5>⚠️ Top 5 TFC Exam Traps</h5>
+                    <ol style="color:#c9d1d9;font-size:0.85em;line-height:1.9;padding-left:18px;">
+                        <li><strong>"CLI-driven runs locally"</strong> — FALSE. Even CLI-driven mode runs on TFC servers — you just trigger from your laptop.</li>
+                        <li><strong>"Sentinel can be bypassed by admin"</strong> — TRUE for advisory/soft, FALSE for hard-mandatory.</li>
+                        <li><strong>"TFC workspaces = CLI workspaces"</strong> — FALSE. TFC workspaces map 1:1 to CLI workspaces conceptually, but they're managed differently.</li>
+                        <li><strong>"Cost estimation is exact"</strong> — FALSE. It's an estimate based on list prices. Actual costs vary with usage.</li>
+                        <li><strong>"Variable Sets override workspace variables"</strong> — FALSE. Workspace variables take precedence over Variable Sets.</li>
+                    </ol>
+                </div>
+                <div class="info-card" style="border-left:4px solid #8b5cf6;">
+                    <h5>🔑 TFC Commandments</h5>
+                    <ol style="color:#c9d1d9;font-size:0.85em;line-height:1.9;padding-left:18px;">
+                        <li><strong>Use OIDC/dynamic credentials</strong> — no static keys anywhere</li>
+                        <li><strong>Hard-mandatory Sentinel on prod</strong> — no override possible</li>
+                        <li><strong>Team tokens for CI/CD</strong> — never personal user tokens</li>
+                        <li><strong>Run triggers for layer ordering</strong> — networking → compute → app</li>
+                        <li><strong>Commit .terraform.lock.hcl</strong> — TFC respects it too</li>
+                    </ol>
+                </div>
+            </div>
+
+            <div class="visual-summary" style="margin-top:16px;">
+                <h4>📊 Part 6 Numbers to Memorize</h4>
+                <div class="vs-grid">
+                    <div class="vs-item"><span class="vs-icon">3</span><span class="vs-label">Run Modes</span><span class="vs-detail">VCS-Driven, API-Driven, CLI-Driven</span></div>
+                    <div class="vs-item"><span class="vs-icon">3</span><span class="vs-label">Sentinel Levels</span><span class="vs-detail">Advisory, Soft-Mandatory, Hard-Mandatory</span></div>
+                    <div class="vs-item"><span class="vs-icon">4</span><span class="vs-label">RBAC Roles</span><span class="vs-detail">Owner, Admin, Write, Read</span></div>
+                    <div class="vs-item"><span class="vs-icon">6</span><span class="vs-label">Source Types</span><span class="vs-detail">Registry, GitHub, Git, S3, Local, Private Reg</span></div>
+                    <div class="vs-item"><span class="vs-icon">~10%</span><span class="vs-label">Exam Weight</span><span class="vs-detail">~6 questions on Terraform Associate (004)</span></div>
+                    <div class="vs-item"><span class="vs-icon">5</span><span class="vs-label">Free Tier Users</span><span class="vs-detail">TFC free tier: up to 5 users, no credit card</span></div>
+                </div>
+            </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════ -->
