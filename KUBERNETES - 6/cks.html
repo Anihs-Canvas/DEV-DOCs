@@ -21392,6 +21392,51 @@ kubectl create secret generic test-encryption -n default \
   └──────────────────────────────────────────────────────────────────────────┘
 </pre>
                 </div>
+
+                <h4>Encryption Provider Comparison — Choose the Right Algorithm</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Provider</th><th>Algorithm</th><th>Key Size</th><th>Performance</th><th>CKS Recommendation</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>identity</strong></td><td>None — plaintext</td><td>N/A</td><td>Fastest</td><td>🔴 NEVER in production. Only useful during migration.</td></tr>
+                            <tr><td><strong>aescbc</strong></td><td>AES-256-CBC + PKCS#7</td><td>32 bytes (256-bit)</td><td>✅ Fast</td><td>✅ Best for CKS exam: simple, no external dependencies, FIPS-compliant.</td></tr>
+                            <tr><td><strong>aesgcm</strong></td><td>AES-256-GCM</td><td>32 bytes</td><td>✅ Fast (slightly faster)</td><td>✅ Good alternative. Must rotate keys every 200K writes.</td></tr>
+                            <tr><td><strong>secretbox</strong></td><td>XSalsa20 + Poly1305</td><td>32 bytes</td><td>🐢 Slower</td><td>⚠️ Only if AES hardware acceleration unavailable.</td></tr>
+                            <tr><td><strong>kms</strong></td><td>Delegates to cloud KMS</td><td>Cloud-managed</td><td>🐢 Slowest (API call)</td><td>✅ Production best practice. Envelope encryption: KMS encrypts DEK.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Secret Rotation — Automating the "Read + Rewrite" Pattern</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header"><span class="code-lang">Bash — Rotate ALL secrets in all namespaces (re-encrypt with current key)</span></div>
+                    <pre><code class="language-bash"># After changing the encryption key or adding a new provider:
+# Step 1: Verify encryption is configured
+kubectl get encryptionconfiguration -o yaml
+# (this is a cluster-admin operation)
+
+# Step 2: Rotate ALL secrets — read (decrypt) + write (encrypt)
+kubectl get secrets -A -o json | kubectl replace -f -
+# This reads every secret via the API server (which decrypts),
+# then writes it back (the API server encrypts with the FIRST
+# provider in the list before storing in etcd).
+
+# Step 3: Verify rotation status (check etcd for old key prefix)
+ETCDCTL_API=3 etcdctl get /registry/secrets/ --prefix --keys-only | \
+  while read key; do
+    encrypted=$(etcdctl get "$key" --print-value-only | head -c 30)
+    echo "$key → $encrypted"
+  done
+# All should show: k8s:enc:aescbc:v1:key2: (the NEW key)
+
+# Step 4: Audit who can read secrets (find overly-permissive RBAC)
+kubectl get clusterrole,role -A -o yaml | grep -B5 '"secrets"' | grep -E 'name:|namespace:'
+# Every role with access to secrets is listed. Review each one.
+kubectl get rolebindings,clusterrolebindings -A -o json | \
+  jq '.items[] | select(.roleRef.name as $r | ["admin","edit","cluster-admin"] | index($r)) | {ns: .metadata.namespace, role: .roleRef.name, subjects: .subjects}'
+# Shows every binding for admin/edit/cluster-admin roles — these
+# roles ALL include secret read access by default!</code></pre>
+                </div>
             </div>
 
             <!-- ═══════════ SECTION 19.4 ═══════════ -->
@@ -22082,6 +22127,33 @@ version = 2
 # RuntimeClass handler: "kata" → containerd looks up [runtimes.kata]
 # → executes /usr/bin/kata-runtime (Kata) to create the container</code></pre>
                 </div>
+
+                <h4>Sandbox Performance Tradeoffs — When the Slowdown Is Worth It</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Workload Type</th><th>runc (Default)</th><th>gVisor</th><th>Kata Containers</th><th>Recommendation</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Web API (Django)</strong></td><td>100% baseline</td><td>~85% perf (syscall overhead)</td><td>~75% perf (VM overhead)</td><td>runc for anihpj (trusted code, needs speed)</td></tr>
+                            <tr><td><strong>Database (Postgres)</strong></td><td>100% baseline</td><td>~70% perf (many syscalls)</td><td>~65% perf</td><td>runc (performance-critical)</td></tr>
+                            <tr><td><strong>User upload handler</strong></td><td>100% baseline</td><td>~85% perf</td><td>~75% perf</td><td>gVisor (untrusted user input!)</td></tr>
+                            <tr><td><strong>CI/CD build jobs</strong></td><td>100% baseline</td><td>~80% perf</td><td>~70% perf</td><td>Kata (hardware isolation for untrusted builds)</td></tr>
+                            <tr><td><strong>Third-party microservice</strong></td><td>100% baseline</td><td>~85% perf</td><td>~75% perf</td><td>Kata or gVisor (untrusted vendor code)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Attack Scenario — What gVisor Prevents That runc Allows</h4>
+                <div class="scenario-box">
+                    <div class="scenario-header">
+                        <span class="scenario-badge danger">ATTACK SCENARIO</span>
+                        <span class="scenario-title">CVE-2022-0185 — Linux Kernel Heap Overflow (CVSS 8.4)</span>
+                    </div>
+                    <div class="scenario-steps">
+                        <div class="scenario-step"><div class="step-marker">1</div><div class="step-content"><strong>Attacker crafts malicious filesystem command</strong><p>Using the <code>unshare</code> syscall with <code>CLONE_NEWNS|CLONE_NEWUSER</code> flags, the attacker triggers a heap buffer overflow in the Linux kernel's <code>legacy_parse_param</code> function. This CVE affected ALL Linux kernels 5.1+ through early 2022.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">2</div><div class="step-content"><strong>With runc: ATTACK SUCCEEDS</strong><p>runc containers share the host kernel. The attacker's exploit corrupts kernel memory → gains root privileges → escapes the container entirely. Full node compromise. <strong>Seccomp does NOT block unshare in RuntimeDefault!</strong></p></div></div>
+                        <div class="scenario-step"><div class="step-marker">🛡️</div><div class="step-content"><strong>With gVisor: ATTACK FAILS</strong><p>gVisor containers run on a USERSPACE kernel (Sentry). The attacker's exploit runs against Sentry, NOT the host Linux kernel. Sentry is written in Go (memory-safe language) — no heap overflow possible. <strong>Even if the attack "succeeds," the attacker only compromises Sentry, not the host.</strong> gVisor then applies a SECOND seccomp filter between Sentry and the host kernel for defense-in-depth.</p></div></div>
+                    </div>
+                </div>
             </div>
 
             <!-- ═══════════ SECTION 21.3 ═══════════ -->
@@ -22357,6 +22429,54 @@ spec:
   ▼
   DESTINATION ENVOY → decrypts → forwards to localhost:5432 (postgres).
 </pre>
+                </div>
+
+                <h4>Istio vs Cilium vs Linkerd — Which Service Mesh for mTLS?</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Feature</th><th>Istio</th><th>Cilium</th><th>Linkerd</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>mTLS</strong></td><td>✅ Auto (Citadel)</td><td>✅ Auto (Cilium identities)</td><td>✅ Auto (identity-based)</td></tr>
+                            <tr><td><strong>Proxy model</strong></td><td>Sidecar (Envoy)</td><td>Sidecar-free (eBPF in kernel)</td><td>Sidecar (linkerd-proxy, Rust)</td></tr>
+                            <tr><td><strong>Performance overhead</strong></td><td>~5-10ms latency</td><td>~1-2ms (near-native)</td><td>~1-3ms</td></tr>
+                            <tr><td><strong>Complexity</strong></td><td>High (many CRDs)</td><td>Medium (K8s-native)</td><td>Low (simplest UX)</td></tr>
+                            <tr><td><strong>NetworkPolicy + mTLS</strong></td><td>✅ Combined</td><td>✅ Combined (single CRD)</td><td>⚠️ Separate configs</td></tr>
+                            <tr><td><strong>CKS exam relevance</strong></td><td>⭐⭐ Most common</td><td>⭐ Growing</td><td>⭐ Simple alternative</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Verifying mTLS Is Actually Working</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header"><span class="code-lang">Bash — Test that mTLS encrypts traffic and plaintext is rejected</span></div>
+                    <pre><code class="language-bash"># 1. Verify STRICT mTLS is enabled in the namespace
+kubectl get peerauthentication -n anihpj-prod
+# Should show: default  STRICT  (mode: STRICT)
+
+# 2. Deploy a test pod WITHOUT an Istio sidecar
+kubectl run test-no-sidecar --image=nginx -n anihpj-prod \
+  --overrides='{"metadata":{"annotations":{"sidecar.istio.io/inject":"false"}}}'
+
+# 3. Try to curl the anihpj service from the test pod
+kubectl exec test-no-sidecar -n anihpj-prod -- \
+  curl -s http://anihpj:8000
+# Expected: curl: (56) Recv failure: Connection reset by peer
+# ✅ PLAINTEXT REJECTED — mTLS requires encrypted traffic!
+
+# 4. Try from a pod WITH a sidecar — should work
+kubectl exec deploy/anihpj -n anihpj-prod -- \
+  curl -s http://anihpj:8000/healthz
+# Expected: OK (200)
+# ✅ SIDECAR-TO-SIDECAR TRAFFIC WORKS (mutual TLS)
+
+# 5. Inspect the certificates in use
+kubectl exec deploy/anihpj -n anihpj-prod -c istio-proxy -- \
+  curl -s http://localhost:15000/certs | jq .
+# Shows: certificate chain, expiry dates, SAN names
+
+# 6. Check Istio's certificate authority
+kubectl get secrets -n istio-system | grep cacerts
+# These are the CA certs Istio uses to issue workload certificates</code></pre>
                 </div>
             </div>
 
@@ -26163,12 +26283,65 @@ cosign verify \
                 <h5>💡 Key Takeaway for the CKS Exam</h5>
                 <p>The CKS exam expects you to understand image signing. Know: (1) <code>cosign generate-key-pair</code> creates the key pair, <code>cosign sign --key cosign.key &lt;image&gt;</code> signs, <code>cosign verify --key cosign.pub &lt;image&gt;</code> verifies. (2) Kyverno <code>verifyImages</code> enforces at admission — know the YAML structure with <code>attestors.entries.keys.publicKeys</code>. (3) Key rotation: sign with both old + new keys during transition, update Kyverno to accept both. (4) Keyless: <code>cosign sign &lt;image&gt;</code> (no --key), identity verification via <code>--certificate-identity</code> and <code>--certificate-oidc-issuer</code>. (5) Signatures reference immutable digests, never mutable tags. Even if an attacker overwrites a tag, the signature is bound to the original digest and will fail verification.</p>
             </div>
+
+            <h4>SBOM in Practice — The Log4Shell Wake-Up Call</h4>
+            <div class="scenario-box">
+                <div class="scenario-header"><span class="scenario-badge danger">REAL-WORLD EVENT</span><span class="scenario-title">Dec 2021 — Log4Shell (CVE-2021-44228, CVSS 10.0)</span></div>
+                <div class="scenario-steps">
+                    <div class="scenario-step"><div class="step-marker">1</div><div class="step-content"><strong>CVE Published</strong><p>Remote code execution in Log4j 2.x via JNDI lookups. CVSS 10.0 — maximum severity.</p></div></div>
+                    <div class="scenario-step"><div class="step-marker">2</div><div class="step-content"><strong>Without SBOM</strong><p>WEEKS of manual auditing. Engineers grep Dockerfiles, Maven POMs, JAR files.</p></div></div>
+                    <div class="scenario-step"><div class="step-marker">3</div><div class="step-content"><strong>With SBOM — 30 Seconds</strong><p>SBOM generated in CI/CD. When Log4Shell hits: <code>grype sbom:image.sbom.json</code> → results in 30 seconds: "anihpj:v2 — NOT affected."</p></div></div>
+                    <div class="scenario-step"><div class="step-marker">4</div><div class="step-content"><strong>The Lesson</strong><p>SBOMs transform vulnerability response from weeks to seconds. US Executive Order 14028 now requires SBOMs for federal software.</p></div></div>
+                </div>
+            </div>
         </div>
                 <div class="chapter-meta">
                     <span class="meta-tag">🟡 Intermediate</span>
                     <span class="meta-tag">⏱️ ~1.5 hours</span>
                     <span class="meta-tag">✍️ Image Signing</span>
                     <span class="meta-tag">📦 Supply Chain</span>
+                </div>
+
+                <h4>Complete Supply Chain Attack — SolarWinds-Style Scenario</h4>
+                <div class="scenario-box">
+                    <div class="scenario-header"><span class="scenario-badge danger">ATTACK SCENARIO</span><span class="scenario-title">How an Attacker Infiltrates the Build Pipeline Without Detection</span></div>
+                    <div class="scenario-steps">
+                        <div class="scenario-step"><div class="step-marker">1</div><div class="step-content"><strong>Source Compromise</strong><p>Attacker gains access to the anihpj GitHub repository via a compromised developer SSH key. They modify <code>settings.py</code> to add a secret backdoor that exfiltrates all Django SECRET_KEY values to a C2 server.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">2</div><div class="step-content"><strong>Build Poisoning</strong><p>The compromised code passes CI checks (Trivy scan, kube-linter pass). Docker build succeeds. <strong>Without signing:</strong> the poisoned image is pushed to the registry. <strong>With signing:</strong> the CI pipeline signs the image with cosign, but the SIGNATURE IS VALID because the build happened legitimately — the source was compromised, not the build.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">3</div><div class="step-content"><strong>Where Signing Helps (and Doesn't)</strong><p>Signing proves the image was BUILT by your CI pipeline — it does NOT prove the source code is clean. This is why SLSA Level 3 requires <strong>two-person review</strong> — someone must review the code before it's built. With SLSA L2+L3: (a) Provenance is signed → proves the build happened, (b) Two-person review required → prevents tampered code from being built, (c) SBOM attached → rapid CVE response when vulnerabilities are found in dependencies.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">4</div><div class="step-content"><strong>The Multi-Layer Defense</strong><p>① Code review (SLSA L3) catches malicious PR. ② If missed: cosign signature proves the build pipeline produced this image (not an attacker pushing directly). ③ If deployed: Kyverno verifyImages confirms the pod is running the signed image. ④ If exploited: SBOM enables rapid identification of affected images. ⑤ Falco detects the exfiltration at runtime. <strong>Five layers — the attacker must defeat ALL of them.</strong></p></div></div>
+                    </div>
+                </div>
+
+                <h4>Cosign Internals — How Signing Works Under the Hood</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Cosign Architecture — Key-Based and Keyless Signing</div>
+<pre>
+  KEY-BASED SIGNING (traditional):
+  ─────────────────────────────
+  1. cosign generate-key-pair → cosign.key (private) + cosign.pub (public)
+  2. cosign sign --key cosign.key IMAGE@sha256:abc...
+     → Computes SHA-256 hash of image manifest
+     → Signs hash with private key → creates .sig payload
+     → Pushes .sig to registry as a separate OCI artifact
+     → Tag: sha256-abc123.sig (stored alongside the image)
+  3. cosign verify --key cosign.pub IMAGE@sha256:abc...
+     → Downloads .sig from registry
+     → Verifies signature against public key
+     → Confirms: "This digest was signed by the holder of cosign.key"
+
+  KEYLESS SIGNING (Sigstore):
+  ──────────────────────────
+  1. OIDC token from CI (proves: "I am repo X on branch Y")
+  2. Fulcio CA issues short-lived cert (10 min) binding identity to public key
+  3. Ephemeral private key signs the image digest
+  4. Certificate + signature uploaded to Rekor transparency log
+  5. cosign verify checks: identity matches, cert from Fulcio, entry in Rekor
+
+  🔑 CKS EXAM: Know both methods. Key-based is simpler for the exam
+     (generate key → sign → verify). Keyless is production best practice
+     but requires OIDC infrastructure (GitHub Actions, GCP SA, etc.).
+</pre>
                 </div>
             </div>
         <!-- CHAPTER NAVIGATION: Ch26 → Ch27 -->
@@ -26702,6 +26875,69 @@ cosign verify-attestation --key cosign.pub \
             <div class="info-box tip">
                 <h5>💡 Key Takeaway for the CKS Exam</h5>
                 <p>The CKS exam expects you to understand SBOM and SLSA as the final supply chain security concepts. Know: (1) <strong>SBOM generation:</strong> <code>syft &lt;image&gt; -o spdx-json</code> or <code>trivy image --format cyclonedx &lt;image&gt;</code>. (2) <strong>Attach SBOM:</strong> <code>cosign attach sbom --sbom &lt;file&gt; &lt;image&gt;</code>. (3) <strong>SLSA levels:</strong> 0=none, 1=provenance, 2=hosted+signed, 3=hardened+hermetic. (4) <strong>SLSA attestation:</strong> <code>cosign attest --key cosign.key --predicate slsa-provenance.json --type slsaprovenance &lt;image&gt;</code>. (5) SBOM + SLSA together enable <strong>complete supply chain transparency</strong>: know what's in your software AND prove how it was built.</p>
+            </div>
+
+            <h4>Distroless Images — The Ultimate Minimal Attack Surface</h4>
+            <div class="comparison-table">
+                <table>
+                    <thead><tr><th>Component</th><th>Standard python:3.12</th><th>python:3.12-slim</th><th>distroless python</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Image size</strong></td><td>~1 GB</td><td>~120 MB</td><td>~50 MB</td></tr>
+                        <tr><td><strong>Shell?</strong></td><td>✅ bash, sh</td><td>✅ sh</td><td>❌ No shell</td></tr>
+                        <tr><td><strong>Package manager?</strong></td><td>✅ apt (full)</td><td>✅ apt (minimal)</td><td>❌ None</td></tr>
+                        <tr><td><strong>Utilities (curl, wget)?</strong></td><td>✅ Many</td><td>⚠️ Few</td><td>❌ None</td></tr>
+                        <tr><td><strong>CVEs (typical)</strong></td><td>30-50</td><td>5-10</td><td>0-2</td></tr>
+                        <tr><td><strong>Attacker capability if compromised</strong></td><td>Full shell, download tools, script</td><td>Basic shell, limited tools</td><td>No tools — trapped!</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p><strong>The tradeoff:</strong> Distroless images are harder to debug. There's no <code>kubectl exec -- sh</code>. You must rely on logs (stdout/stderr) and health checks. For production workloads — where security outweighs developer convenience — this tradeoff is almost always worth it. For development environments, use the slim variant for a balance of security and debugability.</p>
+
+            <h4>SPDX vs CycloneDX Comparison — Choosing the Right SBOM Format</h4>
+            <div class="comparison-table">
+                <table>
+                    <thead><tr><th>Feature</th><th>SPDX 2.3</th><th>CycloneDX 1.6</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Origin</strong></td><td>Linux Foundation (2011)</td><td>OWASP (2017)</td></tr>
+                        <tr><td><strong>Primary focus</strong></td><td>License compliance + supply chain</td><td>Security + vulnerability management</td></tr>
+                        <tr><td><strong>Fields covered</strong></td><td>Package, version, license, copyright, file hash</td><td>Component, version, purl, CPE, hash, vulnerabilities</td></tr>
+                        <tr><td><strong>Vulnerability data</strong></td><td>Via VEX (Vulnerability Exploitability eXchange) extension</td><td>Built-in; can embed CVE IDs and severity directly</td></tr>
+                        <tr><td><strong>ISO standard</strong></td><td>✅ ISO/IEC 5962:2021</td><td>ECMA-424 (not ISO)</td></tr>
+                        <tr><td><strong>Output formats</strong></td><td>JSON, YAML, tag-value, RDF/XML</td><td>JSON, XML</td></tr>
+                        <tr><td><strong>Tool support</strong></td><td>syft, trivy, tern, FOSSA, ORT</td><td>syft, trivy, Dependency-Track, OWASP tools</td></tr>
+                        <tr><td><strong>Kubernetes adoption</strong></td><td>Widely used; k8s SBOM WG recommends SPDX</td><td>Growing; used by Dependency-Track for continuous monitoring</td></tr>
+                        <tr><td><strong>CKS preference</strong></td><td>✅ Both accepted — know either</td><td>✅ Both accepted — know either</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h4>Automated SBOM Generation in CI/CD Pipeline</h4>
+            <div class="diagram-container">
+                <div class="diagram-title">SBOM Generation Pipeline for the anihpj Django App</div>
+<pre>
+ 1. Checkout code
+ 2. Build Docker image: anihpj/api:v2.1.0
+ 3. Generate SBOM BEFORE pushing:
+    $ syft anihpj/api:v2.1.0 -o spdx-json > sbom.spdx.json
+    $ trivy image --format cyclonedx --output sbom.cdx.json anihpj/api:v2.1.0
+ 4. Sign SBOM:
+    $ cosign sign-blob --key cosign.key sbom.spdx.json
+ 5. Push image:
+    $ docker push anihpj/api:v2.1.0
+ 6. Attach SBOM as OCI artifact:
+    $ cosign attach sbom --sbom sbom.spdx.json anihpj/api:v2.1.0
+ 7. Sign image:
+    $ cosign sign --key cosign.key anihpj/api:v2.1.0
+ 8. Upload SBOM to Dependency-Track for continuous monitoring
+
+ RESULT: Image is signed + SBOM-attached + monitored forever
+ QUERY:  cosign download sbom anihpj/api:v2.1.0 | jq .
+</pre>
+            </div>
+
+            <div class="info-box tip">
+                <h5>💡 SBOM Anti-Patterns to Avoid</h5>
+                <p><strong>DO NOT:</strong> Generate SBOM AFTER pushing the image to a public registry — that's too late. <strong>DO NOT:</strong> Store SBOM in the same repo as the source code without signing it — the SBOM itself can be tampered with. <strong>DO NOT:</strong> Use a single SBOM for all environments — dev dependencies differ from production. <strong>DO INSTEAD:</strong> Generate SBOM in CI, sign it with cosign, attach it to the image, and upload it to a central SBOM registry (Dependency-Track, Anchore, or graph-db). The SBOM is only valuable if it's (a) accurate, (b) signed, and (c) discoverable.</p>
             </div>
         </div>
 
@@ -27259,6 +27495,169 @@ current-context: default</code></pre>
                 <h5>💡 Key Takeaway for the CKS Exam</h5>
                 <p>The CKS exam heavily tests audit logging. Know: (1) <strong>4 audit levels:</strong> None, Metadata, Request, RequestResponse — and exactly when to use each. (2) <strong>First match wins:</strong> most specific rules first, default Metadata last. (3) <strong>API server flags:</strong> <code>--audit-policy-file</code>, <code>--audit-log-path</code>, <code>--audit-log-maxage/maxbackup/maxsize</code>, <code>--audit-webhook-config-file</code>, <code>--audit-webhook-mode</code>. (4) <strong>jq:</strong> <code>select(.objectRef.resource=="secrets")</code>, <code>select(.objectRef.subresource=="exec")</code>, <code>select(.responseStatus.code >= 400)</code>. (5) <strong>Exam task:</strong> enable audit logging by editing <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code>, add flags + volume mounts, wait for restart. Verify with <code>ls /var/log/kubernetes/audit.log</code> and <code>tail</code>.</p>
             </div>
+
+            <details class="uth-toggle">
+                <summary>🔧 Under the Hood — How the API Server Generates Audit Events: Authentication → Authorization → Admission → Audit → etcd — The Full Processing Pipeline</summary>
+                <div class="uth-body">
+                <h5>🗺️ The Audit Event Processing Pipeline — Step by Step</h5>
+                <p>Every request to the API server passes through a chain of handlers. The audit system <strong>intercepts the request AFTER authorization and admission but BEFORE the response is sent</strong>. This placement is critical — it ensures audit events capture the final outcome (including admission mutations) but don't leak data from unauthorized requests:</p>
+                <div class="uth-diagram"><pre>
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │         KUBE-APISERVER REQUEST PROCESSING PIPELINE (with audit)            │
+  │                                                                           │
+  │  kubectl get secrets -n anihpj --as=system:serviceaccount:anihpj:ci      │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 1. AUTHENTICATION — Who are you?                                  │    │
+  │  │    • Validates client certificate / bearer token / OIDC token    │    │
+  │  │    • Populates userInfo: {username, groups, uid, extra}          │    │
+  │  │    • ❌ If fails → 401 Unauthorized → Audit event: level=Metadata│    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │ ✅ Authenticated as "system:serviceaccount:anihpj:ci"               │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 2. AUDIT STAGE: RequestReceived                                   │    │
+  │  │    • Creates audit event with: timestamp, user, verb, resource   │    │
+  │  │    • Policy check: does any rule match at level >= Metadata?     │    │
+  │  │    • If no match → skip ALL audit for this request               │    │
+  │  │    • If match → proceed to authorization                         │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 3. AUTHORIZATION — Are you allowed to do this?                    │    │
+  │  │    • Evaluates RBAC: RoleBindings → Roles → rules                 │    │
+  │  │    • Node authorizer, ABAC, webhook (in order)                   │    │
+  │  │    • ❌ If fails → 403 Forbidden → Audit event: stage=Response   │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │ ✅ Authorized (SA has "get" on "secrets" in "anihpj")              │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 4. MUTATING ADMISSION — Modify the request if needed              │    │
+  │  │    • Runs MutatingWebhookConfigurations                          │    │
+  │  │    • ❌ If webhook denies → Audit: level matches policy          │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 5. VALIDATING ADMISSION — Reject if policy violated               │    │
+  │  │    • Runs ValidatingWebhookConfigurations                        │    │
+  │  │    • ❌ If denied → Audit: level matches policy                  │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │ ✅ Admitted                                                         │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 6. OBJECT RETRIEVAL — Read from etcd                              │    │
+  │  │    • GET: reads current state from etcd                          │    │
+  │  │    • Response: the actual secret data (base64-encoded)           │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 7. AUDIT STAGE: ResponseComplete                                  │    │
+  │  │    • Merges: userInfo + objectRef + responseStatus.code          │    │
+  │  │    • Policy check: if level=RequestResponse → include response   │    │
+  │  │      body (the actual secret data!)                              │    │
+  │  │    • If level=Metadata → only include metadata (SA name, code)   │    │
+  │  │    • Writes JSON line to: /var/log/kubernetes/audit.log          │    │
+  │  │    • If webhook configured → POSTs to external endpoint          │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │                                                                           │
+  │  🔑 KEY INSIGHT: Audit runs TWICE — at RequestReceived and               │
+  │     ResponseComplete. This is why omitStages exists: suppress the         │
+  │     early duplicate event and only log the final outcome.                 │
+  └──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+                <h5>🔬 The Anatomy of an Audit Event — Every JSON Field Explained</h5>
+                <p>Each audit event is a deeply nested JSON object. Understanding every field helps you write precise jq queries and correlate events across the cluster:</p>
+                <div class="uth-diagram"><pre>
+  {
+    "kind": "Event",
+    "apiVersion": "audit.k8s.io/v1",
+    "level": "RequestResponse",          ← Which audit level captured this
+    "auditID": "abc123-def456",          ← Unique ID for this specific request
+    "stage": "ResponseComplete",         ← Which stage generated this event
+    "requestURI": "/api/v1/namespaces/anihpj/secrets/anihpj-db-creds",
+    "verb": "get",                       ← HTTP method mapped to K8s verb
+    "user": {                            ← From Authentication (Step 1)
+      "username": "system:serviceaccount:anihpj:ci",
+      "uid": "abc-def-ghi",
+      "groups": ["system:serviceaccounts", "system:authenticated"]
+    },
+    "sourceIPs": ["192.168.1.100"],      ← Original client IP
+    "userAgent": "kubectl/v1.30.0 (linux/amd64) kubernetes/abc123",
+    "objectRef": {                       ← What resource was accessed
+      "resource": "secrets",
+      "namespace": "anihpj",
+      "name": "anihpj-db-creds",
+      "apiGroup": "",
+      "apiVersion": "v1"
+    },
+    "responseStatus": {                  ← HTTP response
+      "metadata": {},
+      "code": 200                        ← 200=success, 403=forbidden
+    },
+    "requestObject": { ... },            ← Present if level >= Request
+    "responseObject": { ... },           ← Present if level = RequestResponse
+    "requestReceivedTimestamp": "2026-06-14T03:14:05.000000Z",
+    "stageTimestamp": "2026-06-14T03:14:05.001234Z",
+    "annotations": {                     ← Admission controllers add notes
+      "authorization.k8s.io/decision": "allow",
+      "authorization.k8s.io/reason": "RBAC: allowed by RoleBinding ..."
+    }
+  }
+
+  🔑 The auditID field connects the RequestReceived and ResponseComplete
+     events for the SAME request. Use it to correlate the full lifecycle
+     of a single API call.
+</pre></div>
+
+                <h5>🛡️ Detecting Audit Log Tampering — When Attackers Try to Cover Their Tracks</h5>
+                <p>A sophisticated attacker who gains node access may try to <strong>delete or modify audit logs</strong> to hide their activity. Here's how to detect tampering and prevent it:</p>
+                <div class="uth-diagram"><pre>
+  TAMPERING TECHNIQUES                         DETECTION COUNTERMEASURES
+  ────────────────────                         ──────────────────────────
+
+  🔴 Technique 1: Delete audit log files       ✅ Countermeasure 1: Ship off-node
+  rm /var/log/kubernetes/audit.log               Webhook backend → SIEM in real-time.
+                                                 Even if local files are deleted, the
+                                                 SIEM has a complete copy.
+
+  🔴 Technique 2: Truncate the audit log       ✅ Countermeasure 2: File integrity
+  echo "" > /var/log/kubernetes/audit.log        Falco rule detects writes to
+                                                 /var/log/kubernetes/. Inotify
+                                                 watches on audit log directory.
+
+  🔴 Technique 3: Modify individual events      ✅ Countermeasure 3: Immutable storage
+  sed -i 's/"code":403/"code":200/' audit.log   Write audit logs to append-only
+                                                 storage (S3 Object Lock, GCS
+                                                 retention policy).
+
+  🔴 Technique 4: Stop API server, remove       ✅ Countermeasure 4: CIS check
+     --audit-log-path flag, restart              kube-bench CIS 1.2.22: "Ensure
+                                                 --audit-log-path is set." Alert
+                                                 if API server restarts without it.
+
+  🔴 Technique 5: Flood audit logs with noise    ✅ Countermeasure 5: Rate monitoring
+     (bury malicious events in noise)            Monitor audit log volume. Alert on
+                                                 10x spike. Use log sampling for
+                                                 high-volume events.
+
+  🔑 DEFENSE IN DEPTH: Each countermeasure alone can be bypassed.
+     All five together make tampering practically impossible:
+     SIEM (off-node) + Falco (detection) + Immutable storage +
+     CIS checks (prevention) + Volume monitoring.
+</pre></div>
+
+                <h5>🚨 CKS Exam Gotcha — Audit Logging Traps That Trip Up Candidates</h5>
+                <div class="info-box warning">
+                    <h5>⚠️ Audit Logging Pitfalls on the CKS Exam</h5>
+                    <p><strong>1. Static pod manifest editing:</strong> When you edit <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code>, the kubelet auto-restarts the API server. Your <code>kubectl</code> connection WILL drop. Wait 30-60 seconds and reconnect. <strong>2. Volume mounts are mandatory:</strong> Adding <code>--audit-policy-file</code> without adding the corresponding <code>volume</code> and <code>volumeMount</code> means the API server can't find the policy file — and audit logging silently fails. Always check ALL three: flag + volumeMount + volume. <strong>3. Wrong policy path:</strong> The policy file must be accessible INSIDE the API server container. If you mount it at <code>/etc/kubernetes/audit</code> but the flag says <code>--audit-policy-file=/etc/kubernetes/audit-policy.yaml</code>, the paths don't match. <strong>4. Forgetting omitStages:</strong> Without <code>omitStages: ["RequestReceived"]</code>, you get TWO audit events per request (RequestReceived + ResponseComplete). This doubles log volume with redundant data. <strong>5. Log rotation on exam:</strong> The CKS exam might give you a small disk. Set <code>--audit-log-maxsize=10</code> (small, 10MB) and <code>--audit-log-maxbackup=5</code> to avoid filling the disk during testing.</p>
+                </div>
+                </div>
+            </details>
         </div>
 
         <!-- CHAPTER NAVIGATION: Ch28 → Ch29 -->
@@ -27703,6 +28102,121 @@ falco -v     # Shows rule evaluation details for each event</code></pre>
                 </div>
             </div>
 
+            <details class="uth-toggle">
+                <summary>🔧 Under the Hood — How Falco Evaluates Rules Against Kernel Events: libsinsp State Machine → FilterCheck → Priority Bands → Alert Dispatch</summary>
+                <div class="uth-body">
+                <h5>🗺️ Inside the Falco Rule Engine — How a Syscall Becomes an Alert</h5>
+                <p>When a container runs <code>cat /etc/shadow</code>, the kernel generates an <code>openat</code> syscall event. Falco's libscap captures this raw event, and libsinsp enriches it with container metadata. Then the rule engine evaluates it against every loaded rule. Here's exactly how that evaluation works:</p>
+                <div class="uth-diagram"><pre>
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │   FALCO RULE EVALUATION — Single Syscall Through the Engine               │
+  │                                                                           │
+  │  SYSCALL: openat(AT_FDCWD, "/etc/shadow", O_RDONLY)                      │
+  │  FROM:    container_id=abc123, pid=4567, uid=0                            │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 1. LIBSCAP: Raw event capture + enrichment                        │    │
+  │  │    • Captures: syscall type (openat), args (fd, path, flags)     │    │
+  │  │    • Enriches: container_id → container.name = "anihpj"          │    │
+  │  │               pid → process tree → proc.cmdline = "cat /etc..."  │    │
+  │  │               uid → user.name = "root"                           │    │
+  │  │               cgroup → k8s.ns.name, k8s.pod.name                 │    │
+  │  │    • Output: structured event with ALL fields populated          │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 2. LIBSINSP: Stateful filtering & field resolution                │    │
+  │  │    • Maintains state: which processes exist, which FDs are open  │    │
+  │  │    • Resolves fields like fd.name (requires tracking open()      │    │
+  │  │      syscalls and mapping fd numbers to paths)                   │    │
+  │  │    • Resolves macros: shell_binaries → [bash, sh, zsh, ...]      │    │
+  │  │    • Resolves lists: anihpj_sensitive_files → [shadow, ...]      │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 3. RULE MATCHING: Sequential evaluation of all loaded rules       │    │
+  │  │    Rule 1: "Terminal shell in container"                         │    │
+  │  │      condition: spawned_process and container and shell           │    │
+  │  │      → evt.type = "openat" (not a process event) → SKIP          │    │
+  │  │    Rule 2: "Read sensitive file untrusted"                       │    │
+  │  │      condition: open_read and container and                      │    │
+  │  │                 fd.name startswith /etc/                         │    │
+  │  │      → evt.type = "openat" ✅ (open_read macro matches)          │    │
+  │  │      → container.name = "anihpj" ✅                               │    │
+  │  │      → fd.name = "/etc/shadow" ✅ (startswith /etc/)             │    │
+  │  │      → MATCH! Rule fires.                                         │    │
+  │  │    Rules 3-80: SKIPPED                                           │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 4. OUTPUT FORMATTING: Template substitution                       │    │
+  │  │    Template: "Sensitive file opened (user=%user.name             │    │
+  │  │              cmd=%proc.cmdline file=%fd.name)"                   │    │
+  │  │    Resolved: "Sensitive file opened (user=root                   │    │
+  │  │              cmd=cat /etc/shadow file=/etc/shadow)"              │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │       │                                                                    │
+  │       ▼                                                                    │
+  │  ┌──────────────────────────────────────────────────────────────────┐    │
+  │  │ 5. DISPATCH: Route alert based on priority + output config        │    │
+  │  │    priority=CRITICAL → ALL channels (stdout + file + webhooks)   │    │
+  │  │    priority=WARNING  → file + Slack (minimumpriority: WARNING)   │    │
+  │  │    priority=DEBUG    → stdout only (development)                 │    │
+  │  └──────────────────────────────────────────────────────────────────┘    │
+  │                                                                           │
+  │  🔑 Falco evaluates EVERY syscall against EVERY rule. With 80             │
+  │     rules and 10,000 syscalls/sec → 800,000 evaluations/sec.              │
+  │     Efficient conditions matter — check container.name first.             │
+  └──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+                <h5>🎯 Falco Priority Decision Framework — When to Use Which Level</h5>
+                <div class="uth-diagram"><pre>
+  PRIORITY LEVELS — From Loudest (EMERGENCY) to Quietest (DEBUG)
+
+  🔴 EMERGENCY  — Cluster-wide catastrophe
+     Use when:  etcd data corruption, API server cert expired
+     Action:    PAGE ON-CALL IMMEDIATELY (PagerDuty, phone call)
+
+  🔴 CRITICAL   — Active attack or severe policy violation
+     Use when:  Shell in prod container, sensitive file read,
+                netcat backdoor, crypto miner, privilege escalation
+     Action:    Page on-call within 5 minutes (PagerDuty)
+
+  🟠 WARNING    — Suspicious but could be legitimate
+     Use when:  Unexpected outbound connection, shell in dev,
+                curl to K8s API from container, package manager use
+     Action:    Slack notification, investigate within 1 hour
+
+  🟡 NOTICE     — Informational, might indicate a problem
+     Use when:  Privileged container launched, new namespace created
+     Action:    Logged, reviewed in weekly security review
+
+  🟢 INFO       — Routine operational data
+     Use when:  Regular deployment, config change, cert renewal
+     Action:    Logged for audit trail
+
+  ⚪ DEBUG      — Development/troubleshooting only
+     Use when:  Testing new rules, verbose event logging
+     Action:    Never sent to production channels
+
+  🔑 CKS EXAM: CRITICAL and WARNING are most commonly tested.
+     CRITICAL = immediate response. WARNING = investigate.
+     EMERGENCY is rarely used in exam scenarios.
+</pre></div>
+
+                <h5>🚨 CKS Exam Gotcha — Falco Rule Writing Pitfalls</h5>
+                <div class="info-box warning">
+                    <h5>⚠️ Falco Rule Mistakes That Fail the CKS Exam</h5>
+                    <p><strong>1. Editing default rules file:</strong> Always edit <code>/etc/falco/falco_rules.local.yaml</code>, NEVER <code>/etc/falco/falco_rules.yaml</code>. The local file survives upgrades. <strong>2. Using override for exceptions:</strong> When the exam asks to "add an exception," use <code>append: true</code>. Override REPLACES the entire rule and removes existing protection. <strong>3. YAML indentation in conditions:</strong> The <code>></code> (folded block scalar) handles indentation differently than <code>|</code>. For multi-line conditions with <code>and</code>/<code>or</code>, use <code>></code> to fold into a single line. <strong>4. Mistyped rule names:</strong> Both <code>append: true</code> and <code>override:</code> reference an EXISTING rule by name. A typo creates a NEW rule instead — your changes silently do nothing. Verify with <code>falco --list | grep your-rule</code>. <strong>5. Not restarting Falco:</strong> Edit rules → restart Falco pod → verify with <code>falco --list</code>. Rule changes don't take effect until restart.</p>
+                </div>
+                </div>
+            </details>
+
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
             <div class="visual-summary">
                 <h4>📊 Chapter 29 Visual Summary — Falco at a Glance</h4>
@@ -28001,37 +28515,62 @@ kubectl cp anihpj/anihpj-django-abc123:/ $DIR/full-fs/ 2>/dev/null
             <!-- ═══════════ SECTION 30.4 ═══════════ -->
             <div class="section-block" id="s30-4">
                 <h3>30.4 Common Attack Scenarios & CKS Responses</h3>
-                <p>Three attack scenarios appear repeatedly on the CKS exam and in real production incidents. Memorize the detection, containment, and eradication steps for each.</p>
+                <p>Six attack scenarios appear repeatedly on the CKS exam and in real production incidents. Memorize the detection, containment, and eradication steps for each. <strong>This table IS your incident response cheat sheet.</strong></p>
 
-                <h4>Attack Response Playbook — 3 Common Scenarios</h4>
+                <h4>Attack → Response Playbook — 6 Common Scenarios (CKS Exam + Real World)</h4>
                 <div class="comparison-table">
                     <table>
                         <thead><tr><th>Scenario</th><th>Detection</th><th>Containment</th><th>Eradication</th></tr></thead>
                         <tbody>
                             <tr>
                                 <td><strong>🪙 Crypto Miner</strong></td>
-                                <td>Falco: "Unexpected outbound connection" to mining pool IPs. Node CPU at 100%.</td>
-                                <td>Isolate pod (Section 30.2), check audit logs for who created it</td>
-                                <td>Delete pod, revoke creator's SA token, add admission rule blocking unknown images</td>
+                                <td>Falco: "Unexpected outbound connection" to mining pool IPs. Node CPU at 100%. kubectl top pod shows abnormal usage.</td>
+                                <td>Isolate pod (Section 30.2), check audit logs for who created it, verify image source</td>
+                                <td>Delete pod, revoke creator's SA token, add admission rule blocking unknown images, block mining pool IPs via NetworkPolicy egress rules</td>
                             </tr>
                             <tr>
                                 <td><strong>🐚 Reverse Shell</strong></td>
-                                <td>Falco: "Netcat remote code execution" (nc -e). Outbound to unusual port.</td>
-                                <td>Isolate pod immediately, block egress to attacker IP via NetworkPolicy</td>
-                                <td>Delete pod, rotate all secrets the pod could access, audit RBAC</td>
+                                <td>Falco: "Netcat remote code execution" (nc -e flag). Outbound connection to unusual port (4444, 1337, 31337).</td>
+                                <td>Isolate pod immediately, apply egress-deny NetworkPolicy targeting attacker IP, kubectl label pod to remove from Service</td>
+                                <td>Delete pod, rotate all secrets the pod could access, audit RBAC, scan image for backdoor</td>
                             </tr>
                             <tr>
                                 <td><strong>📤 Data Exfiltration</strong></td>
-                                <td>Falco: sensitive file read + large outbound transfer. Audit: secret/configmap reads.</td>
-                                <td>Isolate pod, block egress, check what data was accessed</td>
-                                <td>Delete pod, rotate exfiltrated credentials, notify compliance team</td>
+                                <td>Falco: sensitive file read + large outbound transfer (MBs to external IP). Audit log: secret/configmap reads by unexpected SA.</td>
+                                <td>Isolate pod, block all egress via NetworkPolicy, check WHAT data was accessed (audit log objectRef), preserve pod for forensics</td>
+                                <td>Delete pod, rotate ALL exfiltrated credentials, notify compliance team (GDPR/PCI), legal review if PII was involved</td>
                             </tr>
                             <tr>
                                 <td><strong>🔑 Privilege Escalation</strong></td>
-                                <td>Audit: ClusterRoleBinding created. Falco: "Launch privileged container."</td>
-                                <td>Delete the binding, revoke creator's permissions, audit all RBAC</td>
-                                <td>Enable NodeRestriction admission, limit ClusterRoleBinding creation to admins</td>
+                                <td>Audit log: ClusterRoleBinding created binding to cluster-admin. Falco: "Launch privileged container" or setuid binary execution.</td>
+                                <td>Delete the malicious ClusterRoleBinding IMMEDIATELY, revoke creator's RBAC permissions, audit ALL existing bindings for anomalies</td>
+                                <td>Enable NodeRestriction admission plugin, restrict ClusterRoleBinding creation to specific admin users only, enforce PSS Restricted</td>
                             </tr>
+                            <tr>
+                                <td><strong>🔐 Secret Access by Unexpected SA</strong></td>
+                                <td>Audit log: <code>jq 'select(.objectRef.resource=="secrets" and .verb=="get" or .verb=="list")'</code>. SA from dev namespace accessing prod secrets.</td>
+                                <td>Immediately delete the SA token (kubectl delete secret <sa-token>), remove SA from any RoleBindings in the target namespace</td>
+                                <td>Rotate all secrets in the accessed namespace, implement namespace-scoped RBAC (never cross-namespace access), audit all SA permissions</td>
+                            </tr>
+                            <tr>
+                                <td><strong>🔄 Lateral Movement (Pod→Pod)</strong></td>
+                                <td>Falco: outbound connection from compromised pod to other pods on unusual ports. NetworkPolicy violation logs. kubectl exec from unexpected source IPs in audit logs.</td>
+                                <td>Apply emergency default-deny NetworkPolicy in the namespace, isolate both source and target pods, check if SA token was used to list other pods via API</td>
+                                <td>Implement strict default-deny NetworkPolicy (only allow known traffic), namespace isolation, mTLS via service mesh (Istio/Linkerd) for pod-to-pod auth</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Incident Severity Classification — When to Escalate</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Severity</th><th>Criteria</th><th>Response Time</th><th>Who to Notify</th></tr></thead>
+                        <tbody>
+                            <tr><td><span style="color:#dc2626;font-weight:700;">🔴 P1 — Critical</span></td><td>Active data exfiltration, cluster-admin compromise, production outage caused by attack</td><td>Immediate (page on-call)</td><td>Security lead, DevOps lead, CISO, Legal (if data breach)</td></tr>
+                            <tr><td><span style="color:#f97316;font-weight:700;">🟠 P2 — High</span></td><td>Suspicious pod running, privilege escalation attempt detected, crypto miner in non-prod</td><td>Within 1 hour</td><td>Security team, namespace owner, DevOps on-call</td></tr>
+                            <tr><td><span style="color:#eab308;font-weight:700;">🟡 P3 — Medium</span></td><td>Failed attack probes (401/403 storms), policy violation without exploitation, new CVE in staging</td><td>Within 24 hours</td><td>Security team (during business hours)</td></tr>
+                            <tr><td><span style="color:#4ade80;font-weight:700;">🟢 P4 — Low</span></td><td>Informational: routine security events, scan results with no new criticals, weekly compliance report</td><td>Next business day</td><td>Automated dashboard, weekly review</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -28065,6 +28604,88 @@ gpg --encrypt --recipient security@anihpj.com anihpj-incident-20260614.tar.gz
 # Store in secure, access-controlled S3 bucket: anihpj-forensics</code></pre>
                 </div>
                 <p style="text-align:center;font-size:0.85rem;color:#8b949e;margin-top:0.5rem;"><strong>Chain of custody is critical if the incident requires legal action or compliance reporting.</strong></p>
+
+                <h4>📋 Kubernetes Security Incident Report Template</h4>
+                <p>Every security incident must produce a written report. This template covers everything auditors, compliance officers, and insurance providers will ask for. <strong>Fill this out within 24 hours of incident resolution.</strong></p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Markdown — Kubernetes Security Incident Report Template</span>
+                    </div>
+                    <pre><code class="language-markdown"># Kubernetes Security Incident Report
+
+## Incident Metadata
+| Field | Value |
+|-------|-------|
+| **Incident ID** | INC-2026-0614-001 |
+| **Severity** | P1 (Critical) / P2 (High) / P3 (Medium) / P4 (Low) |
+| **Status** | Investigating / Contained / Resolved / Closed |
+| **Detected By** | Falco alert / Audit log analysis / Manual review |
+| **Detection Time** | 2026-06-14 03:14:05 UTC |
+| **Resolution Time** | 2026-06-14 03:45:00 UTC |
+| **Duration** | 31 minutes |
+| **Reporter** | Name / Team |
+
+## Affected Resources
+| Resource | Namespace | Name | Impact |
+|----------|-----------|------|--------|
+| Pod | anihpj-prod | anihpj-django-abc123 | Compromised — shell access |
+| Secret | anihpj-prod | anihpj-db-creds | Potentially read by attacker |
+| ServiceAccount | anihpj-prod | anihpj-deployer | Token used to create malicious pod |
+
+## Timeline (UTC)
+| Time | Event | Source |
+|------|-------|--------|
+| 03:14:01 | Pod "crypto-miner" created in anihpj namespace | Audit log |
+| 03:14:05 | Falco: "Terminal shell in container" alert for anihpj | Falco alert |
+| 03:14:08 | On-call engineer acknowledged alert | PagerDuty |
+| 03:14:12 | kubectl exec detected in audit log (source IP 203.0.113.42) | Audit log |
+| 03:14:15 | Pod isolated via label removal + NetworkPolicy | kubectl commands |
+| 03:14:30 | Forensic capture completed | Section 30.3 checklist |
+| 03:15:00 | Pod deleted, SA token revoked | kubectl commands |
+| 03:15:30 | All secrets in anihpj namespace rotated | kubectl + vault |
+| 03:20:00 | Root cause: compromised CI token used to deploy attacker image | RCA |
+| 03:45:00 | New admission policy deployed blocking unverified images | OPA push |
+
+## Root Cause Analysis
+**What happened:** An attacker obtained the CI/CD service account token
+(from a leaked .env file committed to a public repo). The token had
+"create pods" permission in the anihpj namespace. The attacker used
+kubectl with this token to deploy a pod running a crypto miner image.
+
+**Why it happened:** (1) SA token stored in .env and committed to public
+GitHub. (2) CI SA had overly broad permissions (create pods — not needed
+for CI). (3) No admission control blocked images from untrusted registries.
+(4) readOnlyRootFilesystem was not enforced on the created pod.
+
+## Actions Taken
+| Phase | Action | Status |
+|-------|--------|--------|
+| Containment | Pod isolated via label removal + NetworkPolicy | ✅ Done |
+| Containment | SA token revoked | ✅ Done |
+| Eradication | Compromised pod deleted | ✅ Done |
+| Eradication | All secrets in anihpj namespace rotated | ✅ Done |
+| Recovery | New CI SA created with minimal permissions | ✅ Done |
+| Recovery | Admission policy blocking untrusted registries deployed | ✅ Done |
+| Prevention | .env files added to .gitignore, repo scanned for secrets | ✅ Done |
+| Prevention | Falco rule added for crypto miner detection | ✅ Done |
+| Prevention | readOnlyRootFilesystem enforced via Kyverno policy | 🔲 Pending |
+
+## Lessons Learned
+1. CI tokens should have MINIMAL permissions — never "create pods" unless absolutely needed
+2. All images must come from approved registries — enforced at admission
+3. `readOnlyRootFilesystem: true` would have prevented the crypto miner binary write
+4. Audit log shipping to SIEM enabled rapid timeline reconstruction
+5. Falco detected the shell within 4 seconds — runtime detection works
+
+## Approvals
+| Role | Name | Signature | Date |
+|------|------|-----------|------|
+| Incident Responder | [Name] | | |
+| Security Lead | [Name] | | |
+| DevOps Lead | [Name] | | |
+| CISO (if PII/data breach) | [Name] | | |
+</code></pre>
+                </div>
             </div>
 
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
@@ -28074,7 +28695,7 @@ gpg --encrypt --recipient security@anihpj.com anihpj-incident-20260614.tar.gz
                     <div class="info-card"><div class="card-icon-lg">🚨</div><h5>Lifecycle (30.1)</h5><p><strong>6 phases.</strong> Detect → Contain → Investigate → Eradicate → Recover → Learn. Never delete a pod before capturing forensic evidence.</p></div>
                     <div class="info-card"><div class="card-icon-lg">🔒</div><h5>Isolation (30.2)</h5><p><strong>Label removal + NetworkPolicy.</strong> Stop traffic without deleting the pod. Emergency deny-all NetworkPolicy blocks ingress + egress.</p></div>
                     <div class="info-card"><div class="card-icon-lg">🔍</div><h5>Forensics (30.3)</h5><p><strong>7-point capture checklist.</strong> Pod spec, env vars, processes, network conns, filesystem changes, logs, audit events.</p></div>
-                    <div class="info-card"><div class="card-icon-lg">📋</div><h5>Playbook (30.4-30.5)</h5><p><strong>3 attack scenarios.</strong> Crypto miner, reverse shell, data exfiltration. Post-incident: timeline, RCA, credential rotation.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">📋</div><h5>Playbook (30.4-30.5)</h5><p><strong>6 attack scenarios + severity classification.</strong> Crypto miner, reverse shell, data exfil, priv esc, secret access, lateral movement. Incident report template. Chain of custody.</p></div>
                 </div>
             </div>
 
@@ -28342,6 +28963,116 @@ spec:
               readOnlyRootFilesystem: true</code></pre>
                 </div>
             </div>
+
+            <details class="uth-toggle">
+                <summary>🔧 Under the Hood — How readOnlyRootFilesystem Is Enforced by the Linux Kernel: Mount Namespace Flags → OverlayFS Read-Only Layer → EROFS Error Injection</summary>
+                <div class="uth-body">
+                <h5>🗺️ The Kernel Path of readOnlyRootFilesystem — From SecurityContext to Syscall Rejection</h5>
+                <p>When you set <code>readOnlyRootFilesystem: true</code> in your pod spec, here's exactly what happens at the Linux kernel level to enforce it:</p>
+                <div class="uth-diagram"><pre>
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │   HOW readOnlyRootFilesystem WORKS — Kernel Enforcement Path              │
+  │                                                                           │
+  │  1. POD YAML                                                            │
+  │     securityContext:                                                     │
+  │       readOnlyRootFilesystem: true                                       │
+  │         │                                                                 │
+  │         ▼                                                                 │
+  │  2. KUBELET → CRI → OCI RUNTIME (containerd + runc)                     │
+  │     Translates readOnlyRootFilesystem into OCI spec:                     │
+  │     { "root": { "path": "rootfs", "readonly": true } }                  │
+  │         │                                                                 │
+  │         ▼                                                                 │
+  │  3. OCI RUNTIME (runc) — Creates container mount namespace               │
+  │     • Mounts image layers as OVERLAY filesystem                           │
+  │     • UPPERDIR (writable layer) is set to a temporary directory          │
+  │     • CRITICAL: mount() syscall is called with MS_RDONLY flag            │
+  │                                                                           │
+  │     mount("overlay", "/container/rootfs", "overlay",                     │
+  │           MS_RDONLY,                                                     │
+  │           "lowerdir=/img/layer3:/img/layer2:/img/layer1,"               │
+  │           "upperdir=/tmp/container-upper,"                               │
+  │           "workdir=/tmp/container-work")                                 │
+  │                                                                           │
+  │     ▸ MS_RDONLY flag PREVENTS any write to the overlay mount             │
+  │     ▸ Even if upperdir is writable on the host, the MOUNT is read-only   │
+  │         │                                                                 │
+  │         ▼                                                                 │
+  │  4. INSIDE THE CONTAINER — Attacker tries to write:                      │
+  │     $ echo "malicious" > /etc/crontab                                   │
+  │         │                                                                 │
+  │         ▼                                                                 │
+  │  5. KERNEL VFS (Virtual File System) — open() syscall handler            │
+  │     • Checks: is the mount point read-only?                              │
+  │     • mount->mnt_flags & MNT_READONLY → YES                              │
+  │     • Returns: -EROFS (Read-Only File System)                            │
+  │         │                                                                 │
+  │         ▼                                                                 │
+  │  6. GLIBC → APPLICATION                                                   │
+  │     write() returns -1, errno = EROFS (30)                               │
+  │     bash: /etc/crontab: Read-only file system                            │
+  │                                                                           │
+  │  🔑 KEY INSIGHT: The enforcement happens at the MOUNT level, not at      │
+  │     the file level. Even root (UID 0) cannot bypass MS_RDONLY. The        │
+  │     only way to write is if there's a separate WRITABLE mount (e.g.,     │
+  │     emptyDir at /tmp) that provides a read-write filesystem at a         │
+  │     specific path. This is defense at the kernel level — no userspace    │
+  │     bypass exists.                                                        │
+  └──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+                <h5>🔬 emptyDir vs PVC — Where Do Writes Actually Go?</h5>
+                <p>When you mount writable volumes at <code>/tmp</code>, <code>/app/media</code>, etc., each has a different storage backend. Understanding where the data lives affects security and backup strategy:</p>
+                <div class="uth-diagram"><pre>
+  WRITABLE VOLUME TYPES — Storage Backend Comparison
+
+  emptyDir: {}                    ← Ephemeral — lives on the NODE's disk
+  ────────────                        Path: /var/lib/kubelet/pods/<pod-uid>/volumes/
+  Mounted at: /tmp                    kubernetes.io~empty-dir/<volume-name>/
+  Lifecycle:   Deleted when POD is deleted (not when container restarts!)
+  Security:    ✅ Attacker writes stay on one node, gone on pod delete
+  Risk:        ⚠️ Can fill node disk if no sizeLimit set — use sizeLimit!
+  Use for:     /tmp, /var/run, /var/cache — truly temporary data
+
+  emptyDir:
+    medium: "Memory"              ← tmpfs — lives in RAM
+  ────────────────────                Backed by: RAM (tmpfs filesystem)
+  Mounted at: /dev/shm                Path: not on disk at all
+  Lifecycle:   Deleted when POD is deleted
+  Security:    ✅✅ Attacker writes are in RAM only — no disk forensics
+  Risk:        ⚠️ Consumes pod memory limit — can trigger OOMKill
+  Use for:     Secrets that should never touch disk, high-speed caches
+
+  persistentVolumeClaim:          ← Persistent — lives on NETWORK storage
+  ────────────────────────            Backed by: CSI driver (EBS, NFS, Ceph, etc.)
+  Mounted at: /app/media              Path: depends on storage provider
+  Lifecycle:   SURVIVES pod deletion (data persists across pods)
+  Security:    ⚠️ Attacker writes SURVIVE pod restart/deletion!
+  Risk:        🔴 Malware on PVC can infect new pods that mount it
+  Use for:     User uploads, database files, stateful application data
+               ⚠️ Mount as readOnly if the app only needs to READ
+
+  hostPath:                       ← DANGEROUS — direct access to NODE filesystem
+  ─────────                           Path: ANY path on the host node
+  Mounted at: /host/data              (e.g., /var/lib/kubelet, /etc/kubernetes)
+  Lifecycle:   SURVIVES everything — data is on the node itself
+  Security:    🔴🔴 Attacker writes to HOST filesystem via container!
+  Risk:        🔴 Can compromise the entire node — avoid in production
+  Use for:     System DaemonSets only (kube-proxy, CNI, CSI drivers)
+               ⚠️ BLOCKED by PSS Restricted — requires Privileged
+
+  🔑 CKS EXAM: You'll be asked to mount emptyDir at /tmp for
+     readOnlyRootFilesystem pods. Know the difference between emptyDir
+     (ephemeral, safe) and hostPath (dangerous, blocked by PSS Restricted).
+</pre></div>
+
+                <h5>🚨 CKS Exam Gotcha — readOnlyRootFilesystem Traps</h5>
+                <div class="info-box warning">
+                    <h5>⚠️ Immutability Mistakes That Fail the CKS Exam</h5>
+                    <p><strong>1. Not mounting /tmp:</strong> Most applications write temp files. Without an emptyDir at /tmp, the container crashes with "Read-only file system" on startup. Always check what directories your app writes to. <strong>2. Mounting hostPath for writable directories:</strong> The PSS Restricted profile BLOCKS hostPath volumes. Use emptyDir or PVC instead. <strong>3. Forgetting volumeMount for ALL containers:</strong> If your pod has multiple containers (sidecar pattern), EVERY container needs its own volumeMounts for writable paths. <strong>4. readOnlyRootFilesystem + privileged:</strong> These two conflict — privileged containers bypass most protections. If you need privileged, rethink whether you can use specific capabilities instead. <strong>5. Not verifying:</strong> Always test: <code>kubectl exec pod -- touch /test-write</code> → should fail with "Read-only file system." If it succeeds, your immutability is NOT enforced.</p>
+                </div>
+                </div>
+            </details>
 
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
             <div class="visual-summary">
@@ -29471,6 +30202,69 @@ spec:
                     <div class="info-card"><div class="card-icon-lg">📈</div><h5>6. Signal-to-Noise Dashboard</h5><p>Track <code>alerts_fired_total / alerts_acted_upon_total</code> over time. If this ratio exceeds 5:1, your alerting is broken. Target: < 3:1. This single metric tells you if your security monitoring is useful or just noisy.</p></div>
                 </div>
             </div>
+
+            <details class="uth-toggle">
+                <summary>🔧 Under the Hood — How Trivy Matches Vulnerabilities: Package Enumeration → Database Lookup → CVE Correlation — The Complete Scanning Algorithm</summary>
+                <div class="uth-body">
+                <h5>🗺️ Trivy's Vulnerability Matching — The 3-Phase Pipeline</h5>
+                <p>Trivy doesn't just "look up" CVEs — it performs a sophisticated correlation between installed packages, vulnerability databases, and OS-specific advisories. Understanding this algorithm helps you interpret scan results and troubleshoot false positives/negatives:</p>
+                <div class="uth-diagram"><pre>
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │   TRIVY SCANNING PIPELINE — Complete Flow from Image to Report            │
+  │                                                                           │
+  │  PHASE 1: IMAGE ACQUISITION                                               │
+  │  Input: anihpj/api:v2.1.0                                                 │
+  │  → Fetches image manifest from registry (OCI Distribution API)           │
+  │  → Downloads compressed layer tarballs (NOT the full image)               │
+  │  → Decompresses each layer into a temporary filesystem                    │
+  │  → Walks the merged filesystem (all layers overlaid)                     │
+  │                                                                           │
+  │  PHASE 2: PACKAGE ENUMERATION (per OS type)                              │
+  │  Debian/Ubuntu:  Walks /var/lib/dpkg/status (dpkg database)              │
+  │                  → libcurl4=7.88.1-10+deb12u5                             │
+  │  RHEL/CentOS:    Walks /var/lib/rpm/Packages (RPM database)              │
+  │                  → curl-7.76.1-26.el9_3.3                                 │
+  │  Alpine:         Parses /lib/apk/db/installed (APK database)             │
+  │                  → curl-8.5.0-r0                                         │
+  │  Python:         Walks site-packages/ for *.dist-info/METADATA           │
+  │                  → Django==5.0.2, requests==2.31.0, Pillow==10.2.0       │
+  │  Node.js:        Walks node_modules/*/package.json                       │
+  │  Go/Java/Ruby:   Parses binary metadata / Gemfile.lock / pom.properties  │
+  │                                                                           │
+  │  PHASE 3: VULNERABILITY MATCHING                                          │
+  │  For EACH package: (a) Detect OS version from /etc/os-release            │
+  │  (b) Select advisory database (Debian Tracker, Red Hat OVAL, GHSA, NVD)  │
+  │  (c) Compare version using distro-specific comparator                    │
+  │  (d) Check if FIXED version exists in advisory                           │
+  │  (e) Assign severity: NVD CVSS first, then distro advisory               │
+  │                                                                           │
+  │  OUTPUT: CVE-2023-38545 → libcurl4 7.88.1-10+deb12u5 (AFFECTED)         │
+  │          Fixed in: 7.88.1-10+deb12u6 | Severity: HIGH (7.5)              │
+  │                                                                           │
+  │  🔑 Trivy enumerates PACKAGES and compares VERSIONS — it does NOT        │
+  │     scan binaries. This misses: statically-linked vulns, custom-          │
+  │     compiled software, and zero-days not yet in any database.             │
+  │     Image signing (Ch26) + runtime detection (Ch29) fill these gaps.     │
+  └──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+                <h5>🔬 False Positives and False Negatives — Understanding Trivy's Limitations</h5>
+                <div class="uth-diagram"><pre>
+  FALSE POSITIVE: Trivy reports CVE-2023-44487 (HTTP/2 Rapid Reset)
+  in your Django/gunicorn container, but gunicorn only uses HTTP/1.1.
+  WHY: nghttp2 library is installed in the base image, even though
+  unused. Trivy flags ALL vulnerable packages regardless of usage.
+  FIX: Remove unused packages (image minimization, Ch27).
+
+  FALSE NEGATIVE: You COPY a statically-compiled Go binary into a
+  scratch image. Trivy finds 0 packages → 0 CVEs → "clean".
+  BUT: The binary was compiled with Go 1.21.0 which has CVE-2023-39325
+  embedded. No package database = invisible to Trivy.
+  FIX: Generate SBOM at BUILD time (Ch27) — syft scans the build
+  environment, not just the final image.
+</pre></div>
+                </div>
+            </details>
 
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
             <div class="visual-summary">
@@ -31363,6 +32157,77 @@ kubectl logs -n falco daemonset/falco | grep "Shell in anihpj"</code></pre>
                     <div class="info-box-title">💡 Key Takeaway for the CKS Exam</div>
                     <p>The CKS exam tests your ability to APPLY these controls, not just understand them. For each hardening step in this chapter, practice: (1) Apply the configuration (create/edit YAML), (2) Verify it works (run verification commands), (3) Test the negative case (confirm that violations are blocked). The exam is hands-on — you'll be in a terminal, not writing essays. <strong>Memorize the verification commands in this chapter.</strong></p>
                 </div>
+
+                <details class="uth-toggle">
+                    <summary>🔧 Under the Hood — How the 7 Hardening Steps Interact: Defense-in-Depth Layer Interaction — When One Control Fails, the Next Catches It</summary>
+                    <div class="uth-body">
+                    <h5>🗺️ Defense-in-Depth Interaction — The Kill Chain vs The Defense Chain</h5>
+                    <p>Each hardening step doesn't work in isolation. They form a <strong>layered defense</strong> where even if one control fails, the next one blocks or detects the attack. Here's how all 7 steps interact when an attacker tries to compromise the anihpj pod:</p>
+                    <div class="uth-diagram"><pre>
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │   ATTACKER KILL CHAIN vs DEFENSE-IN-DEPTH LAYERS                          │
+  │                                                                           │
+  │   ATTACKER TRIES:              DEFENSE LAYER STOPS/DETECTS IT:            │
+  │   ──────────────               ─────────────────────────────             │
+  │                                                                           │
+  │   1. Push malicious image      → STEP 1 (33.2): Trivy CI scan BLOCKS     │
+  │      to registry                   CRITICAL CVEs. cosign signature        │
+  │                                   verification by Kyverno BLOCKS          │
+  │                                   unsigned images at admission.           │
+  │                                                                           │
+  │   2. Deploy privileged pod     → STEP 4 (33.4): PSS Restricted LABEL     │
+  │      to bypass controls            REJECTS privileged pods. Gatekeeper    │
+  │                                   BLOCKS images from untrusted            │
+  │                                   registries.                             │
+  │                                                                           │
+  │   3. Exploit app vuln,         → STEP 3 (33.3): runAsNonRoot: true       │
+  │      get shell in container        → Attacker runs as UID 1000, NOT      │
+  │                                   root. Seccomp RuntimeDefault BLOCKS    │
+  │                                   dangerous syscalls (ptrace, mount).    │
+  │                                   Drop ALL → no CAP_SYS_ADMIN.           │
+  │                                                                           │
+  │   4. Write malware to disk     → STEP 3 (33.3): readOnlyRootFilesystem   │
+  │      for persistence               BLOCKS all writes to root FS. Only    │
+  │                                   /tmp (emptyDir) is writable — and      │
+  │                                   emptyDir is DELETED on pod restart.    │
+  │                                                                           │
+  │   5. Read secrets from env     → STEP 7 (33.7): Secrets encrypted at     │
+  │                                   rest in etcd. Vault integration for    │
+  │                                   external secrets. But NOTE: secretKeyRef│
+  │                                   still injects secrets into env vars  │
+  │                                   (readable by anyone with shell).       │
+  │                                                                           │
+  │   6. Access Kubernetes API     → STEP 5 (33.5): automountServiceAccount  │
+  │      using SA token                Token: false → NO token mounted.      │
+  │                                   Even if token exists, minimal RBAC     │
+  │                                   limits what the SA can do.             │
+  │                                                                           │
+  │   7. Lateral movement to DB    → STEP 6 (33.6): NetworkPolicy default-   │
+  │      or other services             deny blocks all unexpected traffic.   │
+  │                                   Only ALLOWED: anihpj→postgres:5432,    │
+  │                                   anihpj→redis:6379, DNS:53. Everything  │
+  │                                   else DROPPED at the CNI level.         │
+  │                                                                           │
+  │   8. Exfiltrate data to C2     → STEP 8 (33.8): Falco DETECTS outbound  │
+  │                                   connections to unexpected IPs. Audit   │
+  │                                   logs CAPTURE the exec event. Falco     │
+  │                                   alerts to Slack/PagerDuty in <5 sec.   │
+  │                                                                           │
+  │   🔑 KEY INSIGHT: No single control is sufficient. The attacker only     │
+  │      needs ONE vulnerability to get in. The defender needs ALL layers    │
+  │      to block every path. This is why the CKS exam tests you on ALL      │
+  │      domains — cluster hardening, system hardening, microservice vuln    │
+  │      minimization, supply chain, runtime security. They are ONE system.  │
+  └──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+                    <h5>🚨 CKS Exam Gotcha — Hardening Pitfalls That Fail the Exam</h5>
+                    <div class="info-box warning">
+                        <h5>⚠️ Common Mistakes When Hardening a Cluster on the CKS Exam</h5>
+                        <p><strong>1. Forgetting volumeMount for EncryptionConfiguration:</strong> Adding <code>--encryption-provider-config</code> without mounting the config file means encryption silently doesn't work. Always add the volume + volumeMount. <strong>2. Setting runAsNonRoot without creating a non-root user:</strong> If your Dockerfile doesn't use <code>USER 1000</code> or <code>runAsUser: 1000</code> without a matching user in the image, the container fails with <code>CreateContainerError</code>. <strong>3. Applying PSS Restricted without checking existing pods:</strong> Labeling a namespace <code>enforce=restricted</code> immediately blocks EXISTING pods that don't comply. Use <code>audit</code> or <code>warn</code> first. <strong>4. NetworkPolicy without a CNI that supports it:</strong> NetworkPolicy is a Kubernetes API object, but ENFORCEMENT requires a CNI plugin (Calico, Cilium, Weave). Without the right CNI, your NetworkPolicies are stored but NOT enforced. <strong>5. KMS encryption without key access:</strong> The <code>kms</code> encryption provider requires the API server to reach the cloud KMS at startup. If the KMS is unreachable (VPC misconfiguration, expired credentials), the API server WON'T START.</p>
+                    </div>
+                    </div>
+                </details>
             </div>
 
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
@@ -32369,6 +33234,11 @@ spec:
                 </div>
             </div>
 
+            <div class="info-box tip">
+                <h5>💡 Key Takeaway for the CKS Exam</h5>
+                <p>The CKS exam may present an incident scenario. Know: (1) <strong>Response order:</strong> Isolate (labels + NetworkPolicy) → Forensics (capture pod spec, env, processes, network, logs) → Eradicate (delete pod, revoke token, rotate secrets) → Recover (rebuild image, redeploy) → Learn (update rules, tighten policies). (2) <strong>Every command counts:</strong> <code>kubectl label pod app-</code> removes from Service in milliseconds. <code>kubectl exec -- ps aux</code> shows attacker's processes. <code>kubectl get pod -o yaml > forensic.yaml</code> preserves evidence. (3) <strong>The attacker CAN persist via emptyDir:</strong> Even with readOnlyRootFilesystem, /tmp (emptyDir) is writable. Attacker's malware survives until pod deletion — not pod restart. (4) <strong>secretKeyRef exposes secrets in env:</strong> It's more secure than hardcoding, but anyone with shell access can <code>env | grep SECRET</code>. Vault (Ch20) is the ultimate solution.</p>
+            </div>
+
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
             <div class="visual-summary">
                 <h4>📊 Chapter 34 Visual Summary — Incident Response at a Glance</h4>
@@ -33224,6 +34094,83 @@ kubectl apply -f argocd/application-anihpj.yaml
 # ✅ All policies enforced from first pod creation.
 # ✅ Complete audit trail: Git history = who deployed what.</code></pre>
                 </div>
+            </div>
+
+            <details class="uth-toggle">
+                <summary>🔧 Under the Hood — How ArgoCD Detects and Corrects Configuration Drift: Kubernetes Watch API → SHA Comparison → Three-Way Diff → Self-Healing Sync</summary>
+                <div class="uth-body">
+                <h5>🗺️ ArgoCD Drift Detection — The Self-Healing Engine</h5>
+                <p>ArgoCD's self-healing is what makes GitOps truly powerful. When someone runs <code>kubectl edit networkpolicy</code> directly on the cluster, ArgoCD detects the deviation and automatically reverts it. Here's exactly how:</p>
+                <div class="uth-diagram"><pre>
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │   ARGOCD DRIFT DETECTION & SELF-HEALING — The Complete Cycle              │
+  │                                                                           │
+  │  1. GIT POLL (every 3 minutes)                                           │
+  │     argocd-repo-server polls git repo: HEAD is commit abc123             │
+  │     Last synced commit was also abc123 → NO CHANGE in Git                │
+  │                                                                           │
+  │  2. CLUSTER POLL (every 3 minutes, same cycle)                           │
+  │     argocd-application-controller queries Kubernetes API:                │
+  │     GET /apis/networking.k8s.io/v1/namespaces/anihpj-prod/               │
+  │         networkpolicies/default-deny-all                                  │
+  │     → Returns: {"spec": {"ingress": [{"from": [{"podSelector": {}}]}]}}   │
+  │     Wait — ingress rule was ADDED! Someone ran kubectl edit!             │
+  │                                                                           │
+  │  3. THREE-WAY DIFF                                                        │
+  │     A: Previous desired state (from last sync): no ingress rules         │
+  │     B: Current desired state (from Git): no ingress rules                │
+  │     C: Live state (from cluster): HAS an ingress rule                    │
+  │                                                                           │
+  │     Diff: B ≠ C → DRIFT DETECTED!                                        │
+  │     ArgoCD marks Application as "OutOfSync"                              │
+  │                                                                           │
+  │  4. AUTO-CORRECTION (if selfHeal: true)                                  │
+  │     ArgoCD applies the desired state from Git:                           │
+  │     PATCH /apis/networking.k8s.io/v1/namespaces/anihpj-prod/             │
+  │          networkpolicies/default-deny-all                                 │
+  │     Body: {"spec": {"ingress": [], "egress": [], "policyTypes": [...]}}   │
+  │     → The manually-added ingress rule is REMOVED.                        │
+  │     → NetworkPolicy is back to Git's desired state.                      │
+  │     → ArgoCD marks Application as "Synced" + "Healthy"                   │
+  │                                                                           │
+  │  5. NOTIFICATION (optional)                                               │
+  │     ArgoCD notifications controller sends:                               │
+  │     → Slack: "anihpj-security-policies: drift detected + auto-corrected" │
+  │     → Audit log: who made the manual change (from K8s audit log)         │
+  │                                                                           │
+  │  🔑 CRITICAL: selfHeal only works if the resource's Live state differs   │
+  │     from Git. If someone also commits the change to Git, ArgoCD sees     │
+  │     it as a legitimate desired state change and syncs it. This is why     │
+  │     BRANCH PROTECTION on main is essential — no unreviewed commits.       │
+  └──────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+                <h5>🔬 How ArgoCD Avoids Sync Loops — The Reconciliation Throttle</h5>
+                <p>Without throttling, ArgoCD could get stuck in an infinite loop of detecting drift → syncing → detecting drift. Here's how it avoids that:</p>
+                <div class="uth-diagram"><pre>
+  SYNC LOOP PREVENTION:
+  1. ArgoCD syncs → writes desired state to cluster
+  2. Cluster acknowledges the write (ResourceVersion incremented)
+  3. ArgoCD's next poll reads the ResourceVersion
+  4. If ResourceVersion == expected → no drift, no sync
+  5. If ResourceVersion > expected → someone else changed it → drift!
+  6. Sync corrects it → ResourceVersion increments again
+  7. Next poll: ResourceVersion matches → stable
+
+  SYNC WAVE ORDERING (critical for dependencies):
+  Wave -1: Namespaces (must exist before anything else)
+  Wave 0:  CRDs, Admission Webhooks (must register before use)
+  Wave 1:  RBAC, ServiceAccounts, ConfigMaps
+  Wave 2:  Deployments, Services, NetworkPolicies
+  Wave 3:  Kyverno Policies, Gatekeeper Constraints
+  Wave 4:  Falco ConfigMaps (last — Falco restarts on change)
+</pre></div>
+                </div>
+            </details>
+
+            <div class="info-box tip">
+                <h5>💡 Key Takeaway for the CKS Exam</h5>
+                <p>GitOps and automation appear on the CKS exam as CI/CD pipeline scenarios. Know: (1) <strong>GitOps principle:</strong> Git is the single source of truth. Every security change goes through PR review → CI validation → ArgoCD deployment. (2) <strong>Self-healing:</strong> <code>syncPolicy.automated.selfHeal: true</code> auto-corrects manual <code>kubectl edit</code> changes within 3 minutes. (3) <strong>CI/CD security gates:</strong> kubesec (score ≥ 5), Trivy (0 CRITICAL), conftest (Rego policies pass), cosign (sign before push). (4) <strong>Policy as Code:</strong> Gatekeeper ConstraintTemplates, Kyverno ClusterPolicies, Falco rules, and audit policies — ALL in Git. Never edit policies directly on the cluster. (5) <strong>Disaster recovery:</strong> <code>git clone</code> + ArgoCD = full security posture restored in ~15 minutes.</p>
             </div>
 
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
