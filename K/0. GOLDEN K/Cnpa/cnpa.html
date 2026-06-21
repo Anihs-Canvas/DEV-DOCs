@@ -16258,6 +16258,20 @@ spec:
             <div class="section-block" id="s15-1"><h3>15.1 What is GitOps? — Git is the Source of Truth</h3>
                 <p>GitOps is an <strong>operating model</strong> for cloud native applications that uses Git repositories as the single source of truth for declarative infrastructure and application configuration. An automated process ensures that the running cluster state matches the desired state defined in Git. If there's a drift — the agent corrects it automatically. If you need to change the application — you change Git, not the cluster:</p>
 
+                <h4>🔍 The Problem GitOps Solves — Before and After</h4>
+                <p>To truly understand WHY GitOps exists, you need to see the operational nightmare it replaces. Before GitOps, platform teams lived in a world of manual kubectl commands, snowflake clusters, and deployment anxiety. GitOps doesn't just automate — it fundamentally changes the relationship between developers, operators, and the cluster:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Problem</th><th>Before GitOps</th><th>After GitOps</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>"What's running in production?"</strong></td><td>Nobody knows exactly. Someone ran kubectl apply 3 weeks ago. Another person scaled replicas manually during an incident. The cluster is a snowflake — unique and irreproducible.</td><td>Git IS the answer. <code>git log</code> shows every change. ArgoCD ensures the cluster matches Git. The cluster is cattle — disposable and reproducible.</td></tr>
+                        <tr><td><strong>"Who changed the replicas from 3 to 10?"</strong></td><td>Slack archaeology. "I think Alice did it during the outage?" No audit trail. No accountability. Changes happen directly on the cluster with no record.</td><td><code>git log -- apps/anihpj/overlays/prod/</code> shows the commit, author, timestamp, PR number, and reviewer. Complete audit trail in one command.</td></tr>
+                        <tr><td><strong>"How do we recover from a disaster?"</strong></td><td>Hope the Terraform state is current. Hope someone documented the manual steps. Rebuild from memory. Recovery takes hours or days. Some things are permanently lost.</td><td>Point ArgoCD at a new cluster. All 45+ applications auto-sync within minutes. Recovery = redeploy from Git. No state lost. No tribal knowledge needed.</td></tr>
+                        <tr><td><strong>"Is staging the same as production?"</strong></td><td>Probably not. Someone patched production directly. Staging has different resource limits. "It worked in staging!" is a meaningless statement because environments have diverged.</td><td>Same Git repo, same manifests, different Kustomize overlays. The ONLY difference is the overlay values (replicas, resources). What you test in staging IS what runs in production.</td></tr>
+                        <tr><td><strong>"How do we deploy?"</strong></td><td>Run the CI pipeline. Hope the KUBECONFIG secret is still valid. Hope nobody changed the cluster between the last deploy and now. Deployment is an event — with anxiety attached.</td><td>Merge a PR. ArgoCD detects the change. Syncs automatically. Deployment is a state — the cluster continuously converges to Git. No ceremony. No credentials outside the cluster.</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="info-box tip"><h5>💡 The Mental Model Shift</h5><p>Traditional ops thinks: <strong>"I TELL the cluster what to do"</strong> (imperative). GitOps thinks: <strong>"I DECLARE what the cluster SHOULD BE, and an agent makes it so"</strong> (declarative, reconciled). This shift from pushing commands to declaring state is the fundamental insight behind GitOps. Once you internalize this, every GitOps concept — pull model, self-heal, pruning, drift detection — becomes obvious.</p></div>
+
                 <div class="diagram-container"><div class="diagram-title">🔄 THE GITOPS RECONCILIATION LOOP</div><div class="diagram-body"><pre>
 ┌──────────────────────────────────────────────────────────────────────┐
 │                     GITOPS — How It Works                            │
@@ -16735,6 +16749,58 @@ $ kubectl rollout status deployment/jobpost</code></pre>
                     </tbody>
                 </table></div>
                 <div class="info-box tip"><h5>💡 CNPA Exam Insight</h5><p>ArgoCD Notifications is the expected answer for "how do you get alerted when a GitOps sync fails?" It's not part of ArgoCD core — it's a separate controller installed alongside ArgoCD. The exam may ask: "A team wants Slack notifications when a production Application becomes Degraded. What should they configure?" → ArgoCD Notifications with on-health-degraded trigger + Slack template.</p></div>
+
+                <h4>🖥️ ArgoCD CLI Essentials — Operational Commands</h4>
+                <p>The <code>argocd</code> CLI is how operators interact with ArgoCD day-to-day. While the Web UI is great for visualization, the CLI is essential for scripting, automation, and incident response. Here are the commands you must know for the CNPA exam:</p>
+                <div class="code-block-wrapper"><div class="code-block-header"><span class="code-lang">BASH</span><span class="code-label">argocd CLI — Essential Commands</span></div><pre class="code-block"><code class="language-bash"># ── LOGIN ──
+argocd login &lt;ARGOCD_SERVER&gt; --sso           # Login via SSO (Okta, Azure AD)
+argocd login &lt;ARGOCD_SERVER&gt; --username admin --password &lt;PWD&gt;
+
+# ── APPLICATION MANAGEMENT ──
+argocd app list                                # List ALL applications
+argocd app get anihpj-prod                     # Detailed view of ONE app
+argocd app sync anihpj-prod                    # MANUAL sync (applies Git to cluster)
+argocd app sync anihpj-prod --prune            # Sync AND delete removed resources
+argocd app diff anihpj-prod                    # PREVIEW what will change (dry-run!)
+argocd app history anihpj-prod                 # Deployment history (commit SHAs)
+argocd app rollback anihpj-prod &lt;REVISION&gt;     # Rollback to specific deployment
+
+# ── EMERGENCY OPERATIONS ──
+argocd app pause anihpj-prod                   # PAUSE sync (emergency fix mode)
+argocd app resume anihpj-prod                  # RESUME sync after fixing
+argocd app terminate-op anihpj-prod            # FORCE STOP a stuck sync operation
+
+# ── CLUSTER MANAGEMENT ──
+argocd cluster add &lt;CLUSTER_CONTEXT&gt;           # Register an external K8s cluster
+argocd cluster list                             # List all connected clusters
+argocd cluster rm &lt;CLUSTER_URL&gt;                 # Remove a cluster</code></pre></div>
+
+                <h4>📊 Sync Waves &amp; Resource Hooks — Controlling Deployment Order</h4>
+                <p>By default, ArgoCD applies all resources in parallel. But real applications have dependencies: a CRD must exist before its Custom Resource, a ConfigMap before the Deployment that references it, a database migration Job before the new pod starts. <strong>Sync waves</strong> control the ORDER of resource application within a single sync:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Wave</th><th>Applied When</th><th>Typical Resources</th><th>Example</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>-10 to -1</strong></td><td>Before the main sync (pre-sync)</td><td>CRDs, Namespaces, Network Policies</td><td>Install cert-manager CRDs before creating Certificate resources</td></tr>
+                        <tr><td><strong>0</strong></td><td>Default — first wave of main sync</td><td>ConfigMaps, Secrets, PVCs</td><td>Create DB connection ConfigMap before referencing it</td></tr>
+                        <tr><td><strong>1-5</strong></td><td>Core application resources</td><td>Deployments, Services, Ingresses</td><td>jobpost Deployment + Service + Ingress (order matters less)</td></tr>
+                        <tr><td><strong>6-10</strong></td><td>After core resources are healthy</td><td>HPA, PDB, monitoring ServiceMonitors</td><td>HPA scales the Deployment → needs Deployment first</td></tr>
+                        <tr><td><strong>11+</strong></td><td>Last — post-sync cleanup</td><td>Jobs, cleanup CronJobs</td><td>Database migration Job runs AFTER new pods are healthy</td></tr>
+                    </tbody>
+                </table></div>
+
+                <h4>🪝 Resource Hooks — Run Actions During Sync</h4>
+                <p>Hooks let you run Kubernetes resources (Jobs, Pods) at specific points in the sync lifecycle. Unlike regular resources that ArgoCD manages continuously, hooks run ONCE and are then ignored. This is how you run database migrations, smoke tests, or cleanup tasks as part of a GitOps sync:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Hook Type</th><th>Runs When</th><th>Use Case</th><th>Deletion Policy</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>PreSync</code></td><td>BEFORE sync applies any resources</td><td>Database backup before deploy, pre-flight checks</td><td>BeforeHookCreation (default)</td></tr>
+                        <tr><td><code>Sync</code></td><td>AFTER PreSync, along with main resources</td><td>Database migration Job, schema updates</td><td>HookSucceeded (delete after success)</td></tr>
+                        <tr><td><code>Skip</code></td><td>ArgoCD SKIPS this resource entirely</td><td>Resources managed externally (e.g., Terraform)</td><td>N/A — never applied</td></tr>
+                        <tr><td><code>PostSync</code></td><td>AFTER all resources are applied AND healthy</td><td>Smoke tests, integration tests, notification Jobs</td><td>HookSucceeded</td></tr>
+                        <tr><td><code>SyncFail</code></td><td>AFTER a sync FAILS</td><td>Cleanup tasks, notification of failure</td><td>HookSucceeded</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="info-box note"><h5>📖 anihpj Sync Wave Example</h5><p>jobpost application sync order: <strong>Wave -5:</strong> Namespace created. <strong>Wave 0:</strong> ConfigMap (DB connection string), Secret (DB password). <strong>Wave 1:</strong> Deployment, Service, Ingress. <strong>PreSync Hook:</strong> DB backup Job runs. <strong>Sync Hook:</strong> Django migration Job (<code>python manage.py migrate</code>). <strong>PostSync Hook:</strong> Smoke test Job (curl /api/health). If migration fails → sync fails → old pods continue serving. If smoke test fails → sync is marked Failed, on-call is paged.</p></div>
             </div>
 
             <!-- ─── 15.5: ArgoCD Application CRD ─── -->
@@ -17105,6 +17171,15 @@ commonLabels:
                     <div class="info-card"><div class="card-icon-lg">🚫</div><h5>❌ Environment Branches in Git</h5><p>Branch <code>dev</code>, <code>staging</code>, <code>prod</code> with different YAML per branch. Cherry-picking between branches. Merge conflicts on config changes. Fix: ONE branch (main) with Kustomize overlays per environment. Environment = directory, not branch.</p></div>
                 </div>
                 <div class="info-box warning"><h5>⚠️ The Golden Rule of GitOps</h5><p><strong>If you need cluster credentials OUTSIDE the cluster, it's NOT GitOps.</strong> The agent must run inside the cluster. The cluster pulls from Git — Git never pushes to the cluster. This single rule eliminates 90% of "fake GitOps" implementations. Remember: <strong>Pull + In-Cluster = GitOps. Push + External = NOT GitOps.</strong></p></div>
+
+                <h4>🔐 The Secrets Problem — "How Do I Store Passwords in Git?"</h4>
+                <p>This is the #1 question teams ask when adopting GitOps: <strong>"If all config is in Git, where do I put database passwords, API keys, and TLS certificates?"</strong> The answer is NOT "put plaintext secrets in Git" — that's a security disaster. Instead, GitOps uses encryption tools that let you store ENCRYPTED secrets in Git safely. Only the cluster (via a controller) can decrypt them:</p>
+                <div class="card-grid cols-3">
+                    <div class="info-card highlight"><div class="card-icon-lg">🔒</div><h5>Sealed Secrets</h5><p><strong>How:</strong> A controller in the cluster generates a public/private key pair. You encrypt secrets client-side with <code>kubeseal</code> using the public key. The encrypted <code>SealedSecret</code> is safe to store in Git. Only the controller (with the private key) can decrypt it into a regular K8s Secret.</p><p><strong>Best for:</strong> Simple setups. GitOps-native. No external dependencies. anihpj uses this for staging.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🔑</div><h5>External Secrets Operator (ESO)</h5><p><strong>How:</strong> Secrets NEVER touch Git. ESO syncs secrets from external providers (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault, GCP Secret Manager) into K8s Secrets automatically. You define an <code>ExternalSecret</code> CR that says "get secret X from AWS, put it in K8s Secret Y."</p><p><strong>Best for:</strong> Enterprise. Centralized secret management. Compliance (secrets never in Git at all). anihpj uses this for production.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🔐</div><h5>SOPS + Age/GPG</h5><p><strong>How:</strong> Mozilla SOPS encrypts entire YAML/JSON files (not just values). Encryption keys managed by Age or GPG. Encrypted files are stored in Git safely. ArgoCD can decrypt SOPS files natively via a plugin.</p><p><strong>Best for:</strong> Teams already using SOPS. Encrypting entire config files (not just individual secrets). Flux CD uses SOPS natively.</p></div>
+                </div>
+                <div class="info-box note"><h5>📖 The Secret Management Decision</h5><p><strong>Sealed Secrets:</strong> Simple, GitOps-native, but secrets ARE in Git (encrypted). <strong>ESO:</strong> Secrets NEVER in Git, centralized management, but requires external secret store. <strong>SOPS:</strong> Flexible, encrypts whole files, but requires key management. <strong>CNPA exam tip:</strong> The exam expects you to know that plaintext secrets should NEVER be in Git, and to recognize Sealed Secrets + ESO as the two primary solutions. Detailed coverage in Chapter 16.</p></div>
             </div>
 
             <!-- ─── 15.8: Practice Lab ─── -->
@@ -17242,11 +17317,131 @@ logging:
 
 # Deploy with: helm install jobpost ./chart -f values-prod.yaml</code></pre></div>
                 <div class="info-box tip"><h5>💡 CNPA Decision: Kustomize vs Helm</h5><p>The CNPA exam expects you to know BOTH. Kustomize is more "Kubernetes native" (built into kubectl since 1.14) and simpler for straightforward config variations. Helm is better for complex templating, chart distribution, and dependency management. Many GitOps repositories use BOTH: Helm for infrastructure (ingress-nginx, cert-manager) and Kustomize for application configs.</p></div>
+
+                <h4>🏗️ Kustomize Build Process — How Base + Overlays Become Final YAML</h4>
+                <p>Kustomize is NOT a templating engine — it's a <strong>declarative transformation tool</strong>. You describe what you want (base + patches), and Kustomize generates the final Kubernetes manifests. Here's the process step by step:</p>
+                <div class="process-steps">
+                    <div class="process-step">
+                        <div class="step-number">1</div>
+                        <div class="step-title">Write Base</div>
+                        <div class="step-desc">Create <code>base/deployment.yaml</code> with DEFAULT values (replicas:1, cpu:100m). This is the common truth for ALL environments.</div>
+                    </div>
+                    <div class="process-step">
+                        <div class="step-number">2</div>
+                        <div class="step-title">Write Overlays</div>
+                        <div class="step-desc">Create <code>overlays/prod/kustomization.yaml</code> with ONLY the differences: patch replicas→5, cpu→500m, add HPA.</div>
+                    </div>
+                    <div class="process-step">
+                        <div class="step-number">3</div>
+                        <div class="step-title">kustomize build</div>
+                        <div class="step-desc">Run <code>kustomize build overlays/prod/</code>. Kustomize merges base + patches → produces final, complete YAML ready for kubectl.</div>
+                    </div>
+                    <div class="process-step">
+                        <div class="step-number">4</div>
+                        <div class="step-title">ArgoCD Syncs</div>
+                        <div class="step-desc">ArgoCD runs kustomize build automatically, diffs the result against the cluster, and applies any changes. Fully automated.</div>
+                    </div>
+                </div>
+
+                <h4>🧭 Kustomize or Helm? — A Decision Tree for anihpj</h4>
+                <p>This is the most common architectural decision in GitOps configuration. The CNPA exam expects you to recommend the right tool for the right scenario:</p>
+                <div class="decision-tree">
+                    <div class="decision-node question">Q1: "Do you need to DISTRIBUTE this to external users (Helm chart registry)?"</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-branch-label">YES</div><div class="decision-node yes">Use Helm — Charts are designed for distribution and versioning across organizations.</div></div>
+                        <div><div class="decision-branch-label">NO</div><div class="decision-node question">Q2: "Do you need complex templating (if/else, loops, nested values)?"</div></div>
+                    </div>
+                    <div class="decision-branches">
+                        <div><div class="decision-branch-label">YES</div><div class="decision-node yes">Use Helm — Go templates handle conditional logic that Kustomize cannot express declaratively.</div></div>
+                        <div><div class="decision-branch-label">NO</div><div class="decision-node question">Q3: "Is your config mostly simple overrides (replicas, resources, images)?"</div></div>
+                    </div>
+                    <div class="decision-branches">
+                        <div><div class="decision-branch-label">YES</div><div class="decision-node yes">Use Kustomize — Simpler, native to kubectl, no template debugging. anihpj's choice for apps.</div></div>
+                        <div><div class="decision-branch-label">NO</div><div class="decision-node no">Use BOTH — Helm for infrastructure (ingress, cert-manager), Kustomize for application configs. Best of both worlds.</div></div>
+                    </div>
+                </div>
+
+                <h4>🧩 Kustomize Patch Types — Three Ways to Override</h4>
+                <p>Kustomize offers three different patch mechanisms — each with different use cases. Understanding which to use is key to writing maintainable overlays:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Patch Type</th><th>Syntax</th><th>Best For</th><th>Example</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Strategic Merge</strong></td><td><code>patchesStrategicMerge</code></td><td>Simple field overrides. Merges with the base using K8s-aware logic (knows lists should merge by name, not replace).</td><td>Override replicas, image tag, add env vars</td></tr>
+                        <tr><td><strong>JSON Patch (RFC 6902)</strong></td><td><code>patchesJson6902</code></td><td>Precise surgical changes. Uses <code>op: replace/add/remove</code> with exact JSON paths. Works for ANY field.</td><td>Add a specific container port, remove a volume mount</td></tr>
+                        <tr><td><strong>Inline Patch</strong></td><td><code>patches:</code> with inline YAML</td><td>Self-contained patches in kustomization.yaml. No separate patch files needed.</td><td>Quick overrides during development, prototyping</td></tr>
+                    </tbody>
+                </table></div>
+
+                <h4>🚫 The DRY Principle — NEVER Copy-Paste Manifests</h4>
+                <p>The most common beginner mistake in GitOps: copying <code>deployment.yaml</code> into dev/, staging/, prod/ and editing each one. This violates the DRY (Don't Repeat Yourself) principle and creates a maintenance nightmare:</p>
+                <div class="split-panel">
+                    <div class="split-bad"><div class="split-label">❌ COPY-PASTE (NOT GitOps)</div><div class="split-content">
+                        <p><strong>The mistake:</strong></p>
+                        <pre><code>apps/jobpost/dev/deployment.yaml     # replicas: 1
+apps/jobpost/staging/deployment.yaml # replicas: 2
+apps/jobpost/prod/deployment.yaml    # replicas: 5</code></pre>
+                        <p><strong>Problem:</strong> Change the health check? Edit 3 files. Add a new env var? Edit 3 files. Bump the resource limit? Edit 3 files. For 10 apps × 3 envs = 30 files to maintain. Human error is inevitable.</p>
+                    </div></div>
+                    <div class="split-good"><div class="split-label">✅ KUSTOMIZE OVERLAYS (GitOps Way)</div><div class="split-content">
+                        <p><strong>The solution:</strong></p>
+                        <pre><code>apps/jobpost/base/deployment.yaml          # ONCE
+apps/jobpost/overlays/dev/kustomization.yaml    # replicas: 1
+apps/jobpost/overlays/staging/kustomization.yaml# replicas: 2
+apps/jobpost/overlays/prod/kustomization.yaml   # replicas: 5</code></pre>
+                        <p><strong>Benefit:</strong> Change the health check ONCE in base/. All 3 environments inherit it. Only environment-specific DIFFERENCES live in overlays. 10 apps × 1 base + 30 lightweight overlay files. Drift is structurally impossible.</p>
+                    </div></div>
+                </div>
+                <div class="info-box warning"><h5>⚠️ The Copy-Paste Test</h5><p>If you find yourself copying a manifest file between environment directories, STOP. Ask: "What is DIFFERENT between environments?" Only the DIFFERENCES belong in overlays — everything common goes in base/. This is the same principle as "Build Once, Deploy Many" (Chapter 14) applied to configuration. <strong>Base = the common truth. Overlay = the environment-specific delta.</strong></p></div>
+
+                <h4>🗄️ Database Strategy Across Environments — The anihpj Pattern</h4>
+                <p>One of the most important environment-specific configurations is the DATABASE. Dev uses a lightweight local database. Staging uses a managed database for realistic testing. Production uses a highly-available, auto-failover database. The same application code — completely different persistence backends — all managed through Kustomize overlays:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Environment</th><th>Database</th><th>Why</th><th>Kustomize Config</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Dev</strong></td><td><strong>SQLite</strong> (local file)</td><td>Zero setup. Ephemeral data. Devs can reset with <code>rm db.sqlite3</code>. No external dependency. Perfect for rapid iteration.</td><td>ConfigMap: <code>DB_ENGINE=django.db.backends.sqlite3</code>, <code>DB_NAME=/data/db.sqlite3</code></td></tr>
+                        <tr><td><strong>Staging</strong></td><td><strong>PostgreSQL</strong> (managed, single instance)</td><td>Real database engine. Tests migrations against actual PostgreSQL. Catches SQLite-incompatible queries BEFORE production.</td><td>Secret ref: <code>DB_ENGINE=django.db.backends.postgresql</code>, <code>DB_HOST=staging-pg.anihpj.com</code></td></tr>
+                        <tr><td><strong>Production</strong></td><td><strong>Amazon RDS</strong> (Multi-AZ, HA)</td><td>Auto-failover. Automated backups. Point-in-time recovery. Read replicas for analytics. This is what paying customers depend on.</td><td>Secret ref: <code>DB_ENGINE=django.db.backends.postgresql</code>, <code>DB_HOST=prod-pg.cluster-xxx.rds.amazonaws.com</code>, HPA enabled</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="info-box note"><h5>📖 Why This Matters for CNPA</h5><p>The exam tests whether you understand that "same app, different environment" means MORE than just replica counts. Database type, caching layer (Redis: none in dev, single in staging, cluster in prod), logging (stdout in dev, ELK in prod), and monitoring (none in dev, Prometheus in staging/prod) all vary by environment. Kustomize overlays handle ALL of these differences — not just replicas. The application code stays identical; only configuration changes.</p></div>
             </div>
 
             <!-- ─── 16.2: Argo Rollouts ─── -->
             <div class="section-block" id="s16-2"><h3>16.2 Progressive Delivery with Argo Rollouts — Canary &amp; Blue/Green via GitOps</h3>
                 <p>Argo Rollouts extends the standard Kubernetes Deployment with advanced deployment strategies — <strong>canary</strong> (gradual traffic shift with analysis) and <strong>blue/green</strong> (instant switch with full validation). It's a CRD-based controller that replaces Deployments with Rollouts — and integrates seamlessly with ArgoCD for GitOps:</p>
+
+                <h4>📈 The Deployment Evolution — From Basic to Progressive</h4>
+                <p>Platforms evolve through stages of deployment sophistication. Each stage adds capability but also complexity. The CNPA exam expects you to know where each strategy fits — and when to move up the ladder:</p>
+                <div class="evolution-strip">
+                    <div class="evo-item">
+                        <div class="evo-icon">📦</div>
+                        <div class="evo-era">STAGE 1</div>
+                        <h5>Standard K8s Deployment</h5>
+                        <p>Rolling update. No traffic control. No analysis. If pods crash, K8s restarts them — but users already saw errors.</p>
+                        <div class="evo-status bad">Minimal Safety</div>
+                    </div>
+                    <div class="evo-item">
+                        <div class="evo-icon">🔄</div>
+                        <div class="evo-era">STAGE 2</div>
+                        <h5>Rolling + Health Checks</h5>
+                        <p>Readiness probes prevent traffic to unhealthy pods. MaxSurge/MaxUnavailable tuned. Better but still "all or nothing."</p>
+                        <div class="evo-status ok">Basic Safety</div>
+                    </div>
+                    <div class="evo-item active">
+                        <div class="evo-icon">🐤</div>
+                        <div class="evo-era">STAGE 3</div>
+                        <h5>Canary with Analysis</h5>
+                        <p>Gradual traffic shift. Automated metric analysis. Auto-rollback on degradation. Only X% of users affected by bad deploy.</p>
+                        <div class="evo-status good">Good Safety</div>
+                    </div>
+                    <div class="evo-item">
+                        <div class="evo-icon">🔵</div>
+                        <div class="evo-era">STAGE 4</div>
+                        <h5>Blue/Green + Pre-Validation</h5>
+                        <p>Full parallel environment. Complete test suite before switch. Instant rollback in < 1 second. Highest safety.</p>
+                        <div class="evo-status good">Best Safety</div>
+                    </div>
+                </div>
 
                 <div class="diagram-container"><div class="diagram-title">🐤 CANARY ROLLOUT — Argo Rollouts in GitOps</div><div class="diagram-body"><pre>
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -17347,6 +17542,98 @@ spec:
             }[2m])</code></pre></div>
 
                 <div class="info-box warning"><h5>⚠️ Argo Rollouts vs Standard Deployments</h5><p>Argo Rollouts REPLACES the standard K8s Deployment resource with a Rollout CRD. If you're using Argo Rollouts, you use <code>kind: Rollout</code> instead of <code>kind: Deployment</code>. The Rollout manages the underlying ReplicaSets with the canary/bluegreen logic. In GitOps, this means your Git repo contains Rollout manifests — not Deployment manifests — for apps using progressive delivery.</p></div>
+
+                <h4>🔵🟢 Blue/Green with Argo Rollouts — The Instant Switch</h4>
+                <p>While canary gradually shifts traffic, Blue/Green deploys the new version ENTIRELY, validates it, then switches ALL traffic at once. This gives you an instant rollback — just switch back to Blue. Here's how Argo Rollouts handles Blue/Green in a GitOps workflow:</p>
+                <div class="diagram-container"><div class="diagram-title">🔵 BLUE/GREEN ROLLOUT — Argo Rollouts</div><div class="diagram-body"><pre>
+┌──────────────────────────────────────────────────────────────────────┐
+│  BLUE/GREEN WITH ARGO ROLLOUTS                                       │
+│                                                                       │
+│  STEP 1: All traffic on Blue (v3.1) — 5 replicas                    │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │  🔵 Blue (v3.1):  5 pods  ◀── 100% traffic               │       │
+│  │  🟢 Green (v3.2): 0 pods   (not receiving traffic)       │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                                                                       │
+│  STEP 2: Deploy Green (v3.2) alongside Blue                          │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │  🔵 Blue (v3.1):  5 pods  ◀── 100% traffic               │       │
+│  │  🟢 Green (v3.2): 5 pods   (active, not receiving traffic)│       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                                                                       │
+│  STEP 3: Run pre-promotion tests on Green                            │
+│  • Smoke tests: curl /api/health → 200                               │
+│  • Integration tests: DB migration successful                        │
+│  • Manual approval: "Green looks good. Promote."                     │
+│                                                                       │
+│  STEP 4: Switch Service selector from Blue → Green                   │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │  🔵 Blue (v3.1):  5 pods   (no traffic — kept as backup)  │       │
+│  │  🟢 Green (v3.2): 5 pods  ◀── 100% traffic ✅             │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                                                                       │
+│  STEP 5: Scale down Blue after N minutes (configurable)              │
+│  If Green fails → switch selector BACK to Blue (INSTANT rollback)    │
+│                                                                       │
+│  RESOURCE COST: 2× replicas DURING deploy                             │
+│  ROLLBACK SPEED: < 1 second (just switch the Service selector)       │
+│  BEST FOR: Major version upgrades, risky changes, pre-validation     │
+└──────────────────────────────────────────────────────────────────────┘</pre></div></div>
+
+                <h4>🎯 Canary vs Blue/Green — Which One for anihpj?</h4>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Decision Factor</th><th>Canary</th><th>Blue/Green</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Traffic shift</strong></td><td>Gradual (10% → 25% → 50% → 100%)</td><td>Instant (0% → 100% in one switch)</td></tr>
+                        <tr><td><strong>Resource cost during deploy</strong></td><td>~1.1-1.5× (extra canary pods)</td><td>2× (both Blue AND Green run fully)</td></tr>
+                        <tr><td><strong>Rollback speed</strong></td><td>~30s (scale down canary pods)</td><td>< 1 second (switch Service selector)</td></tr>
+                        <tr><td><strong>User impact if failure</strong></td><td>Only X% of users affected</td><td>ALL users affected (but instant rollback)</td></tr>
+                        <tr><td><strong>Requires Service Mesh?</strong></td><td>Yes (Istio/Linkuma for traffic splitting)</td><td>No (uses K8s Service selectors)</td></tr>
+                        <tr><td><strong>Best for</strong></td><td>Continuous validation, risky DB changes, gradual rollout</td><td>Major releases, pre-validation required, instant rollback</td></tr>
+                        <tr><td><strong>anihpj use</strong></td><td>Staging: canary every PR merge. Auto-analysis with Prometheus.</td><td>Production: Blue/Green for quarterly major releases. Full test suite before switch.</td></tr>
+                    </tbody>
+                </table></div>
+
+                <h4>🔄 ArgoCD + Argo Rollouts — How GitOps Drives Progressive Delivery</h4>
+                <p>The integration between ArgoCD and Argo Rollouts is elegant: ArgoCD handles Git→Cluster sync (the GitOps part), while Argo Rollouts handles the rollout strategy (the progressive delivery part). Here's the full flow for a canary deployment triggered by a Git change:</p>
+                <div class="diagram-container"><div class="diagram-title">🔗 ARGOCD + ROLLOUTS INTEGRATION — Full Canary Flow</div><div class="diagram-body"><pre>
+┌──────────────────────────────────────────────────────────────────────┐
+│  ARGOCD + ARGO ROLLOUTS — End-to-End Canary                          │
+│                                                                       │
+│  ═══════════════ PHASE 1: GITOPS (ArgoCD) ═══════════════            │
+│  T=0     Developer: git push (image: v3.2)                            │
+│  T=15s   ArgoCD: detects new commit (webhook)                         │
+│  T=20s   ArgoCD: Repo Server clones, generates Rollout YAML           │
+│  T=25s   ArgoCD: Applies Rollout CRD to cluster → "Synced"           │
+│                                                                       │
+│  ═══════════ PHASE 2: PROGRESSIVE DELIVERY (Argo Rollouts) ══════════ │
+│  T=25s   Rollouts: Creates canary ReplicaSet (v3.2, 1 pod)            │
+│  T=30s   Rollouts: Sets canary weight = 10%                           │
+│  T=35s   Rollouts: Canary pod Running + Ready                         │
+│  T=5m    Rollouts: Pause 5 min → AnalysisTemplate runs                │
+│           ├── Metric: error_rate < 0.01?                              │
+│           ├── Metric: p99_latency < 500ms?                            │
+│           └── Metric: crash_count == 0?                               │
+│                                                                       │
+│  ═══════════ OUTCOME A: PROMOTE (all metrics pass) ════════════       │
+│  T=5m    Analysis: ALL METRICS PASS ✅                                 │
+│  T=5m    Rollouts: → setWeight: 30% → pause → 50% → 100%             │
+│  T=15m   Rollouts: Scale down old ReplicaSet (v3.1) to 0             │
+│  T=15m   Rollout status: "Healthy ✅. Fully Promoted. v3.2 = 100%"   │
+│                                                                       │
+│  ═══════════ OUTCOME B: ABORT (any metric fails) ═════════════        │
+│  T=7m    Analysis: error_rate = 0.05 (EXCEEDS 0.01 limit) ❌          │
+│  T=7m    Rollouts: ABORT canary. Set weight = 0%.                     │
+│  T=7m30s Rollouts: Scale down canary ReplicaSet (v3.2) to 0          │
+│  T=7m30s Rollout status: "Degraded ❌. Rolled back. v3.1 = 100%"     │
+│                                                                       │
+│  KEY INSIGHT: ArgoCD stays "Synced" throughout. The Rollout CRD in   │
+│  Git says "use canary strategy" — ArgoCD ensures the CRD exists.      │
+│  Argo Rollouts reads the CRD and executes the progressive steps.      │
+│  ArgoCD does NOT manage the canary steps — Argo Rollouts does.        │
+└──────────────────────────────────────────────────────────────────────┘</pre></div></div>
+
+                <div class="info-box tip"><h5>💡 CNPA: Separation of Concerns</h5><p>ArgoCD = Git→Cluster synchronization (ensures Rollout CRD matches Git). Argo Rollouts = Progressive delivery execution (manages canary/bluegreen steps and analysis). If the Rollout CRD says "canary with 5 steps," ArgoCD ensures the Rollout CRD exists in the cluster. Argo Rollouts reads that CRD and performs the actual canary. This separation is a key CNPA concept: <strong>GitOps defines WHAT. Progressive delivery controllers execute HOW.</strong></p></div>
             </div>
 
             <!-- ─── 16.3: Secrets in GitOps ─── -->
@@ -17407,6 +17694,74 @@ spec:
     - secretKey: DB_HOST
       remoteRef:
         key: jobpost-prod-db-host</code></pre></div>
+
+                <h4>🔧 Sealed Secrets — CLI Workflow Step by Step</h4>
+                <p>Here's exactly how anihpj encrypts a secret and commits it to Git using Sealed Secrets. The key insight: the <strong>private key NEVER leaves the cluster</strong>. Only the public key is used client-side for encryption:</p>
+                <div class="code-block-wrapper"><div class="code-block-header"><span class="code-lang">BASH</span><span class="code-label">Sealed Secrets — Encrypt & Commit Workflow</span></div><pre class="code-block"><code class="language-bash"># STEP 1: Create a plain K8s Secret (NEVER commit this!)
+kubectl create secret generic db-credentials \
+  --from-literal=username=jobpost \
+  --from-literal=password=s3cret123! \
+  --namespace anihpj-staging \
+  --dry-run=client -o yaml > secret.yaml
+
+# STEP 2: Encrypt with kubeseal (uses cluster's public key)
+kubeseal --controller-name=sealed-secrets \
+  --controller-namespace=kube-system \
+  --format yaml < secret.yaml > sealed-secret.yaml
+
+# STEP 3: DELETE the plain secret.yaml IMMEDIATELY
+rm secret.yaml
+
+# STEP 4: sealed-secret.yaml is SAFE to commit to Git
+# It looks like this: (encrypted blob, unreadable)
+git add sealed-secret.yaml
+git commit -m "Add DB credentials for staging"
+git push
+
+# STEP 5: ArgoCD syncs the SealedSecret CR
+# → Sealed Secrets controller detects it
+# → Decrypts with cluster's private key
+# → Creates the actual K8s Secret in anihpj-staging namespace
+# → Pods can now mount db-credentials as env vars</code></pre></div>
+
+                <h4>🏢 ESO ClusterSecretStore — Shared Across Namespaces</h4>
+                <p>ESO has two store types. Understanding the difference is critical for multi-tenant platforms:</p>
+                <div class="card-grid cols-2">
+                    <div class="info-card highlight"><div class="card-icon-lg">🔑</div><h5>SecretStore (Namespaced)</h5><p>Scoped to ONE namespace. Only ExternalSecrets in the same namespace can use it. Each team creates their own SecretStore pointing to their own vault path. <strong>anihpj:</strong> backend-team namespace has SecretStore → backend-team/ secrets in Azure KV.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🏢</div><h5>ClusterSecretStore (Global)</h5><p>Available in ALL namespaces. Platform team creates ONCE. All teams reference it. Requires cluster-admin to create. <strong>anihpj:</strong> One ClusterSecretStore → Azure Key Vault. All 3 clusters use it. Centralized credential management.</p></div>
+                </div>
+
+                <h4>🔐 Security Comparison — Which Tool for Which Threat?</h4>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Threat / Requirement</th><th>Sealed Secrets</th><th>ESO</th><th>SOPS</th></tr></thead>
+                    <tbody>
+                        <tr><td>Secrets visible in Git?</td><td>🔴 Encrypted blob present</td><td>🟢 Only references (no values)</td><td>🔴 Encrypted file present</td></tr>
+                        <tr><td>Multi-cluster support</td><td>🔴 One sealing key per cluster</td><td>🟢 Same ExternalSecret works everywhere</td><td>🟡 Same key can work, but needs per-cluster config</td></tr>
+                        <tr><td>Secret rotation</td><td>🟡 Re-encrypt and commit</td><td>🟢 Rotate in Azure/AWS, ESO auto-syncs</td><td>🟡 Re-encrypt file and commit</td></tr>
+                        <tr><td>External dependency</td><td>🟢 None (self-contained in K8s)</td><td>🔴 Requires external secret store</td><td>🟡 Requires KMS/AGE/GPG key management</td></tr>
+                        <tr><td>Compliance (PCI-DSS, SOC2)</td><td>🟡 Acceptable with audit</td><td>🟢 Best — secrets never in Git</td><td>🟡 Acceptable with audit</td></tr>
+                        <tr><td>Operational complexity</td><td>🟢 Lowest</td><td>🔴 Highest</td><td>🟡 Medium</td></tr>
+                    </tbody>
+                </table></div>
+
+                <h4>🧭 Which Secret Tool Should anihpj Use? — Decision Tree</h4>
+                <p>The CNPA exam will ask you to recommend a secret management approach based on specific requirements. Here's the decision framework anihpj uses:</p>
+                <div class="decision-tree">
+                    <div class="decision-node question">Q1: "Do your compliance requirements forbid secrets from EVER touching Git (even encrypted)?"</div>
+                    <div class="decision-branches">
+                        <div><div class="decision-branch-label">YES</div><div class="decision-node yes">Use External Secrets Operator — secrets live ONLY in Azure Key Vault/AWS Secrets Manager. Git stores only references.</div></div>
+                        <div><div class="decision-branch-label">NO</div><div class="decision-node question">Q2: "Do you need the same secret across MULTIPLE clusters?"</div></div>
+                    </div>
+                    <div class="decision-branches">
+                        <div><div class="decision-branch-label">YES</div><div class="decision-node yes">Use ESO with ClusterSecretStore — one ExternalSecret CR works across all clusters. Centralized rotation.</div></div>
+                        <div><div class="decision-branch-label">NO</div><div class="decision-node question">Q3: "Do you need to encrypt entire CONFIG FILES (not just secret values)?"</div></div>
+                    </div>
+                    <div class="decision-branches">
+                        <div><div class="decision-branch-label">YES</div><div class="decision-node yes">Use SOPS — encrypts entire YAML/JSON files. Good for sensitive configs that aren't K8s Secrets.</div></div>
+                        <div><div class="decision-branch-label">NO</div><div class="decision-node yes">Use Sealed Secrets — simplest. Encrypt in CLI → commit to Git → controller decrypts in cluster. Zero external dependencies. anihpj uses this for dev/staging.</div></div>
+                    </div>
+                </div>
+                <div class="info-box tip"><h5>💡 anihpj's Layered Approach</h5><p><strong>Dev/Staging:</strong> Sealed Secrets (simple, no external deps). <strong>Production:</strong> ESO + Azure Key Vault (compliance, rotation, central management). <strong>Shared Configs:</strong> SOPS + AGE keys (encrypt entire files). This layered approach means you use the RIGHT tool for each context — not one tool for everything. The CNPA exam rewards this nuanced thinking.</p></div>
             </div>
 
             <!-- ─── 16.4: Multi-Cluster GitOps ─── -->
@@ -17484,6 +17839,106 @@ spec:
         {{syncPolicy}}:
           prune: "{{eq .env \"dev\"}}"
           selfHeal: "{{eq .env \"dev\"}}"</code></pre></div>
+
+                <h4>🧬 ApplicationSet Generator Types — Five Ways to Generate Apps</h4>
+                <p>The power of ApplicationSet comes from its generators — each one creates Applications from a different source of truth. Understanding when to use each is critical for the CNPA exam:</p>
+                <div class="card-grid cols-3">
+                    <div class="info-card highlight"><div class="card-icon-lg">📋</div><h5>List Generator</h5><p><strong>Literal list of values.</strong> You manually list each environment/cluster. Simplest, most explicit. <strong>anihpj:</strong> List of [dev, staging, prod] with cluster URLs. Best when you have a small, known set of targets.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🌐</div><h5>Cluster Generator</h5><p><strong>Auto-discovers clusters.</strong> Reads from ArgoCD's list of registered clusters. Every cluster ArgoCD knows about gets the Application. <strong>Use:</strong> When you add a cluster to ArgoCD, apps auto-deploy to it. Zero config per cluster.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">📁</div><h5>Git Generator</h5><p><strong>Reads from Git directories/files.</strong> Each subdirectory in a Git path becomes an Application. <strong>Use:</strong> Teams add app directories to Git → ApplicationSet auto-creates ArgoCD Applications. Self-service GitOps.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">✖️</div><h5>Matrix Generator</h5><p><strong>Cartesian product.</strong> Combines two generators. [dev, staging, prod] × [jobpost, redis] = 6 Applications. <strong>Use:</strong> Every combination of cluster × app. Scales exponentially — be careful with large sets.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🔗</div><h5>Merge Generator</h5><p><strong>Merges multiple generators.</strong> Unlike matrix (product), merge combines results side-by-side. <strong>Use:</strong> Some apps from Git + some from a list + some from clusters. Flexible but complex.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🏷️</div><h5>Cluster Decision Resource</h5><p><strong>Uses an external CR.</strong> A custom resource (e.g., "DeploymentTarget") controls which clusters get which apps. <strong>Use:</strong> Advanced multi-tenancy. Teams declare their target clusters via CRs. For very large platforms.</p></div>
+                </div>
+
+                <h4>🚀 Multi-Cluster Promotion — Dev → Staging → Production</h4>
+                <p>The anihpj promotion workflow uses ApplicationSet with environment-specific sync policies to create a gated pipeline. Code flows automatically through dev and staging, but production requires manual approval:</p>
+                <div class="diagram-container"><div class="diagram-title">📋 ANIHPJ PROMOTION PIPELINE — Git → Dev → Staging → Prod</div><div class="diagram-body"><pre>
+┌──────────────────────────────────────────────────────────────────────┐
+│  GITOPS PROMOTION PIPELINE                                            │
+│                                                                       │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐               │
+│  │   GIT    │───▶│  DEV CLUSTER  │───▶│STAGING CLUSTER│              │
+│  │  merge   │    │  auto-sync    │    │  auto-sync    │              │
+│  │  to main │    │  < 3 minutes  │    │  < 3 minutes  │              │
+│  └──────────┘    └──────┬───────┘    └──────┬───────┘              │
+│                         │                    │                        │
+│                         │  ✅ Auto-promoted  │  ✅ Auto-promoted     │
+│                         │  after sync        │  after sync           │
+│                         │                    │                        │
+│                         │              ┌─────▼──────────┐           │
+│                         │              │  PROD CLUSTER   │           │
+│                         │              │  ⏸️ PENDING     │           │
+│                         │              │  (manual sync)  │           │
+│                         │              └─────┬──────────┘           │
+│                         │                    │                        │
+│                         │              ┌─────▼──────────┐           │
+│                         │              │  HUMAN APPROVAL │           │
+│                         │              │  argocd app     │           │
+│                         │              │  sync anihpj-   │           │
+│                         │              │  prod           │           │
+│                         │              └─────┬──────────┘           │
+│                         │                    │                        │
+│                         │              ┌─────▼──────────┐           │
+│                         │              │  PROD CLUSTER   │           │
+│                         │              │  ✅ Synced       │           │
+│                         │              │  💚 Healthy      │           │
+│                         │              └─────────────────┘           │
+│                                                                       │
+│  TIMELINE:                                                            │
+│  T=0      Developer merges PR to main                                 │
+│  T=3min   DEV auto-syncs. 1 replica of v3.2 running.                 │
+│  T=6min   STAGING auto-syncs. 2 replicas of v3.2 running.            │
+│  T=30min  Manual tests pass on staging.                               │
+│  T=35min  Release manager: argocd app sync anihpj-prod               │
+│  T=37min  PRODUCTION: 5 replicas of v3.2 serving users.              │
+│                                                                       │
+│  ROLLBACK: git revert → auto-sync dev + staging → manual sync prod   │
+└──────────────────────────────────────────────────────────────────────┘</pre></div></div>
+
+                <h4>🔗 ArgoCD Cluster Registration — Connecting External Clusters</h4>
+                <p>For multi-cluster GitOps, ArgoCD needs to know about each target cluster. There are two ways to register clusters — and the choice affects security, management overhead, and the architecture of your GitOps setup:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Method</th><th>How It Works</th><th>Best For</th><th>Security Consideration</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>argocd cluster add</strong></td><td>Uses your current kubectl context. ArgoCD installs a ServiceAccount + ClusterRole + Bearer Token on the target cluster. Stores the token as a Secret in the ArgoCD namespace.</td><td>Initial setup. Clusters you control with kubectl access. Quick onboarding.</td><td>The Bearer Token stored in ArgoCD namespace has cluster-admin by default. Use <code>--system-namespace</code> and restrict RBAC.</td></tr>
+                        <tr><td><strong>Declarative Secret</strong></td><td>Manually create a Secret in the ArgoCD namespace with the cluster's API server URL + TLS config + Bearer Token. More control over RBAC and token scope.</td><td>Production clusters. GitOps-managed clusters. When you need fine-grained RBAC.</td><td>Create a restricted ServiceAccount (not cluster-admin). Scope to specific namespaces. Rotate tokens regularly.</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="code-block-wrapper"><div class="code-block-header"><span class="code-lang">BASH</span><span class="code-label">Registering an External Cluster with ArgoCD</span></div><pre class="code-block"><code class="language-bash"># METHOD 1: argocd CLI (uses current kubectl context)
+argocd cluster add prod-cluster-context --name production
+# ArgoCD installs a ServiceAccount and stores credentials
+
+# METHOD 2: Declarative (manual Secret)
+cat &lt;&lt;EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prod-cluster-secret
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+type: Opaque
+stringData:
+  name: production
+  server: https://prod-api.anihpj.com:6443
+  config: |
+    {
+      "bearerToken": "&lt;RESTRICTED_SA_TOKEN&gt;",
+      "tlsClientConfig": {
+        "insecure": false,
+        "caData": "&lt;BASE64_CA_CERT&gt;"
+      }
+    }
+EOF
+
+# Verify registration
+argocd cluster list
+# SERVER                                  NAME        STATUS
+# https://kubernetes.default.svc          in-cluster  Successful
+# https://prod-api.anihpj.com:6443        production  Successful
+# https://staging-api.anihpj.com:6443     staging     Successful</code></pre></div>
+                <div class="info-box warning"><h5>⚠️ Cluster Registration Security</h5><p>When you run <code>argocd cluster add</code>, the default ServiceAccount has <strong>cluster-admin</strong> privileges. For production clusters, always: (1) Create a restricted ServiceAccount with only the RBAC ArgoCD needs. (2) Use the declarative Secret method. (3) Rotate Bearer Tokens on a schedule. (4) Never commit the cluster Secret to Git — it contains credentials.</p></div>
             </div>
 
             <!-- ─── 16.5: GitOps Observability ─── -->
@@ -17538,6 +17993,21 @@ spec:
 │  │  COMPLETE AUDIT: commit → sync → deploy → verify               │ │
 │  └─────────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────┘</pre></div></div>
+
+                <h4>📊 Key Prometheus Metrics — What to Alert On</h4>
+                <p>ArgoCD exposes a rich set of Prometheus metrics. Here are the ones that matter for platform operations — and what alerts you should configure for each:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Metric</th><th>What It Tracks</th><th>Alert When</th><th>Severity</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>argocd_app_sync_status</code></td><td>Is app Synced (0), OutOfSync (1), or Unknown (2)?</td><td>Any prod app = 1 for > 15 min</td><td>🔴 Critical</td></tr>
+                        <tr><td><code>argocd_app_health_status</code></td><td>Is app Healthy (0), Progressing (1), Degraded (2)?</td><td>Prod Degraded OR any app Degraded > 10 min</td><td>🔴 Critical</td></tr>
+                        <tr><td><code>argocd_sync_operation_duration_seconds</code></td><td>How long did the last sync take?</td><td>p99 > 60s for prod cluster</td><td>🟡 Warning</td></tr>
+                        <tr><td><code>argocd_app_reconcile_count</code></td><td>How many reconciliation cycles have run?</td><td>Rate drops to 0 (controller stopped)</td><td>🔴 Critical</td></tr>
+                        <tr><td><code>argocd_cluster_connection_status</code></td><td>Is ArgoCD connected to target clusters?</td><td>Any cluster = 0 (disconnected)</td><td>🔴 Critical</td></tr>
+                        <tr><td><code>argocd_kubectl_exec_pending_count</code></td><td>How many kubectl operations are queued?</td><td>> 50 pending (API server bottleneck)</td><td>🟡 Warning</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="info-box tip"><h5>💡 The "Green Dashboard"</h5><p>The ultimate GitOps observability goal: a single Grafana dashboard that shows ALL applications across ALL clusters. Every app should be a green rectangle. If ANY rectangle is yellow or red, the on-call engineer knows exactly where to look. This is the "single pane of glass" that makes platform operations manageable at scale.</p></div>
             </div>
 
             <!-- ─── 16.6: Practice Lab ─── -->
@@ -17574,6 +18044,15 @@ spec:
                 <!-- Q10 -->
                 <div class="mcq-block"><div class="mcq-question"><span class="mcq-domain domain-d3">Domain 3</span><span class="mcq-qnum">Q10</span><p>When using ArgoCD ApplicationSet with a matrix generator, what does the generator produce?</p></div><div class="mcq-options"><div class="mcq-option"><span class="mcq-radio"></span><span class="mcq-label">A</span> A mathematical matrix of CPU and memory resource requests for each application</div><div class="mcq-option"><span class="mcq-radio"></span><span class="mcq-label">B</span> A dependency graph showing which applications must be deployed before others</div><div class="mcq-option" data-answer="correct"><span class="mcq-radio"></span><span class="mcq-label">C</span> The Cartesian product of multiple generators, creating an Application for every combination of inputs</div><div class="mcq-option"><span class="mcq-radio"></span><span class="mcq-label">D</span> A rolling update schedule that staggers deployments across clusters to avoid simultaneous changes</div></div><div class="mcq-answer"><button class="mcq-toggle" onclick="toggleAnswer(this)">▼ Show Answer</button><div class="mcq-explanation hidden"><p class="mcq-correct">✅ <strong>Correct: C</strong></p><p>A matrix generator combines multiple generators to produce the Cartesian product. Example: List generator [dev, staging, prod] × List generator [anihpj, redis, postgres] = 9 Applications. This is how you scale GitOps across environments × applications without manual duplication.</p></div></div></div>
             </div>
+
+            <div class="visual-summary"><h4>📊 Chapter 16 Summary — Key Takeaways</h4><div class="vs-grid">
+                <div class="vs-item"><span class="vs-icon">🎨</span><span class="vs-label">Kustomize Overlays</span><span class="vs-detail">Base + overlays. NEVER copy-paste manifests. Only diffs in overlays.</span></div>
+                <div class="vs-item"><span class="vs-icon">🐤</span><span class="vs-label">Canary Rollouts</span><span class="vs-detail">Gradual traffic shift with auto-analysis. Fail → auto-abort.</span></div>
+                <div class="vs-item"><span class="vs-icon">🔵</span><span class="vs-label">Blue/Green</span><span class="vs-detail">Instant switch. < 1s rollback. 2× resources during deploy.</span></div>
+                <div class="vs-item"><span class="vs-icon">🔐</span><span class="vs-label">Secrets</span><span class="vs-detail">Sealed Secrets (encrypted in Git), ESO (never in Git), SOPS.</span></div>
+                <div class="vs-item"><span class="vs-icon">🌐</span><span class="vs-label">ApplicationSet</span><span class="vs-detail">6 generator types. One template → N Applications automatically.</span></div>
+                <div class="vs-item"><span class="vs-icon">📊</span><span class="vs-label">Observability</span><span class="vs-detail">Prometheus metrics + Grafana dashboard + alerts. Green = good.</span></div>
+            </div></div>
         </div>
     </section>
 
