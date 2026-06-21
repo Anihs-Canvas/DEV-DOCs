@@ -17404,6 +17404,56 @@ apps/jobpost/overlays/prod/kustomization.yaml   # replicas: 5</code></pre>
                     </tbody>
                 </table></div>
                 <div class="info-box note"><h5>📖 Why This Matters for CNPA</h5><p>The exam tests whether you understand that "same app, different environment" means MORE than just replica counts. Database type, caching layer (Redis: none in dev, single in staging, cluster in prod), logging (stdout in dev, ELK in prod), and monitoring (none in dev, Prometheus in staging/prod) all vary by environment. Kustomize overlays handle ALL of these differences — not just replicas. The application code stays identical; only configuration changes.</p></div>
+
+                <h4>🏷️ Kustomize ConfigMap &amp; Secret Generators — Beyond Manual YAML</h4>
+                <p>One of Kustomize's most powerful features: you don't have to write ConfigMap YAML by hand. Generators create ConfigMaps and Secrets from files, literals, or environment files — and automatically append a content hash to the name. This means when the ConfigMap content changes, the Deployment automatically restarts (because the ConfigMap name changed):</p>
+                <div class="split-panel">
+                    <div class="split-good"><div class="split-label">✅ WITH Generators (Kustomize Way)</div><div class="split-content">
+                        <pre><code># kustomization.yaml
+configMapGenerator:
+  - name: jobpost-config
+    files:
+      - application.properties
+    literals:
+      - LOG_LEVEL=debug
+      - DB_MAX_CONNS=100
+
+# Result: ConfigMap named "jobpost-config-7f8b3k2m"
+# Content hash auto-appended. Change a value →
+# new hash → Deployment restart triggered.</code></pre>
+                        <p><strong>Why it matters:</strong> Without generators, you'd write the ConfigMap YAML manually and use <code>kubectl rollout restart</code> every time it changes. Generators make ConfigMap changes trigger automatic rolling updates — true GitOps.</p>
+                    </div></div>
+                    <div class="split-bad"><div class="split-label">❌ WITHOUT Generators (Manual)</div><div class="split-content">
+                        <pre><code># configmap.yaml — written by hand
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jobpost-config   # Fixed name
+data:
+  LOG_LEVEL: "debug"
+
+# Problem: Change LOG_LEVEL to "warn" → 
+# ConfigMap updates but Deployment does NOT 
+# restart. Pods still use old ConfigMap until 
+# manual restart.</code></pre>
+                        <p><strong>The gap:</strong> Manual ConfigMaps don't trigger rollouts. You must remember to restart the Deployment separately. In GitOps, this manual step breaks the automation chain.</p>
+                    </div></div>
+                </div>
+
+                <h4>🧠 Helm Template Capabilities — What Go Templates Can Do That Kustomize Can't</h4>
+                <p>While Kustomize is declarative and simpler, Helm's Go templating engine (<code>{{ .Values.xxx }}</code>) enables logic that Kustomize cannot express. Understanding this difference helps you choose the right tool:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Capability</th><th>Kustomize</th><th>Helm</th><th>Why It Matters</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Conditional blocks</strong></td><td>❌ Cannot</td><td>✅ <code>{{ if .Values.production }}</code></td><td>Production-only resources (HPA, PDB) only render when needed</td></tr>
+                        <tr><td><strong>Loops</strong></td><td>❌ Cannot</td><td>✅ <code>{{ range .Values.ports }}</code></td><td>Generate N container ports from a list without duplication</td></tr>
+                        <tr><td><strong>String manipulation</strong></td><td>❌ Limited</td><td>✅ <code>{{ .Values.name | upper }}</code></td><td>Transform values (uppercase, trim, replace) in templates</td></tr>
+                        <tr><td><strong>Default values</strong></td><td>⚠️ Base only</td><td>✅ <code>{{ .Values.replicas | default 3 }}</code></td><td>Fallback values when not specified — no separate base needed</td></tr>
+                        <tr><td><strong>Named templates</strong></td><td>❌ Cannot</td><td>✅ <code>{{ include "labels" . }}</code></td><td>Reusable template fragments. DRY within charts.</td></tr>
+                        <tr><td><strong>Chart dependencies</strong></td><td>❌ Cannot</td><td>✅ <code>Chart.yaml dependencies</code></td><td>Pull in PostgreSQL chart, Redis chart — deploy whole stacks</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="info-box tip"><h5>💡 The Real-Decision: "Do you need TEMPLATE LOGIC?"</h5><p>The single question that determines Kustomize vs Helm is: <strong>"Does your configuration require conditional logic (if/else), loops, or string manipulation?"</strong> If yes → Helm. If no (just field overrides) → Kustomize. This is the CNPA's expected decision framework. Most application configs only need field overrides — which is why Kustomize is the default recommendation for GitOps app configuration.</p></div>
             </div>
 
             <!-- ─── 16.2: Argo Rollouts ─── -->
@@ -17634,6 +17684,18 @@ spec:
 └──────────────────────────────────────────────────────────────────────┘</pre></div></div>
 
                 <div class="info-box tip"><h5>💡 CNPA: Separation of Concerns</h5><p>ArgoCD = Git→Cluster synchronization (ensures Rollout CRD matches Git). Argo Rollouts = Progressive delivery execution (manages canary/bluegreen steps and analysis). If the Rollout CRD says "canary with 5 steps," ArgoCD ensures the Rollout CRD exists in the cluster. Argo Rollouts reads that CRD and performs the actual canary. This separation is a key CNPA concept: <strong>GitOps defines WHAT. Progressive delivery controllers execute HOW.</strong></p></div>
+
+                <h4>📊 Analysis Providers — What Can Argo Rollouts Measure?</h4>
+                <p>The AnalysisTemplate is only as good as the metrics it queries. Argo Rollouts supports multiple <strong>metric providers</strong> — each connecting to a different observability backend. The CNPA exam expects you to know which provider to use for which scenario:</p>
+                <div class="card-grid cols-3">
+                    <div class="info-card highlight"><div class="card-icon-lg">📈</div><h5>Prometheus</h5><p><strong>Most common.</strong> Queries Prometheus/Thanos/VictoriaMetrics. Define a PromQL query and a success condition. <strong>Example:</strong> <code>rate(http_errors[2m]) < 0.01</code> means error rate must stay below 1%. <strong>anihpj:</strong> All staging canary analyses use Prometheus. Measures error rate, p99 latency, and CPU/memory of canary pods.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🐕</div><h5>Datadog</h5><p>Queries Datadog metrics API. Requires API + APP keys configured as K8s Secrets. <strong>Best for:</strong> Teams already on Datadog. Avoids running a separate Prometheus. <strong>Query type:</strong> Datadog metric query, not PromQL.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🌊</div><h5>Wavefront</h5><p>Queries VMware Wavefront (formerly Tanzu Observability). <strong>Best for:</strong> Enterprise VMware shops. Similar to Prometheus but uses Wavefront Query Language (WQL).</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">🌐</div><h5>Web</h5><p>Sends HTTP requests to any endpoint. Parses JSON/XML response. <strong>Most flexible.</strong> Can query ANY API that returns metrics — custom monitoring, SaaS APIs, feature flag systems. <strong>Example:</strong> Call an internal canary-health API that returns <code>{"healthy": true}</code>.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">📋</div><h5>Job</h5><p>Runs a Kubernetes Job as the analysis. The Job's exit code determines success/failure. <strong>Best for:</strong> Complex checks that need code — run a Python script, a database migration validation, or an integration test suite.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">☁️</div><h5>CloudWatch / NewRelic</h5><p>Queries AWS CloudWatch Metrics or NewRelic NRQL. <strong>Best for:</strong> AWS-native shops or NewRelic users. Uses cloud-specific query syntax.</p></div>
+                </div>
+                <div class="info-box note"><h5>📖 Combining Multiple Providers</h5><p>An AnalysisTemplate can define MULTIPLE metrics from different providers. For anihpj's critical deployments: <strong>Prometheus</strong> checks error rate and latency, <strong>Job</strong> runs a DB migration validation script, <strong>Web</strong> calls an internal health endpoint. ALL must pass for the canary to promote. If ANY ONE metric exceeds its failure limit → canary aborts. This defense-in-depth approach is what makes progressive delivery truly safe for production.</p></div>
             </div>
 
             <!-- ─── 16.3: Secrets in GitOps ─── -->
@@ -17762,6 +17824,18 @@ git push
                     </div>
                 </div>
                 <div class="info-box tip"><h5>💡 anihpj's Layered Approach</h5><p><strong>Dev/Staging:</strong> Sealed Secrets (simple, no external deps). <strong>Production:</strong> ESO + Azure Key Vault (compliance, rotation, central management). <strong>Shared Configs:</strong> SOPS + AGE keys (encrypt entire files). This layered approach means you use the RIGHT tool for each context — not one tool for everything. The CNPA exam rewards this nuanced thinking.</p></div>
+
+                <h4>🔄 Secret Rotation — Keeping Secrets Fresh in GitOps</h4>
+                <p>Secrets should rotate — regularly and on compromise. Each GitOps secret tool handles rotation differently. Understanding the rotation mechanism is critical for operational security:</p>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Tool</th><th>Rotation Mechanism</th><th>Process</th><th>Downtime Risk</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Sealed Secrets</strong></td><td>Re-encrypt with kubeseal</td><td>1) Update plain secret value (never commit). 2) Re-run <code>kubeseal</code>. 3) Commit new SealedSecret. 4) ArgoCD syncs. 5) Old pods still use old secret until restart.</td><td>🟡 Pods must be restarted to pick up new secret. Use <code>kubectl rollout restart</code> or Stakater Reloader.</td></tr>
+                        <tr><td><strong>External Secrets Operator</strong></td><td>Rotate in external store ONLY</td><td>1) Rotate secret in Azure/AWS/Vault. 2) ESO auto-syncs on <code>refreshInterval</code>. 3) New pods get new value. No Git commit needed!</td><td>🟢 Lowest — rotation is external to GitOps. ESO handles sync automatically.</td></tr>
+                        <tr><td><strong>SOPS</strong></td><td>Re-encrypt entire file</td><td>1) Decrypt file. 2) Change secret value. 3) Re-encrypt with <code>sops -e</code>. 4) Commit. 5) ArgoCD decrypts + syncs.</td><td>🟡 Same as Sealed Secrets — pods need restart.</td></tr>
+                    </tbody>
+                </table></div>
+                <div class="info-box warning"><h5>⚠️ The Pod Restart Problem</h5><p>When you rotate a Secret in Git, ArgoCD updates the K8s Secret object — but <strong>running pods do NOT automatically reload</strong> environment variables or mounted secret volumes. Solution options: (1) <strong>Stakater Reloader:</strong> A K8s controller that watches ConfigMaps/Secrets and automatically restarts dependent Deployments. (2) <strong>Kustomize configMapGenerator:</strong> Auto-appends content hash to ConfigMap name → K8s performs rolling update when hash changes. (3) <strong>Manual:</strong> <code>kubectl rollout restart deployment/jobpost</code> after secret rotation. For GitOps, Reloader is the recommended approach — it closes the loop automatically.</p></div>
             </div>
 
             <!-- ─── 16.4: Multi-Cluster GitOps ─── -->
@@ -17939,6 +18013,57 @@ argocd cluster list
 # https://prod-api.anihpj.com:6443        production  Successful
 # https://staging-api.anihpj.com:6443     staging     Successful</code></pre></div>
                 <div class="info-box warning"><h5>⚠️ Cluster Registration Security</h5><p>When you run <code>argocd cluster add</code>, the default ServiceAccount has <strong>cluster-admin</strong> privileges. For production clusters, always: (1) Create a restricted ServiceAccount with only the RBAC ArgoCD needs. (2) Use the declarative Secret method. (3) Rotate Bearer Tokens on a schedule. (4) Never commit the cluster Secret to Git — it contains credentials.</p></div>
+
+                <h4>🛡️ Disaster Recovery with GitOps — The Ultimate Benefit</h4>
+                <p>This is where GitOps truly shines. When a cluster is destroyed (hardware failure, region outage, ransomware), traditional ops requires hours or days of manual reconstruction. With GitOps, recovery is measured in minutes — because the ENTIRE desired state lives in Git, not in the cluster:</p>
+                <div class="diagram-container"><div class="diagram-title">🔄 GITOPS DISASTER RECOVERY — Cluster Loss & Recovery</div><div class="diagram-body"><pre>
+┌──────────────────────────────────────────────────────────────────────┐
+│  GITOPS DR — The Cluster is Cattle, Not a Pet                        │
+│                                                                       │
+│  ═══════════════ SCENARIO: PRODUCTION CLUSTER DESTROYED ══════════════│
+│  T=0     💥 Production cluster gone. 45 apps down.                   │
+│          Root cause: Region-wide outage. Cluster unrecoverable.      │
+│                                                                       │
+│  ═══════════════ TRADITIONAL RECOVERY (Without GitOps) ══════════════ │
+│  T=30min Ops team: "What was running in production?"                 │
+│          Check runbooks → outdated. Check Terraform state → partial.  │
+│  T=2h    Provision new cluster (Terraform/EKS).                       │
+│  T=3h    Re-run 45 CI pipelines to re-deploy apps.                    │
+│  T=5h    Manual kubectl fixes for things CI didn't handle.            │
+│  T=6h    "We forgot the Redis config. And the Ingress annotations."   │
+│  T=8h    Production partially restored. Some configs lost forever.    │
+│                                                                       │
+│  ═══════════════ GITOPS RECOVERY (With ArgoCD) ═══════════════════════│
+│  T=30min Provision new EKS cluster (automated via Terraform/Crossplane)│
+│  T=35min Install ArgoCD on new cluster (single kubectl apply)         │
+│  T=40min Register new cluster with ArgoCD:                            │
+│          argocd cluster add new-prod-cluster --name production        │
+│  T=45min Point ApplicationSet at new cluster:                         │
+│          Edit ApplicationSet → cluster: https://new-prod-cluster...   │
+│  T=50min ArgoCD begins syncing ALL 45 applications                    │
+│  T=90min ALL 45 apps: Synced ✅ + Healthy ✅                           │
+│                                                                       │
+│  RESULT:                                                              │
+│  • Traditional: 6-8 hours, possible data/config loss                  │
+│  • GitOps: ~90 minutes, zero config loss (everything in Git)         │
+│  • The ONLY thing not in Git: persistent data (RDS snapshots, etc.)  │
+│                                                                       │
+│  WHY THIS WORKS:                                                      │
+│  • Git IS the backup of your cluster configuration                    │
+│  • ArgoCD IS the restore tool                                         │
+│  • ApplicationSet IS the multi-cluster orchestrator                   │
+│  • No CI pipelines, no manual kubectl, no tribal knowledge            │
+│                                                                       │
+│  anihpj DR strategy:                                                  │
+│  • Primary: us-east-1 (prod)                                          │
+│  • DR: us-west-2 (warm standby, ArgoCD pre-installed)                 │
+│  • ApplicationSet already configured for both regions                 │
+│  • RDS cross-region read replica for database recovery                │
+│  • Recovery Time Objective (RTO): < 2 hours                           │
+│  • Recovery Point Objective (RPO): < 5 minutes (RDS replication)      │
+└──────────────────────────────────────────────────────────────────────┘</pre></div></div>
+
+                <div class="info-box tip"><h5>💡 CNPA: GitOps = Built-in DR</h5><p>This is the CNPA "aha moment" about GitOps: <strong>You don't need a separate DR plan for your application configuration.</strong> Git + ArgoCD IS the DR plan. The only things you need to back up separately are: (1) Persistent data (databases, object storage). (2) The ArgoCD configuration itself (which is... also in Git). (3) Cluster infrastructure (Terraform/Crossplane — also in Git). This is why GitOps is the CNPA's preferred operating model — it collapses deployment, auditing, rollback, and disaster recovery into a SINGLE workflow.</p></div>
             </div>
 
             <!-- ─── 16.5: GitOps Observability ─── -->
