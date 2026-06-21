@@ -2205,6 +2205,7 @@
                             <li><a href="#s33-4">33.4 Firewalls — Stateful &amp; Stateless</a></li>
                             <li><a href="#s33-5">33.5 Network Segmentation</a></li>
                             <li><a href="#s33-6">33.6 Common Network Attacks &amp; Defense</a></li>
+                            <li><a href="#s33-7">33.7 LAB: Security Hardening</a></li>
                         </ul>
                     </li>
                     <li class="chapter-item">
@@ -39037,6 +39038,91 @@ echo | openssl s_client -connect jobpost.anihpj.com:443 2>&1 | \
 │  └─────────────────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────────────┘</pre>
                 </div>
+
+                <h4>TCP Window Scaling — Why Bigger Pipes Need Bigger Windows</h4>
+                <p>The original TCP specification (RFC 793) had a 16-bit Window field — maximum 65,535 bytes. At 1 Gbps with 50ms RTT, the BDP is 6.25 MB — 100× larger than the maximum window. Without window scaling, TCP would be limited to ~10 Mbps regardless of link speed:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">TCP WINDOW SCALING — How TCP Overcomes the 64KB Limit</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  TCP WINDOW SCALING — RFC 1323 (1992)                                           │
+│                                                                               │
+│  THE PROBLEM:                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  TCP Window field: 16 bits → max value 65,535 bytes.                      │ │
+│  │  At 10 Gbps, 50ms RTT: BDP = 62.5 MB → 1,000× larger than max window!    │ │
+│  │  Without scaling: max throughput = window / RTT = 65535 / 0.05 ≈ 10 Mbps │ │
+│  │  Even on a 10 Gbps link, you'd only get 10 Mbps.                          │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  THE SOLUTION:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Window Scale option (SYN packet): shift count (0-14).                     │ │
+│  │  Actual Window = Window_Field × 2^shift_count                              │ │
+│  │                                                                           │ │
+│  │  shift=0: 65,535 bytes      (original)                                    │ │
+│  │  shift=7: 65,535 × 128   = 8.3 MB    (typical default)                    │ │
+│  │  shift=9: 65,535 × 512   = 33.5 MB                                        │ │
+│  │  shift=14: 65,535 × 16384 = 1.07 GB  (maximum possible!)                  │ │
+│  │                                                                           │ │
+│  │  Linux default: shift=7 (shown as "wscale 7" in tcpdump).                  │ │
+│  │  Effective window: 65535 × 128 = ~8 MB. Enough for 1 Gbps × 50ms.         │ │
+│  │  For 10 Gbps × 50ms: need ~62 MB → increase tcp_rmem max to 128 MB.       │ │
+│  │                                                                           │ │
+│  │  CHECK YOUR SCALING:                                                        │ │
+│  │  tcpdump -i eth0 -nn 'tcp[tcpflags] & tcp-syn != 0' -c 1 -v               │ │
+│  │  # Look for "wscale N" in the SYN options. If missing → no scaling!       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>Jitter and Bufferbloat — The Real-Time Communication Killers</h4>
+                <p><strong>Jitter</strong> is the variation in packet delay. While average latency might be 5ms, jitter means some packets take 2ms and others take 50ms. For real-time applications (VoIP, gaming, video conferencing), jitter is MORE important than average latency:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">JITTER — Why Average Latency Is Misleading</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  JITTER — The Hidden Performance Metric                                         │
+│                                                                               │
+│  TWO PATHS — SAME AVERAGE, DIFFERENT EXPERIENCE:                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  PATH A (Low jitter):                                                     │ │
+│  │  Packet 1: 5ms, Packet 2: 5ms, Packet 3: 4ms, Packet 4: 6ms, Packet 5: 5ms│ │
+│  │  Avg: 5ms. Jitter: 1ms.  → Smooth VoIP. Happy users.                      │ │
+│  │                                                                           │ │
+│  │  PATH B (High jitter — bufferbloat):                                       │ │
+│  │  Packet 1: 2ms, Packet 2: 2ms, Packet 3: 48ms, Packet 4: 2ms, Packet 5: 46ms│ │
+│  │  Avg: 20ms. Jitter: 23ms. → VoIP choppy. Gaming lag spikes. Unusable.     │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  MEASURING JITTER:                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  iperf3 -c &lt;target&gt; -u -b 10M -t 30                                       │ │
+│  │  # Jitter column shows variation. < 1ms = good. > 10ms = bad.             │ │
+│  │                                                                           │ │
+│  │  mtr &lt;target&gt; → StDev column = jitter. High StDev = bufferbloat.          │ │
+│  │                                                                           │ │
+│  │  ping -c 100 &lt;target&gt; | awk '/rtt/ {print $4}' | tr '/' ' '               │ │
+│  │  # Shows min/avg/max/mdev. mdev = jitter.                                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  FIXING BUFFERBLOAT (the #1 cause of jitter):                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  1. Enable fq_codel qdisc (fair queuing + controlled delay):               │ │
+│  │     tc qdisc replace dev eth0 root fq_codel                                │ │
+│  │                                                                           │ │
+│  │  2. Reduce NIC ring buffer (less buffer = less bloat):                     │ │
+│  │     ethtool -G eth0 rx 256 tx 256                                          │ │
+│  │     # Default is often 512-4096. 256 is fine for most workloads.          │ │
+│  │                                                                           │ │
+│  │  3. BBR congestion control (paced, doesn't fill buffers):                  │ │
+│  │     sysctl -w net.ipv4.tcp_congestion_control=bbr                          │ │
+│  │     sysctl -w net.core.default_qdisc=fq                                    │ │
+│  │                                                                           │ │
+│  │  VERIFY: mtr shows reduced StDev after applying these fixes.              │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
             </div>
 
             <!-- ─── Section 32.2: Measuring Network Performance ─── -->
@@ -39144,6 +39230,51 @@ echo | openssl s_client -connect jobpost.anihpj.com:443 2>&1 | \
 │  # Watch for 5+ minutes to catch intermittent issues.                         │
 └──────────────────────────────────────────────────────────────────────────────┘</pre>
                 </div>
+
+                <h4>httping — Measure Application Latency, Not Just Network</h4>
+                <p><code>httping</code> measures the full HTTP request-response cycle — DNS + TCP + TLS + HTTP. Unlike ping (ICMP only), httping tells you what USERS actually experience:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">httping — L7 Latency Measurement</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  httping — MEASURE WHAT USERS ACTUALLY EXPERIENCE                               │
+│                                                                               │
+│  BASIC HTTP TEST:                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  httping -c 10 -g https://jobpost.anihpj.com/health                       │ │
+│  │  # OUTPUT:                                                                 │ │
+│  │  # connected to 34.120.45.67:443, seq=0 time=85.2 ms                      │ │
+│  │  # connected to 34.120.45.67:443, seq=1 time=92.1 ms                      │ │
+│  │  # --- https://jobpost.anihpj.com/health statistics ---                   │ │
+│  │  # 10 connects, 10 ok, 0 failed, avg 88.5 ms, min 82.1, max 95.3         │ │
+│  │                                                                           │ │
+│  │  COMPARE WITH ping:                                                         │ │
+│  │  ping -c 10 34.120.45.67 → avg 1.2 ms   (L3 only)                         │ │
+│  │  httping → avg 88.5 ms                    (DNS+TCP+TLS+HTTP)               │ │
+│  │  Difference: 87.3 ms = TLS handshake + HTTP processing overhead           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  TLS LATENCY BREAKDOWN:                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  httping -c 5 http://jobpost.anihpj.com   → avg 35 ms (no TLS)            │ │
+│  │  httping -c 5 https://jobpost.anihpj.com  → avg 85 ms (with TLS 1.2)      │ │
+│  │  TLS overhead: 50 ms. This is why TLS 1.3 (1-RTT vs 2-RTT) matters.      │ │
+│  │  Test with different TLS versions to quantify the handshake cost.         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>netperf & qperf — Advanced Benchmarking</h4>
+                <p>While iperf3 is the standard, netperf and qperf offer different testing modes that are useful for specific scenarios:</p>
+
+                <table class="comparison-table" style="width:100%;">
+                    <thead><tr><th>Tool</th><th>Key Feature</th><th>Command Example</th><th>Best For</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>netperf</strong></td><td>Request/response rate (transactions/sec), not just bulk throughput</td><td>netperf -H &lt;server&gt; -t TCP_RR — measures transaction rate</td><td>Database-like workloads. Many small requests, not one big stream.</td></tr>
+                        <tr><td><strong>qperf</strong></td><td>No server setup needed. Uses SSH/rsh. Tests bandwidth AND latency.</td><td>qperf &lt;server&gt; tcp_bw tcp_lat — bandwidth + latency in one command</td><td>Quick ad-hoc test without installing anything on the server.</td></tr>
+                    </tbody>
+                </table>
+                <p><strong>netperf vs iperf3:</strong> iperf3 measures bulk throughput (MB/sec) — good for streaming, file transfers. netperf measures transaction rate (requests/sec) — good for databases, APIs, microservices. For anihpj's Django-to-PostgreSQL traffic (many small queries), netperf's TCP_RR test is more representative than iperf3's bulk stream test.</p>
             </div>
 
             <!-- ─── Section 32.3: TCP Tuning for Performance ─── -->
@@ -39165,7 +39296,201 @@ echo | openssl s_client -connect jobpost.anihpj.com:443 2>&1 | \
                     </tbody>
                 </table>
 
-                <h4>BBR Congestion Control — The Biggest Single Win</h4>
+                <h4>Why More Bandwidth Doesn't Fix Latency Problems</h4>
+                <p>This is one of the most common misconceptions in networking. <strong>Bandwidth is capacity. Latency is delay.</strong> Adding more lanes to a highway doesn't make cars drive faster — it just fits more cars. Same with networks:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">BANDWIDTH vs LATENCY — Why Bigger Pipes Don't Help</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  BANDWIDTH vs LATENCY — The Highway Analogy                                     │
+│                                                                               │
+│  10 Mbps (2-lane road):                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Serialization (1500B): 1.2 ms.  Propagation (same): 50 ms.              │ │
+│  │  Total: 51.2 ms per packet.  1 car every 1.2 ms, 50 ms to drive.        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  10 Gbps (2000-lane highway):                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Serialization (1500B): 0.0012 ms.  Propagation (same): 50 ms.           │ │
+│  │  Total: 50.0012 ms per packet.  2000 cars at once, still 50 ms to drive. │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  THE MATH:                                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Request: 1 KB. Response: 100 KB. RTT: 50 ms.                             │ │
+│  │                                                                           │ │
+│  │  At 10 Mbps:  Time = RTT + (101KB × 8 / 10Mbps)                           │ │
+│  │              = 50ms + 80.8ms = 130.8 ms                                    │ │
+│  │                                                                           │ │
+│  │  At 100 Mbps: Time = 50ms + 8.08ms = 58.08 ms  (72% improvement)          │ │
+│  │                                                                           │ │
+│  │  At 1 Gbps:   Time = 50ms + 0.81ms = 50.81 ms  (only 12% better)         │ │
+│  │                                                                           │ │
+│  │  At 10 Gbps:  Time = 50ms + 0.08ms = 50.08 ms  (essentially RTT-only)    │ │
+│  │                                                                           │ │
+│  │  DIMINISHING RETURNS: After ~1 Gbps, latency improvement is marginal.     │ │
+│  │  A 1000× bandwidth increase from 10 Mbps to 10 Gbps saves only 80 ms.    │ │
+│  │  Moving the server 1000 km closer saves 10 ms — costs far less.           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  WHEN BANDWIDTH DOES MATTER:                                                    │
+│  • Large file transfers (backups, video, data migration)                      │
+│  • Many concurrent users (1000 users × 1 Mbps each = need 1 Gbps)             │
+│  • Bulk data pipelines (ETL, log shipping)                                    │
+│                                                                               │
+│  WHEN LATENCY MATTERS MORE:                                                     │
+│  • Small requests (API calls, DB queries, web pages)                           │
+│  • Interactive applications (SSH, gaming, video calls)                         │
+│  • Microservices communicating (many small RPCs)                               │
+│                                                                               │
+│  For anihpj/jobpost: Your Django DB queries are small (KB). 1 Gbps is plenty. │
+│  Invest in reducing RTT (same-AZ deployment), not buying 10 Gbps links.       │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>tcp_slow_start_after_idle — The Hidden Performance Killer</h4>
+                <p>When <code>tcp_slow_start_after_idle=1</code> (default), TCP resets its congestion window after a connection has been idle. This means a perfectly good long-lived connection suddenly behaves like a brand-new connection — starting from a tiny window and slowly ramping up. For connection-pooled databases, this is devastating:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">tcp_slow_start_after_idle — Why Pooled Connections Become Slow</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  tcp_slow_start_after_idle — THE CONNECTION POOL KILLER                        │
+│                                                                               │
+│  THE PROBLEM:                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Django CONN_MAX_AGE=600 → keeps DB connections open for 10 minutes.      │ │
+│  │  Connection sits idle for 30 seconds between requests (slow traffic).     │ │
+│  │  Next request: TCP congestion window was RESET to initial (10 segments).  │ │
+│  │  Instead of sending 100 KB of query results at line rate...               │ │
+│  │  ...it slowly ramps up: 10→20→40→80 segments over multiple RTTs.         │ │
+│  │                                                                           │ │
+│  │  Result: Pooled connection performs WORSE than a new connection!          │ │
+│  │  (New connection starts fresh regardless. Pooled connection appears to    │ │
+│  │   have a full window but it was silently reset.)                          │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  THE FIX:                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  sysctl -w net.ipv4.tcp_slow_start_after_idle=0                            │ │
+│  │  # NOW: idle connections keep their congestion window.                     │ │
+│  │  # When traffic resumes, BBR/CUBIC starts from the SAVED window,          │ │
+│  │  # not from scratch. Massive improvement for connection pools.            │ │
+│  │                                                                           │ │
+│  │  SAFETY: This was originally a safety measure for 1990s internet —         │ │
+│  │  congestion could change drastically while idle. On modern networks       │ │
+│  │  (stable datacenter links), it's unnecessary and harmful.                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>Congestion Control Algorithms — CUBIC vs BBR vs Reno</h4>
+                <p>TCP congestion control has evolved over decades. Understanding the algorithm families helps you choose the right one for your workload:</p>
+
+                <table class="comparison-table" style="width:100%;">
+                    <thead><tr><th>Algorithm</th><th>Era</th><th>How It Works</th><th>Best For</th><th>Weakness</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Reno</strong></td><td>1990</td><td>Additive Increase / Multiplicative Decrease. Cuts window by 50% on loss.</td><td>Low-BDP paths (dial-up, early internet)</td><td>Terrible on high-BDP or lossy links.</td></tr>
+                        <tr><td><strong>CUBIC</strong></td><td>2008 (Linux default)</td><td>Cubic function for window growth. Recovers faster after loss than Reno.</td><td>General purpose. Decent on most paths.</td><td>Still reactive to loss. Causes bufferbloat.</td></tr>
+                        <tr><td><strong>BBR</strong></td><td>2016 (Google)</td><td>Model-based. Measures max BW + min RTT. Ignores packet loss.</td><td>High-BDP paths, lossy links, bufferbloat-prone links</td><td>Slightly less aggressive on clean low-BDP links.</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>NIC Tuning — Interrupt Coalescing and RSS</h4>
+                <p>At 10 Gbps line rate (~14.8 million packets/sec), the CPU can't process every packet interrupt. NIC tuning offloads work from the CPU to the NIC hardware:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">NIC TUNING — Hardware Offloading for 10Gbps+</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  NIC TUNING PARAMETERS — ethtool for High-Performance                            │
+│                                                                               │
+│  INTERRUPT COALESCING (ethtool -C):                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  PROB: 14.8M pps = 14.8M interrupts/sec → CPU 100% just handling IRQs.   │ │
+│  │  FIX: Batch interrupts. "Wait for N packets OR T microseconds."           │ │
+│  │                                                                           │ │
+│  │  ethtool -C eth0 rx-usecs 50 rx-frames 256                                │ │
+│  │  # Wait up to 50 µs or 256 packets before interrupting CPU.              │ │
+│  │  # Reduces interrupts from 14.8M/s to ~20K/s. CPU freed for app work.    │ │
+│  │  # Trade-off: slightly higher latency (50 µs). For most apps: worth it.  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  RSS — RECEIVE SIDE SCALING (ethtool -X):                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Distributes incoming packets across multiple CPU cores by hash.           │ │
+│  │  Without RSS: all packets go to CPU 0 → bottleneck.                       │ │
+│  │  With RSS: packets spread across 4-8 cores → 4-8× throughput.             │ │
+│  │                                                                           │
+│  │  ethtool -X eth0 equal 4    # Spread across 4 cores                       │ │
+│  │  ethtool -x eth0             # Show RSS indirection table                  │ │
+│  │  ethtool -l eth0             # Show combined channels (should match cores) │ │
+│  │                                                                           │ │
+│  │  CHECK IRQ DISTRIBUTION:                                                    │ │
+│  │  cat /proc/interrupts | grep eth0                                         │ │
+│  │  # If all interrupts on CPU 0 → RSS not working. Fix above.               │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  OFFLOAD FEATURES (ethtool -k):                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  ethtool -k eth0 | grep -E "tso|gso|gro|lro"                              │ │
+│  │  tso (TCP Segmentation Offload): NIC splits large TCP segments → HW does  │ │
+│  │    the work, not kernel. Saves CPU. Should be ON.                          │ │
+│  │  gso (Generic Segmentation Offload): SW version of TSO. ON.               │ │
+│  │  gro (Generic Receive Offload): NIC merges small packets → less CPU. ON.  │ │
+│  │  lro (Large Receive Offload): HW version of GRO. ON for physical NICs.    │ │
+│  │  For VMs (AWS, GCP): these are often handled by the hypervisor.           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>TLS 1.3 Performance — Why One Less Round Trip Matters</h4>
+                <p>TLS 1.3 reduced the handshake from 2-RTT to 1-RTT — cutting TLS latency nearly in half. Understanding the handshake explains why this is the single biggest latency win for HTTPS services:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">TLS 1.2 vs TLS 1.3 — Handshake Latency Comparison</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  TLS HANDSHAKE — Why Version Matters                                            │
+│                                                                               │
+│  TLS 1.2 (2-RTT = ~100ms at 50ms RTT):                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Client                                  Server                           │ │
+│  │  ── ClientHello ──────────────────────→  (RTT 1: negotiate cipher)       │ │
+│  │  ←─ ServerHello + Certificate ────────                                     │ │
+│  │  ── ClientKeyExchange + Finished ────→  (RTT 2: key exchange + verify)   │ │
+│  │  ←─ Finished ─────────────────────────                                     │ │
+│  │  ── GET /health ─────────────────────→  (RTT 3: first data = 150ms!)     │ │
+│  │  TOTAL: 2-RTT (100ms) before data. 3-RTT for first response.             │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  TLS 1.3 (1-RTT = ~50ms at 50ms RTT):                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Client                                  Server                           │ │
+│  │  ── ClientHello + KeyShare ──────────→  (RTT 1: cipher + key in one!)    │ │
+│  │  ←─ ServerHello + Certificate + Finished                                   │ │
+│  │  ── GET /health ─────────────────────→  (RTT 2: first data = 100ms!)     │ │
+│  │  TOTAL: 1-RTT (50ms) before data. 2-RTT for first response.              │ │
+│  │  → 50ms saved per new connection. 100ms saved for first response.        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  TLS 1.3 0-RTT RESUMPTION (for repeat connections):                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Client sends data with the FIRST packet (ClientHello + Application Data) │ │
+│  │  0-RTT: ~0ms before data. 1-RTT for first response.                       │ │
+│  │  Saves 50ms vs 1.3, 100ms vs 1.2.                                         │ │
+│  │  CAUTION: 0-RTT data is replayable. Don't use for non-idempotent requests │ │
+│  │  (POST, PUT, DELETE). Use for GET requests only.                           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  ENABLE TLS 1.3 (nginx-ingress ConfigMap):                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  data:                                                                     │ │
+│  │    ssl-protocols: "TLSv1.2 TLSv1.3"                                        │ │
+│  │    ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:..."                        │ │
+│  │  VERIFY: openssl s_client -connect host:443 -tls1_3 2>&1 | grep Protocol │ │
+│  │  # "Protocol: TLSv1.3" → TLS 1.3 is active!                               │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
                 <p><strong>BBR (Bottleneck Bandwidth and Round-trip)</strong> is Google's congestion control algorithm. Unlike CUBIC (which detects congestion via packet loss), BBR models the network path to find the actual bottleneck bandwidth and RTT — resulting in dramatically better performance on lossy or high-latency links:</p>
 
                 <div class="diagram-container">
@@ -39260,6 +39585,24 @@ echo | openssl s_client -connect jobpost.anihpj.com:443 2>&1 | \
 │  └─────────────────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────────────┘</pre>
                 </div>
+            </div>
+
+            <!-- ═══ Implementation Summary ═══ -->
+            <div class="info-box note">
+                <h4>🛠️ How to Implement This — Your Performance Optimization Playbook</h4>
+                <p>Here's how to apply these performance techniques to the anihpj/jobpost Django-on-Kubernetes deployment, ordered by impact-to-effort ratio:</p>
+                <table class="comparison-table" style="width:100%; margin-top:12px;">
+                    <thead><tr><th>Step</th><th>Change</th><th>Command</th><th>Impact</th><th>Risk</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>1</strong></td><td>Enable BBR congestion control</td><td>sysctl -w net.ipv4.tcp_congestion_control=bbr</td><td>3-10x on lossy links</td><td>None</td></tr>
+                        <tr><td><strong>2</strong></td><td>Disable tcp_slow_start_after_idle</td><td>sysctl -w net.ipv4.tcp_slow_start_after_idle=0</td><td>2-5x for connection pools</td><td>None</td></tr>
+                        <tr><td><strong>3</strong></td><td>Enable TCP Fast Open</td><td>sysctl -w net.ipv4.tcp_fastopen=3</td><td>1-RTT per repeat connection</td><td>Minimal</td></tr>
+                        <tr><td><strong>4</strong></td><td>Tune TCP buffers for BDP</td><td>sysctl -w net.ipv4.tcp_rmem="4096 87380 134217728"</td><td>Fills 10Gbps+ pipes</td><td>Uses more RAM</td></tr>
+                        <tr><td><strong>5</strong></td><td>Enable HTTP/2 on Ingress</td><td>ConfigMap: use-http2: "true"</td><td>60ms saved per page load</td><td>None</td></tr>
+                        <tr><td><strong>6</strong></td><td>Django CONN_MAX_AGE</td><td>DATABASES['default']['CONN_MAX_AGE']=600</td><td>65ms saved per DB query</td><td>May need PgBouncer</td></tr>
+                    </tbody>
+                </table>
+                <p style="margin-top:12px;"><strong>Quick win sequence:</strong> Steps 1-3 take 5 minutes total and deliver immediate improvement. Steps 4-6 require testing/validation but provide compounding savings. Measure baseline iperf3 + httping BEFORE and AFTER each step to quantify the impact. Roll back if any step causes regressions.</p>
             </div>
 
             <!-- ═══ SRE Performance Engineering ═══ -->
@@ -39527,9 +39870,1677 @@ kubectl delete svc iperf-server</code></pre>
 
     <section class="chapter-section" id="part10">
         <h2><span>🔴 Part 10: Network Security</span><span class="chapter-badge">Chapters 33-35</span></h2>
-        <div class="content-placeholder">
-            <div class="placeholder-icon">🔒</div>
-            <p>Content for Part 10 will be added here — covering Zero-Trust, NetworkPolicies, TLS Management, and mTLS.</p>
+
+        <!-- ══════════════════════════════════════════════════════════════════
+             CHAPTER 33 — Network Security Fundamentals for SREs
+             ═══════════════════════════════════════════════════════════════════ -->
+        <div id="ch33">
+            <div class="chapter-intro">
+                <h3>Chapter 33: Network Security Fundamentals for SREs</h3>
+                <p>Security isn't something you bolt on after deployment — it's something you <strong>embed in every layer</strong> of your network architecture. As an SRE, you're on the front line: you configure the firewalls, you write the NetworkPolicies, you manage the TLS certificates. This chapter gives you the mindset, the principles, and the practical knowledge to defend your infrastructure — from zero trust architecture to defending against specific attack types. Every concept is mapped to the anihpj/jobpost deployment so you can apply it immediately.</p>
+            </div>
+
+            <!-- ─── Section 33.1: The Security Mindset ─── -->
+            <div class="section-block" id="s33-1">
+                <h3>33.1 The Security Mindset — Assume Breach</h3>
+                <p>Traditional security was a <strong>perimeter model</strong>: build a strong wall (firewall) around your network, and trust everything inside. Modern security is <strong>defense in depth</strong>: assume the perimeter WILL be breached, and build multiple layers of defense so no single failure is catastrophic:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">DEFENSE IN DEPTH — Multiple Layers of Security</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  DEFENSE IN DEPTH — No Single Point of Security Failure                         │
+│                                                                               │
+│  OLD MODEL (Perimeter Security):                                                │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Internet ──→ [FIREWALL] ──→ Trusted Internal Network (everything open)  │ │
+│  │  PROBLEM: Once past the firewall, attacker has FREE ACCESS to everything.│ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  NEW MODEL (Defense in Depth):                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Internet                                                                │ │
+│  │  │                                                                        │ │
+│  │  ▼  LAYER 1: Cloud WAF/DDoS protection (Cloudflare, AWS Shield)           │ │
+│  │  │                                                                        │ │
+│  │  ▼  LAYER 2: Network ACLs / Security Groups (IP/port level)               │ │
+│  │  │                                                                        │ │
+│  │  ▼  LAYER 3: Load Balancer (TLS termination, request validation)          │ │
+│  │  │                                                                        │ │
+│  │  ▼  LAYER 4: Kubernetes NetworkPolicy (pod-level firewall)                │ │
+│  │  │                                                                        │ │
+│  │  ▼  LAYER 5: mTLS (service-to-service authentication)                     │ │
+│  │  │                                                                        │ │
+│  │  ▼  LAYER 6: Application auth (JWT, API keys, OAuth)                     │ │
+│  │  │                                                                        │ │
+│  │  ▼                                                                         │ │
+│  │  anihpj pod (jobpost Django app)                                          │ │
+│  │                                                                           │ │
+│  │  Attacker must breach ALL 6 layers. Defense in depth.                     │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  PRINCIPLE OF LEAST PRIVILEGE:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Every component gets ONLY the access it needs to function — nothing more.│ │
+│  │  • jobpost needs:  PostgreSQL:5432, Redis:6379, outbound HTTPS            │ │
+│  │  • jobpost does NOT need: direct internet ingress, other DBs, SSH         │ │
+│  │  • PostgreSQL needs: nothing inbound except from jobpost pods              │ │
+│  │  • Redis needs: nothing inbound except from jobpost pods                  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  EAST-WEST vs NORTH-SOUTH TRAFFIC:                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  North-South: Traffic entering/leaving the cluster (user ↔ service).      │ │
+│  │  East-West: Traffic between services INSIDE the cluster (jobpost→DB).     │ │
+│  │  Most breaches start with North-South, then pivot East-West.              │ │
+│  │  Defense: Perimeter (N-S) + Micro-segmentation (E-W) = both directions.   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 DevSecOps Principle: Shift Security Left</h5>
+                    <p>Security must be embedded in every layer from the start — not bolted on after deployment. For anihpj/jobpost: (1) Dockerfile: run as non-root user, minimal base image, no secrets in layers. (2) K8s manifests: default-deny NetworkPolicy, readOnlyRootFilesystem, non-root SecurityContext. (3) CI/CD: scan images for CVEs, validate TLS config, check NetworkPolicy syntax. (4) Runtime: mTLS with Cilium/Istio, audit logging, anomaly detection. Security that's added after go-live is security that will be bypassed in production.</p>
+                </div>
+            </div>
+
+            <!-- ─── Section 33.2: Zero Trust Networking ─── -->
+            <div class="section-block" id="s33-2">
+                <h3>33.2 Zero Trust Networking — "Never Trust, Always Verify"</h3>
+                <p><strong>Zero Trust</strong> flips the traditional security model: no implicit trust based on network location. Just because a request comes from "inside the VPC" doesn't mean it's safe. Every connection must be authenticated and authorized:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">ZERO TRUST ARCHITECTURE — Every Connection Authenticated</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  ZERO TRUST — The Three Core Principles                                         │
+│                                                                               │
+│  1. VERIFY EXPLICITLY                                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Authenticate and authorize EVERY request based on ALL available data    │ │
+│  │  points — user identity, device health, location, service identity,      │ │
+│  │  anomaly detection. Never trust "it came from the internal network."     │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  2. LEAST PRIVILEGE ACCESS                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Grant just enough access for just enough time (JIT/JEA).                 │ │
+│  │  jobpost → PostgreSQL:5432 only. NOT jobpost → Redis (if not needed).    │ │
+│  │  Access is: specific source → specific destination → specific port.      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  3. ASSUME BREACH                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Design as if the perimeter is already compromised.                       │ │
+│  │  Micro-segment everything. Encrypt all traffic (mTLS).                     │ │
+│  │  Minimize blast radius: one compromised pod can't reach everything.       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  GOOGLE BeyondCorp — Zero Trust in Practice:                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Google eliminated their corporate VPN. Instead:                           │ │
+│  │  • Every request is authenticated (user + device certificate).            │ │
+│  │  • Access proxy enforces policy (no direct network access to apps).       │ │
+│  │  • No "internal network" concept — all traffic is untrusted.              │ │
+│  │  Result: Google employees work from anywhere with no VPN.                  │ │
+│  │  Same model applies to services: no implicit trust between microservices. │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  ZERO TRUST IN KUBERNETES:                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  NetworkPolicies: Pod-level firewall rules (default-deny + specific allow)│ │
+│  │  mTLS (Istio/Cilium): Encrypt + authenticate every service-to-service call│ │
+│  │  SPIFFE/SPIRE: Cryptographic workload identity (every pod gets an ID)     │ │
+│  │                                                                           │ │
+│  │  anihpj Zero-Trust Journey:                                                │ │
+│  │  Phase 1: default-deny NetworkPolicy (all pods isolated)                   │ │
+│  │  Phase 2: Add specific allow rules (jobpost→DB, jobpost→Redis)            │ │
+│  │  Phase 3: Enable mTLS via Cilium (encrypt all E-W traffic)                │ │
+│  │  Phase 4: SPIFFE identities (every pod cryptographically verifiable)      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+
+            <!-- ─── Section 33.4: Firewalls — Stateful and Stateless ─── -->
+            <div class="section-block" id="s33-4">
+                <h3>33.4 Firewalls — Stateful and Stateless</h3>
+                <p>Firewalls are the most fundamental security control. Understanding the difference between stateful and stateless firewalls determines what you can (and can't) do with each:</p>
+
+                <table class="comparison-table" style="width:100%;">
+                    <thead><tr><th>Feature</th><th>Stateless Firewall</th><th>Stateful Firewall</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>How it works</strong></td><td>Checks each packet independently against rules. No memory of past packets.</td><td>Tracks connection state (SYN→SYN-ACK→ESTABLISHED). Remembers established flows.</td></tr>
+                        <tr><td><strong>Return traffic</strong></td><td>Must explicitly allow return traffic (separate rule needed).</td><td>Automatically allows return traffic for established connections.</td></tr>
+                        <tr><td><strong>Performance</strong></td><td>Fast (simple lookup). Good for high-throughput.</td><td>Slower (conntrack table lookup). Conntrack can overflow.</td></tr>
+                        <tr><td><strong>Example</strong></td><td>AWS NACL, Azure NSG (basic), router ACL</td><td>AWS Security Group, iptables (with conntrack), cloud NGFW</td></tr>
+                        <tr><td><strong>Rule count</strong></td><td>Limited (AWS NACL: 20 inbound, 20 outbound).</td><td>Effectively unlimited (thousands of rules).</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>iptables as a Firewall — Default DROP vs Default ACCEPT</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">iptables FIREWALL POLICIES — Default DROP vs Default ACCEPT</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  iptables — BUILDING A HOST FIREWALL                                            │
+│                                                                               │
+│  DEFAULT ACCEPT (permissive — dangerous!):                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  iptables -P INPUT ACCEPT    ← Default policy: allow everything           │ │
+│  │  iptables -A INPUT -p tcp --dport 22 -j ACCEPT                            │ │
+│  │  iptables -A INPUT -p tcp --dport 443 -j ACCEPT                           │ │
+│  │  iptables -A INPUT -j DROP    ← Last rule: drop everything else           │ │
+│  │  # PROBLEM: If you flush rules, default ACCEPT exposes everything!        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  DEFAULT DROP (secure — recommended!):                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  iptables -P INPUT DROP      ← Default policy: drop everything            │ │
+│  │  iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT   │ │
+│  │  iptables -A INPUT -p tcp --dport 22 -j ACCEPT   ← Explicitly allow SSH   │ │
+│  │  iptables -A INPUT -p tcp --dport 443 -j ACCEPT  ← Explicitly allow HTTPS │ │
+│  │  # SAFE: Even if rules are flushed, default DROP protects everything.     │ │
+│  │  # The ESTABLISHED,RELATED rule allows return traffic for our outbound.   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  CLOUD FIREWALLS:                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  AWS Security Groups: Stateful. Allow return traffic automatically.       │ │
+│  │    Default: deny all inbound, allow all outbound.                          │ │
+│  │                                                                           │ │
+│  │  AWS NACLs: Stateless. Must allow BOTH inbound AND outbound explicitly.   │ │
+│  │    Default: allow all. Use for subnet-level broad blocks.                 │ │
+│  │                                                                           │ │
+│  │  GCP Firewall Rules: Stateful (implied). Applied at VPC level.            │ │
+│  │    Priority-based (0-65535, lower = higher priority).                      │ │
+│  │                                                                           │ │
+│  │  Azure NSGs: Stateful. Applied at subnet or NIC level.                     │ │
+│  │    Default rules allow VNet-internal and Azure Load Balancer traffic.     │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>Conntrack Internals — How Stateful Firewalls Track Connections</h4>
+                <p>The <strong>connection tracking table (conntrack)</strong> is the secret behind stateful firewalls. Understanding its internals explains why they work — and why they can fail:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">CONNTRACK INTERNALS — The State Table Behind Firewalls</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  CONNTRACK — How Linux Tracks Every Connection                                  │
+│                                                                               │
+│  STATES: NEW (SYN seen) | ESTABLISHED (handshake done) | RELATED (to existing) │
+│  INVALID (doesn't match any known connection — usually dropped).               │
+│                                                                               │
+│  ONE RULE CONTROLS ALL RETURN TRAFFIC:                                           │
+│  iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT        │
+│  # Recognizes return packets by conntrack 5-tuple (proto+src_ip+src_port+       │
+│  # dst_ip+dst_port). Automatically allows responses to outbound connections.    │
+│                                                                               │
+│  TABLE SIZE: Default 65,536 entries. Each entry ~300 bytes. ~20MB total.       │
+│  TIMEOUTS: TCP ESTABLISHED=5d, TIME_WAIT=120s, UDP=30s, ICMP=30s.             │
+│  DNS USES UDP → every query = 30s entry. 10K qps × 30s = 300K entries → OVERFLOW│
+│                                                                               │
+│  WATCH CONNTRACK LIVE: watch 'cat /proc/sys/net/netfilter/nf_conntrack_count'  │
+│  INCREASE LIMIT: sysctl -w net.netfilter.nf_conntrack_max=262144               │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>SYN Cookies — Cryptographic Defense Against SYN Floods</h4>
+                <p>SYN cookies encode connection state into the SYN-ACK sequence number using a cryptographic hash — no memory allocated until the handshake completes:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">SYN COOKIES — Stateless Defense Against SYN Floods</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  SYN COOKIES — How the Kernel Defeats SYN Floods Without Memory (RFC 4987)      │
+│                                                                               │
+│  WITHOUT COOKIES (vulnerable):                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Attacker SYN (spoofed) → Kernel allocates memory → SYN-ACK → no response │ │
+│  │  Memory held 120s. 1000 spoofed SYNs/s × 120s = 120K dead entries → DoS. │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  WITH COOKIES (defended):                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Attacker SYN → Kernel computes: cookie = hash(secret, src_ip, src_port, │ │
+│  │    dst_ip, dst_port, timestamp). ZERO memory allocated.                    │ │
+│  │  SYN-ACK with cookie as sequence number → spoofed source never responds.  │ │
+│  │  Legitimate client → ACK (cookie+1) → kernel verifies cookie → allocates. │ │
+│  │  KEY: Cookie is STATELESS. No memory until handshake completes.            │ │
+│  │  COST: TCP options lost during cookies (MSS, SACK, wscale) → slight perf  │ │
+│  │  penalty for legitimate connections during attacks.                        │ │
+│  │  ENABLE: sysctl net.ipv4.tcp_syncookies=1  (default on most distros)      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+
+            <!-- ─── Section 33.5: Network Segmentation ─── -->
+            <div class="section-block" id="s33-5">
+                <h3>33.5 Network Segmentation and Micro-Segmentation</h3>
+                <p><strong>Network segmentation</strong> divides your network into isolated zones. <strong>Micro-segmentation</strong> takes this to the workload level — every pod, every container gets its own security boundary:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">SEGMENTATION — From VLANs to Pod-Level Policies</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  NETWORK SEGMENTATION — Limiting Blast Radius                                   │
+│                                                                               │
+│  PHYSICAL SEGMENTATION (VLANs):                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  VLAN 10 (Web):    Public-facing apps. Can reach: VLAN 20 only.           │ │
+│  │  VLAN 20 (App):    Business logic. Can reach: VLAN 30 only.               │ │
+│  │  VLAN 30 (DB):     Databases. Can reach: NOTHING external.                │ │
+│  │  VLAN 40 (Mgmt):   SSH/Bastion. Can reach: ALL VLANs for admin.           │ │
+│  │                                                                           │ │
+│  │  Traffic between VLANs MUST go through a firewall/router.                  │ │
+│  │  Physical separation = strongest isolation. Hardest to manage.            │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  KUBERNETES MICRO-SEGMENTATION (NetworkPolicies):                                │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  namespace: web                                                            │ │
+│  │  ┌──────────────────────────────────────────────────────┐                 │ │
+│  │  │  jobpost pod                                          │                 │ │
+│  │  │  • Ingress: LB only (port 8000)                       │                 │ │
+│  │  │  • Egress: PostgreSQL (5432), Redis (6379), DNS (53)  │                 │ │
+│  │  └──────────────────────────────────────────────────────┘                 │ │
+│  │                                                                           │ │
+│  │  namespace: data                                                           │ │
+│  │  ┌──────────────────────────────────────────────────────┐                 │ │
+│  │  │  postgres pod                                         │                 │ │
+│  │  │  • Ingress: jobpost pods only (port 5432)             │                 │ │
+│  │  │  • Egress: NONE                                       │                 │ │
+│  │  └──────────────────────────────────────────────────────┘                 │ │
+│  │  ┌──────────────────────────────────────────────────────┐                 │ │
+│  │  │  redis pod                                            │                 │ │
+│  │  │  • Ingress: jobpost pods only (port 6379)             │                 │ │
+│  │  │  • Egress: NONE                                       │                 │ │
+│  │  └──────────────────────────────────────────────────────┘                 │ │
+│  │                                                                           │ │
+│  │  BENEFITS:                                                                 │ │
+│  │  • Compromised jobpost pod cannot access other web pods.                  │ │
+│  │  • Compromised jobpost pod cannot access DBs in other namespaces.         │ │
+│  │  • PostgreSQL pods are completely isolated from internet.                  │ │
+│  │  • Blast radius of ANY compromise is limited to specific paths.           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <h4>How NetworkPolicies Are Enforced — iptables vs eBPF Under the Hood</h4>
+                <p>NetworkPolicies aren't magic — they're implemented by your CNI plugin using either iptables or eBPF. Understanding the implementation helps debug "why is my traffic blocked?" questions:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">NETWORKPOLICY ENFORCEMENT — iptables (Calico) vs eBPF (Cilium)</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  NETWORKPOLICY — How CNI Plugins Enforce Rules                                  │
+│                                                                               │
+│  CALICO (iptables):                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Calico creates iptables chains for each policy:                          │ │
+│  │                                                                           │ │
+│  │  Chain cali-pi-policy (pod ingress):                                       │ │
+│  │    target     prot opt source               destination                   │ │
+│  │    MARK       all  --  anywhere             anywhere    MARK match ...    │ │
+│  │    DROP       all  --  anywhere             anywhere    /* default deny */│ │
+│  │    ACCEPT     tcp  --  10.244.1.5           anywhere    /* jobpost pod */ │ │
+│  │                                                                           │ │
+│  │  Chain cali-po-policy (pod egress):                                        │ │
+│  │    DROP       all  --  anywhere             anywhere    /* default deny */│ │
+│  │    ACCEPT     udp  --  anywhere             10.96.0.10  /* DNS */         │ │
+│  │    ACCEPT     tcp  --  anywhere             10.244.2.8  /* PostgreSQL */  │ │
+│  │                                                                           │ │
+│  │  PROBLEM AT SCALE: Each policy adds rules. 100 policies × 50 pods =       │ │
+│  │  5,000 rules. Each packet traverses ALL rules (O(n) scan).                │ │
+│  │  Latency increases linearly with policy count.                             │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  CILIUM (eBPF):                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Cilium stores policies as eBPF map entries:                               │ │
+│  │                                                                           │ │
+│  │  bpftool map dump name cilium_policy                                       │ │
+│  │  # Shows: identity → allowed_peer_identities mapping                       │ │
+│  │                                                                           │ │
+│  │  Each pod gets a numeric "security identity" (e.g., jobpost=12345).       │ │
+│  │  Policy lookup: hash(src_identity, dst_identity, port) → ALLOW/DENY.      │ │
+│  │                                                                           │ │
+│  │  O(1) hash lookup vs O(n) iptables scan.                                  │ │
+│  │  5,000 rules take the SAME time as 5 rules.                               │ │
+│  │  Policies enforced at kernel level — no iptables traversal needed.        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  DEBUGGING POLICY ENFORCEMENT:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  # iptables mode (Calico):                                                 │ │
+│  │  iptables -L calico-pi-policy -n -v | grep &lt;pod_name&gt;                      │ │
+│  │  # Shows packet counts per rule. If DROP count increases → policy active.  │ │
+│  │                                                                           │ │
+│  │  # eBPF mode (Cilium):                                                     │ │
+│  │  cilium policy get                                                        │ │
+│  │  cilium monitor --type drop   # Watch dropped packets in real-time         │ │
+│  │  # Shows exactly which policy and identity caused the drop.               │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+
+            <!-- ─── Section 33.6: Common Network Attacks ─── -->
+            <div class="section-block" id="s33-6">
+                <h3>33.6 Common Network Attacks and How to Defend</h3>
+                <p>Knowing how attacks work is the first step to defending against them. Here are the most common network attacks, how they work at the packet level, and how to protect your infrastructure:</p>
+
+                <table class="comparison-table" style="width:100%;">
+                    <thead><tr><th>Attack</th><th>Layer</th><th>Detection Method</th><th>Mitigation</th><th>anihpj Example</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>SYN Flood</strong></td><td>L4</td><td>High SYN rate, many half-open connections (SYN_RECV)</td><td>SYN cookies: sysctl net.ipv4.tcp_syncookies=1. Rate limiting at LB level. Cloud DDoS scrubbing (AWS Shield).</td><td>AWS Shield Standard (free) protects ALB from SYN floods automatically.</td></tr>
+                        <tr><td><strong>DNS Amplification</strong></td><td>L7</td><td>Massive DNS responses to your IP from open resolvers</td><td>Rate-limit DNS traffic. Close open DNS resolvers. Use DNSSEC.</td><td>CoreDNS rate-limiting plugin. Don't expose CoreDNS to internet.</td></tr>
+                        <tr><td><strong>ARP Spoofing</strong></td><td>L2</td><td>Duplicate MAC for same IP in ARP table</td><td>Static ARP entries for critical IPs. DHCP snooping on switches. Port security (limit MACs per port).</td><td>Cloud VPC: ARP spoofing not possible (hypervisor-level isolation).</td></tr>
+                        <tr><td><strong>TLS Downgrade</strong></td><td>L5</td><td>Weak ciphers accepted in handshake</td><td>Harden TLS config: disable TLS 1.0/1.1, weak ciphers. Enable HSTS.</td><td>nginx-ingress: ssl-protocols: "TLSv1.2 TLSv1.3". ssl-ciphers: only ECDHE forward secrecy.</td></tr>
+                        <tr><td><strong>BGP Hijack</strong></td><td>L3</td><td>Unexpected AS_PATH changes, traffic rerouted</td><td>RPKI (Resource Public Key Infrastructure). IRR filtering. Prefix allowlists.</td><td>Cloud providers handle BGP security. Not directly relevant for anihpj.</td></tr>
+                        <tr><td><strong>Credential Sniffing</strong></td><td>L7</td><td>HTTP (not HTTPS) traffic carrying credentials</td><td>Enforce TLS everywhere. HSTS (Strict-Transport-Security). Redirect HTTP→HTTPS.</td><td>Ingress: redirect HTTP:80→HTTPS:443. HSTS header: max-age=31536000.</td></tr>
+                    </tbody>
+                </table>
+
+                <h4>DDoS Defense — Protection at Every Layer</h4>
+                <div class="diagram-container">
+                    <div class="diagram-title">DDoS ATTACK TYPES — Volumetric, Protocol, and Application</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  DDoS — THREE ATTACK CATEGORIES                                                 │
+│                                                                               │
+│  1. VOLUMETRIC (flood bandwidth):                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Goal: Saturate your link bandwidth. UDP flood, ICMP flood, DNS amp.      │ │
+│  │  Defense: Cloud DDoS scrubbing (AWS Shield, Cloudflare Magic Transit).    │ │
+│  │    Scrubbing center filters attack traffic before it reaches you.         │ │
+│  │  Detection: Sudden 10x+ increase in inbound traffic (bytes/sec).          │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  2. PROTOCOL (exhaust state):                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Goal: Exhaust server state tables. SYN flood fills conntrack table.      │ │
+│  │  Defense: SYN cookies (kernel handles without state). Rate limiting.      │ │
+│  │    sysctl net.ipv4.tcp_syncookies=1 (enabled by default on most distros). │ │
+│  │  Detection: SYNs/sec spike. ss -s | grep synrec shows half-open count.   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  3. APPLICATION-LAYER (exhaust app resources):                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Goal: Overwhelm application with legitimate-looking requests. HTTP flood. │ │
+│  │  Defense: WAF (Web Application Firewall), rate limiting at LB/Ingress.    │ │
+│  │    nginx-ingress: limit-req-zones, limit-conn-zones.                       │ │
+│  │  Detection: HTTP request rate spike to specific endpoint.                  │ │
+│  │  anihpj: rate-limit /api/ endpoints to 100 req/sec per IP.                │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  DNS POISONING (DNS Cache Poisoning):                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Attacker sends forged DNS responses with fake IPs. Victim's DNS cache    │ │
+│  │  stores the fake record → all users of that resolver go to attacker's IP. │ │
+│  │  Detection: unexpected IPs in DNS responses. dig +trace shows anomalies.  │ │
+│  │  Mitigation: DNSSEC (cryptographically signs DNS records). For anihpj:    │ │
+│  │  use DNSSEC on your domain (Route53/Cloudflare supports it). CoreDNS      │ │
+│  │  can validate DNSSEC. Monitor DNS response IP changes with alerts.        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  PORT SCANNING:                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Attacker probes all 65535 ports to discover running services. nmap -sV   │ │
+│  │  can fingerprint service versions. Finding: open SSH on port 22, old      │ │
+│  │  PostgreSQL on 5432, exposed Redis on 6379 → all attack vectors.          │ │
+│  │  Detection: VPC Flow Logs show many REJECT flows from same source IP      │ │
+│  │  to many ports. Cloud providers monitor for scanning patterns.            │ │
+│  │  Mitigation: Minimize exposure. Only open required ports. Use Security    │ │
+│  │  Groups to restrict by source IP. Use SSM Session Manager instead of SSH. │ │
+│  │  Never expose databases directly to internet. Rate-limit at NACL level.   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  MAN-IN-THE-MIDDLE (MITM) / PACKET SNIFFING:                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Attacker intercepts traffic between two parties. On switched networks:   │ │
+│  │  ARP spoofing redirects traffic through attacker. On wireless: passive    │ │
+│  │  sniffing of unencrypted Wi-Fi. On compromised routers: direct access.    │ │
+│  │  Detection: ARP table anomalies (duplicate MACs). Unexpected certificate  │ │
+│  │  warnings. RTT increases (extra hop through attacker).                     │ │
+│  │  Mitigation: TLS EVERYWHERE (encrypts data in transit). Certificate       │ │
+│  │  pinning (app only trusts specific certs). mTLS (both sides authenticated).│ │
+│  │  For anihpj: Ingress terminates TLS. Internal E-W traffic: use Cilium     │ │
+│  │  mTLS or Istio. Never use HTTP internally. HSTS prevents downgrade.       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  DNSSEC DEEP DIVE — How Cryptographic DNS Validation Works:                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  DNSSEC adds digital signatures to DNS records. Chain of trust:            │ │
+│  │  Root (.) → .com (DS record) → anihpj.com (DS record) → A record (RRSIG)  │ │
+│  │  Each zone's DNSKEY is signed by the parent's DS record.                   │ │
+│  │  Validation: resolver follows chain, verifying each RRSIG signature.       │ │
+│  │  If ANY signature is invalid → response is rejected → SERVFAIL.           │ │
+│  │  For anihpj: enable DNSSEC on your domain registrar. Route53 and           │ │
+│  │  Cloudflare both support DNSSEC. CoreDNS can validate (forward to a        │ │
+│  │  DNSSEC-validating resolver like 1.1.1.2 or 9.9.9.9).                    │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  WAF (Web Application Firewall) — OWASP Top 10 Protection:                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  A WAF inspects HTTP/HTTPS requests at L7. Blocks: SQL injection (SQLi),  │ │
+│  │  Cross-Site Scripting (XSS), path traversal, CSRF, bad user agents.       │ │
+│  │  AWS WAF: rules on ALB/CloudFront. Managed rule groups (OWASP Top 10).    │ │
+│  │  Rate-based rules: block IPs exceeding N requests in 5 min.               │ │
+│  │  For anihpj: deploy AWS WAF on the ALB. Enable AWSManagedRulesCommonRule. │ │
+│  │  Add rate-based rule: block >2000 req/5min per IP on /api/ endpoints.     │ │
+│  │  Cost: $5/month per ACL + $1/month per rule + per-request charge.        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  TLS CIPHER SUITE SECURITY — Why Forward Secrecy Matters:                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Weak ciphers (to avoid): RC4 (broken), 3DES (slow, 112-bit effective),   │ │
+│  │  CBC-mode ciphers (padding oracle attacks - Lucky13, POODLE).              │ │
+│  │  Strong ciphers (prefer): ECDHE + AES-GCM or ChaCha20-Poly1305.            │ │
+│  │  ECDHE = Elliptic Curve Diffie-Hellman Ephemeral → FORWARD SECRECY.        │ │
+│  │    Each session gets unique keys. Even if server's private key is stolen   │ │
+│  │    later, past sessions CANNOT be decrypted.                                │ │
+│  │  AES-GCM = Authenticated Encryption with Associated Data → encrypt +       │ │
+│  │    authenticate in one step. Prevents tampering.                            │ │
+│  │  RECOMMENDED nginx TLS config:                                              │ │
+│  │  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:   │ │
+│  │    ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:              │ │
+│  │    ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;              │ │
+│  │  VERIFY: testssl.sh or ssllabs.com/ssltest → should show only A/A+ ciphers.│ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+
+            <!-- ═══ Implementation Summary ═══ -->
+            <div class="info-box note">
+                <h4>🛠️ How to Implement This — Your Security Hardening Roadmap</h4>
+                <p>Here's a prioritized security implementation plan for anihpj/jobpost, ordered by impact and effort:</p>
+                <table class="comparison-table" style="width:100%; margin-top:12px;">
+                    <thead><tr><th>Phase</th><th>What to Do</th><th>Effort</th><th>Impact</th><th>Blocks What Attack</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>1 (Day 1)</strong></td><td>Enable AWS Shield Standard (free). Enable SYN cookies on all nodes. Change iptables to default DROP.</td><td>30 min</td><td>High</td><td>SYN floods, basic volumetric DDoS</td></tr>
+                        <tr><td><strong>2 (Week 1)</strong></td><td>Apply default-deny NetworkPolicies. Add specific allow rules for jobpost→DB, jobpost→Redis, DNS egress.</td><td>2 hours</td><td>Critical</td><td>East-West lateral movement, pod compromise</td></tr>
+                        <tr><td><strong>3 (Week 2)</strong></td><td>Harden TLS: disable 1.0/1.1, enforce HSTS, redirect HTTP→HTTPS. Run testssl.sh audit.</td><td>1 hour</td><td>High</td><td>TLS downgrade, credential sniffing, MITM</td></tr>
+                        <tr><td><strong>4 (Week 3)</strong></td><td>Enable WAF on ALB with rate-based rules. Configure nginx-ingress rate limiting per endpoint.</td><td>2 hours</td><td>High</td><td>Application-layer DDoS, brute force</td></tr>
+                        <tr><td><strong>5 (Month 2)</strong></td><td>Enable mTLS via Cilium or Istio. Deploy SPIRE for SPIFFE workload identities.</td><td>1 week</td><td>Critical</td><td>MITM, service impersonation</td></tr>
+                        <tr><td><strong>6 (Ongoing)</strong></td><td>Regular security audits. Container image scanning. VPC Flow Log monitoring. Incident response drills.</td><td>Continuous</td><td>Ongoing</td><td>Zero-day exploits, new attack vectors</td></tr>
+                    </tbody>
+                </table>
+                <p style="margin-top:12px;"><strong>Minimum viable security:</strong> Complete phases 1-3 (Week 1-2). This blocks the most common attacks with ~4 hours of work. Phases 4-6 provide defense-in-depth for production environments handling sensitive data.</p>
+            </div>
+
+            <!-- ═══ Chapter 33 Visual Summary ═══ -->
+            <div class="visual-summary">
+                <h4>📊 Chapter 33 Visual Summary — What You've Learned</h4>
+                <div class="vs-grid">
+                    <div class="vs-item"><span class="vs-icon">🏰</span><span class="vs-label">Defense in Depth</span><span class="vs-detail">6 security layers: WAF→NACL→LB→NetworkPolicy→mTLS→App Auth. No single failure is catastrophic.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🔐</span><span class="vs-label">Zero Trust</span><span class="vs-detail">Never trust, always verify. No implicit trust based on network location. BeyondCorp eliminated VPNs.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🛡️</span><span class="vs-label">Firewalls</span><span class="vs-detail">Stateful (SG, iptables+conntrack) vs Stateless (NACL). Default DROP is safer than default ACCEPT.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🔲</span><span class="vs-label">Micro-Segmentation</span><span class="vs-detail">Pod-level isolation via NetworkPolicies. Blast radius limited to specific paths. East-West protection.</span></div>
+                    <div class="vs-item"><span class="vs-icon">💥</span><span class="vs-label">DDoS Defense</span><span class="vs-detail">Volumetric (scrubbing), Protocol (SYN cookies), Application (WAF + rate limiting). Defend all 3 layers.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🎣</span><span class="vs-label">DNS Poisoning</span><span class="vs-detail">Forged DNS responses poison cache. Defense: DNSSEC. CoreDNS can validate. Monitor for unexpected IP changes.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🕵️</span><span class="vs-label">MITM & Port Scan</span><span class="vs-detail">TLS everywhere prevents sniffing. Minimize exposed ports. Use SSM instead of SSH. VPC Flow Logs detect scanning.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🔏</span><span class="vs-label">DNSSEC & WAF</span><span class="vs-detail">DNSSEC signs DNS records cryptographically. WAF blocks SQLi/XSS at L7. AWS WAF on ALB with OWASP rules.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🔑</span><span class="vs-label">TLS Cipher Security</span><span class="vs-detail">ECDHE = forward secrecy. AES-GCM = authenticated encryption. Avoid RC4/3DES/CBC. A/A+ rating on SSL Labs.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🧩</span><span class="vs-label">Policy Enforcement</span><span class="vs-detail">Calico: iptables chains (O(n) scan). Cilium: eBPF hash maps (O(1) lookup). 5000 policies = same speed as 5.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🔍</span><span class="vs-label">Attack Matrix</span><span class="vs-detail">SYN flood, DNS amp, ARP spoof, TLS downgrade, BGP hijack, credential sniff — detection + mitigation for each.</span></div>
+                    <div class="vs-item"><span class="vs-icon">🆔</span><span class="vs-label">SPIFFE/SPIRE</span><span class="vs-detail">Cryptographic workload identity. Every pod gets an X.509 SVID. Enables mTLS without manual certificate management.</span></div>
+                    <div class="vs-item"><span class="vs-icon">☁️</span><span class="vs-label">Cloud Firewalls</span><span class="vs-detail">AWS SG (stateful, per-ENI) vs NACL (stateless, per-subnet). GCP Firewall Rules. Azure NSGs. Choose the right tool.</span></div>
+                </div>
+            </div>
+
+            <!-- ═══ Key Takeaways ═══ -->
+            <div class="info-box note">
+                <h4>🔑 Chapter 33 Key Takeaways</h4>
+                <ol style="color:#c9d1d9; line-height:1.9; padding-left:24px;">
+                    <li><strong>Assume breach. Build defense in depth.</strong> No single firewall or policy is enough. Layer WAF, NACLs, SGs, NetworkPolicies, mTLS, and application auth. Each layer slows the attacker and increases detection chance.</li>
+                    <li><strong>Zero trust means authenticate EVERY connection.</strong> Being "inside the VPC" is not authentication. Every service-to-service call must be authenticated (mTLS) and authorized (NetworkPolicy). Never trust network location.</li>
+                    <li><strong>Default DROP is always safer than default ACCEPT.</strong> Start with deny-all, then add specific allow rules. A flushed ruleset with default ACCEPT exposes everything. With default DROP, nothing gets through.</li>
+                    <li><strong>Micro-segment at the pod level.</strong> Don't just segment by VLAN or subnet. Each pod should only have exactly the network access it needs. Compromised web pod can't reach other web pods or databases in other namespaces.</li>
+                    <li><strong>DDoS defense requires all three layers.</strong> Volumetric attacks need cloud scrubbing. Protocol attacks need SYN cookies and rate limiting. Application attacks need WAF. You need ALL three.</li>
+                </ol>
+            </div>
+
+            <!-- ═══ NETWORKING EXAM QUESTIONS — Chapter 33 ═══ -->
+            <div class="net-exam-questions">
+                <h4>📝 Chapter 33 — Practice Questions</h4>
+
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What is defense in depth and how does it differ from perimeter security? Give an example with the anihpj deployment.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Perimeter security puts one strong firewall at the network edge and trusts everything inside — if breached, the attacker has free access. Defense in depth layers multiple independent security controls: WAF/DDoS protection → Security Groups → NetworkPolicies → mTLS → Application auth. For anihpj: Cloudflare WAF blocks malicious requests at the edge. AWS Security Groups restrict inbound ports. Kubernetes NetworkPolicies limit pod-to-pod communication. Cilium mTLS encrypts and authenticates every service call. Django JWT authentication verifies user identity. An attacker must breach ALL 5 layers — compromising one layer doesn't give access to everything.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">Explain the three principles of Zero Trust. How would you implement them for anihpj/jobpost on Kubernetes?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>(1) Verify Explicitly: Every request authenticated and authorized. Implement with mTLS (Cilium/Istio) so every service-to-service call presents a certificate. (2) Least Privilege: Grant minimum access needed. NetworkPolicies: jobpost→PostgreSQL:5432 only, not jobpost→Redis (if not needed). (3) Assume Breach: Design as if perimeter is compromised. Micro-segment all pods. Encrypt all East-West traffic. Minimize blast radius. anihpj journey: Phase 1: default-deny NetworkPolicy. Phase 2: specific allow rules. Phase 3: mTLS via Cilium. Phase 4: SPIFFE workload identities.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">What's the difference between a stateful and stateless firewall? Give cloud (AWS) examples of each.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Stateless: Checks each packet independently — no memory. Must explicitly allow both inbound AND return traffic. Example: AWS NACL (Network ACL). If you allow inbound port 443, you must also allow outbound ephemeral ports (1024-65535) for return traffic. Limited to 20 rules per direction. Stateful: Tracks connection state. Automatically allows return traffic for established connections. Example: AWS Security Groups. Allow inbound 443, return traffic automatically allowed. No rule limit in practice. Uses conntrack table to track state — can overflow under high connection rates.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">You're configuring iptables on a production server. Should you use default ACCEPT or default DROP? Why?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Always use default DROP (iptables -P INPUT DROP). With default ACCEPT, if someone accidentally flushes the rules (iptables -F), ALL traffic is suddenly allowed — the server is completely exposed. With default DROP, a flushed ruleset blocks everything — safe failure mode. Essential rule: iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT (allows return traffic for connections WE initiated). Then add explicit ACCEPT rules for needed ports (SSH, HTTPS). The ESTABLISHED,RELATED rule uses conntrack to identify legitimate return traffic without opening those ports to unsolicited inbound.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What is micro-segmentation and how does it differ from traditional network segmentation? How is it implemented in Kubernetes?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Traditional segmentation: Divide network by VLAN/subnet (web tier, app tier, DB tier). Coarse-grained. Traffic within same VLAN is unrestricted. Micro-segmentation: Segment at the individual workload (pod) level. Every pod has its own firewall boundary. Implemented in K8s with NetworkPolicies: podSelector selects target pods, ingress/egress rules specify allowed sources/destinations/ports. Default-deny + specific allows. Benefits: compromised web pod cannot access other web pods. DB pods are isolated from everything except the app pods. East-West protection within the same namespace/subnet.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">Describe a SYN flood attack. How does it work at the packet level, and what kernel parameter mitigates it?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>A SYN flood sends massive numbers of TCP SYN packets (often with spoofed source IPs) to a target. The server allocates resources for each half-open connection (SYN_RECV state), sending SYN-ACK and waiting for the final ACK. The attacker never completes the handshake. The server's SYN queue fills up → legitimate connections are dropped. Mitigation: SYN cookies (sysctl net.ipv4.tcp_syncookies=1). The kernel encodes connection information in the SYN-ACK sequence number instead of allocating memory. When the legitimate client responds with ACK, the kernel reconstructs the connection from the cookie. No state stored until the handshake completes. Effective against spoofed-source SYN floods.</p></div></details></div>
+            </div>
+
+            <!-- ═══ NETWORKING PRACTICE DRILLS — Chapter 33 ═══ -->
+            <div class="net-practice-drill">
+                <h4>🔨 Chapter 33 — Hands-On Drills</h4>
+                <div class="drill-item"><span class="drill-number">D1</span><div class="drill-task">iptables Default DROP: Configure iptables on a test VM with default DROP policy. Add rules for SSH and HTTPS. Flush the rules and verify the server is still protected. Switch to default ACCEPT and repeat — observe the difference.</div></div>
+                <div class="drill-item"><span class="drill-number">D2</span><div class="drill-task">Defense in Depth Audit: For anihpj, list all 6 security layers. For each layer, identify the specific technology implementing it. Are any layers missing or weak?</div></div>
+                <div class="drill-item"><span class="drill-number">D3</span><div class="drill-task">SYN Cookies: On a test server, check if SYN cookies are enabled (sysctl net.ipv4.tcp_syncookies). Use hping3 to generate a SYN flood (hping3 -S --flood -p 80 target). Watch ss -s for SYN_RECV count. Enable cookies and observe the difference.</div></div>
+                <div class="drill-item"><span class="drill-number">D4</span><div class="drill-task">NetworkPolicy Isolation: Deploy two pods in the same namespace. Test connectivity (should work). Apply default-deny NetworkPolicy. Test again (should fail). Add specific allow rule between the two pods. Verify connectivity is restored.</div></div>
+                <div class="drill-item"><span class="drill-number">D5</span><div class="drill-task">TLS Hardening: Check your Ingress TLS configuration with testssl.sh (docker run --rm drwetter/testssl.sh https://your-domain.com). Document any weak ciphers or protocols. Harden the config and re-test.</div></div>
+            </div>
+
+            <!-- ═══ Section 33.7: LAB — Security Hardening Bootcamp ═══ -->
+            <div class="section-block" id="s33-7">
+                <h3>33.7 LAB: Security Hardening Bootcamp</h3>
+                <div class="sre-callout">
+                    <h5>🛠️ Security Hardening Lab — 6 Hands-On Exercises</h5>
+                    <div class="lab-steps">
+                        <div class="lab-card">
+                            <div class="lab-card-header">
+                                <span class="lab-card-number">1</span>
+                                <h4 class="lab-card-title">Build a Default-DROP iptables Firewall</h4>
+                            </div>
+                            <div class="lab-card-body">
+                                <pre><code><span class="comment"># Start with a clean state</span>
+iptables -F && iptables -X && iptables -t nat -F
+
+<span class="comment"># Set default DROP policies</span>
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT ACCEPT  <span class="comment"># Allow outbound from this host</span>
+
+<span class="comment"># Allow loopback</span>
+iptables -A INPUT -i lo -j ACCEPT
+
+<span class="comment"># Allow established/related connections (critical!)</span>
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+<span class="comment"># Allow SSH (port 22)</span>
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+<span class="comment"># Verify: try SSH from another machine → should work.</span>
+<span class="comment"># Try curl from this machine to another → should work (our outbound).</span>
+<span class="comment"># External machine trying to curl this one → should fail (DROP).</span>
+<span class="comment"># Flush rules: iptables -F → SSH should STILL be blocked (default DROP!).</span></code></pre>
+                            </div>
+                        </div>
+                        <div class="lab-card">
+                            <div class="lab-card-header">
+                                <span class="lab-card-number">2</span>
+                                <h4 class="lab-card-title">Simulate and Mitigate a SYN Flood</h4>
+                            </div>
+                            <div class="lab-card-body">
+                                <pre><code><span class="comment"># Check current SYN cookie status</span>
+sysctl net.ipv4.tcp_syncookies
+
+<span class="comment"># Watch SYN_RECV count (half-open connections)</span>
+watch -n 1 'ss -s | grep synrec'
+
+<span class="comment"># From another machine, generate SYN flood:</span>
+<span class="comment"># hping3 -S --flood -p 80 &lt;target_ip&gt; --rand-source</span>
+<span class="comment"># Watch SYN_RECV spike → then cookies kick in → count stabilizes.</span>
+
+<span class="comment"># If cookies were disabled (sysctl -w net.ipv4.tcp_syncookies=0):</span>
+<span class="comment"># SYN_RECV continues climbing → server becomes unresponsive.</span>
+<span class="comment"># Re-enable: sysctl -w net.ipv4.tcp_syncookies=1</span></code></pre>
+                            </div>
+                        </div>
+                        <div class="lab-card">
+                            <div class="lab-card-header">
+                                <span class="lab-card-number">3</span>
+                                <h4 class="lab-card-title">Apply a Default-Deny NetworkPolicy</h4>
+                            </div>
+                            <div class="lab-card-body">
+                                <pre><code><span class="comment"># Deploy two test pods</span>
+kubectl run web --image=nginx
+kubectl expose pod web --port=80
+kubectl run client --image=busybox:1.28 -- sleep 3600
+
+<span class="comment"># Test connectivity (should work — no policies yet):</span>
+kubectl exec client -- wget -qO- --timeout=2 http://web
+<span class="comment"># Output: nginx welcome page → unrestricted access</span>
+
+<span class="comment"># Apply default-deny:</span>
+kubectl apply -f - &lt;&lt;EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+EOF
+
+<span class="comment"># Test again (should FAIL):</span>
+kubectl exec client -- wget -qO- --timeout=2 http://web
+<span class="comment"># Output: wget: download timed out → BLOCKED by default-deny</span>
+
+<span class="comment"># Add explicit allow rule and verify.</span></code></pre>
+                            </div>
+                        </div>
+                        <div class="lab-card">
+                            <div class="lab-card-header">
+                                <span class="lab-card-number">4</span>
+                                <h4 class="lab-card-title">TLS Configuration Audit with testssl.sh</h4>
+                            </div>
+                            <div class="lab-card-body">
+                                <pre><code><span class="comment"># Run comprehensive TLS audit:</span>
+docker run --rm drwetter/testssl.sh https://jobpost.anihpj.com
+
+<span class="comment"># Check for: Supported TLS versions (should be 1.2, 1.3 only)</span>
+<span class="comment"># Check for: Weak ciphers (RC4, 3DES, NULL)</span>
+<span class="comment"># Check for: Certificate chain completeness</span>
+<span class="comment"># Check for: HSTS header presence</span>
+<span class="comment"># Document findings. Harden nginx-ingress ConfigMap:</span>
+<span class="comment"># ssl-protocols: "TLSv1.2 TLSv1.3"</span>
+<span class="comment"># ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:..."</span>
+<span class="comment"># Re-run testssl.sh. All warnings should be resolved.</span></code></pre>
+                            </div>
+                        </div>
+                        <div class="lab-card">
+                            <div class="lab-card-header">
+                                <span class="lab-card-number">5</span>
+                                <h4 class="lab-card-title">Rate Limiting with nginx-ingress</h4>
+                            </div>
+                            <div class="lab-card-body">
+                                <pre><code><span class="comment"># Configure rate limiting in ingress-nginx ConfigMap:</span>
+kubectl edit configmap ingress-nginx-controller -n ingress-nginx
+<span class="comment"># Add:</span>
+<span class="comment"># data:</span>
+<span class="comment">#   limit-req-status-code: "429"</span>
+<span class="comment">#   limit-conn-status-code: "429"</span>
+
+<span class="comment"># Add annotations to your Ingress:</span>
+<span class="comment"># nginx.ingress.kubernetes.io/limit-rps: "10"</span>
+<span class="comment"># nginx.ingress.kubernetes.io/limit-whitelist: "10.0.0.0/8"</span>
+
+<span class="comment"># Test with ApacheBench to trigger rate limit:</span>
+ab -n 100 -c 10 https://jobpost.anihpj.com/api/
+<span class="comment"># Some requests should return 429 Too Many Requests.</span></code></pre>
+                            </div>
+                        </div>
+                        <div class="lab-card">
+                            <div class="lab-card-header">
+                                <span class="lab-card-number">6</span>
+                                <h4 class="lab-card-title">Full Security Baseline Audit</h4>
+                            </div>
+                            <div class="lab-card-body">
+                                <pre><code><span class="comment"># Run this security audit checklist for anihpj:</span>
+<span class="comment"># [ ] WAF/DDoS protection enabled (Cloudflare/AWS Shield)</span>
+<span class="comment"># [ ] Security Groups: only ports 80/443 open to 0.0.0.0/0</span>
+<span class="comment"># [ ] All other ports restricted to VPC CIDR only</span>
+<span class="comment"># [ ] Default-deny NetworkPolicy applied in all namespaces</span>
+<span class="comment"># [ ] Specific allow rules for all required service-to-service paths</span>
+<span class="comment"># [ ] TLS 1.2+ enabled. TLS 1.0/1.1 disabled</span>
+<span class="comment"># [ ] HSTS header present (max-age=31536000)</span>
+<span class="comment"># [ ] HTTP→HTTPS redirect enforced</span>
+<span class="comment"># [ ] SYN cookies enabled on all nodes</span>
+<span class="comment"># [ ] Rate limiting configured on Ingress</span>
+<span class="comment"># [ ] Container images scanned for vulnerabilities (Trivy/Grype)</span>
+<span class="comment"># [ ] Pods run as non-root (SecurityContext)</span>
+<span class="comment"># Document gaps. Create Jira tickets for each missing item.</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ Key Terminology ═══ -->
+            <div class="anatomy-card">
+                <div class="anatomy-header"><h4>📖 Key Terms from Chapter 33</h4></div>
+                <div class="anatomy-body">
+                    <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🏰</span>Defense in Depth</div><div class="anatomy-value">A security strategy that layers multiple independent controls so that if one fails, others still protect the asset. Contrasts with perimeter security where one firewall breach exposes everything. Layers: physical, network, host, application, data.</div></div>
+                    <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔐</span>Zero Trust</div><div class="anatomy-value">A security model that eliminates implicit trust based on network location. Every connection is authenticated and authorized regardless of source. Three principles: verify explicitly, least privilege access, assume breach. Pioneered by Google's BeyondCorp.</div></div>
+                    <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🆔</span>SPIFFE/SPIRE</div><div class="anatomy-value">Secure Production Identity Framework for Everyone. SPIFFE defines a standard (X.509 SVID) for workload identity. SPIRE is the implementation. Every pod gets a cryptographically verifiable identity (spiffe://cluster.local/ns/default/sa/jobpost). Used by Istio, Cilium, and other service meshes for mTLS authentication.</div></div>
+                    <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🛡️</span>Stateful Firewall</div><div class="anatomy-value">A firewall that tracks the state of network connections (TCP handshake state, UDP pseudo-state). Automatically allows return traffic for established connections. Examples: AWS Security Groups, iptables with conntrack. Uses connection tracking table — can overflow under DDoS.</div></div>
+                    <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">📋</span>Stateless Firewall</div><div class="anatomy-value">A firewall that evaluates each packet independently against rules, with no memory of past packets. Must explicitly allow both inbound and return traffic. Example: AWS NACL. Simpler, faster, but requires more rules. Limited rule capacity (~20 per direction for NACLs).</div></div>
+                    <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔲</span>Micro-Segmentation</div><div class="anatomy-value">Network segmentation at the individual workload (pod/container) level rather than subnet/VLAN. Each workload has its own security boundary. In Kubernetes: implemented via NetworkPolicies. Limits blast radius — one compromised pod cannot reach all others.</div></div>
+                </div>
+            </div>
+
+            <!-- ═══ EXPANDED EXAM QUESTIONS Q7-Q10 ═══ -->
+            <div class="net-exam-questions" style="margin-top:32px;">
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What is SPIFFE/SPIRE and how does it enable zero trust in Kubernetes? How does a pod prove its identity?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>SPIFFE (Secure Production Identity Framework for Everyone) is a CNCF standard for workload identity. Every workload gets a SPIFFE ID in the format: spiffe://trust-domain/ns/namespace/sa/serviceaccount. SPIRE is the implementation — it runs as an agent on each node, authenticates pods via K8s service account tokens, and issues X.509 SVIDs (SPIFFE Verifiable Identity Documents) — short-lived TLS certificates. Pod A connects to Pod B: both present their SVIDs. Mutual TLS handshake verifies both identities. Neither pod trusts the other based on IP — only based on cryptographic identity. This enables zero trust: even if an attacker gets a pod IP in the same namespace, they can't authenticate without a valid SVID.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">How does Google's BeyondCorp implement zero trust? What lessons can you apply to Kubernetes networking?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Google eliminated their corporate VPN with BeyondCorp: (1) All applications are exposed to the internet — no "internal" network. (2) Every request goes through an access proxy that authenticates the user AND the device (device certificate + user credentials). (3) Access decisions are based on user identity, device health, location, and sensitivity of the resource — not network location. (4) No special "internal" access — working from office gives no extra privileges. Lessons for K8s: expose services via authenticated proxies (not raw IP access), implement mTLS everywhere (Cilium/Istio), use workload identity (SPIFFE) instead of IP-based trust, default-deny all network traffic, and never assume "same namespace = safe."</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">Compare AWS Security Groups and NACLs. When would you use each for the anihpj deployment?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Security Groups: Stateful. Applied at ENI (instance) level. Default: deny inbound, allow all outbound. Automatically allows return traffic. For anihpj: SG on EC2 nodes — allow inbound 80/443 from 0.0.0.0/0 (public), allow 22 from bastion SG only, allow all traffic between nodes in the same SG. NACLs: Stateless. Applied at subnet level. Default: allow all. Must explicitly allow ephemeral ports for return traffic. For anihpj: NACL on public subnets — block known bad IPs. NACL on DB subnets — allow only from app subnet CIDR. Use SGs for fine-grained per-instance rules. Use NACLs for broad subnet-level blocks (blacklisting IPs, blocking entire protocols).</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">Design a complete DDoS defense strategy for anihpj/jobpost covering all three attack categories with specific tools and configurations.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Volumetric (Layer 3/4): AWS Shield Standard (free, always-on) protects ALB/CloudFront from SYN floods, UDP reflection. Upgrade to Shield Advanced ($3K/mo) for 24/7 DRT access and cost protection. Protocol: Enable SYN cookies on all nodes (sysctl). ALB connection draining. Limit connections per IP at nginx-ingress. Application (Layer 7): AWS WAF on ALB with rate-based rules (block IPs exceeding 2000 req/5min). nginx-ingress limit-req-zones for /api/ endpoints (100 req/sec/IP). CloudFront for caching static content (reduces origin load). Health check endpoints excluded from rate limits. Monitor: CloudWatch DDoS metrics, ALB RequestCount, HTTP 429 spike detection. Runbook: identify attack type → enable Shield Advanced mitigation → adjust WAF rules → contact AWS DRT if needed.</p></div></details></div>
+            </div>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════════════════
+             CHAPTER 35 — TLS & Certificate Management in Production
+             ═══════════════════════════════════════════════════════════════════ -->
+        <div id="ch35">
+            <div class="chapter-intro">
+                <h3>Chapter 35: TLS & Certificate Management in Production</h3>
+                <p>TLS is the foundation of secure communication on the internet. Every HTTPS request, every gRPC call, every database connection — all protected by TLS. But certificates expire, get misconfigured, and break in production. This chapter covers the complete TLS certificate lifecycle, from issuance through monitoring and renewal, with a focus on Kubernetes-native automation via cert-manager. You'll learn mTLS for zero-trust service-to-service communication, monitoring to prevent certificate expiry incidents, and zero-downtime rotation strategies.</p>
+            </div>
+
+            <div class="learning-objectives">
+                <h4>🎯 What You'll Learn</h4>
+                <ul>
+                    <li>✅ The complete TLS certificate lifecycle — Issue, Deploy, Monitor, Renew, Revoke — and what happens at each stage</li>
+                    <li>✅ How cert-manager automates TLS in Kubernetes, from ACME challenges to auto-renewal and Secret management</li>
+                    <li>✅ Mutual TLS (mTLS) and SPIFFE — how to build zero-trust service-to-service authentication with cryptographic identity</li>
+                    <li>✅ Multi-layer TLS monitoring with Prometheus, blackbox_exporter, Grafana dashboards, and alerting rules</li>
+                    <li>✅ Six certificate rotation strategies for zero-downtime renewal — from Overwrite In-Place to Blue/Green swaps</li>
+                    <li>✅ The essential openssl toolkit for TLS debugging — 10 commands every network engineer must know by heart</li>
+                    <li>✅ Production TLS hardening best practices — cipher suites, HSTS, key sizes, OCSP stapling, and CT monitoring</li>
+                </ul>
+            </div>
+
+            <div class="chapter-relevance">
+                <span class="relevance-label">🔐 Security Relevance</span>
+                <div class="relevance-domains">
+                    <span class="domain-badge">TLS / PKI <span class="domain-weight">CORE</span></span>
+                    <span class="domain-badge">Zero-Trust Architecture <span class="domain-weight">ESSENTIAL</span></span>
+                    <span class="domain-badge">Kubernetes Security <span class="domain-weight">CRITICAL</span></span>
+                    <span class="domain-badge">Production SRE <span class="domain-weight">MANDATORY</span></span>
+                </div>
+            </div>
+
+            <div class="exam-tip">
+                <h5>💡 Certificate Expiry Is The #1 Cause of Avoidable Outages</h5>
+                <p>Every major tech company has suffered a certificate expiry outage. In 2024 alone: Microsoft Teams (3-hour outage), Spotify (1-hour outage), and countless smaller incidents. The pattern is always the same: cert was issued, nobody monitored it, it expired silently, production went down. <strong>The fix is not "be more careful" — it's automation (cert-manager) + monitoring (Prometheus) + alerting (Alertmanager).</strong> This chapter gives you the complete blueprint.</p>
+            </div>
+
+            <!-- ─── Section 35.1: The TLS Certificate Lifecycle ─── -->
+            <div class="section-block" id="s35-1">
+                <h3>35.1 The TLS Certificate Lifecycle</h3>
+                <p>A TLS certificate goes through five distinct stages in its life. Missing any stage leads to production incidents — most commonly, certificates expiring silently:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">TLS CERTIFICATE LIFECYCLE — 5 Stages</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  TLS CERTIFICATE LIFECYCLE — Issue → Deploy → Monitor → Renew → Revoke         │
+│                                                                               │
+│  ① ISSUE: Generate private key + CSR → Submit to CA → CA validates domain      │
+│     ownership (HTTP-01/DNS-01 challenge) → CA issues certificate.              │
+│     Commands: openssl req -new -newkey rsa:2048 -nodes -keyout tls.key         │
+│               -out tls.csr -subj "/CN=jobpost.anihpj.com"                      │
+│                                                                               │
+│  ② DEPLOY: Store cert + key as Kubernetes Secret → Mount in pod or reference   │
+│     in Ingress. Ingress TLS section references the Secret.                     │
+│     kubectl create secret tls jobpost-tls --cert=tls.crt --key=tls.key         │
+│                                                                               │
+│  ③ MONITOR: Track expiry date. Alert when < 30 days remain.                   │
+│     Prometheus: certmanager_certificate_expiration_timestamp_seconds           │
+│     openssl x509 -noout -enddate -in tls.crt                                   │
+│                                                                               │
+│  ④ RENEW: Generate new cert BEFORE expiry. cert-manager auto-renews 30 days    │
+│     before expiry. Manual: new CSR → new cert → update Secret.                 │
+│     ⚠️ cert-manager creates a NEW Secret; ensure Ingress references it!        │
+│                                                                               │
+│  ⑤ REVOKE (if compromised): Add cert to CRL (Certificate Revocation List)     │
+│     or OCSP staple. Replace compromised cert immediately.                      │
+│     openssl ca -revoke tls.crt -keyfile ca.key -cert ca.crt                    │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="info-box warning">
+                    <h5>⚠️ GOTCHA — cert-manager Creates a NEW Secret</h5>
+                    <p>A cert renewed by cert-manager creates a <strong>NEW Secret</strong> with a different name or overwrites the existing one. If your Ingress references the OLD Secret name, traffic breaks after renewal. Use cert-manager annotations on the Ingress resource instead of static Secret references. When cert-manager is configured with an Issuer on the Ingress, it automatically updates the correct Secret.</p>
+                </div>
+            </div>
+
+            <!-- ─── Section 35.2: cert-manager in Kubernetes ─── -->
+            <div class="section-block" id="s35-2">
+                <h3>35.2 cert-manager in Kubernetes</h3>
+                <p><strong>cert-manager</strong> automates the entire TLS certificate lifecycle within Kubernetes. It creates a pipeline: Issuer → CertificateRequest → Order → Challenge → Certificate → Secret:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">cert-manager — Complete Setup for jobpost.anihpj.com</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  cert-manager — AUTOMATE TLS FOR ANIHPJ                                         │
+│                                                                               │
+│  STEP 1: Install cert-manager:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  kubectl apply -f https://github.com/cert-manager/cert-manager/releases/ │ │
+│  │    download/v1.15.0/cert-manager.yaml                                     │ │
+│  │  kubectl get pods -n cert-manager  # Verify: 3 pods running               │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  STEP 2: Create a ClusterIssuer (Let's Encrypt staging for testing):            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  apiVersion: cert-manager.io/v1                                           │ │
+│  │  kind: ClusterIssuer                                                       │ │
+│  │  metadata:                                                                 │ │
+│  │    name: letsencrypt-staging                                               │ │
+│  │  spec:                                                                     │ │
+│  │    acme:                                                                   │ │
+│  │      server: https://acme-staging-v02.api.letsencrypt.org/directory       │ │
+│  │      email: admin@anihpj.com                                               │ │
+│  │      privateKeySecretRef:                                                  │ │
+│  │        name: letsencrypt-staging-key                                       │ │
+│  │      solvers:                                                              │ │
+│  │      - http01:                                                             │ │
+│  │          ingress:                                                          │ │
+│  │            class: nginx                                                    │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  STEP 3: Create a Certificate resource:                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  apiVersion: cert-manager.io/v1                                           │ │
+│  │  kind: Certificate                                                         │ │
+│  │  metadata:                                                                 │ │
+│  │    name: jobpost-tls                                                       │ │
+│  │    namespace: default                                                      │ │
+│  │  spec:                                                                     │ │
+│  │    secretName: jobpost-tls                                                 │ │
+│  │    dnsNames:                                                               │ │
+│  │    - jobpost.anihpj.com                                                    │ │
+│  │    issuerRef:                                                              │ │
+│  │      name: letsencrypt-staging                                             │ │
+│  │      kind: ClusterIssuer                                                   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  STEP 4: Reference in Ingress:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  spec:                                                                     │ │
+│  │    tls:                                                                    │ │
+│  │    - hosts:                                                                │ │
+│  │      - jobpost.anihpj.com                                                  │ │
+│  │      secretName: jobpost-tls                                               │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  VERIFY:                                                                        │
+│  kubectl get certificate jobpost-tls → READY=True                              │
+│  kubectl get certificaterequests → shows CSR history                           │
+│  kubectl describe certificate jobpost-tls → check events for errors            │
+│                                                                               │
+│  PRODUCTION: Switch to letsencrypt-prod (https://acme-v02.api.letsencrypt.org) │
+│  Staging has HIGHER rate limits. Test with staging FIRST.                      │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+            </div>
+
+            <!-- ─── Section 35.3: mTLS Deep Dive ─── -->
+            <div class="section-block" id="s35-3">
+                <h3>35.3 mTLS (Mutual TLS) — Zero-Trust Service-to-Service Authentication</h3>
+                <p>Standard TLS verifies the SERVER's identity to the client. mTLS adds bi-directional authentication: the CLIENT must also present a valid certificate. This is the cornerstone of zero-trust networking — every service proves who it is on every call:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">mTLS HANDSHAKE — Client AND Server Certificates</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  mTLS HANDSHAKE (TLS 1.3 with mutual auth):                                    │
+│                                                                               │
+│     CLIENT                                    SERVER                           │
+│     ──────                                    ──────                           │
+│  (1) ClientHello ──────────────────────────→                                  │
+│      (supported ciphers, SNI "jobpost.anihpj.com")                            │
+│                                                                               │
+│  (2)                        ←─────────────── ServerHello + ServerCertificate  │
+│                             (server cert for jobpost.anihpj.com)               │
+│                             + CertificateRequest (ASK for client cert!)        │
+│  ════════════════════ DIFFERENCE FROM STANDARD TLS ═════════════════════════  │
+│  The CertificateRequest message is unique to mTLS. It says:                    │
+│  "I've proven who I am — now YOU prove who YOU are."                           │
+│  ════════════════════════════════════════════════════════════════════════════  │
+│                                                                               │
+│  (3) ClientCertificate + ClientCertVerify ─→                                  │
+│      (client cert for "payment-service.anihpj.local")                          │
+│                                                                               │
+│  (4) Server validates client cert:                                             │
+│      ✓ Signed by trusted CA?    ✓ Not expired?                                │
+│      ✓ SAN matches expected?    ✓ Not in CRL?                                 │
+│                                                                               │
+│  (5) Encrypted session established — BOTH identities verified                  │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="comparison-table">
+                    <table>
+                        <tr><th>Feature</th><th>Standard TLS</th><th>mTLS</th></tr>
+                        <tr><td>Server Authentication</td><td>✅ Server must present valid cert</td><td>✅ Same</td></tr>
+                        <tr><td>Client Authentication</td><td>❌ Not required (use API key/JWT)</td><td>✅ Client MUST present valid cert</td></tr>
+                        <tr><td>Certificate Management</td><td>1 cert per server</td><td>N certs (server + every client)</td></tr>
+                        <tr><td>Key Distribution</td><td>N/A for clients</td><td>Every client needs a cert + key pair</td></tr>
+                        <tr><td>Infrastructure</td><td>Single CA (Let's Encrypt)</td><td>Internal CA + cert-manager + SPIFFE</td></tr>
+                        <tr><td>Revocation Complexity</td><td>Low</td><td>High — every client cert must be revocable</td></tr>
+                        <tr><td>Kubernetes Ecosystem</td><td>cert-manager (ACME)</td><td>cert-manager (self-signed/CA) + Istio/Linkerd</td></tr>
+                    </table>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Service Mesh mTLS — Istio/Linkerd Handle the Heavy Lifting</h5>
+                    <p>In Kubernetes, Istio or Linkerd inject sidecar proxies (Envoy/Linkerd-proxy) into every pod. These proxies automatically negotiate mTLS between services. The application code doesn't need to handle TLS at all. cert-manager handles the certificate issuance; the service mesh handles the mTLS negotiation transparently.</p>
+                </div>
+
+                <!-- SPIFFE: Universal Workload Identity -->
+                <div class="diagram-container">
+                    <div class="diagram-title">SPIFFE — Universal Identity for Workloads (The Foundation of mTLS at Scale)</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  SPIFFE (Secure Production Identity Framework for Everyone)                     │
+│                                                                               │
+│  PROBLEM: In a microservices world, how does "payment-service" prove it's       │
+│  actually payment-service and not an impostor? IP addresses? Network segments?  │
+│  Those are network-level, not identity-level.                                   │
+│                                                                               │
+│  SOLUTION: SPIFFE — a standard for workload identity backed by cryptographic   │
+│  proof. Every workload gets a SPIFFE ID (like a passport) that it uses to      │
+│  authenticate to other services via mTLS.                                       │
+│                                                                               │
+│  SPIRE (SPIFFE Runtime Environment) — THE REFERENCE IMPLEMENTATION:            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         SPIRE ARCHITECTURE                                │ │
+│  │                                                                           │ │
+│  │  ┌──────────────────┐         ┌──────────────────┐                       │ │
+│  │  │   SPIRE SERVER   │◀───────▶│   SPIRE AGENT    │  (per-node daemon)    │ │
+│  │  │   (centralized)  │   gRPC  │   (node-local)   │                       │ │
+│  │  │                  │         │                  │                       │ │
+│  │  │  - CA signing    │         │  - Workload       │                       │ │
+│  │  │  - Identity      │         │    attestation    │                       │ │
+│  │  │    registry      │         │  - SVID issuance  │                       │ │
+│  │  │  - Node          │         │  - Key rotation   │                       │ │
+│  │  │    attestation   │         │  - SVID caching   │                       │ │
+│  │  └──────────────────┘         └────────┬─────────┘                       │ │
+│  │                                        │ Unix domain socket              │ │
+│  │                              ┌─────────▼─────────┐                       │ │
+│  │                              │   WORKLOAD POD    │                       │ │
+│  │                              │  (payment-service)│                       │ │
+│  │                              │                   │                       │ │
+│  │                              │  SPIFFE ID:       │                       │ │
+│  │                              │  spiffe://anihpj  │                       │ │
+│  │                              │  .com/ns/prod/    │                       │ │
+│  │                              │  sa/payment-svc   │                       │ │
+│  │                              │  ┌─────────────┐  │                       │ │
+│  │                              │  │ x.509 SVID  │  │  ← Short-lived cert   │ │
+│  │                              │  │ + Private Key│  │    (auto-rotated)     │ │
+│  │                              │  └─────────────┘  │                       │ │
+│  │                              └───────────────────┘                       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  SPIFFE IDENTITY FLOW — Step by Step:                                           │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  ① WORKLOAD ATTESTATION: SPIRE Agent verifies the workload's identity     │ │
+│  │     using kernel-level attributes (UID, GID, process name, cgroup).       │ │
+│  │     "Is this process REALLY running as the payment-service pod?"          │ │
+│  │                                                                           │ │
+│  │  ② SPIFFE ID ASSIGNMENT: Based on Kubernetes metadata (namespace,         │ │
+│  │     service account, pod labels), SPIRE assigns a unique SPIFFE ID:       │ │
+│  │     spiffe://anihpj.com/ns/prod/sa/payment-svc                            │ │
+│  │                                                                           │ │
+│  │  ③ x.509 SVID ISSUANCE: SPIRE Agent issues a short-lived (default 1h)     │ │
+│  │     x.509 certificate (SVID) bound to that SPIFFE ID. The cert + key      │ │
+│  │     are written to a shared memory volume accessible by the workload.     │ │
+│  │                                                                           │ │
+│  │  ④ mTLS HANDSHAKE: When payment-service calls job-service, the Envoy     │ │
+│  │     sidecar presents the SVID as the client certificate. Job-service      │ │
+│  │     validates: ✓ Signed by trusted SPIRE CA? ✓ SPIFFE ID matches          │ │
+│  │     expected identity? ✓ Not expired? ✓ Not revoked?                      │ │
+│  │                                                                           │ │
+│  │  ⑤ CONTINUOUS ROTATION: SPIRE Agent automatically rotates SVIDs before    │ │
+│  │     expiry. The workload always has a valid certificate. ZERO manual      │ │
+│  │     intervention. Compromised key blast radius: max 1 hour.                │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  SPIFFE IN ANIHPJ — Real Benefits:                                             │
+│  - Every microservice (payment, job, user, notification) has a cryptographically│
+│    verifiable identity — not just an IP address                                │
+│  - Database connections: PostgreSQL accepts connections ONLY from pods with    │
+│    specific SPIFFE IDs (e.g., spiffe://anihpj.com/ns/prod/sa/job-service)     │
+│  - Audit trail: Every mTLS handshake is logged with SPIFFE IDs of both parties │
+│  - Compliance: SPIFFE-based identity satisfies PCI-DSS, SOC 2, FedRAMP        │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="info-box note">
+                    <h5>📝 SPIFFE vs cert-manager — Different Roles, Complementary</h5>
+                    <p>cert-manager issues certificates for Ingress/public-facing endpoints (via ACME/Let's Encrypt). SPIFFE/SPIRE issues short-lived identity certificates for internal workload-to-workload mTLS. They work together: cert-manager handles North-South traffic (ingress); SPIFFE handles East-West traffic (service mesh). In a complete zero-trust architecture you need BOTH.</p>
+                </div>
+            </div>
+
+            <!-- ─── Section 35.4: TLS Monitoring & Alerting ─── -->
+            <div class="section-block" id="s35-4">
+                <h3>35.4 TLS Monitoring & Alerting — Catch Expiry BEFORE It Happens</h3>
+                <p>Certificate expiry is a leading cause of production outages. The fix is simple — monitor expiry and alert early. cert-manager exposes Prometheus metrics; combine them with blackbox-exporter for external probing and PrometheusRules for alerts:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">TLS MONITORING STACK — 3 Layers</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  TLS MONITORING — LAYERED APPROACH FOR ZERO BLIND SPOTS                        │
+│                                                                               │
+│  LAYER 1: KUBERNETES (Internal — cert-manager metrics):                         │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Prometheus scrapes cert-manager controller @ :9402/metrics:              │ │
+│  │                                                                           │ │
+│  │  certmanager_certificate_expiration_timestamp_seconds                     │ │
+│  │    {name="jobpost-tls", namespace="default"}  1710614400  # Unix epoch    │ │
+│  │                                                                           │ │
+│  │  certmanager_certificate_ready_status                                     │ │
+│  │    {name="jobpost-tls"}  1  # 1=Ready, 0=Not Ready                        │ │
+│  │                                                                           │ │
+│  │  Days until expiry = (expiration_timestamp - time()) / 86400              │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  LAYER 2: EXTERNAL (blackbox_exporter probes):                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Prometheus Job:                                                          │ │
+│  │  - job_name: 'blackbox-tls'                                               │ │
+│  │    metrics_path: /probe                                                   │ │
+│  │    params:                                                                │ │
+│  │      module: [http_2xx]                                                   │ │
+│  │      target: [https://jobpost.anihpj.com]                                 │ │
+│  │    static_configs:                                                        │ │
+│  │      - targets: ['jobpost.anihpj.com:443']                                │ │
+│  │                                                                           │ │
+│  │  probe_ssl_earliest_cert_expiry — expiry from external perspective        │ │
+│  │  probe_success — 1 if TLS handshake OK + cert valid                       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  LAYER 3: ALERTING RULES:                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  groups:                                                                  │ │
+│  │  - name: tls-alerts                                                       │ │
+│  │    rules:                                                                 │ │
+│  │    - alert: CertificateExpiringSoon                                       │ │
+│  │      expr: certmanager_certificate_expiration_timestamp_seconds           │ │
+│  │              - time() < 30 * 86400                                        │ │
+│  │      annotations:                                                         │ │
+│  │        summary: "Certificate {{ $labels.name }} expires in < 30 days"     │ │
+│  │        runbook: "https://wiki.anihpj.com/tls-renewal"                     │ │
+│  │    - alert: CertificateExpiringCritical                                   │ │
+│  │      expr: certmanager_certificate_expiration_timestamp_seconds           │ │
+│  │              - time() < 7 * 86400                                         │ │
+│  │      labels:                                                              │ │
+│  │        severity: critical                                                 │ │
+│  │    - alert: CertificateNotReady                                           │ │
+│  │      expr: certmanager_certificate_ready_status == 0                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <!-- Grafana Dashboard & cert-manager Troubleshooting -->
+                <div class="diagram-container">
+                    <div class="diagram-title">Grafana TLS Certificate Dashboard — Key Panels</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  GRAFANA DASHBOARD: "TLS Certificate Overview"                                  │
+│                                                                               │
+│  PANEL 1 — Certificate Expiry Timeline (Status Timeline):                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Query: certmanager_certificate_expiration_timestamp_seconds - time()    │ │
+│  │  Color thresholds: Green (>60d) | Yellow (30-60d) | Orange (7-30d) |     │ │
+│  │                    Red (<7d)                                              │ │
+│  │  Visualization: Bar gauge — one bar per certificate                       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  PANEL 2 — Certificate Readiness (Stat):                                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Query: certmanager_certificate_ready_status                              │ │
+│  │  Show: Green "All Ready" if all == 1, else Red "N Failed"                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  PANEL 3 — Renewal History (Time Series):                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Query: increase(certmanager_certificate_renewal_count[30d])              │ │
+│  │  Shows: How many renewals happened — spikes indicate issues                │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  PANEL 4 — External TLS Probe Latency (blackbox_exporter):                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Query: probe_duration_seconds{job="blackbox-tls"}                        │ │
+│  │  Alert if: probe_success == 0 for > 2 minutes                            │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <!-- cert-manager Troubleshooting Commands -->
+                <div class="diagram-container">
+                    <div class="diagram-title">cert-manager Troubleshooting — Essential kubectl Commands</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  cert-manager DEBUGGING — CHECK CERTIFICATE HEALTH & RENEWAL STATUS            │
+│                                                                               │
+│  1. CHECK CERTIFICATE READINESS:                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  kubectl get certificate jobpost-tls                                     │ │
+│  │  NAME           READY   SECRET        AGE                                 │ │
+│  │  jobpost-tls    True    jobpost-tls   30d                                 │ │
+│  │                                                                           │ │
+│  │  # If READY=False → certificate failed to issue or renew                  │ │
+│  │  kubectl describe certificate jobpost-tls                                │ │
+│  │  # Look at Status.Conditions:                                             │ │
+│  │  #   Type: Ready   Status: False   Reason: "Expired"                      │ │
+│  │  #   Message: "Certificate has expired"                                   │ │
+│  │  # Common reasons: "Issuing", "Expired", "RateLimited",                   │ │
+│  │  #                 "InvalidConfig", "DNSFailed"                           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  2. SEE ALL CSR HISTORY:                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  kubectl get certificaterequests -A                                       │ │
+│  │  NAMESPACE  NAME                    APPROVED   STATUS    AGE              │ │
+│  │  default    jobpost-tls-abc123      True       True      25d              │ │
+│  │  default    jobpost-tls-def456      True       False     1d   ← FAILED!   │ │
+│  │                                                                           │ │
+│  │  kubectl describe certificaterequest jobpost-tls-def456                   │ │
+│  │  # Check Status.Conditions for the failure reason                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  3. CHECK ORDERS & CHALLENGES:                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  kubectl get orders -A                                                    │ │
+│  │  kubectl get challenges -A                                                │ │
+│  │  kubectl describe challenge jobpost-tls-xyz-123456                       │ │
+│  │  # Challenges show HTTP-01/DNS-01 validation status                       │ │
+│  │  # "Waiting for HTTP-01 challenge propagation" = ingress not ready        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  4. CHECK cert-manager CONTROLLER LOGS:                                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  kubectl logs -n cert-manager deployment/cert-manager --tail=50           │ │
+│  │  kubectl logs -n cert-manager deployment/cert-manager-cainjector          │ │
+│  │  kubectl logs -n cert-manager deployment/cert-manager-webhook             │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="info-box warning">
+                    <h5>⚠️ GOTCHA — cert-manager Only Manages Certificates IT Created</h5>
+                    <p>cert-manager only renews certificates that have the <code>renewBefore</code> annotation (default: 30 days before expiry). If you <strong>manually</strong> created a Kubernetes Secret with a TLS certificate, cert-manager will <strong>NOT</strong> manage, monitor, or renew it. You MUST create a <code>Certificate</code> resource and let cert-manager create the Secret. <strong>Always let cert-manager CREATE the Secret.</strong> If you need to bring your own certificate, use the <code>Certificate</code> resource with a <code>secretTemplate</code> annotation, not a manual <code>kubectl create secret tls</code>.</p>
+                </div>
+            </div>
+
+            <!-- ─── Section 35.5: Certificate Rotation Strategies ─── -->
+            <div class="section-block" id="s35-5">
+                <h3>35.5 Certificate Rotation Strategies — Zero Downtime</h3>
+                <p>Certificates expire. Rotating them without downtime requires careful orchestration. Here are four strategies, from simple to advanced:</p>
+
+                <div class="comparison-table">
+                    <table>
+                        <tr><th>Strategy</th><th>Mechanism</th><th>Downtime</th><th>Complexity</th><th>Best For</th></tr>
+                        <tr><td><strong>1. Overwrite In-Place</strong></td><td>cert-manager updates the SAME Secret → Ingress controller detects change</td><td>None (sub-second)</td><td>Low</td><td>cert-manager default — 90% of use cases</td></tr>
+                        <tr><td><strong>2. Hot Reload</strong></td><td>nginx/Envoy watch Secret via K8s API, call <code>nginx -s reload</code> on change. Envoy xDS-based — truly zero-downtime, no process restart</td><td>None for Envoy; sub-second for nginx</td><td>Low</td><td>nginx-ingress (k8s watch) or Envoy Gateway (xDS)</td></tr>
+                        <tr><td><strong>3. Dual-Cert Transition (SNI-based)</strong></td><td>Serve BOTH old and new cert during rotation window via SNI matching</td><td>None</td><td>Medium</td><td>HAProxy, custom nginx configs, legacy clients</td></tr>
+                        <tr><td><strong>4. Dual-Secret Swap</strong></td><td>Create new Secret (tls-new) → update Ingress ref → delete old</td><td>None (atomic swap)</td><td>Medium</td><td>Manual rotation, controlled cut-over, audit trails</td></tr>
+                        <tr><td><strong>5. Rolling Pod Restart</strong></td><td>kubectl rollout restart deployment anihpj-jobpost</td><td>None (rolling)</td><td>Low</td><td>Post cert Secret update, reload in-memory certs</td></tr>
+                        <tr><td><strong>6. Blue/Green Cert Swap</strong></td><td>Deploy new Ingress with new cert Secret → test → switch DNS</td><td>None (DNS TTL)</td><td>High</td><td>PCI-DSS, critical prod, 100% pre-validation</td></tr>
+                    </table>
+                </div>
+
+                <!-- Strategy Deep Dives -->
+                <div class="diagram-container">
+                    <div class="diagram-title">STRATEGY 1: Overwrite In-Place — cert-manager Default (Most Common)</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  OVERWRITE IN-PLACE — HOW cert-manager DEFAULT ROTATION WORKS:                  │
+│                                                                               │
+│  ┌─────────┐    ┌─────────────┐    ┌──────────┐    ┌──────────────────┐     │
+│  │ cert-   │    │ Kubernetes  │    │ Ingress  │    │     Client       │     │
+│  │ manager │    │   Secret    │    │Controller│    │   (browser/API)  │     │
+│  └────┬────┘    └──────┬──────┘    └────┬─────┘    └────────┬─────────┘     │
+│       │                │               │                    │               │
+│  ═══ Renewal triggered (≤30 days before expiry) ═══         │               │
+│       │                │               │                    │               │
+│  (1)  │ Fetch new cert │               │                    │               │
+│       │ from LE/CA     │               │                    │               │
+│       │───────────────▶│               │                    │               │
+│       │  (2) Overwrite │               │                    │               │
+│       │  tls.crt+tls.key              │                    │               │
+│       │                │──────────────▶│                    │               │
+│       │                │ (3) K8s API   │                    │               │
+│       │                │  watch fires  │                    │               │
+│       │                │  Secret change│                    │               │
+│       │                │               │────┐               │               │
+│       │                │               │    │ (4) Reload    │               │
+│       │                │               │    │ TLS config    │               │
+│       │                │               │◀───┘               │               │
+│       │                │               │                    │               │
+│  ════════════════════ NEW CONNECTIONS GET NEW CERT ══════════════════════    │
+│  ══════════════════ EXISTING CONNECTIONS CONTINUE WITH OLD CERT ═══════════   │
+│                                                                               │
+│  KEY BEHAVIOR PER CONTROLLER:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │ nginx-ingress:  Watches Secrets via K8s API. On change → nginx -s reload │ │
+│  │                 (graceful: old workers drain, new workers use new cert)   │ │
+│  │                                                                           │ │
+│  │ Envoy Gateway:  xDS-based dynamic reconfiguration. NO reload needed.      │ │
+│  │                 Truly zero-downtime — new cert hot-swapped in memory.     │ │
+│  │                                                                           │ │
+│  │ HAProxy:        Requires explicit `socat` command or full reload for      │ │
+│  │                 cert changes. MAY drop active connections on reload.      │ │
+│  │                                                                           │ │
+│  │ Traefik:        Watches Secrets. Dynamic config hot-reload. No downtime.  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">STRATEGY 3: Dual-Cert Transition — Serve OLD + NEW Cert Simultaneously</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  DUAL-CERT TRANSITION — SNI-BASED ROUTING TO OLD VS NEW CERT:                   │
+│                                                                               │
+│  USE CASE: You need to support legacy clients that pin certificates or don't   │
+│  trust the new CA. Serve BOTH certs during a transition window.                │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         INGRESS / LB                                      │ │
+│  │  ┌─────────────────────┐    ┌─────────────────────┐                      │ │
+│  │  │  SNI: jobpost.anihpj│    │  SNI: *.anihpj.com  │                      │ │
+│  │  │  → NEW cert (RSA)   │    │  → OLD cert (ECDSA) │                      │ │
+│  │  │  → NEW cert (ECDSA) │    │                     │                      │ │
+│  │  └──────────┬──────────┘    └──────────┬──────────┘                      │ │
+│  │             │                          │                                  │ │
+│  │  Clients sending SNI=jobpost.anihpj.com get the NEW cert.                 │ │
+│  │  Clients sending SNI=*.anihpj.com (older, wildcard) get the OLD cert.     │ │
+│  │                                                                           │ │
+│  │  After transition window (e.g., 7 days): remove old cert. All clients     │ │
+│  │  should now be sending the specific SNI.                                  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  nginx CONFIGURATION FOR DUAL-CERT:                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  # Ingress YAML — two TLS entries:                                        │ │
+│  │  spec:                                                                    │ │
+│  │    tls:                                                                   │ │
+│  │    - hosts:                                                               │ │
+│  │      - jobpost.anihpj.com           # Specific hostname → NEW cert        │ │
+│  │      secretName: jobpost-tls-new                                          │ │
+│  │    - hosts:                                                               │ │
+│  │      - "*.anihpj.com"               # Wildcard → OLD cert (transition)    │ │
+│  │      secretName: jobpost-tls-old                                          │ │
+│  │                                                                           │ │
+│  │  # nginx picks the MOST SPECIFIC SNI match first:                         │ │
+│  │  # "jobpost.anihpj.com" (exact match) > "*.anihpj.com" (wildcard)        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <!-- Zero-Downtime Rotation Sequence Diagram -->
+                <div class="diagram-container">
+                    <div class="diagram-title">Zero-Downtime Certificate Rotation — Complete Sequence</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  ZERO-DOWNTIME ROTATION — END-TO-END TIMELINE (cert-manager + nginx-ingress)   │
+│                                                                               │
+│  T-30 DAYS: cert-manager detects expiry approaching (renewBefore: 720h)       │
+│       │                                                                        │
+│  T-29 DAYS: cert-manager creates new CertificateRequest → ACME Order →        │
+│       │    HTTP-01 Challenge → CA issues new certificate                       │
+│       │                                                                        │
+│  T-29 DAYS: cert-manager writes new cert+key to SAME Secret (overwrite)       │
+│       │    ┌──────────────────────────────────────────────┐                   │
+│       │    │ Secret "jobpost-tls" BEFORE:  OLD cert       │                   │
+│       │    │ Secret "jobpost-tls" AFTER:   NEW cert       │                   │
+│       │    └──────────────────────────────────────────────┘                   │
+│       │                                                                        │
+│  T-29 DAYS: Kubelet syncs Secret to node (within 60s by default)             │
+│       │                                                                        │
+│  T-29 DAYS: nginx-ingress watches Secret change via K8s API                   │
+│       │    ┌──────────────────────────────────────────────┐                   │
+│       │    │ nginx -s reload (graceful shutdown):          │                   │
+│       │    │  1. New worker processes start → load NEW cert│                   │
+│       │    │  2. Old workers finish active connections     │                   │
+│       │    │  3. Old workers exit when connections drain   │                   │
+│       │    │  DOWNTIME: < 100ms (connection accept gap)    │                   │
+│       │    └──────────────────────────────────────────────┘                   │
+│       │                                                                        │
+│  T-29 DAYS: NEW connections → NEW cert. EXISTING connections → OLD cert       │
+│       │         until they complete (keep-alive) or max worker shutdown        │
+│       │                                                                        │
+│  T-29 DAYS: cert-manager updates Certificate.status:                          │
+│       │    ┌──────────────────────────────────────────────┐                   │
+│       │    │ Status:                                       │                   │
+│       │    │   Conditions:                                 │                   │
+│       │    │     Type: Ready    Status: True               │                   │
+│       │    │     NotAfter: (new expiry date)               │                   │
+│       │    │     RenewalTime: (timestamp)                  │                   │
+│       │    └──────────────────────────────────────────────┘                   │
+│                                                                               │
+│  MONITORING CONFIRMS:                                                          │
+│  ✓ certmanager_certificate_expiration_timestamp_seconds — reset to new date  │
+│  ✓ certmanager_certificate_renewal_count — incremented                        │
+│  ✓ probe_success — remains 1 (no interruption)                               │
+│  ✓ HTTP 5xx rate — zero during rotation window                               │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="info-box warning">
+                    <h5>⚠️ GOTCHA — Test Your Ingress Controller's Reload Behavior</h5>
+                    <p>Some Ingress controllers (older nginx versions, certain HAProxy configs) require a <strong>full process reload</strong> for certificate changes — this drops active connections. Before going to production: 1) Test cert rotation under load, 2) Verify zero connection drops with <code>hey -n 100000 -c 50</code>, 3) Check controller logs for "reloading" events, 4) If using nginx, ensure <code>worker-shutdown-timeout</code> is set high enough for long-lived connections (default: 240s for graceful shutdown). Envoy Gateway (xDS) and Traefik handle cert changes without reload — prefer them for zero-downtime critical paths.</p>
+                </div>
+
+                <div class="info-box warning">
+                    <h5>⚠️ CRITICAL — cert-manager Overwrites Manually Created Secrets</h5>
+                    <p>If a Certificate resource's <code>secretName</code> matches a Secret you manually created, cert-manager WILL overwrite it on the next reconciliation loop. Either let cert-manager OWN the Secret (don't create it manually) or use a different <code>secretName</code> for manual certs. <strong>Never fight cert-manager for ownership.</strong></p>
+                </div>
+            </div>
+
+            <!-- ─── Section 35.6: TLS Debugging with OpenSSL ─── -->
+            <div class="section-block" id="s35-6">
+                <h3>35.6 TLS Debugging with OpenSSL — A Practitioner's Toolkit</h3>
+                <p>When TLS breaks, you need fast diagnostics. These <code>openssl</code> commands are the Swiss Army knife of TLS debugging — from verifying chain trust to inspecting cipher suites:</p>
+
+                <div class="diagram-container">
+                    <div class="diagram-title">TLS DEBUGGING — 10 ESSENTIAL OpenSSL COMMANDS</div>
+                    <pre>┌──────────────────────────────────────────────────────────────────────────────┐
+│  TLS DEBUGGING — openssl COMMANDS EVERY NETWORK ENGINEER MUST KNOW             │
+│                                                                               │
+│  1. CHECK CERTIFICATE EXPIRY:                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl x509 -in tls.crt -noout -dates -subject -issuer                │ │
+│  │  → notBefore=Mar  1 00:00:00 2025 GMT                                    │ │
+│  │  → notAfter=May 30 23:59:59 2025 GMT  (90-day Let's Encrypt cert)        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  2. VERIFY CHAIN OF TRUST:                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl verify -CAfile ca-bundle.crt tls.crt                            │ │
+│  │  → tls.crt: OK                                                           │ │
+│  │  # Bad chain: error 20 at 0 depth lookup: unable to get local issuer cert│ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  3. FETCH REMOTE CERT (no browser):                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl s_client -connect jobpost.anihpj.com:443 -servername \         │ │
+│  │    jobpost.anihpj.com 2>&1 | openssl x509 -noout -text                  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  4. CHECK TLS VERSION + CIPHER NEGOTIATED:                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl s_client -connect jobpost.anihpj.com:443 -tls1_2 \             │ │
+│  │    2>&1 | grep -E "Protocol|Cipher"                                      │ │
+│  │  → Protocol: TLSv1.3                                                      │ │
+│  │  → Cipher: TLS_AES_256_GCM_SHA384                                        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  5. CHECK ALL SAN NAMES ON A CERT:                                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl x509 -in tls.crt -noout -ext subjectAltName                     │ │
+│  │  → DNS:jobpost.anihpj.com, DNS:*.anihpj.com                              │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  6. DECODE A PEM CERTIFICATE:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl x509 -in tls.crt -noout -text | less                            │ │
+│  │  # Human-readable: Serial, Issuer, Validity, Public Key, Extensions       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  7. CHECK PRIVATE KEY MATCHES CERT (MODULUS COMPARISON):                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl x509 -in tls.crt -noout -modulus | md5sum                       │ │
+│  │  openssl rsa -in tls.key -noout -modulus | md5sum                        │ │
+│  │  # Same hash = matching pair ✓                                           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  8. TEST mTLS (client cert required):                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl s_client -connect internal-api.anihpj.local:443 \               │ │
+│  │    -cert client.crt -key client.key -CAfile ca.crt                       │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  9. GENERATE SELF-SIGNED CERT FOR DEV/TESTING:                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl req -x509 -newkey rsa:4096 -nodes -days 365 \                   │ │
+│  │    -keyout dev-key.pem -out dev-cert.pem \                                │ │
+│  │    -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"          │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  10. DUMP ALL CERTIFICATES IN A PEM BUNDLE:                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  openssl crl2pkcs7 -nocrl -certfile fullchain.pem | \                    │ │
+│  │    openssl pkcs7 -print_certs -noout                                     │ │
+│  │  # Shows each cert in the chain: leaf → intermediate → root               │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="info-box tip">
+                    <h5>💡 Browser vs CLI Debugging</h5>
+                    <p>Your browser's TLS information (click the padlock → Certificate) is great for quick checks, but it uses the OS trust store, not your server's CA bundle. Always validate with <code>openssl s_client</code> from a machine that uses the same trust store as your production clients.</p>
+                </div>
+            </div>
+
+            <!-- ─── Section 35.7: TLS Best Practices ─── -->
+            <div class="section-block" id="s35-7">
+                <h3>35.7 TLS Best Practices — Production Hardening</h3>
+                <p>TLS configuration mistakes are among the most common security audit findings. Here are battle-tested production best practices for TLS configuration:</p>
+
+                <div class="comparison-table">
+                    <table>
+                        <tr><th>Category</th><th>✅ DO</th><th>❌ DON'T</th></tr>
+                        <tr><td><strong>TLS Version</strong></td><td>TLS 1.3 only (or TLS 1.2 with strong ciphers if legacy needed)</td><td>TLS 1.0/1.1 — deprecated, vulnerable to POODLE, BEAST</td></tr>
+                        <tr><td><strong>Cipher Suites</strong></td><td>ECDHE + AES-GCM/ChaCha20-Poly1305. TLS 1.3 has only 5 secure ciphers</td><td>RC4, 3DES, CBC-mode ciphers, NULL ciphers, EXPORT-grade</td></tr>
+                        <tr><td><strong>Key Size</strong></td><td>RSA 2048-bit minimum, ECDSA P-256 or better</td><td>RSA 1024-bit, DSA (broken)</td></tr>
+                        <tr><td><strong>HSTS</strong></td><td>Strict-Transport-Security: max-age=31536000; includeSubDomains; preload</td><td>Omitting HSTS — allows SSL stripping attacks</td></tr>
+                        <tr><td><strong>Certificate Validity</strong></td><td>90 days (Let's Encrypt standard). Short-lived = less risk if compromised</td><td>365+ days — harder to revoke, longer exposure if compromised</td></tr>
+                        <tr><td><strong>Renewal Buffer</strong></td><td>Alert at 30 days, critical at 7 days. cert-manager auto-renews at 30d</td><td>Renewing on the day of expiry — one glitch and you're down</td></tr>
+                        <tr><td><strong>Private Key Storage</strong></td><td>Kubernetes Secret (encrypted at rest). AWS KMS / HashiCorp Vault for sensitive keys</td><td>Hardcoding in code, committing to git, storing in configmaps</td></tr>
+                        <tr><td><strong>mTLS Scope</strong></td><td>All internal service-to-service traffic (zero-trust principle)</td><td>mTLS only at the edge — internal traffic remains plaintext</td></tr>
+                        <tr><td><strong>Certificate Transparency</strong></td><td>Monitor CT logs for mis-issued certs (crt.sh, Cloudflare CT Mon)</td><td>Blindly trusting CAs — they have been compromised before (DigiNotar, Comodo)</td></tr>
+                        <tr><td><strong>CRL/OCSP</strong></td><td>Enable OCSP stapling. Check CRL for internal CAs</td><td>Relying solely on cert expiry — revocation is for compromised keys</td></tr>
+                    </table>
+                </div>
+
+                <div class="info-box danger">
+                    <h5>🚨 COMMON TLS MISTAKES THAT CAUSE OUTAGES</h5>
+                    <p>1. <strong>Missing intermediate cert</strong> — Full chain not served. Browsers/curl fail. Fix: concatenate cert + intermediate into fullchain.pem.<br>2. <strong>Secret name mismatch</strong> — Ingress references a Secret that doesn't exist. kubectl describe ingress shows the TLS error.<br>3. <strong>Namespace mismatch</strong> — cert-manager Certificate is in one namespace, Ingress is in another. Secrets are namespace-scoped.<br>4. <strong>ACME rate limit hit</strong> — Let's Encrypt has strict per-domain rate limits (5 certs/week), staging has higher (50/week). Always test with staging first.</p>
+                </div>
+            </div>
+
+            <!-- ─── Section 35.8: LAB — TLS Production ─── -->
+            <div class="section-block" id="s35-8">
+                <h3>35.8 LAB: TLS in Production for anihpj/jobpost</h3>
+                <p>Hands-on lab to deploy TLS end-to-end for the jobpost application using cert-manager, configure mTLS, and simulate certificate expiry scenarios:</p>
+
+                <div class="lab-steps">
+                    <div class="lab-card"><span class="lab-num">Lab 1</span><h5>Install cert-manager & Issue First Certificate</h5>
+                        <ul>
+                            <li><code>kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.0/cert-manager.yaml</code></li>
+                            <li>Create a <code>ClusterIssuer</code> for Let's Encrypt staging</li>
+                            <li>Create a <code>Certificate</code> resource for <code>jobpost.anihpj.com</code></li>
+                            <li>Configure the Ingress to reference <code>secretName: jobpost-tls</code></li>
+                            <li>Verify: <code>curl -vI https://jobpost.anihpj.com</code> shows TLSv1.3</li>
+                        </ul>
+                    </div>
+                    <div class="lab-card"><span class="lab-num">Lab 2</span><h5>Enable HSTS and Security Headers on nginx-ingress</h5>
+                        <ul>
+                            <li>Add ConfigMap to nginx-ingress: <code>hsts: "true"</code>, <code>hsts-max-age: "31536000"</code>, <code>hsts-include-subdomains: "true"</code></li>
+                            <li>Add annotation to Ingress: <code>nginx.ingress.kubernetes.io/configuration-snippet</code> for CSP and X-Frame-Options</li>
+                            <li>Verify headers: <code>curl -sI https://jobpost.anihpj.com | grep -i strict</code></li>
+                        </ul>
+                    </div>
+                    <div class="lab-card"><span class="lab-num">Lab 3</span><h5>Set Up TLS Monitoring with Prometheus</h5>
+                        <ul>
+                            <li>Create ServiceMonitor for cert-manager metrics endpoint</li>
+                            <li>Write PrometheusRule: <code>CertificateExpiringSoon</code> at 30d, <code>CertificateExpiringCritical</code> at 7d</li>
+                            <li>Set up Alertmanager config to route TLS alerts to #sre-tls Slack channel</li>
+                            <li>Test: manually create a cert with 25-day expiry and verify alert fires</li>
+                        </ul>
+                    </div>
+                    <div class="lab-card"><span class="lab-num">Lab 4</span><h5>Simulate Certificate Expiry — Test Your Alerting</h5>
+                        <ul>
+                            <li>Create a self-signed cert with 5-day validity: <code>openssl req -x509 -days 5 ...</code></li>
+                            <li>Deploy as <code>expiring-tls</code> Secret. Create a test Ingress using it</li>
+                            <li>Wait for Prometheus alert to fire at 7 days. Verify Alertmanager routes to Slack/email</li>
+                            <li>Practice the runbook: renew cert → update Secret → verify → close alert</li>
+                        </ul>
+                    </div>
+                    <div class="lab-card"><span class="lab-num">Lab 5</span><h5>Configure mTLS Between jobpost Services</h5>
+                        <ul>
+                            <li>Create an internal CA: <code>openssl req -x509 -newkey rsa:4096 -days 3650 ... -subj "/CN=anihpj Internal CA"</code></li>
+                            <li>Generate client certs for payment-service, job-service</li>
+                            <li>Configure Django to require client certs (modify settings.py/Django TLS config)</li>
+                            <li>Test: <code>curl --cert client.crt --key client.key https://internal-api</code> succeeds; <code>curl</code> without cert fails with 403</li>
+                        </ul>
+                    </div>
+                    <div class="lab-card"><span class="lab-num">Lab 6</span><h5>Zero-Downtime Certificate Rotation Drill</h5>
+                        <ul>
+                            <li>Simulate production load: <code>hey -n 100000 -c 50 https://jobpost.anihpj.com</code></li>
+                            <li>Perform dual-secret swap: create new Secret → update Ingress → verify</li>
+                            <li>Monitor <code>hey</code> output — confirm ZERO errors during the swap</li>
+                            <li>Check nginx-ingress logs: <code>kubectl logs -l app.kubernetes.io/name=ingress-nginx | grep "reload\|old_secret\|new_secret"</code></li>
+                            <li>Time the operation: target &lt; 5 seconds from edit to all connections using new cert</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 VISUAL SUMMARY
+                 ═══════════════════════════════════════════════════ -->
+            <div class="visual-summary">
+                <h4>📊 Visual Summary: TLS Management at a Glance</h4>
+                <div class="visual-card-grid">
+                    <div class="visual-card"><span class="visual-icon">🔐</span><strong>TLS Lifecycle</strong><span>Issue → Deploy → Monitor → Renew → Revoke</span></div>
+                    <div class="visual-card"><span class="visual-icon">🤖</span><strong>cert-manager</strong><span>Automates ACME challenges, renewal, Secret management</span></div>
+                    <div class="visual-card"><span class="visual-icon">🔄</span><strong>mTLS</strong><span>Bi-directional cert auth for zero-trust service mesh</span></div>
+                    <div class="visual-card"><span class="visual-icon">📊</span><strong>Monitoring</strong><span>cert-manager metrics + blackbox_exporter + PrometheusRules</span></div>
+                    <div class="visual-card"><span class="visual-icon">♻️</span><strong>Rotation</strong><span>Auto-renew | Dual-Secret Swap | Rolling Restart | Blue/Green</span></div>
+                    <div class="visual-card"><span class="visual-icon">🔧</span><strong>Debugging</strong><span>openssl s_client | x509 -text | verify -CAfile | modulus check</span></div>
+                    <div class="visual-card"><span class="visual-icon">🛡️</span><strong>Best Practices</strong><span>TLS 1.3 | ECDHE | HSTS | 90d validity | OCSP stapling</span></div>
+                    <div class="visual-card"><span class="visual-icon">🧪</span><strong>LAB</strong><span>6 exercises — cert-manager → HSTS → monitoring → mTLS → rotation</span></div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 KEY TAKEAWAYS
+                 ═══════════════════════════════════════════════════ -->
+            <div class="section-block" id="ch35-key-takeaways">
+                <h3>Key Takeaways — Chapter 35</h3>
+                <div class="anatomy-card"><h5>🔑 Core Principles</h5><ul>
+                    <li><strong>cert-manager is a non-negotiable Kubernetes component</strong> — Manually managing TLS in Kubernetes is a recipe for outages. Let cert-manager own the entire lifecycle.</li>
+                    <li><strong>Monitor expiry at MULTIPLE layers</strong> — Internal (cert-manager metrics) + External (blackbox_exporter) + Alerting (PrometheusRules). Never rely on a single source of truth for expiry.</li>
+                    <li><strong>mTLS is the foundation of zero-trust networking</strong> — In a production microservices environment, every service should prove its identity on every call. Use a service mesh to handle the complexity.</li>
+                    <li><strong>Short-lived certificates are MORE secure</strong> — 90-day certs limit the blast radius of a compromised key. Automation (cert-manager) makes short-lived certs operationally feasible.</li>
+                    <li><strong>Practice certificate rotation BEFORE it's an emergency</strong> — The worst time to learn certificate rotation is when your production site is down. Run the LAB exercises quarterly.</li>
+                    <li><strong>openssl is your TLS stethoscope</strong> — Master <code>s_client</code>, <code>x509 -text</code>, <code>verify</code>, and modulus comparison. These commands diagnose 90% of TLS issues in seconds.</li>
+                </ul></div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 KEY TERMINOLOGY
+                 ═══════════════════════════════════════════════════ -->
+            <div class="anatomy-card"><h5>📖 Key Terminology — TLS & Certificates</h5>
+                <table class="term-table"><tr><td><strong>ACME</strong></td><td>Automated Certificate Management Environment — protocol used by Let's Encrypt for automated domain validation and certificate issuance</td></tr><tr><td><strong>cert-manager</strong></td><td>Kubernetes-native certificate controller. Automates issuance and renewal of TLS certificates via ACME or internal CAs</td></tr><tr><td><strong>CSR</strong></td><td>Certificate Signing Request — the signed request a client sends to a CA to obtain a certificate. Contains the public key and claimed identity</td></tr><tr><td><strong>Intermediate CA</strong></td><td>A subordinate CA whose certificate is signed by the Root CA. The intermediate signs leaf certificates. Root CA stays offline</td></tr><tr><td><strong>Chain of Trust</strong></td><td>Leaf cert → Intermediate CA cert → Root CA cert. Every link must be valid for the entire chain to be trusted</td></tr><tr><td><strong>SAN</strong></td><td>Subject Alternative Name — extension that lists all domains/IPs the certificate is valid for. Replaces the deprecated Common Name (CN) field</td></tr><tr><td><strong>OCSP Stapling</strong></td><td>The server includes a cached OCSP response in the TLS handshake, proving the certificate hasn't been revoked without the client making a separate OCSP request</td></tr><tr><td><strong>SPIFFE</strong></td><td>Secure Production Identity Framework for Everyone — a standard for workload identity and mTLS in cloud-native environments. SPIRE is the reference implementation</td></tr><tr><td><strong>HSTS</strong></td><td>HTTP Strict Transport Security — a response header that tells browsers to only connect via HTTPS, preventing SSL stripping attacks</td></tr><tr><td><strong>CT Logs</strong></td><td>Certificate Transparency Logs — publicly auditable append-only logs of all issued certificates. Prevents mis-issuance by CAs</td></tr></table>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 EXAM-STYLE QUESTIONS
+                 ═══════════════════════════════════════════════════ -->
+            <div class="net-exam-questions"><h4>📋 Exam-Style Questions</h4>
+                <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">Explain the difference between standard TLS and mTLS. In what scenario would you choose mTLS over standard TLS + API keys?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Standard TLS: Only the SERVER presents a certificate. Client authenticates via other means (JWT, API keys, OAuth). mTLS: BOTH client AND server present certificates. mTLS is preferred when: 1) Zero-trust architecture — every service must prove identity on every call, 2) No user-level authentication available (machine-to-machine), 3) Certificate-based identity is tied to SPIFFE/SPIRE workload identity, 4) Regulatory compliance requires cryptographic proof of both parties. mTLS has higher operational cost (managing client certs, rotation, revocation) so use a service mesh (Istio/Linkerd) to automate it.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">Your jobpost.anihpj.com certificate expires in 4 hours. You use cert-manager with Let's Encrypt. Walk through your immediate actions using a dual-secret swap strategy.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><div class="eq-answer-diagram"><pre>┌────────────────────────────────────────────────────────────────┐
+│ IMMEDIATE (T-4 hours):                                          │
+│  1. Check cert-manager status:                                  │
+│     kubectl describe certificate jobpost-tls                    │
+│     → If "Ready: False" with ACME error, auto-renewal failed    │
+│  2. Generate new cert manually:                                 │
+│     openssl req -new -newkey rsa:2048 -nodes \                  │
+│       -keyout tls-emergency.key -out tls-emergency.csr \        │
+│       -subj "/CN=jobpost.anihpj.com"                            │
+│     # Get signed by LE manually or use a backup cert             │
+│  3. Dual-secret swap:                                           │
+│     kubectl create secret tls jobpost-tls-emergency \           │
+│       --cert=tls-emergency.crt --key=tls-emergency.key          │
+│     kubectl edit ingress jobpost-ingress \                      │
+│       # Change secretName → jobpost-tls-emergency              │
+│  4. Verify: curl -vI https://jobpost.anihpj.com                 │
+│  5. Post-mortem: Why did cert-manager fail?                     │
+│     - ACME rate limit? DNS challenge timeout?                    │
+│     - Fix root cause before next renewal cycle                  │
+└────────────────────────────────────────────────────────────────┘</pre></div></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Describe the 3-layer TLS monitoring architecture. Why is a multi-layer approach necessary?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Layer 1 — Internal (cert-manager metrics): Scrapes cert-manager's Prometheus endpoint for expiration timestamps and ready status. Catches issues with the issuance process itself. Layer 2 — External (blackbox_exporter): Probes the TLS endpoint from OUTSIDE the cluster. Verifies the cert from the client's perspective, catching issues like missing intermediate certs or wrong cert served. Layer 3 — Alerting (PrometheusRules): Translates metrics into actionable alerts at 30d (warning) and 7d (critical). Multi-layer is necessary because: A single layer can lie. cert-manager metrics show "Ready" but the Ingress might reference the wrong Secret. blackbox_exporter shows the cert works but doesn't track WHEN it will expire from the source. Redundancy eliminates blind spots.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">You've configured cert-manager with a ClusterIssuer for Let's Encrypt. The Certificate resource shows "Ready: False" with the error "ACME order failed: 400 urn:ietf:params:acme:error:rateLimited". What happened and how do you fix it?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Let's Encrypt rate limit triggered. Production LE has strict limits: 5 certificates per domain per week, 5 duplicate certificates per week. Common causes: 1) Repeatedly deleting/recreating the Certificate resource (each creates a new order), 2) ClusterIssuer recreation resets the ACME account, 3) Testing with production endpoint instead of staging. Fix: 1) Wait until the rate limit resets (max 1 week), 2) Switch to staging ClusterIssuer for testing: <code>letsencrypt-staging</code> (50 certs/week), 3) Use <code>kubectl describe certificate</code> to check the order state, 4) Consider DNS-01 challenge if HTTP-01 is flaky (DNS-01 has fewer rate limits). Prevention: Always test with staging first. Use <code>disableAccountKeyGeneration: true</code> on ClusterIssuer to prevent accidental account recreation.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">Compare the four certificate rotation strategies. Which would you use for a PCI-DSS compliant payment processing service and why?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>For PCI-DSS (which requires audit trails and formal change control): Use Strategy 4 (Blue/Green Cert Swap). Rationale: 1) Pre-deployment validation — the new cert can be tested against the PCI compliance scanner BEFORE it serves real traffic, 2) Atomic cut-over — DNS change allows instant rollback if the new cert fails validation, 3) Audit trail — the blue/green process creates clear audit events: new cert deployed → tested → cut-over → old cert decommissioned. Strategy 1 (auto-renew) is too opaque for PCI auditors. Strategy 2 (dual-secret) is faster but lacks pre-deployment validation. Strategy 3 (rolling restart) doesn't address cert validation. For non-PCI services, Strategy 1 (cert-manager auto-renew) + Strategy 3 (rolling restart) is sufficient.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">You deploy a new TLS certificate to a Kubernetes Secret. The application still serves the old certificate. What are the three most likely causes?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>1) <strong>Pod hasn't reloaded</strong> — Kubernetes Secrets mounted as volumes are auto-updated by the kubelet (within ~60s), but applications must watch for changes. Secrets mounted as ENV vars are NOT updated until pod restart. Fix: <code>kubectl rollout restart deployment</code>. 2) <strong>nginx-ingress cached the old cert</strong> — nginx-ingress reloads its config when it detects Ingress Secret changes, but large clusters have a reload delay. Check: <code>kubectl logs ingress-nginx-controller | grep "reloading"</code>. Fix: force reload with <code>kubectl delete pod</code> on the ingress controller. 3) <strong>Wrong Secret referenced</strong> — The Ingress still points to the OLD Secret name. <code>kubectl describe ingress</code> shows the TLS section. Fix: update <code>secretName</code> in the Ingress TLS spec.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">Write the openssl command to verify that a certificate's private key matches the public key in the certificate, AND explain what it checks.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><div class="eq-answer-diagram"><pre># Compare modulus (the mathematical heart of the key pair)
+$ openssl x509 -in tls.crt -noout -modulus | openssl md5
+(stdin)= a1b2c3d4e5f6...
+
+$ openssl rsa -in tls.key -noout -modulus | openssl md5
+(stdin)= a1b2c3d4e5f6...
+
+# Same hash → key pair matches ✓
+# Different hash → key mismatch ✗
+
+# What it checks:
+# The RSA modulus 'n' is derived from p×q (two large primes).
+# Both the certificate (public key) and the private key share the
+# same modulus 'n'. If the moduli match, the keys are a valid pair.
+# This is a one-way check: you can verify the public key matches
+# the private key WITHOUT exposing the private components (p, q, d)</pre></div></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">Explain HSTS with the <code>includeSubDomains</code> and <code>preload</code> directives. What risk does HSTS preloading mitigate?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>Strict-Transport-Security: max-age=31536000; includeSubDomains; preload</code>. max-age: Browser remembers this domain is HTTPS-only for 1 year. includeSubDomains: Applies HSTS to *.anihpj.com (critical — attackers can spoof api.anihpj.com). preload: Domain is hardcoded into browser source code (hstspreload.org). This mitigates the "trust-on-first-use" attack: Without preload, a user's FIRST visit to your site could be intercepted via SSL stripping (the attacker prevents the HTTPS redirect). With preload, the browser KNOWS to use HTTPS even before the first connection. Risk: Once preloaded, ALL subdomains MUST have valid HTTPS — revocation from the preload list takes months.</p></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">Design a TLS certificate hierarchy for anihpj with 3 environments (dev/staging/prod), internal services (mTLS), and external endpoints (public TLS).</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><div class="eq-answer-diagram"><pre>┌────────────────────────────────────────────────────────────────┐
+│ ANIHPJ TLS CERTIFICATE HIERARCHY:                               │
+│                                                                 │
+│ ROOT CA (Offline, air-gapped, HSM-backed):                      │
+│   └── Internal PKI Intermediate CA (online, signs internal certs)│
+│        ├── Dev cluster certs (30d, auto-renewed by cert-manager) │
+│        ├── Staging cluster certs (90d)                            │
+│        ├── Production internal certs for mTLS (90d)              │
+│        │    ├── payment-service.anihpj.local                     │
+│        │    ├── job-service.anihpj.local                         │
+│        │    └── user-service.anihpj.local                        │
+│        └── SPIFFE SPIFFE IDs for workload identity               │
+│            └── spiffe://anihpj.com/ns/prod/sa/payment-svc       │
+│                                                                 │
+│ PUBLIC-FACING (Let's Encrypt via cert-manager):                   │
+│   ├── jobpost.anihpj.com (LE prod, 90d, auto-renew)             │
+│   ├── api.anihpj.com (LE prod, 90d, auto-renew)                 │
+│   └── *.anihpj.com wildcard via DNS-01 challenge                │
+│                                                                 │
+│ RATIONALE:                                                       │
+│ - Internal PKI for mTLS: full control, short-lived certs,        │
+│   SPIFFE integration. Not dependent on external service.         │
+│ - Let's Encrypt for public: free, automated, widely trusted.     │
+│ - Separate internal/external CAs: compromise of internal CA      │
+│   doesn't affect public trust.                                   │
+└────────────────────────────────────────────────────────────────┘</pre></div></div></details></div>
+
+                <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">You're debugging a production TLS outage. <code>curl https://jobpost.anihpj.com</code> returns <code>SSL certificate problem: unable to get local issuer certificate</code>. List the diagnostic steps in order and the openssl commands you'd use at each step.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><div class="eq-answer-diagram"><pre>┌────────────────────────────────────────────────────────────────┐
+│ SYSTEMATIC TLS DEBUGGING — "Unable to get local issuer cert"     │
+│                                                                 │
+│ STEP 1: Fetch remote cert, check chain:                          │
+│ $ openssl s_client -connect jobpost.anihpj.com:443 \             │
+│     -servername jobpost.anihpj.com -showcerts 2>&1 | \           │
+│     grep -E "depth|verify|subject|issuer"                       │
+│ → Check if intermediate cert is missing from the chain           │
+│                                                                 │
+│ STEP 2: Verify against system trust store:                       │
+│ $ openssl s_client -connect jobpost.anihpj.com:443 \             │
+│     -CAfile /etc/ssl/certs/ca-certificates.crt -servername \    │
+│     jobpost.anihpj.com                                          │
+│ → If this works but Step 1 fails, the SERVER isn't sending the   │
+│   full chain (leaf + intermediate). Fix: concatenate.            │
+│                                                                 │
+│ STEP 3: Check the Secret contents in K8s:                        │
+│ $ kubectl get secret jobpost-tls -o jsonpath='{.data.tls\.crt}' │
+│     | base64 -d | openssl x509 -noout -subject -issuer          │
+│ → Verify tls.crt contains the full chain, not just the leaf      │
+│                                                                 │
+│ STEP 4: Check if cert-manager issued full chain:                 │
+│ $ kubectl describe certificate jobpost-tls                      │
+│ → Look for "Full Chain" in events or status                      │
+│                                                                 │
+│ STEP 5: Verify intermediate is in the same Secret:               │
+│ $ openssl crl2pkcs7 -nocrl -certfile fullchain.pem | \           │
+│     openssl pkcs7 -print_certs -noout                           │
+│ → Should show 2+ certs: leaf + intermediate(+ root)              │
+│                                                                 │
+│ ROOT CAUSE (90% of cases):                                       │
+│ The TLS Secret only contains the leaf cert, not the              │
+│ intermediate. cert-manager Certificate resource's secretName     │
+│ stores tls.crt as FULL CHAIN by default. If manually created,    │
+│ you likely only put the leaf cert.                               │
+└────────────────────────────────────────────────────────────────┘</pre></div></div></details></div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 PRACTICE DRILLS
+                 ═══════════════════════════════════════════════════ -->
+            <div class="net-practice-drill"><h4>🎯 Practice Drills — TLS Mastery</h4>
+                <div class="drill-item"><span class="drill-num">Drill 1</span><strong>Speed Run: Certificate Issuance</strong><p>From scratch (no existing cert-manager): install cert-manager, create ClusterIssuer, create Certificate, configure Ingress — all under 10 minutes. Time yourself. The goal is muscle memory for future incidents.</p></div>
+                <div class="drill-item"><span class="drill-num">Drill 2</span><strong>Broken TLS Scenarios</strong><p>Have a partner break TLS in 5 different ways (expired cert, missing intermediate, wrong SAN, expired CA, mismatched key pair). Diagnose and fix each within 3 minutes using ONLY openssl commands. No browser or GUI.</p></div>
+                <div class="drill-item"><span class="drill-num">Drill 3</span><strong>mTLS Configuration</strong><p>Set up mTLS between two services WITHOUT a service mesh. Create internal CA, generate client/server certs, configure both services, verify with curl. Then do it AGAIN with Istio and compare the effort difference.</p></div>
+                <div class="drill-item"><span class="drill-num">Drill 4</span><strong>Alerting Validation</strong><p>Create a cert with 25-day validity. Deploy it. Verify Prometheus scrapes the metric. Verify the CertificateExpiringSoon alert fires within 5 minutes. Fix it. Verify the alert resolves. Repeat for 6-day validity (critical alert).</p></div>
+                <div class="drill-item"><span class="drill-num">Drill 5</span><strong>Let's Encrypt Rate Limit Recovery</strong><p>Simulate hitting LE's rate limit (create/delete Certificate 5+ times). Document the exact error message, the wait period, and the workaround (staging cluster issuer). Write the runbook for other engineers.</p></div>
+                <div class="drill-item"><span class="drill-num">Drill 6</span><strong>Zero-Downtime Rotation Under Load</strong><p>Generate 1000 req/sec load. Perform all 4 rotation strategies. Measure: did ANY request fail? What was the switch-over time? Which strategy was fastest? Document your findings.</p></div>
+            </div>
         </div>
     </section>
 
