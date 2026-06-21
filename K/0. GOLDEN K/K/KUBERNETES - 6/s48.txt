@@ -1,0 +1,105 @@
+owner@anih:~$ # ============================================
+# SCENARIO S48: Pod Anti-Affinity — Wrong topologyKey
+# ============================================
+kubectl create namespace anihpj
+cat << 'EOF' | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-web
+  namespace: anihpj
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-web
+  template:
+    metadata:
+      labels:
+        app: anihpj-web
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: anihpj-web
+            topologyKey: "node-role"  # ❌ BUG! No node has this label!
+      containers:
+      - name: web
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+EOF
+
+# Check pods — ALL will be PENDING forever!
+kubectl get pods -n anihpj -o wide
+kubectl describe pod -n anihpj -l app=anihpj-web | grep -A3 Events
+namespace/anihpj created
+deployment.apps/anihpj-web created
+NAME                          READY   STATUS              RESTARTS   AGE   IP       NODE   NOMINATED NODE   READINESS GATES
+anihpj-web-7f968b66bd-jxsb5   0/1     ContainerCreating   0          0s    <none>   wk2    <none>           <none>
+anihpj-web-7f968b66bd-x7lz7   0/1     ContainerCreating   0          0s    <none>   wk3    <none>           <none>
+anihpj-web-7f968b66bd-zr9lw   0/1     ContainerCreating   0          0s    <none>   wk1    <none>           <none>
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  0s    default-scheduler  Successfully assigned anihpj/anihpj-web-7f968b66bd-jxsb5 to wk2
+--
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  0s    default-scheduler  Successfully assigned anihpj/anihpj-web-7f968b66bd-x7lz7 to wk3
+--
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  0s    default-scheduler  Successfully assigned anihpj/anihpj-web-7f968b66bd-zr9lw to wk1
+owner@anih:~$ kubectl get pods -n anihpj -o wide
+NAME                          READY   STATUS    RESTARTS   AGE   IP           NODE   NOMINATED NODE   READINESS GATES
+anihpj-web-7f968b66bd-jxsb5   1/1     Running   0          8s    10.244.3.8   wk2    <none>           <none>
+anihpj-web-7f968b66bd-x7lz7   1/1     Running   0          8s    10.244.1.8   wk3    <none>           <none>
+anihpj-web-7f968b66bd-zr9lw   1/1     Running   0          8s    10.244.2.9   wk1    <none>           <none>
+owner@anih:~$ # Fix: Replace "node-role" with "kubernetes.io/hostname"
+kubectl delete deploy anihpj-web -n anihpj
+cat << 'EOF' | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anihpj-web
+  namespace: anihpj
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: anihpj-web
+  template:
+    metadata:
+      labels:
+        app: anihpj-web
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: anihpj-web
+            topologyKey: "kubernetes.io/hostname"  # ✅ FIXED! Built-in label on every node
+      containers:
+      - name: web
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+EOF
+kubectl rollout status deploy/anihpj-web -n anihpj
+kubectl get pods -n anihpj -o wide
+deployment.apps "anihpj-web" deleted from anihpj namespace
+deployment.apps/anihpj-web created
+Waiting for deployment "anihpj-web" rollout to finish: 0 of 3 updated replicas are available...
+Waiting for deployment "anihpj-web" rollout to finish: 1 of 3 updated replicas are available...
+Waiting for deployment "anihpj-web" rollout to finish: 2 of 3 updated replicas are available...
+deployment "anihpj-web" successfully rolled out
+NAME                          READY   STATUS    RESTARTS   AGE   IP            NODE   NOMINATED NODE   READINESS GATES
+anihpj-web-84657bc65c-8skxw   1/1     Running   0          2s    10.244.3.9    wk2    <none>           <none>
+anihpj-web-84657bc65c-b5v48   1/1     Running   0          2s    10.244.2.10   wk1    <none>           <none>
+anihpj-web-84657bc65c-n528n   1/1     Running   0          2s    10.244.1.9    wk3    <none>           <none>
