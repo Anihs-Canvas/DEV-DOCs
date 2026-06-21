@@ -7102,6 +7102,39 @@ docker exec web ping -c 2 db
             <h5>📖 kube-proxy Modes — iptables vs IPVS</h5>
             <p><strong>iptables</strong> (default): Writes iptables rules with random backend selection. Good up to ~5000 Services. <strong>IPVS</strong>: In-kernel L4 load balancer with O(1) hash table lookup. Scales to 10,000+ Services. Enable with <code>--proxy-mode=ipvs</code>. <strong>Userspace</strong> (legacy): kube-proxy proxies every packet through user space. Slowest — not for production.</p>
         </div>
+
+        <div class="info-box note">
+            <h5>📖 Container Runtimes Deep Dive — CRI, OCI, and the Runtime Landscape</h5>
+            <p>Kubernetes doesn't run containers directly. It talks to a Container Runtime via <strong>CRI</strong> (Container Runtime Interface) — a gRPC API that standardizes how kubelet communicates with ANY runtime. The runtime then uses <strong>OCI</strong> (Open Container Initiative) standards to actually create and run containers.</p>
+            <p><strong>The Evolution:</strong> Pre-1.24, Docker was supported via <code>dockershim</code> (a CRI adapter inside kubelet). Since 1.24, dockershim is REMOVED. You MUST use a CRI-compliant runtime. Docker images still work — they're OCI-compatible. You just can't use the Docker daemon directly.</p>
+            <div class="compare-table"><table>
+                <thead><tr><th>Runtime</th><th>Type</th><th>Footprint</th><th>Best For</th><th>CRI Socket</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>containerd</strong></td><td>High-level CRI</td><td>~50MB</td><td>Default for most K8s distros. Stable, well-tested.</td><td><code>unix:///run/containerd/containerd.sock</code></td></tr>
+                    <tr><td><strong>CRI-O</strong></td><td>High-level CRI</td><td>~40MB</td><td>Purpose-built for K8s. No Docker compatibility layer. Red Hat's default.</td><td><code>unix:///var/run/crio/crio.sock</code></td></tr>
+                    <tr><td><strong>gVisor</strong></td><td>Sandbox (runsc)</td><td>~100MB</td><td>User-space kernel. Each container gets its OWN kernel. High security for untrusted workloads.</td><td>Via containerd (RuntimeClass)</td></tr>
+                    <tr><td><strong>Kata Containers</strong></td><td>Sandbox (VM)</td><td>~150MB</td><td>Each pod runs in a lightweight VM. Strongest isolation. Hardware virtualization required.</td><td>Via containerd/CRI-O (RuntimeClass)</td></tr>
+                </tbody>
+            </table></div>
+            <p><strong>How it works:</strong> kubelet → CRI gRPC call (<code>RunPodSandbox</code>, <code>CreateContainer</code>) → containerd → OCI runtime (runc) → Linux namespaces + cgroups → your process. When you run <code>kubectl logs</code>, kubelet makes a CRI call to get stdout/stderr from the container runtime. Everything goes through CRI.</p>
+            <p><strong>RuntimeClass example — run untrusted workload in gVisor:</strong></p>
+            <pre><code class="language-yaml">apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: untrusted-pod
+spec:
+  runtimeClassName: gvisor  # This pod gets its own user-space kernel
+  containers:
+  - name: app
+    image: nginx</code></pre>
+            <p>As a platform engineer, you configure which runtimes are available per node and enforce RuntimeClass via admission policies. Finance pods might require Kata for compliance; dev pods use containerd.</p>
+        </div>
         </div>
 
         <!-- 6.4 Pod Creation Journey -->
@@ -7162,6 +7195,64 @@ docker exec web ping -c 2 db
                 <tr><td><strong>External-to-Pod</strong></td><td>NodePort (30000-32767), LoadBalancer (cloud LB), or Ingress (L7 routing). Traffic enters the cluster through these.</td><td>User visits anihpj.com → Cloud LB → NodePort 30080 → kube-proxy → pod 10.0.1.5:8000.</td></tr>
             </tbody>
         </table></div>
+
+        <div class="diagram-container">
+            <div class="diagram-title">CNI PLUGIN COMPARISON — Calico, Cilium, Flannel, Weave</div>
+            <pre class="diagram-text">
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                        CNI PLUGIN LANDSCAPE                              │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  FLANNEL (Simplest)                                                  │
+  │  How: Overlay network (VXLAN/host-gw). Every pod gets IP from        │
+  │  node's subnet. Packets encapsulated in VXLAN between nodes.         │
+  │  Pros: Dead simple setup. Cons: No NetworkPolicy support (without    │
+  │  additional plugins). Extra overhead from encapsulation.             │
+  │  VS Code:
+  │  Best For: Learning K8s, small clusters, simple networking needs.    │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  CALICO (Most Popular, Enterprise-Grade)                             │
+  │  How: Can use BGP (no overlay!) or VXLAN/IPIP. Direct routing with   │
+  │  BGP means NO encapsulation overhead — near-native performance.      │
+  │  Pros: NetworkPolicies (iptables OR eBPF), BGP for performance.      │
+  │  Cons: BGP requires router support or full mesh. More config.        │
+  │  VS Code:
+  │  Best For: Production clusters needing policies + performance.       │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  CILIUM (eBPF-Powered, Next-Gen)                                     │
+  │  How: Replaces kube-proxy AND CNI. Uses eBPF to program kernel       │
+  │  directly — bypasses iptables entirely. Hubble for observability.    │
+  │  Pros: Fastest (eBPF), built-in observability, L7 policies,          │
+  │  service mesh replacement. Cons: Requires newer kernel (≥ 4.19).     │
+  │  VS Code:                                                            │
+  │  Best For: High-performance, security-focused, K8s-native platforms. │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ═══════════════════════════════════════════════════════════════════════════
+  DECISION MATRIX:
+  Just learning?          → Flannel
+  Production with policies? → Calico (iptables mode)
+  Production + performance? → Calico (BGP mode) or Cilium
+  Security + observability? → Cilium (eBPF + Hubble)
+  Multi-cluster mesh?       → Cilium Cluster Mesh
+  ═══════════════════════════════════════════════════════════════════════════
+            </pre>
+        </div>
+
+        <div class="scenario-box positive">
+            <h5>🎉 Real-World CNI Decision — anihpj Platform (3 Clusters)</h5>
+            <ul>
+                <li>✅ <strong>Dev cluster:</strong> Flannel — simple, no policies needed, fast setup for developers.</li>
+                <li>✅ <strong>Staging cluster:</strong> Calico (VXLAN mode) — NetworkPolicies to simulate production security. Moderate performance acceptable.</li>
+                <li>✅ <strong>Production cluster:</strong> Cilium (eBPF mode) — maximum performance, Hubble observability, L7 NetworkPolicies for PCI compliance (blocking SQL injection at kernel level!).</li>
+                <li>✅ <strong>Platform engineer's job:</strong> Not just picking one CNI — managing DIFFERENT CNIs per cluster based on requirements. The CNPE exam expects you to justify these choices.</li>
+            </ul>
+        </div>
         </div>
 
         <!-- 6.6 etcd -->
@@ -7260,6 +7351,112 @@ docker exec web ping -c 2 db
         <div class="info-box note">
             <h5>📖 Scheduler Scoring — How K8s Picks the Best Node</h5>
             <p>The scheduler uses 2 phases: <strong>Filtering</strong> (eliminate nodes that can't run the pod — insufficient resources, taint mismatch, port conflicts) and <strong>Scoring</strong> (rank survivors by preference). Key scoring plugins: NodeResourcesFit (prefers less-loaded nodes), ImageLocality (prefers nodes that already have the image cached), PodTopologySpread (spreads pods across zones for HA). Highest total score wins. Tie → random pick.</p>
+        </div>
+
+        <div class="diagram-container">
+            <div class="diagram-title">SCHEDULER SCORING — How a Node Wins the Pod</div>
+            <pre class="diagram-text">
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  SCHEDULER DECISION: Where should anihpj-web-xyz run?                    │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  AVAILABLE NODES (3 workers):
+  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+  │ Worker-1     │  │ Worker-2     │  │ Worker-3     │
+  │ CPU: 2/4     │  │ CPU: 3.5/4   │  │ CPU: 1/4     │
+  │ Mem: 3/8Gi   │  │ Mem: 7/8Gi   │  │ Mem: 2/8Gi   │
+  │ Disk: 50%    │  │ Disk: 85%    │  │ Disk: 20%    │
+  │              │  │              │  │              │
+  │ taint: none  │  │ taint: none  │  │ taint:        │
+  │              │  │              │  │ critical=true │
+  │ zone: us-    │  │ zone: us-    │  │ zone: us-     │
+  │ east-1a      │  │ east-1b      │  │ east-1c       │
+  └──────────────┘  └──────────────┘  └──────────────┘
+
+  ═══════════════════════════════════════════════════════════════════════════
+
+  PHASE 1: FILTERING (eliminate impossible)
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ Worker-3: ❌ ELIMINATED — has taint critical=true, pod has no          │
+  │ toleration.                                                           │
+  │ Worker-1: ✅ PASSES — enough CPU (needs 250m), memory (needs 256Mi)    │
+  │ Worker-2: ✅ PASSES — enough resources                                 │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  PHASE 2: SCORING (rank the survivors)
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ Plugin              │ Worker-1 Score │ Worker-2 Score │ Weight        │
+  ├──────────────────────┼────────────────┼────────────────┼───────────────┤
+  │ NodeResourcesFit     │ 8 (more free)  │ 3 (nearly full)│ 1 (default)   │
+  │ ImageLocality        │ 10 (cached!)   │ 0 (needs pull) │ 1             │
+  │ PodTopologySpread    │ 5 (1a has pod) │ 8 (1b, fewer)  │ 2             │
+  │ NodeAffinity         │ 10 (matched)   │ 10 (matched)   │ 1             │
+  ├──────────────────────┼────────────────┼────────────────┼───────────────┤
+  │ TOTAL WEIGHTED SCORE │ 8+10+10+10=38  │ 3+0+16+10=29   │               │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ═══════════════════════════════════════════════════════════════════════════
+  🏆 WINNER: Worker-1 (score 38 vs 29)
+  Scheduler updates Pod.spec.nodeName = "worker-1" → kubelet takes over
+  ═══════════════════════════════════════════════════════════════════════════
+            </pre>
+        </div>
+
+        <div class="info-box tip">
+            <h5>💡 kubeadm Bootstrap Walkthrough — How the Control Plane Comes Alive</h5>
+            <p>When you run <code>kubeadm init</code>, here's exactly what happens step-by-step:</p>
+            <pre><code class="language-bash"># 1. Preflight checks — are we ready?
+kubeadm init phase preflight
+# [preflight] Running pre-flight checks
+# [preflight] Pulling images required for setting up a Kubernetes cluster
+
+# 2. Generate self-signed CA certificate (valid 10 years)
+kubeadm init phase certs all
+# [certs] Generated ca certificate and key
+# [certs] Generated apiserver certificate and key
+# [certs] apiserver serving cert is signed for DNS names [kubernetes, ...]
+# [certs] Generated etcd/ca certificate and key
+
+# 3. Write kubeconfig files for controller-manager, scheduler, kubelet, admin
+kubeadm init phase kubeconfig all
+# [kubeconfig] Wrote "admin.conf" — THIS IS YOUR ~/.kube/config
+
+# 4. Generate static pod manifests (written to /etc/kubernetes/manifests/)
+kubeadm init phase control-plane all
+# [control-plane] Wrote static Pod manifest for kube-apiserver
+# [control-plane] Wrote static Pod manifest for kube-controller-manager
+# [control-plane] Wrote static Pod manifest for kube-scheduler
+
+# 5. Start local etcd (static pod)
+kubeadm init phase etcd local
+# [etcd] Wrote static Pod manifest for local etcd
+
+# 6. Wait for control plane to be healthy
+# kubelet watches /etc/kubernetes/manifests/ → starts all 4 pods
+# After ~30 seconds: kubectl get pods -n kube-system shows control plane
+
+# 7. Upload kubeadm/kubelet config to cluster as ConfigMaps
+kubeadm init phase upload-config all
+
+# 8. Mark the node as control-plane + add taints
+kubeadm init phase mark-control-plane
+
+# 9. Generate bootstrap token for joining workers
+kubeadm init phase bootstrap-token
+
+# 10. Install CoreDNS and kube-proxy as addons
+kubeadm init phase addon all</code></pre>
+            <p><strong>After init:</strong> kubelet runs as a systemd service. Control plane runs as static pods. You join workers with <code>kubeadm join &lt;IP&gt;:6443 --token &lt;token&gt; --discovery-token-ca-cert-hash sha256:&lt;hash&gt;</code>. Understanding this flow means you can troubleshoot ANY kubeadm cluster issue — from certificate expiration to manifest corruption.</p>
+        </div>
+
+        <div class="scenario-box">
+            <h5>😰 Control Plane Upgrade Gone Wrong — A Real Platform Engineer Story</h5>
+            <ul>
+                <li>🔴 <strong>Scenario:</strong> You run <code>kubeadm upgrade apply v1.29.0</code>. The new kube-apiserver won't start. <code>kubectl</code> is dead. What now?</li>
+                <li>🔴 <strong>Diagnosis:</strong> SSH to the control plane node. Check <code>crictl ps | grep kube-apiserver</code> — no container. Check <code>journalctl -u kubelet -f</code> — kubelet says "manifest parsing error: unknown field 'encryptionAlgorithm'." The new API server manifest has a field the old kubelet doesn't understand.</li>
+                <li>🔴 <strong>Fix:</strong> Edit <code>/etc/kubernetes/manifests/kube-apiserver.yaml</code>, remove the unknown field. Kubelet detects the change, restarts the API server. Within 30 seconds, kubectl works again. This is why you ALWAYS have SSH access to control plane nodes.</li>
+                <li>🟡 <strong>Lesson:</strong> <code>kubectl</code> relies on the API server. When the API server is down, you need node-level access. Always maintain both paths: API access (kubectl) AND node access (SSH/journalctl/crictl).</li>
+            </ul>
         </div>
         </div>
 
@@ -7573,6 +7770,20 @@ kubectl uncordon $NODE</code></pre>
 
         <p><strong>anihpj-web Pod:</strong> Contains 2 containers — Nginx (reverse proxy, port 80) + Gunicorn/Django (app, port 8000). They share the pod IP and can communicate via localhost. Nginx proxies to <code>http://127.0.0.1:8000</code>.</p>
 
+        <div class="info-box note">
+            <h5>📖 Multi-Container Pod Design Patterns — Sidecar, Ambassador, Adapter</h5>
+            <p>When should you put multiple containers in ONE pod vs separate pods? The rule: <strong>same pod = same lifecycle</strong>. Containers in a pod are scheduled together, scaled together, and die together. They share network (localhost), IPC, and volumes.</p>
+            <div class="compare-table"><table>
+                <thead><tr><th>Pattern</th><th>What It Does</th><th>anihpj Example</th><th>Other Examples</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>SIDECAR</strong></td><td>Enhances the main container without changing it. Runs alongside, shares resources.</td><td><strong>Nginx sidecar:</strong> Reverse proxies to Gunicorn. Handles TLS termination, static files, rate limiting. Gunicorn doesn't know Nginx exists — it just listens on localhost:8000.</td><td>Istio Envoy proxy, logging sidecar (Fluentd), Cloud SQL Auth proxy</td></tr>
+                    <tr><td><strong>AMBASSADOR</strong></td><td>Proxies external connections. Main container talks to localhost, ambassador handles external complexity.</td><td><strong>Redis Ambassador:</strong> If Redis was external (AWS ElastiCache), an ambassador container handles TLS + auth. Django talks to localhost:6379 — ambassador proxies to external Redis.</td><td>Twemproxy for sharded Redis, any external DB proxy</td></tr>
+                    <tr><td><strong>ADAPTER</strong></td><td>Transforms output. Main container emits in one format, adapter converts to standard format.</td><td><strong>Metrics adapter:</strong> Django emits custom metrics on :9090. Adapter container scrapes them, converts to Prometheus format on :9091. Prometheus scrapes :9091.</td><td>Prometheus exporters (Redis, Postgres), log format normalizers</td></tr>
+                </tbody>
+            </table></div>
+            <p><strong>When NOT to use multi-container pods:</strong> If containers have independent lifecycles (different scaling needs, different update cadences), use separate Deployments + Services. Only group containers that MUST share fate.</p>
+        </div>
+
         <div class="info-box tip">
             <h5>💡 Init Containers — Run Setup Before Your Main App Starts</h5>
             <p>Init containers run BEFORE app containers and must complete successfully before the app starts. They're perfect for: waiting for a database to be ready, running migrations, setting up permissions. Unlike app containers, init containers run SEQUENTIALLY (A finishes → B starts → C starts → then app containers). If an init container fails, the pod restarts (depending on restartPolicy). anihpj example: an init container runs <code>python manage.py migrate</code> before Gunicorn starts — ensuring the database schema is up to date before any requests arrive.</p>
@@ -7717,6 +7928,21 @@ spec:
             <h5>⚠️ Rolling Update Strategy — maxSurge and maxUnavailable</h5>
             <p><strong>maxSurge:</strong> Maximum number of EXTRA pods allowed during update (over desired count). Default: 25% (1 extra per 4 desired). <strong>maxUnavailable:</strong> Maximum number of pods that can be UNAVAILABLE during update. Default: 25%.</p>
             <p><strong>Production values for anihpj (3 replicas):</strong> <code>maxSurge: 1, maxUnavailable: 0</code> — creates 1 new pod before killing old one, never loses capacity. <strong>Development: maxSurge: 0, maxUnavailable: 1</strong> — kills old pod first (saves resources, tolerates brief downtime).</p>
+        </div>
+
+        <div class="info-box note">
+            <h5>📖 Deployment Strategies — Recreate vs RollingUpdate vs Blue/Green vs Canary</h5>
+            <p>Kubernetes Deployments natively support two strategies. For advanced strategies (Blue/Green, Canary), you need additional tools like Argo Rollouts or service meshes. Here's the full comparison:</p>
+            <div class="compare-table"><table>
+                <thead><tr><th>Strategy</th><th>How It Works</th><th>Downtime</th><th>Resources</th><th>Rollback</th><th>Best For</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Recreate</strong></td><td>Kill ALL old pods → create ALL new pods. Simple, brutal.</td><td>⚠️ YES — full downtime during pod replacement</td><td>Minimal (no overlap)</td><td>Instant (just old version)</td><td>Batch jobs, dev environments, stateful apps that can't have 2 instances</td></tr>
+                    <tr><td><strong>RollingUpdate</strong></td><td>Replace pods one-by-one. Old + new coexist during update.</td><td>✅ ZERO (if configured right)</td><td>+1 extra pod during update (maxSurge)</td><td><code>kubectl rollout undo</code></td><td>Most production workloads. Default K8s strategy.</td></tr>
+                    <tr><td><strong>Blue/Green</strong></td><td>Deploy entire new stack (green) alongside old (blue). Switch traffic via Service selector change.</td><td>✅ ZERO</td><td>2× full capacity (both stacks running)</td><td>Instant (switch selector back)</td><td>Critical workloads needing instant rollback. Requires Argo Rollouts or manual Service update.</td></tr>
+                    <tr><td><strong>Canary</strong></td><td>Route small % of traffic to new version. Gradually increase. Monitor for errors.</td><td>✅ ZERO</td><td>+X% extra (canary pods)</td><td>Instant (shift traffic back)</td><td>High-risk changes. Requires Argo Rollouts, Flagger, or service mesh (Istio/Linkerd).</td></tr>
+                </tbody>
+            </table></div>
+            <p><strong>anihpj strategy:</strong> RollingUpdate for web (stateless, 3 replicas, no downtime). Blue/Green for database schema changes (migrate → verify → switch). Canary for major Django version upgrades (route 5% traffic → check error rate → ramp to 100%). The CNPE exam asks you to CHOOSE the right strategy — not just implement it.</p>
         </div>
         </div>
 
@@ -7958,6 +8184,21 @@ spec:
         <div id="s7-7" class="section-block"><h4>7.7 ConfigMaps and Secrets</h4>
         <p>ConfigMap stores non-sensitive config. Secret stores sensitive data (base64 encoded, NOT encrypted by default). Both can be mounted as environment variables or files. anihpj ConfigMap: <code>DEBUG</code>, <code>ALLOWED_HOSTS</code>, <code>DB_HOST</code>. anihpj Secret: <code>DB_PASSWORD</code>, <code>SECRET_KEY</code>.</p>
         <div class="cnpe-exam-tip"><strong>🧠 CNPE Exam:</strong> Secrets are base64 ENCODED, not encrypted. Anyone with <code>kubectl get secret -o yaml</code> can decode them. Use Sealed Secrets, External Secrets Operator, or Vault for production.</div>
+
+        <div class="info-box note">
+            <h5>📖 Secret Management Tools — From Basic to Enterprise</h5>
+            <p>Base64-encoded Secrets in etcd are NOT production-ready. Here's the evolution of Secret management — and what platform engineers should deploy at each maturity level:</p>
+            <div class="compare-table"><table>
+                <thead><tr><th>Tool</th><th>How It Works</th><th>Encrypted in Git?</th><th>Auto-Rotate?</th><th>Complexity</th><th>Best For</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Encryption at Rest</strong></td><td>API server encrypts Secrets before writing to etcd. Built-in. Configure with EncryptionConfiguration.</td><td>N/A (etcd only)</td><td>❌ No</td><td>⭐ Low</td><td>First step. Every production cluster MUST enable this. Prevents etcd compromise = secret exposure.</td></tr>
+                    <tr><td><strong>Sealed Secrets</strong></td><td>Encrypt Secret with cluster's public key. Only that cluster can decrypt. Encrypted YAML is safe in Git.</td><td>✅ Yes</td><td>❌ No (manual)</td><td>⭐⭐ Medium</td><td>GitOps workflows. Devs commit encrypted secrets. Controller decrypts in cluster. Simple, effective.</td></tr>
+                    <tr><td><strong>External Secrets Operator</strong></td><td>Syncs secrets from external store (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp Vault) INTO K8s Secrets.</td><td>✅ Yes (in external store)</td><td>✅ Yes (if external store supports it)</td><td>⭐⭐⭐ Medium</td><td>Cloud-native. One ExternalSecret CRD → auto-syncs → K8s Secret stays updated. anihpj uses this for DB_PASSWORD from AWS Secrets Manager.</td></tr>
+                    <tr><td><strong>HashiCorp Vault + Vault CSI</strong></td><td>Secrets NEVER touch etcd. Vault CSI provider mounts secrets directly into pod filesystem. App reads from file.</td><td>✅ Yes (in Vault)</td><td>✅ Yes (Vault dynamic secrets)</td><td>⭐⭐⭐⭐ High</td><td>Enterprise. Dynamic DB credentials (new user per pod!), audit logging, multi-cloud. Most secure — secret never exists as K8s object.</td></tr>
+                </tbody>
+            </table></div>
+            <p><strong>anihpj secret flow (Production):</strong> Developer creates <code>ExternalSecret</code> CRD → ESO fetches <code>DB_PASSWORD</code> from AWS Secrets Manager → creates K8s Secret → Deployment mounts it via env var → Django reads <code>os.environ['DB_PASSWORD']</code>. Rotating the secret: update AWS Secrets Manager → ESO auto-syncs to K8s → trigger <code>rollout restart</code>.</p>
+        </div>
 
         <div class="info-box note">
             <h5>📖 Encryption at Rest — Making Secrets Actually Secret</h5>
@@ -8286,6 +8527,74 @@ kubectl get pods -n anihpj --show-labels</code></pre>
                 <tr><td><strong>k3d</strong></td><td>K3s in Docker</td><td>Ultra-lightweight. K3s is a certified K8s distribution. Good for policy/security experiments.</td><td>15 sec</td><td>~300MB/node</td></tr>
             </tbody>
         </table></div>
+
+        <div class="info-box tip">
+            <h5>💡 Installation Guide — All 4 Tools on Ubuntu</h5>
+            <pre><code class="language-bash"># === kubeadm (requires 2+ VMs or multipass) ===
+# On each VM:
+sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt update && sudo apt install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl  # prevent auto-updates
+
+# Install container runtime (containerd)
+sudo apt install -y containerd
+sudo mkdir -p /etc/containerd
+containerd config default | sudo tee /etc/containerd/config.toml
+sudo systemctl restart containerd
+
+# On control-plane node:
+sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+mkdir -p $HOME/.kube && sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+# On worker nodes (use token from kubeadm init output):
+sudo kubeadm join <CONTROL_PLANE_IP>:6443 --token <TOKEN> --discovery-token-ca-cert-hash sha256:<HASH>
+
+# ═══════════════════════════════════════════════════════════════════
+
+# === kind (requires Docker) ===
+# On Ubuntu/Debian:
+[ $(uname -m) = x86_64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.22.0/kind-linux-amd64
+chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+
+# Create 3 clusters:
+kind create cluster --name dev
+kind create cluster --name staging
+kind create cluster --name prod
+
+# ═══════════════════════════════════════════════════════════════════
+
+# === minikube ===
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+minikube start --driver=docker --cpus=2 --memory=4096
+
+# ═══════════════════════════════════════════════════════════════════
+
+# === k3d (requires Docker) ===
+curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+k3d cluster create security --servers 1 --agents 2
+
+# ═══════════════════════════════════════════════════════════════════
+
+# Verify all clusters are accessible:
+kubectl config get-contexts
+# Should show 6 contexts: cluster1-admin@cluster1, kind-dev, kind-staging,
+# kind-prod, minikube, k3d-security</code></pre>
+        </div>
+
+        <div class="scenario-box">
+            <h5>😰 "I destroyed my production cluster!" — A Context Horror Story</h5>
+            <ul>
+                <li>🔴 <strong>What happened:</strong> Platform engineer was debugging an issue. Switched to kind-dev to test a fix. Got distracted by a Slack message. Came back, forgot to switch context. Ran <code>kubectl delete namespace anihpj</code> — but current-context was <strong>kind-prod</strong>, not kind-dev.</li>
+                <li>🔴 <strong>Result:</strong> The ENTIRE production namespace — including the Postgres StatefulSet and PVC — was deleted in 2 seconds. No confirmation prompt. No undo.</li>
+                <li>🔴 <strong>Recovery:</strong> Velero backup restored the namespace in ~5 minutes. PVC data was recovered from the backup. Downtime: 8 minutes. Root cause: no context verification before destructive commands.</li>
+                <li>🟡 <strong>Prevention:</strong> (1) Context in PS1 prompt. (2) <code>kubectl config current-context</code> before DELETE. (3) Production cluster uses a DIFFERENT kubeconfig file entirely — <code>export KUBECONFIG=~/.kube/prod-config</code> only when needed. (4) Enable <code>kubectl delete</code> dry-run: <code>alias kdelete='echo "Are you sure? Use: kubectl delete --dry-run=client ... first"'</code>.</li>
+            </ul>
+        </div>
         </div>
 
         <!-- 8.2 kubectl & kubeconfig -->
@@ -8321,6 +8630,18 @@ export PS1="[\u@\h \W \$(kubectl config current-context 2>/dev/null)]\$ "
         <div class="info-box tip">
             <h5>💡 kubeconfig Deep Dive — clusters, users, contexts</h5>
             <p><code>~/.kube/config</code> has 3 sections: <strong>clusters</strong> (API server URLs + CA certs), <strong>users</strong> (client certs + keys), and <strong>contexts</strong> (cluster + user + namespace combinations). A context is a pointer: it references a cluster and a user. <code>current-context</code> is the active one. Merge kubeconfigs with: <code>KUBECONFIG=~/.kube/config:~/.kube/config2 kubectl config view --flatten &gt; merged</code>. View with: <code>kubectl config view</code>.</p>
+        </div>
+
+        <div class="info-box note">
+            <h5>📖 kubeconfig Troubleshooting — "The connection to the server localhost:8080 was refused"</h5>
+            <p>This is the most common kubectl error for beginners. It means kubectl can't find a valid kubeconfig. Here's the debug flowchart:</p>
+            <ol>
+                <li><strong>Does the file exist?</strong> <code>ls -la ~/.kube/config</code>. If not, you never ran <code>kubeadm init</code> or copied the admin.conf.</li>
+                <li><strong>Is KUBECONFIG env var set?</strong> <code>echo $KUBECONFIG</code>. If set, it OVERRIDES <code>~/.kube/config</code>. Unset it or point it to the right file.</li>
+                <li><strong>Are the paths in the config valid?</strong> <code>kubectl config view</code> — check <code>certificate-authority</code>, <code>client-certificate</code>, <code>client-key</code> paths. They must be absolute paths or relative to <code>~/.kube/</code>.</li>
+                <li><strong>Is the server reachable?</strong> <code>curl -k https://SERVER_IP:6443/healthz</code>. If not, VPN or firewall might be blocking.</li>
+                <li><strong>Is the certificate still valid?</strong> <code>kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d | openssl x509 -noout -dates</code> — check <code>notAfter</code>. K8s CA certs expire after 10 years.</li>
+            </ol>
         </div>
         </div>
 
@@ -8808,6 +9129,65 @@ kubectl rollout restart deployment/anihpj-web -n anihpj
 kubectl get pods -n anihpj -w  # Watch recovery</code></pre>
                     </details>
                 </div>
+            </div>
+        </div>
+
+        <div class="section-block">
+            <h4>8.7 Day 2 Operations — Maintaining Your Lab Environment</h4>
+            <p>Setting up a lab is easy. Keeping it running, clean, and useful for weeks of study is the real challenge. Here's your maintenance playbook.</p>
+
+            <div class="info-box tip">
+                <h5>💡 Daily Startup Script — Get All 6 Clusters Ready in One Command</h5>
+                <pre><code class="language-bash">#!/bin/bash
+# lab-start.sh — Start all 6 clusters and verify
+set -e
+
+echo "=== Starting Lab Clusters ==="
+
+# kind clusters (if Docker is running, they auto-start)
+for cluster in dev staging prod; do
+  if kind get clusters | grep -q "^$cluster$"; then
+    echo "kind-$cluster: already exists"
+  else
+    kind create cluster --name $cluster
+  fi
+done
+
+# minikube
+minikube status &>/dev/null || minikube start
+
+# k3d
+k3d cluster list | grep -q security || k3d cluster create security
+
+echo ""
+echo "=== Current Contexts ==="
+kubectl config get-contexts
+echo ""
+echo "⚠️  Current: $(kubectl config current-context)"
+echo "✅ Lab ready!"</code></pre>
+            </div>
+
+            <div class="info-box note">
+                <h5>📖 Lab Resource Management — Don't Let Docker Eat Your Laptop</h5>
+                <p>6 clusters = a LOT of containers. Here's how to manage resources:</p>
+                <ul>
+                    <li><strong>Stop clusters you're not using:</strong> <code>kind delete cluster --name dev</code> and recreate later. Takes 30 seconds to restore.</li>
+                    <li><strong>Pause Docker:</strong> <code>docker pause $(docker ps -q)</code> freezes all containers. <code>docker unpause $(docker ps -aq)</code> to resume. CPU drops to zero while paused.</li>
+                    <li><strong>Monitor usage:</strong> <code>docker stats --no-stream</code> shows per-container CPU/memory. <code>docker system df</code> shows disk usage.</li>
+                    <li><strong>Clean up weekly:</strong> <code>docker system prune -a -f --volumes</code>. Removes unused images, containers, volumes. Frees GB of space.</li>
+                    <li><strong>Minimum lab:</strong> If resources are tight, run just 3 kind clusters + 1 k3d. That's ~2GB RAM vs ~6GB for all 6.</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h5>⚠️ Lab Backup Strategy — Protect Your Work</h5>
+                <p>You'll invest dozens of hours in your lab. Don't lose your work:</p>
+                <ul>
+                    <li><strong>Backup kubeconfig:</strong> <code>cp ~/.kube/config ~/.kube/config.backup.$(date +%Y%m%d)</code> — weekly. This is small but irreplaceable.</li>
+                    <li><strong>Backup your manifests:</strong> All anihpj YAML files should be in Git. <code>git push</code> daily. The lab is disposable; your code is not.</li>
+                    <li><strong>Backup etcd (kubeadm cluster):</strong> <code>ETCDCTL_API=3 etcdctl snapshot save /backup/etcd-$(date +%Y%m%d).db</code> — weekly. Test the restore: restore to a NEW data-dir and verify.</li>
+                    <li><strong>Disaster recovery test (monthly):</strong> Delete all kind clusters. Recreate from scratch. Re-deploy anihpj from Git. Time how long it takes. Target: under 15 minutes.</li>
+                </ul>
             </div>
         </div>
 

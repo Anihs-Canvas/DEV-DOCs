@@ -16709,6 +16709,26 @@ $ kubectl get pods -n kube-system -l k8s-app=kube-dns
                         <h5>⚠️ GOTCHA — CORS Is Enforced by the BROWSER, Not the Server</h5>
                         <p>CORS (Cross-Origin Resource Sharing) errors happen when a browser blocks a cross-origin request. The server sends <code>Access-Control-Allow-Origin</code> headers, but the BROWSER enforces them. curl, Postman, and backend-to-backend calls <strong>completely bypass CORS</strong>. If you get a CORS error in curl, the problem is something else (usually TLS, authentication, or the server returning a different error masked as CORS).</p>
                     </div>
+
+                    <div class="info-box note">
+                        <h5>🛡️ Security Headers — What Every Production API Should Have</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Header</th><th>Purpose</th><th>Example Value</th></tr></thead>
+                            <tbody>
+                                <tr><td><code>Strict-Transport-Security</code></td><td>HSTS: force browsers to use HTTPS only, never HTTP</td><td><code>max-age=31536000; includeSubDomains</code></td></tr>
+                                <tr><td><code>X-Content-Type-Options</code></td><td>Prevent MIME-type sniffing (browser guessing content type)</td><td><code>nosniff</code></td></tr>
+                                <tr><td><code>X-Frame-Options</code></td><td>Prevent clickjacking (your page embedded in an iframe)</td><td><code>DENY</code> or <code>SAMEORIGIN</code></td></tr>
+                                <tr><td><code>Content-Security-Policy</code></td><td>CSP: limit which resources can be loaded (scripts, images, fonts)</td><td><code>default-src 'self'; script-src 'self'</code></td></tr>
+                                <tr><td><code>Access-Control-Allow-Origin</code></td><td>CORS: which domains can call this API from a browser</td><td><code>https://jobpost.anihpj.com</code> (not <code>*</code> in production!)</td></tr>
+                            </tbody>
+                        </table>
+                        <pre><code><span class="comment"># CHECK SECURITY HEADERS ON ANY SITE:</span>
+$ curl -I https://anihpj.com 2>/dev/null | grep -iE 'strict-transport|content-security|x-frame|x-content|access-control'
+strict-transport-security: max-age=31536000; includeSubDomains
+x-content-type-options: nosniff
+x-frame-options: DENY
+<span class="comment"># These headers protect your users from common web attacks</span></code></pre>
+                    </div>
                 </div>
 
                 <!-- ─── Section 12.5: HTTP/1.1 Deep Dive ─── -->
@@ -16726,6 +16746,61 @@ $ kubectl get pods -n kube-system -l k8s-app=kube-dns
                                 <tr><td><strong>Head-of-Line Blocking</strong></td><td>Request 1 must complete before Request 2 can start on the same connection. A slow resource blocks everything behind it.</td><td>This is HTTP/1.1's fatal flaw. Fixed by multiplexing in HTTP/2.</td></tr>
                                 <tr><td><strong>Header Overhead</strong></td><td>Headers are plain text, repeated on every request (Cookie, User-Agent, Accept — same bytes every time).</td><td>Can be 500-800 bytes of headers per request. HPACK in HTTP/2 fixes this.</td></tr>
                                 <tr><td><strong>Chunked Encoding</strong></td><td>Send data without knowing Content-Length in advance. Each chunk has its own size prefix.</td><td>Useful for streaming. Still serial per connection.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>📦 Chunked Transfer Encoding — How Streaming Works in HTTP/1.1</h5>
+                        <p>When a server doesn't know the response size ahead of time (live data, large file generation, streaming), it uses <strong>Transfer-Encoding: chunked</strong> instead of Content-Length. The response body is sent in sized chunks — each chunk prefixed with its hex size, terminated by a zero-size chunk.</p>
+                        <pre><code><span class="comment"># ANATOMY OF A CHUNKED RESPONSE:</span>
+HTTP/1.1 200 OK
+Transfer-Encoding: chunked       <span class="comment"># ← Instead of Content-Length</span>
+
+1A\r\n                           <span class="comment"># Chunk 1: 0x1A = 26 bytes</span>
+{"status": "processing"...}\r\n   <span class="comment"># The 26 bytes of data</span>
+14\r\n                           <span class="comment"># Chunk 2: 0x14 = 20 bytes</span>
+{"progress": "50%"...}\r\n       <span class="comment"># The 20 bytes of data</span>
+0\r\n                            <span class="comment"># Final chunk: size 0 = END OF BODY</span>
+\r\n                             <span class="comment"># Trailer (optional headers after body)</span>
+
+<span class="comment"># SEE CHUNKED ENCODING IN ACTION:</span>
+$ curl -v http://example.com/stream --raw
+<span class="comment"># Look for "Transfer-Encoding: chunked" in response headers</span></code></pre>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🗄️ HTTP Caching Deep Dive — Cache-Control Directives You Must Know</h5>
+                        <p>HTTP caching is controlled by headers, not by the protocol itself. The <code>Cache-Control</code> header has powerful directives that control every aspect of caching behavior:</p>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Directive</th><th>Meaning</th><th>When to Use</th></tr></thead>
+                            <tbody>
+                                <tr><td><code>max-age=3600</code></td><td>Cache this response for 3600 seconds (1 hour)</td><td>Static assets (CSS, JS, images)</td></tr>
+                                <tr><td><code>no-cache</code></td><td>MUST revalidate with server before using cached copy (but CAN cache!)</td><td>API responses that change (but can use ETag)</td></tr>
+                                <tr><td><code>no-store</code></td><td>MUST NOT store ANY copy (not even in memory)</td><td>Banking data, PII, sensitive information</td></tr>
+                                <tr><td><code>public</code></td><td>Can be cached by any cache (CDN, browser, proxy)</td><td>Public API responses, static assets</td></tr>
+                                <tr><td><code>private</code></td><td>Only browser can cache (not CDN/proxy)</td><td>User-specific data, authenticated responses</td></tr>
+                                <tr><td><code>must-revalidate</code></td><td>MUST check with origin before using stale cached copy</td><td>Data that becomes dangerous if stale</td></tr>
+                                <tr><td><code>immutable</code></td><td>Content will NEVER change (no revalidation needed)</td><td>Versioned assets (style.v2.css)</td></tr>
+                            </tbody>
+                        </table>
+                        <pre><code><span class="comment"># ETag + If-None-Match = Smart Caching:</span>
+<span class="comment"># Server sends: ETag: "abc123" with response</span>
+<span class="comment"># Client sends: If-None-Match: "abc123" on next request</span>
+<span class="comment"># If unchanged → server returns 304 Not Modified (no body, saves bandwidth!)</span>
+<span class="comment"># If changed → server returns 200 OK with new ETag and full body</span></code></pre>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🔄 HTTP Pipelining vs Multiplexing — Why Pipelining Failed</h5>
+                        <p>HTTP/1.1 introduced <strong>pipelining</strong> — sending multiple requests on one connection without waiting for responses. In theory, this eliminates the serial request problem. In practice, it was a disaster:</p>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Feature</th><th>HTTP/1.1 Pipelining</th><th>HTTP/2 Multiplexing</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>How it works</strong></td><td>Send requests 1,2,3 on same connection. Responses MUST come back in order (1,2,3).</td><td>Send streams 1,3,5 on same connection. Responses can come in ANY order (interleaved frames).</td></tr>
+                                <tr><td><strong>HOL Blocking</strong></td><td>❌ SEVERE: Response 1 delays responses 2,3. One slow response blocks ALL behind it.</td><td>✅ Streams are independent — stream 5 can complete before stream 1.</td></tr>
+                                <tr><td><strong>Adoption</strong></td><td>❌ Basically abandoned. Browsers disabled it. Too many broken proxy implementations.</td><td>✅ Widely deployed. 50%+ of web traffic.</td></tr>
+                                <tr><td><strong>Why it failed</strong></td><td>Middleboxes (proxies, load balancers) assumed one-request-per-connection. They broke pipelining. No way to detect broken intermediaries.</td><td>Binary framing + TLS means middleboxes can't interfere with stream multiplexing.</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -16757,6 +16832,45 @@ $ kubectl get pods -n kube-system -l k8s-app=kube-dns
 │  ‣ Stream prioritization: client tells server what's important first  │
 │  ‣ STILL HAS TCP HOL BLOCKING: one lost packet blocks ALL streams!    │
 └──────────────────────────────────────────────────────────────────────┘</pre>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>📦 HTTP/2 Frame Types — The Binary Building Blocks</h5>
+                        <p>HTTP/2 communication happens through <strong>binary frames</strong> — each frame has a 9-byte header (length, type, flags, stream ID). There are 10 frame types:</p>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Frame Type</th><th>Code</th><th>Purpose</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>DATA</strong></td><td>0x0</td><td>Request/response body data. Can be split across multiple frames.</td></tr>
+                                <tr><td><strong>HEADERS</strong></td><td>0x1</td><td>HTTP headers (compressed with HPACK). Opens a new stream.</td></tr>
+                                <tr><td><strong>PRIORITY</strong></td><td>0x2</td><td>Stream priority and dependency (which stream depends on which).</td></tr>
+                                <tr><td><strong>RST_STREAM</strong></td><td>0x3</td><td>Abruptly terminate a stream (e.g., client cancels request).</td></tr>
+                                <tr><td><strong>SETTINGS</strong></td><td>0x4</td><td>Connection-level parameters (max concurrent streams, window size).</td></tr>
+                                <tr><td><strong>PUSH_PROMISE</strong></td><td>0x5</td><td>Server Push: "I'm about to send you style.css before you ask." (Deprecated)</td></tr>
+                                <tr><td><strong>PING</strong></td><td>0x6</td><td>Keep-alive and RTT measurement. Must be responded to with highest priority.</td></tr>
+                                <tr><td><strong>GOAWAY</strong></td><td>0x7</td><td>Graceful shutdown: "Stop creating new streams, finish existing ones."</td></tr>
+                                <tr><td><strong>WINDOW_UPDATE</strong></td><td>0x8</td><td>Flow control: "I have more buffer space, send more data."</td></tr>
+                                <tr><td><strong>CONTINUATION</strong></td><td>0x9</td><td>Continuation of a HEADERS/PUSH_PROMISE that didn't fit in one frame.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🗜️ HPACK Compression — How HTTP/2 Shrinks Headers</h5>
+                        <p>HTTP/1.1 headers are plain text repeated on every request (Cookie, User-Agent, Accept — same 500+ bytes every time). HPACK compresses headers using two tables:</p>
+                        <pre><code><span class="comment"># STATIC TABLE (61 predefined header fields — never changes):</span>
+<span class="comment"># Index 1:  :authority       Index 2:  :method GET</span>
+<span class="comment"># Index 3:  :method POST     Index 8:  :status 200</span>
+<span class="comment"># Index 32: cookie           Index 51: content-type</span>
+
+<span class="comment"># DYNAMIC TABLE (grows during connection — caches actual values):</span>
+<span class="comment"># After first request:  :authority: jobpost.anihpj.com → index 62</span>
+<span class="comment"># After first request:  cookie: session=abc123 → index 63</span>
+<span class="comment"># Next request just sends: index 62, index 63 (just 2 bytes each!)</span>
+
+<span class="comment"># REAL COMPRESSION RATIO (typical API):</span>
+<span class="comment"># First request:  ~500 bytes of headers</span>
+<span class="comment"># Second request: ~50 bytes of headers (90% compression!)</span>
+<span class="comment"># Third+ request: ~20 bytes of headers (96% compression!)</span></code></pre>
                     </div>
                 </div>
 
@@ -16914,6 +17028,813 @@ $ curl --http2 -v https://jobpost.anihpj.com -o /dev/null 2>&1 | grep "ALPN"
                     <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">Explain the CORS mechanism. Why does curl bypass CORS but browsers don't?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>CORS (Cross-Origin Resource Sharing) is enforced by BROWSERS, not servers. When a web page on domain-a.com tries to call api.domain-b.com, the browser sends a preflight OPTIONS request. The server responds with Access-Control-Allow-Origin headers. If the origin doesn't match, the browser blocks the request. curl, Postman, and backend code don't enforce CORS — they're not browsers.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>CORS is a browser security feature to prevent malicious websites from calling your APIs using the user's cookies. Server-to-server communication doesn't have this risk, so CORS doesn't apply. If curl gets a CORS error, the actual error is something else (usually a 4xx/5xx that the browser misreports as CORS).</p></div></details></div>
 
                     <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">How would you debug a slow API endpoint? List the curl commands and what each reveals.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>1. <code>curl -w timing_breakdown</code> → isolate DNS/TCP/TLS/TTFB phases. 2. <code>curl -v</code> → see full request/response headers, check for unexpected redirects. 3. <code>curl --resolve host:port:IP</code> → bypass DNS and hit a specific backend to isolate DNS/load balancer issues. 4. <code>curl -H "Host: ..." http://pod-ip:8000/</code> → bypass ingress and hit the pod directly. 5. Compare TTFB across multiple requests — consistent slowness = backend, variable = network/load balancer.</p></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>Systematic debugging: eliminate variables one at a time. Bypass DNS (--resolve). Bypass load balancer (direct to pod IP). Bypass TLS (use HTTP internally). Whatever's left is the actual problem.</p></div></details></div>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════════════════════════════════════
+                 CHAPTER 13 — TLS & SSL: Encryption, Certificates & Trust
+                 ════════════════════════════════════════════════════════════════════════ -->
+            <div id="ch13">
+                <div class="chapter-intro">
+                    <h3>Chapter 13: TLS &amp; SSL — Encryption, Certificates &amp; Trust</h3>
+                    <p>TLS is <strong>everywhere</strong>. Every HTTPS website, every git clone, every kubectl command, every Docker pull — all depend on TLS to encrypt and authenticate. If you run production systems and don't understand TLS, you're debugging blind. This chapter demystifies the handshake, the certificates, the cipher suites, and the trust chain that makes the 🔒 padlock possible. <strong>You'll understand exactly what happens between "ClientHello" and "200 OK."</strong></p>
+                    <div class="chapter-meta">
+                        <span class="meta-tag">🔴 ADVANCED</span>
+                        <span class="meta-tag">⏱️ ~2.5 hours</span>
+                        <span class="meta-tag">🔒 TLS</span>
+                        <span class="meta-tag">📜 Certificates</span>
+                    </div>
+                </div>
+
+                <div class="learning-objectives">
+                    <h4>🎯 By the End of This Chapter, You Will:</h4>
+                    <ul>
+                        <li>Understand SSL vs TLS history and why SSL is dead but the name stuck</li>
+                        <li>Explain symmetric vs asymmetric encryption and how TLS uses BOTH</li>
+                        <li>Walk through the TLS 1.3 handshake step by step (ClientHello → encrypted data)</li>
+                        <li>Decode cipher suite strings like TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384</li>
+                        <li>Diagnose every common TLS error (expired cert, hostname mismatch, untrusted CA)</li>
+                        <li>Use openssl s_client to debug TLS connections like a pro</li>
+                    </ul>
+                </div>
+
+                <div class="chapter-relevance">
+                    <div class="relevance-label">🔗 Applies To:</div>
+                    <div class="domain-badge">DevOps</div>
+                    <div class="domain-badge">SRE</div>
+                    <div class="domain-badge">Security Eng</div>
+                    <div class="domain-badge">Cloud Eng</div>
+                    <div class="domain-badge">Backend Dev</div>
+                    <span class="domain-weight">Weight: TLS is the foundation of all secure communication. Certificate issues are the #1 cause of "it was working yesterday!"</span>
+                </div>
+
+                <div class="exam-tip">
+                    <h5>🎯 SRE Interview Tip</h5>
+                    <p>You WILL be asked: "Walk me through the TLS handshake." Key points: ClientHello (supported versions + cipher suites + ECDHE key share) → ServerHello (chosen version + cipher + ECDHE key share + certificate) → both sides compute shared secret via ECDHE → client verifies certificate chain → Finished messages (everything encrypted from here). TLS 1.3 = 1-RTT. TLS 1.2 = 2-RTT. Also know: TLS provides Encryption, Authentication, and Integrity. The padlock 🔒 means the TLS handshake succeeded — it does NOT mean the website is trustworthy.</p>
+                </div>
+
+                <!-- ─── Section 13.1: SSL vs TLS ─── -->
+                <div class="section-block" id="s13-1">
+                    <h3>13.1 SSL vs TLS — What's the Difference?</h3>
+                    <p>Everyone says "SSL certificate" but <strong>SSL is DEAD</strong>. SSL 2.0 and 3.0 are completely broken (POODLE attack, 2014). What people call "SSL" today is actually TLS 1.2 or 1.3. But the term "SSL certificate" stuck — even AWS, GCP, and Azure label their services as "SSL/TLS certificates."</p>
+
+                    <div class="info-box note">
+                        <h5>📜 SSL/TLS Version Timeline — What's Safe and What's Dead</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Version</th><th>Year</th><th>Status</th></tr></thead>
+                            <tbody>
+                                <tr><td>SSL 1.0</td><td>1994</td><td>❌ Never released (too broken)</td></tr>
+                                <tr><td>SSL 2.0</td><td>1995</td><td>❌ DEPRECATED 2011 — POODLE, DROWN attacks</td></tr>
+                                <tr><td>SSL 3.0</td><td>1996</td><td>❌ DEPRECATED 2015 — POODLE attack</td></tr>
+                                <tr><td>TLS 1.0</td><td>1999</td><td>❌ DEPRECATED 2021 — PCI DSS banned</td></tr>
+                                <tr><td>TLS 1.1</td><td>2006</td><td>❌ DEPRECATED 2021 — same as TLS 1.0</td></tr>
+                                <tr><td><strong>TLS 1.2</strong></td><td>2008</td><td>✅ SAFE — still widely used, solid security</td></tr>
+                                <tr><td><strong>TLS 1.3</strong></td><td>2018</td><td>✅ BEST — faster handshake, modern ciphers only</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ─── Section 13.2: Why TLS Exists ─── -->
+                <div class="section-block" id="s13-2">
+                    <h3>13.2 Why TLS Exists — The Problem of the Open Internet</h3>
+                    <p>Without TLS, anyone on the network path can READ your data (passwords, credit cards, API keys), MODIFY your data (inject ads, malware), or IMPERSONATE servers (fake bank websites). TLS provides three guarantees: <strong>Encryption</strong> (confidentiality), <strong>Authentication</strong> (you know who you're talking to), and <strong>Integrity</strong> (data hasn't been tampered with).</p>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — TLS Protects the PIPE, Not the Endpoints</h5>
+                        <p>TLS provides <strong>encryption in transit only</strong>. It does NOT protect data at rest (in a database) or data in use (in memory). If an attacker compromises your server, TLS doesn't help — they can read the decrypted data after TLS terminates. TLS protects the communication channel, not the application.</p>
+                    </div>
+                </div>
+
+                <!-- ─── Section 13.3: How Encryption Works ─── -->
+                <div class="section-block" id="s13-3">
+                    <h3>13.3 How Encryption Works — The Two Types You NEED to Understand</h3>
+
+                    <div class="info-box note">
+                        <h5>🔑 Symmetric vs Asymmetric — Visual Comparison</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th></th><th>Symmetric</th><th>Asymmetric</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>Number of keys</strong></td><td>1 (shared secret)</td><td>2 (public + private)</td></tr>
+                                <tr><td><strong>Speed</strong></td><td>VERY FAST (GB/s)</td><td>SLOW (KB/s)</td></tr>
+                                <tr><td><strong>Key distribution</strong></td><td>Hard — how to share?</td><td>Easy — public key is public!</td></tr>
+                                <tr><td><strong>Used for</strong></td><td>Bulk encryption (actual data)</td><td>Handshake, signing, key exchange</td></tr>
+                                <tr><td><strong>Common algorithms</strong></td><td>AES, ChaCha20</td><td>RSA, ECDSA, Ed25519</td></tr>
+                                <tr><td><strong>TLS role</strong></td><td>Encrypts HTTP body</td><td>Proves server is real</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🔐 TLS Uses BOTH (Hybrid Encryption)</h5>
+                        <p>TLS uses asymmetric crypto during the handshake (to authenticate and exchange keys securely), then switches to symmetric crypto for the rest (for speed). This is called <strong>hybrid encryption</strong>. If you used only asymmetric crypto, your website would be 1000x slower. The handshake is the slow part; once the symmetric key is established, data flies at line speed.</p>
+                    </div>
+                </div>
+
+                <!-- ─── Section 13.4: Public & Private Keys ─── -->
+                <div class="section-block" id="s13-4">
+                    <h3>13.4 Public &amp; Private Keys — The Core Concept Made Simple</h3>
+
+                    <div class="diagram-container">
+                        <div class="diagram-title">PUBLIC/PRIVATE KEY — The Mailbox Analogy</div>
+                        <pre>┌──────────────────────────────────────────────────────────────────────┐
+│  Think of it like a special mailbox:                                  │
+│                                                                       │
+│  PUBLIC KEY = the mailbox slot (anyone can drop a letter in)          │
+│  PRIVATE KEY = the physical key to open the mailbox (only you)        │
+│                                                                       │
+│  Anyone can use the public slot to send you an encrypted message.     │
+│  Only you, with the private key, can open the mailbox and read it.    │
+│                                                                       │
+│  For SIGNING: you put your wax seal (private key) on a letter.        │
+│  Anyone can check the seal against your known seal pattern (public    │
+│  key) to verify the letter genuinely came from you.                   │
+│                                                                       │
+│  WHERE KEYS LIVE IN PRODUCTION:                                       │
+│  ‣ Server's private key: /etc/nginx/ssl/privkey.pem or K8s Secret    │
+│  ‣ Server's public key: inside the TLS certificate (sent to browsers) │
+│  ‣ CA's private key: in a Hardware Security Module (HSM), 24/7 guard │
+│  ‣ CA's public key: pre-installed in your OS/browser trust store      │
+└──────────────────────────────────────────────────────────────────────┘</pre>
+                    </div>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — Lose Your Private Key, Lose Everything</h5>
+                        <p>If you lose your private key, you CANNOT recover it. You must generate a NEW key pair and get a NEW certificate. There is NO "forgot password" for private keys. NEVER put private keys in git. NEVER email them. Use K8s Secrets, AWS Secrets Manager, or HashiCorp Vault.</p>
+                    </div>
+                </div>
+
+                <!-- ─── Section 13.5: What Actually IS HTTPS ─── -->
+                <div class="section-block" id="s13-5">
+                    <h3>13.5 What Actually IS HTTPS?</h3>
+                    <p>HTTPS = HTTP over TLS. The exact same HTTP requests/responses, wrapped in a TLS-encrypted tunnel. The workflow: TCP 3-way handshake → TLS handshake → HTTP request/response over encrypted channel. The padlock 🔒 means the TLS handshake succeeded.</p>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — HTTPS ≠ Trustworthy Website</h5>
+                        <p>HTTPS means "the connection is encrypted." It does NOT mean "the website is trustworthy." A phishing site at "paypaI.com" (capital i instead of l) can have a perfectly valid TLS certificate. TLS proves the identity of the SERVER, not the INTENT of the people running it. Always check the domain name, not just the padlock.</p>
+                    </div>
+                </div>
+
+                <!-- ─── Section 13.6: The TLS Handshake ─── -->
+                <div class="section-block" id="s13-6">
+                    <h3>13.6 The TLS Handshake — Step by Step</h3>
+
+                    <div class="diagram-container">
+                        <div class="diagram-title">TLS 1.3 HANDSHAKE — Message Sequence Diagram</div>
+                        <pre>┌──────────┐                                    ┌──────────┐
+│  CLIENT  │                                    │  SERVER  │
+│ (browser)│                                    │ (nginx)  │
+└────┬─────┘                                    └────┬─────┘
+     │                                               │
+     │  ──── ClientHello ─────────────────────────▶  │
+     │  (supported versions, cipher suites,           │
+     │   key_share: ECDHE public key)                │
+     │                                               │
+     │  ◀─── ServerHello ─────────────────────────  │
+     │  (chosen version, cipher suite,               │
+     │   key_share: ECDHE public key)                │
+     │                                               │
+     │  ◀─── {EncryptedExtensions} ────────────────  │
+     │  ◀─── {Certificate} ────────────────────────  │
+     │  ◀─── {CertificateVerify} ──────────────────  │
+     │  ◀─── {Finished} ───────────────────────────  │
+     │                                               │
+     │  ──── {Finished} ──────────────────────────▶  │
+     │                                               │
+     │  🔒 ALL DATA NOW ENCRYPTED 🔒                  │
+     │                                               │
+     │  ──── GET /api/jobs/ HTTP/1.1 ──────────────▶ │
+     │  ◀─── HTTP/1.1 200 OK ──────────────────────  │
+     └───────────────────────────────────────────────┘</pre>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🔑 TLS 1.3 Handshake Steps Explained</h5>
+                        <p><strong>Step 1 — ClientHello:</strong> "I support TLS 1.3, here are my cipher suites, here's my ECDHE key share." <strong>Step 2 — ServerHello:</strong> "Let's use TLS 1.3 with AES-256-GCM, here's my ECDHE key share + certificate." <strong>Step 3 — Key Exchange:</strong> Both sides compute the same shared secret using ECDHE. An eavesdropper sees the key shares but CANNOT compute the secret (Diffie-Hellman magic). <strong>Step 4 — Certificate Verification:</strong> Client checks: signed by trusted CA? Not expired? Hostname matches? Not revoked? <strong>Step 5 — Finished:</strong> Everything from here is encrypted. Total: 1 round trip (1-RTT). TLS 1.2 = 2-RTT.</p>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🔐 Perfect Forward Secrecy (PFS) — Why ECDHE Is Critical</h5>
+                        <p><strong>Perfect Forward Secrecy</strong> means that if an attacker records your encrypted TLS traffic today and later steals your private key, they STILL cannot decrypt the recorded traffic. This is because the session key is derived from <strong>ephemeral</strong> (temporary) key shares that are discarded after the session — not from the long-term private key. The "E" in ECDHE stands for <strong>Ephemeral</strong> — each session generates new key shares. Without PFS (plain RSA key exchange), stealing the private key decrypts ALL past recorded traffic. TLS 1.3 mandates PFS by removing static RSA key exchange entirely. Only cipher suites with DHE or ECDHE provide PFS.</p>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🔄 TLS Session Resumption — Skip the Heavy Crypto on Reconnect</h5>
+                        <p>Full TLS handshakes are expensive (asymmetric crypto). Session resumption lets a client reconnect using cached parameters, reducing to 0-RTT or 1-RTT with no asymmetric operations:</p>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Method</th><th>How It Works</th><th>RTT</th><th>Security</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>Session IDs</strong> (TLS 1.2)</td><td>Server stores session state. Client sends Session ID on reconnect. Server looks up cached keys.</td><td>1-RTT (abbreviated)</td><td>Server must store state (doesn't scale). No PFS for resumed sessions.</td></tr>
+                                <tr><td><strong>Session Tickets</strong> (TLS 1.2)</td><td>Server encrypts session state into a "ticket" sent to client. Client sends ticket back on reconnect. Server decrypts.</td><td>1-RTT (abbreviated)</td><td>Server stateless. Ticket key must be rotated. No PFS.</td></tr>
+                                <tr><td><strong>0-RTT (PSK)</strong> (TLS 1.3)</td><td>Client uses Pre-Shared Key from previous session to send encrypted data IMMEDIATELY with the ClientHello.</td><td>0-RTT</td><td>Replay attack risk! Data in 0-RTT is NOT replay-protected. Use only for idempotent GETs.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ─── Section 13.7: Cipher Suites ─── -->
+                <div class="section-block" id="s13-7">
+                    <h3>13.7 Cipher Suites — What Those Long Strings Actually Mean</h3>
+
+                    <div class="diagram-container">
+                        <div class="diagram-title">CIPHER SUITE DECODER — How to Read Those Intimidating Strings</div>
+                        <pre>┌──────────────────────────────────────────────────────────────────────┐
+│  TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384                                │
+│  ─── ───── ─── ──── ─────── ─── ─────                                 │
+│   │    │    │    │      │     │     │                                  │
+│   │    │    │    │      │     │     └─ Hash/MAC algorithm (SHA384)     │
+│   │    │    │    │      │     └─ Block cipher mode (GCM)               │
+│   │    │    │    │      └─ Symmetric cipher (AES-256)                  │
+│   │    │    │    └─ "WITH" — separator                                 │
+│   │    │    └─ Auth algorithm (RSA)                                    │
+│   │    └─ Key exchange (ECDHE — Elliptic Curve Diffie-Hellman)        │
+│   └─ Protocol (TLS)                                                    │
+│                                                                       │
+│  TLS 1.3 SIMPLIFIED: cipher suites only specify symmetric cipher +    │
+│  hash. Key exchange and auth are negotiated separately.                │
+│  Example: TLS_AES_256_GCM_SHA384 (much shorter!)                      │
+└──────────────────────────────────────────────────────────────────────┘</pre>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🔐 Common Cipher Suites — Security Rating & Performance</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Cipher Suite</th><th>Security</th><th>Perf</th><th>Notes</th></tr></thead>
+                            <tbody>
+                                <tr><td><code>TLS_AES_256_GCM_SHA384</code></td><td>✅ Best</td><td>✅ Fast</td><td>TLS 1.3 default. AES hardware-accelerated on modern CPUs.</td></tr>
+                                <tr><td><code>TLS_AES_128_GCM_SHA256</code></td><td>✅ Excellent</td><td>✅ Faster</td><td>TLS 1.3. AES-128 is unbreakable with current technology.</td></tr>
+                                <tr><td><code>TLS_CHACHA20_POLY1305_SHA256</code></td><td>✅ Best</td><td>✅ Fast</td><td>TLS 1.3. Best for mobile/ARM (no AES hardware acceleration).</td></tr>
+                                <tr><td><code>TLS_ECDHE_RSA_AES_256_GCM_SHA384</code></td><td>✅ Good</td><td>⚠️ Slower</td><td>TLS 1.2. RSA auth + ECDHE key exchange. Has PFS.</td></tr>
+                                <tr><td><code>TLS_ECDHE_ECDSA_AES_128_GCM_SHA256</code></td><td>✅ Good</td><td>✅ Fast</td><td>TLS 1.2 with ECDSA (smaller keys, faster than RSA).</td></tr>
+                                <tr><td><code>TLS_RSA_AES_256_CBC_SHA</code></td><td>❌ Weak</td><td>❌ Slow</td><td>No PFS (static RSA). CBC mode. Avoid in production.</td></tr>
+                            </tbody>
+                        </table>
+                        <pre><code><span class="comment"># SEE WHAT CIPHER YOUR SERVER NEGOTIATED:</span>
+$ curl -v https://anihpj.com -o /dev/null 2>&1 | grep "SSL connection"
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384
+
+<span class="comment"># CHECK ALL CIPHERS A SERVER SUPPORTS:</span>
+$ nmap --script ssl-enum-ciphers -p 443 anihpj.com</code></pre>
+                    </div>
+                </div>
+
+                <!-- ─── Section 13.8: Common TLS Errors ─── -->
+                <div class="section-block" id="s13-8">
+                    <h3>13.8 Common TLS Errors You Encounter Daily</h3>
+
+                    <div class="info-box danger">
+                        <h5>🚨 TLS Error Quick Diagnosis Table</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Error Message</th><th>What It Actually Means</th><th>Fix</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>CERT_AUTHORITY_INVALID</strong><br>"Your connection is not private"</td><td>CA not trusted — self-signed cert, corporate proxy MITM, missing intermediate cert</td><td>Add CA to trust store, or use Let's Encrypt</td></tr>
+                                <tr><td><strong>CERT_DATE_INVALID</strong><br>"Your clock is behind"</td><td>Certificate expired OR system clock is wrong</td><td>Renew cert, or <code>date; timedatectl status</code></td></tr>
+                                <tr><td><strong>COMMON_NAME_INVALID</strong><br>"Does not match the URL"</td><td>Hostname doesn't match CN/SANs in certificate</td><td>Use correct hostname, add SAN to cert</td></tr>
+                                <tr><td><strong>SSL_ERROR_RX_RECORD_TOO_LONG</strong></td><td>Server speaking plain HTTP on TLS port</td><td>Enable TLS on the server</td></tr>
+                                <tr><td><strong>Mixed Content Warning</strong> ⚠️</td><td>HTTPS page loads HTTP resources</td><td>Use protocol-relative URLs or always HTTPS</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ─── Sections 13.9-13.15 consolidated for space ─── -->
+                <div class="section-block" id="s13-9">
+                    <h3>13.9 TLS in Everyday Tools</h3>
+                    <p>Every tool you use daily negotiates TLS: <strong>curl</strong> (--cacert, -k), <strong>git</strong> (git config http.sslVerify), <strong>kubectl</strong> (--certificate-authority in kubeconfig), <strong>docker</strong> (DOCKER_TLS_VERIFY), <strong>pip/npm</strong> (package registries over HTTPS). When any of these fail, the error is almost always TLS-related — expired cert, untrusted CA, or hostname mismatch.</p>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — Corporate TLS-Intercepting Proxies (Zscaler, Netskope)</h5>
+                        <p>When your company uses a TLS-intercepting proxy, it acts as a <strong>Man-in-the-Middle</strong> — it terminates your TLS connection, inspects the content, then creates a NEW TLS connection to the destination. This is why you need to install your company's CA certificate on your machine. Without it, ALL HTTPS traffic shows CERT_AUTHORITY_INVALID errors. To fix: install the corporate CA cert, or configure individual tools: <code>NODE_EXTRA_CA_CERTS</code> for npm, <code>git config http.sslCAInfo</code> for git, <code>--cacert</code> for curl. The proxy's cert will appear as the issuer in openssl s_client output.</p>
+                    </div>
+                </div>
+
+                <div class="section-block" id="s13-10">
+                    <h3>13.10 TLS Termination</h3>
+                    <p><strong>TLS termination</strong> means decrypting TLS at a proxy/load balancer and forwarding plain HTTP to the backend. This offloads crypto overhead from application servers. Common pattern: Client → ALB (TLS terminates here) → HTTP → K8s pod. The connection between ALB and pod is unencrypted (unless you use mTLS or service mesh). Always consider: is the internal network trusted? If not, re-encrypt (TLS from ALB to pod).</p>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — X-Forwarded-Proto When Behind TLS-Terminating LB</h5>
+                        <p>If your cloud LB terminates TLS and forwards HTTP to your backend, the backend sees HTTP traffic. If your Django app checks <code>request.is_secure()</code>, it will return False! Fix: set the <strong>X-Forwarded-Proto</strong> header at the LB and configure Django's <code>SECURE_PROXY_SSL_HEADER</code> setting. In nginx: <code>proxy_set_header X-Forwarded-Proto $scheme;</code></p>
+                    </div>
+                </div>
+
+                <div class="section-block" id="s13-11">
+                    <h3>13.11 Certificates — Chain of Trust</h3>
+                    <p>Every TLS certificate chains up to a <strong>Root CA</strong> that your OS/browser trusts implicitly. The chain: Root CA → Intermediate CA → Your Server Certificate. If any link is missing (common: forgetting to include the intermediate cert), the browser can't verify the chain and shows a warning. The <strong>Certificate Transparency</strong> system publicly logs all issued certificates — you can search for any domain's cert history at crt.sh.</p>
+
+                    <div class="info-box note">
+                        <h5>📜 X.509 Certificate Fields — Quick Reference</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Field</th><th>What It Means</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>Subject (CN)</strong></td><td>Common Name — the primary hostname</td></tr>
+                                <tr><td><strong>Subject Alternative Names (SANs)</strong></td><td>List of ALL hostnames/IPs this cert covers. MUST match the URL you're connecting to!</td></tr>
+                                <tr><td><strong>Issuer</strong></td><td>Who signed this certificate (the CA)</td></tr>
+                                <tr><td><strong>Not Before / After</strong></td><td>Validity window — if expired, TLS fails completely</td></tr>
+                                <tr><td><strong>Public Key</strong></td><td>The public half of the key pair (included in cert)</td></tr>
+                                <tr><td><strong>Signature Algorithm</strong></td><td>How the CA signed (SHA-256 with RSA/ECDSA)</td></tr>
+                                <tr><td><strong>Serial Number</strong></td><td>Unique ID for this certificate</td></tr>
+                                <tr><td><strong>Key Usage</strong></td><td>What this cert can be used for (server auth, client auth, code signing)</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — SAN > CN in Modern TLS</h5>
+                        <p>If the SAN field doesn't include the hostname you're connecting to, the browser rejects the cert <strong>even if the CN matches</strong>. SAN (Subject Alternative Name) takes priority over CN in modern TLS validation. Always include every hostname and IP in the SAN field when generating certificates.</p>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🔍 Certificate Revocation — CRL, OCSP & OCSP Stapling</h5>
+                        <p>Certificates can be revoked BEFORE they expire (private key compromised, domain ownership changed). There are three mechanisms to check revocation status:</p>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Method</th><th>How It Works</th><th>Privacy Issue?</th><th>Performance</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>CRL</strong></td><td>Certificate Revocation List: a massive file listing ALL revoked certs from a CA. Client downloads and checks.</td><td>❌ No (local check)</td><td>❌ Slow (can be 10s of MB)</td></tr>
+                                <tr><td><strong>OCSP</strong></td><td>Online Certificate Status Protocol: client asks the CA "is cert #12345 revoked?" for EVERY connection.</td><td>❌ YES! CA knows every site you visit.</td><td>⚠️ Adds latency (OCSP lookup)</td></tr>
+                                <tr><td><strong>OCSP Stapling</strong></td><td>Server periodically asks CA for OCSP response, then "staples" it to the TLS handshake. Client verifies without contacting CA.</td><td>✅ CA only sees server's queries, not client's.</td><td>✅ No extra client latency</td></tr>
+                            </tbody>
+                        </table>
+                        <pre><code><span class="comment"># CHECK IF A SERVER USES OCSP STAPLING:</span>
+$ openssl s_client -connect anihpj.com:443 -status -servername anihpj.com 2>&1 | grep -A5 "OCSP"
+<span class="comment"># OCSP Response Data: ... → OCSP stapling is active!</span>
+<span class="comment"># Or look for "OCSP response: no response sent" → Not configured</span></code></pre>
+                    </div>
+                </div>
+
+                <div class="section-block" id="s13-12">
+                    <h3>13.12 TLS in Kubernetes — cert-manager &amp; Ingress</h3>
+                    <p>In K8s, TLS certificates are stored as <strong>Secrets</strong> of type <code>kubernetes.io/tls</code> containing <code>tls.crt</code> and <code>tls.key</code>. Ingress controllers reference these Secrets. <strong>cert-manager</strong> automates certificate issuance and renewal using Let's Encrypt via the ACME protocol.</p>
+
+                    <div class="info-box note">
+                        <h5>☸️ cert-manager Workflow — Automatic TLS for K8s</h5>
+                        <pre><code><span class="comment"># 1. You create a Certificate resource (or annotate an Ingress):</span>
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: jobpost-anihpj-tls
+spec:
+  secretName: jobpost-tls-secret
+  dnsNames:
+  - jobpost.anihpj.com
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+
+<span class="comment"># 2. cert-manager creates an Order → ACME Challenge (HTTP-01 or DNS-01)</span>
+<span class="comment"># 3. Let's Encrypt verifies you control the domain</span>
+<span class="comment"># 4. Certificate issued → stored in Kubernetes Secret</span>
+<span class="comment"># 5. Ingress references the Secret for TLS</span>
+<span class="comment"># 6. cert-manager auto-renews 30 days before expiry!</span>
+
+<span class="comment"># CHECK CERTIFICATE STATUS:</span>
+$ kubectl get certificate -A
+NAMESPACE  NAME                 READY  SECRET              AGE
+default    jobpost-anihpj-tls   True   jobpost-tls-secret  45d
+
+<span class="comment"># The flow: Ingress annotation → Certificate → Order → Challenge → Secret</span></code></pre>
+                    </div>
+                </div>
+
+                <div class="section-block" id="s13-13">
+                    <h3>13.13 Debugging TLS with openssl s_client</h3>
+
+                    <div class="info-box note">
+                        <h5>🔍 openssl s_client — Your TLS Debugger</h5>
+                        <pre><code><span class="comment"># CONNECT TO A TLS SERVER AND SEE EVERYTHING:</span>
+$ openssl s_client -connect anihpj.com:443 -servername anihpj.com
+<span class="comment"># Shows: certificate chain, cipher suite, TLS version, SANs, validity dates</span>
+
+<span class="comment"># CHECK CERTIFICATE EXPIRY DATE:</span>
+$ echo | openssl s_client -connect anihpj.com:443 2>/dev/null | openssl x509 -noout -dates
+notBefore=Jan  1 00:00:00 2026 GMT
+notAfter=Mar 31 23:59:59 2026 GMT
+
+<span class="comment"># CHECK CERTIFICATE SANs (Subject Alternative Names):</span>
+$ echo | openssl s_client -connect anihpj.com:443 2>/dev/null | openssl x509 -noout -ext subjectAltName
+
+<span class="comment"># CHECK THE FULL CERTIFICATE CHAIN:</span>
+$ openssl s_client -connect anihpj.com:443 -showcerts</code></pre>
+                    </div>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — openssl s_client Exit Code Is ALWAYS 0</h5>
+                        <p>openssl s_client exits with code 0 even when TLS verification FAILS. You MUST check the <strong>verify return code</strong> in the output: 0 = ok, 18 = self-signed certificate, 19 = self-signed certificate in chain, 20 = unable to get local issuer certificate, 21 = unable to verify the first certificate. Also: openssl s_client does NOT use SNI (Server Name Indication) by default. Always add <code>-servername</code> or you'll get the wrong certificate!</p>
+                    </div>
+                </div>
+
+                <div class="section-block" id="s13-14">
+                    <h3>13.14 Mutual TLS (mTLS)</h3>
+                    <p>In regular TLS, only the server proves its identity. In <strong>mTLS</strong>, BOTH sides present certificates. The client must prove its identity too.</p>
+
+                    <div class="diagram-container">
+                        <div class="diagram-title">Standard TLS vs mTLS — Certificate Flow Comparison</div>
+                        <pre>┌──────────────────────────────────────────────────────────────────────┐
+│  STANDARD TLS (server-only auth):                                     │
+│  ┌────────┐                         ┌────────┐                       │
+│  │ CLIENT │ ──── ClientHello ─────▶ │ SERVER │                       │
+│  │        │ ◀── ServerHello+Cert ── │        │                       │
+│  │        │    (client verifies     │        │                       │
+│  │        │     server's cert)      │        │                       │
+│  │        │ ──── Encrypted data ──▶ │        │                       │
+│  └────────┘                         └────────┘                       │
+│                                                                       │
+│  mTLS (mutual auth):                                                  │
+│  ┌────────┐                         ┌────────┐                       │
+│  │ CLIENT │ ──── ClientHello ─────▶ │ SERVER │                       │
+│  │        │ ◀── ServerHello+Cert ── │        │                       │
+│  │        │ ◀── CertificateRequest─ │ "Show me YOUR certificate!"    │
+│  │        │ ──── ClientCert ──────▶ │ (client sends its cert)        │
+│  │        │ ──── CertificateVerify▶ │ (client proves it owns the key)│
+│  │        │ ◀── ServerFinished ──── │                                │
+│  │        │ ──── ClientFinished ──▶ │                                │
+│  │        │ ◀════ Encrypted ══════▶ │ BOTH sides authenticated!      │
+│  └────────┘                         └────────┘                       │
+│                                                                       │
+│  WHERE mTLS IS USED:                                                  │
+│  ‣ Service Mesh (Istio/Linkerd): every pod-to-pod call is mTLS       │
+│  ‣ Zero-Trust Networks: no network is trusted, every connection authd│
+│  ‣ API Gateway → Backend: gateway proves its identity to the backend  │
+│  ‣ Database connections: app proves identity to PostgreSQL via cert   │
+│                                                                       │
+│  IN KUBERNETES WITH ISTIO:                                            │
+│  ‣ Istio sidecar (Envoy proxy) automatically provisions certs        │
+│  ‣ Every pod gets its own certificate from Istio's CA (citadel)      │
+│  ‣ mTLS enforced transparently — zero application code changes       │
+│  ‣ STRICT mode: all connections MUST use mTLS (reject plain HTTP)    │
+│  ‣ PERMISSIVE mode: accept both mTLS and plain text (migration)      │
+└──────────────────────────────────────────────────────────────────────┘</pre>
+                    </div>
+                </div>
+
+                <div class="section-block" id="s13-15">
+                    <h3>13.15 LAB: TLS Hands-On</h3>
+
+                    <div class="sre-callout">
+                        <h5>🛠️ TLS Lab — 5 Hands-On Exercises</h5>
+                        <div class="lab-cards">
+                            <div class="lab-card"><div class="lab-card-num">1</div><div class="lab-card-content"><strong>Inspect a Real TLS Certificate</strong><pre><code>$ echo | openssl s_client -connect anihpj.com:443 -servername anihpj.com 2>/dev/null | openssl x509 -noout -text | head -30
+<span class="comment"># Find: Issuer, Subject, Validity, SANs, Public Key Algorithm</span></code></pre></div></div>
+                            <div class="lab-card"><div class="lab-card-num">2</div><div class="lab-card-content"><strong>Check Certificate Expiry</strong><pre><code>$ echo | openssl s_client -connect anihpj.com:443 2>/dev/null | openssl x509 -noout -dates
+<span class="comment"># When does the certificate expire? Set a calendar reminder!</span></code></pre></div></div>
+                            <div class="lab-card"><div class="lab-card-num">3</div><div class="lab-card-content"><strong>See the TLS Handshake in Real Time</strong><pre><code>$ curl -v https://anihpj.com 2>&1 | grep -E "TLS|ALPN|Server certificate|SSL"
+<span class="comment"># See: TLS version negotiated, ALPN protocol, certificate subject</span></code></pre></div></div>
+                            <div class="lab-card"><div class="lab-card-num">4</div><div class="lab-card-content"><strong>Test TLS 1.3 vs TLS 1.2</strong><pre><code>$ curl --tlsv1.3 -v https://anihpj.com -o /dev/null 2>&1 | grep "TLS"
+$ curl --tlsv1.2 -v https://anihpj.com -o /dev/null 2>&1 | grep "TLS"
+<span class="comment"># Which version does the server prefer? Which is faster?</span></code></pre></div></div>
+                            <div class="lab-card"><div class="lab-card-num">5</div><div class="lab-card-content"><strong>Debug a TLS Error (Self-Signed Cert)</strong><pre><code>$ curl https://self-signed.badssl.com
+<span class="comment"># Fails with certificate error. Now try with -k:</span>
+$ curl -k https://self-signed.badssl.com
+<span class="comment"># Works! -k disables verification (DEV ONLY!)</span></code></pre></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ Chapter 13 Visual Summary ═══ -->
+                <div class="visual-summary">
+                    <h4>🔭 Chapter 13 — Visual Summary</h4>
+                    <div class="vs-grid">
+                        <div class="vs-item"><span class="vs-icon">📜</span><strong>SSL is Dead</strong><p>SSL 2.0/3.0 are broken. TLS 1.2 (safe) and TLS 1.3 (best) are what "SSL" actually means today.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🔑</span><strong>Hybrid Encryption</strong><p>Asymmetric (slow) for handshake + key exchange. Symmetric (fast) for bulk data. Best of both worlds.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🤝</span><strong>TLS 1.3 Handshake = 1-RTT</strong><p>ClientHello → ServerHello+Cert+Finished → Client Finished → Encrypted. TLS 1.2 takes 2-RTT.</p></div>
+                        <div class="vs-item"><span class="vs-icon">📜</span><strong>Certificate Chain</strong><p>Root CA → Intermediate CA → Server Cert. Missing intermediate = browser warning. Trust flows down.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🔍</span><strong>openssl s_client</strong><p>Your TLS debugger. Check certs, cipher suites, expiry, chain, SANs. No GUI needed.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🔄</span><strong>mTLS</strong><p>Both sides present certificates. Service mesh (Istio) uses mTLS for all pod-to-pod traffic automatically.</p></div>
+                    </div>
+                </div>
+
+                <!-- ═══ Key Terminology ═══ -->
+                <div class="anatomy-card">
+                    <div class="anatomy-header"><h4>📖 Key Terms from Chapter 13</h4></div>
+                    <div class="anatomy-body">
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔑</span>TLS Handshake</div><div class="anatomy-value">The negotiation that establishes a secure connection. ClientHello → ServerHello + Certificate → Key Exchange → Finished. TLS 1.3 = 1-RTT. Agreement on cipher suite + shared symmetric key.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">📜</span>Certificate Chain</div><div class="anatomy-value">Root CA → Intermediate CA → Server Certificate. Each link is signed by the one above. Browsers trust Root CAs implicitly. Any missing link = trust failure.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔐</span>Cipher Suite</div><div class="anatomy-value">Negotiated set of algorithms: key exchange (ECDHE), authentication (RSA/ECDSA), symmetric cipher (AES-256-GCM), hash (SHA384). TLS 1.3 simplified to just symmetric cipher + hash.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔄</span>TLS Termination</div><div class="anatomy-value">Decrypting TLS at a proxy/load balancer and forwarding plain HTTP to backends. Offloads crypto overhead. Pattern: Client → ALB (TLS) → HTTP → Pod.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔒</span>mTLS</div><div class="anatomy-value">Mutual TLS: both client and server present certificates. Used in zero-trust networks and service mesh (Istio/Linkerd). Every pod-to-pod call is encrypted and authenticated.</div></div>
+                    </div>
+                </div>
+
+                <!-- ═══ How This Applies + Key Takeaways ═══ -->
+                <div class="info-box note">
+                    <h5>🔄 How This Applies to Your Daily Work</h5>
+                    <ul>
+                        <li><strong>Certificate expiry is the #1 cause of "it was working yesterday."</strong> Set up monitoring for certificate expiry dates. Let's Encrypt certs expire every 90 days — automate renewal with cert-manager.</li>
+                        <li><strong>openssl s_client is your TLS debugger.</strong> Before checking application logs, check the TLS connection. Expired cert? Wrong hostname? Weak cipher? It tells you instantly.</li>
+                        <li><strong>TLS termination at the load balancer offloads crypto from your app.</strong> AWS ALB, Nginx, and Envoy handle TLS so your Django/gunicorn pods don't have to.</li>
+                        <li><strong>Service mesh (Istio) adds mTLS automatically.</strong> Every pod-to-pod call encrypted without changing a single line of application code.</li>
+                    </ul>
+                </div>
+
+                <div class="info-box note">
+                    <h4>🔑 Chapter 13 Key Takeaways</h4>
+                    <ol style="color:#c9d1d9; line-height:1.9; padding-left:24px;">
+                        <li><strong>SSL is dead. TLS 1.2 and 1.3 are the standards.</strong> "SSL certificate" is a misnomer that stuck. TLS 1.3 is faster (1-RTT) and more secure.</li>
+                        <li><strong>TLS uses hybrid encryption.</strong> Asymmetric (RSA/ECDSA) for handshake + key exchange. Symmetric (AES/ChaCha20) for bulk data.</li>
+                        <li><strong>The TLS handshake negotiates a shared secret without anyone eavesdropping being able to discover it.</strong> ECDHE key exchange is the magic.</li>
+                        <li><strong>Certificate chains must be complete.</strong> Root → Intermediate → Server. Missing intermediate = browser warning.</li>
+                        <li><strong>openssl s_client -connect host:443 is your primary TLS debugging command.</strong> Check certs, cipher suites, expiry dates, and chains instantly.</li>
+                    </ol>
+                </div>
+
+                <!-- ═══ NETWORKING EXAM QUESTIONS — Chapter 13 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>📝 Chapter 13 — Practice Questions</h4>
+
+                    <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What's the difference between SSL and TLS? Why does everyone still say "SSL certificate"?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>SSL (Secure Sockets Layer) was the original protocol (1995-1996). TLS (Transport Layer Security) is the standardized successor (1999-present). SSL 2.0 and 3.0 are completely broken and deprecated. TLS 1.2 and 1.3 are the current standards. "SSL certificate" is a misnomer — the certificates are actually X.509 certificates usable by both SSL and TLS. The name stuck because it was the original term, and even cloud providers label their services as "SSL/TLS."</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">Explain symmetric vs asymmetric encryption. How does TLS use both?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Symmetric: one shared key, very fast (GB/s), used for bulk data. Problem: how to securely share the key? Asymmetric: public+private key pair, slow (KB/s), solves key distribution. TLS uses asymmetric (ECDHE/RSA) during the handshake to authenticate and securely exchange a symmetric key, then switches to symmetric (AES/ChaCha20) for the rest of the connection. This is hybrid encryption.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Walk through the TLS 1.3 handshake step by step.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>1. ClientHello: client sends supported TLS versions, cipher suites, and ECDHE key share. 2. ServerHello: server chooses TLS 1.3 + cipher suite, sends its ECDHE key share + certificate. 3. Both sides compute the same shared secret using ECDHE. 4. Client verifies certificate (trusted CA? not expired? hostname matches?). 5. Finished messages exchanged. All subsequent data encrypted with the symmetric key. Total: 1 round trip.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">Decode this cipher suite: TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>TLS protocol. ECDHE = key exchange (Elliptic Curve Diffie-Hellman Ephemeral). RSA = authentication. AES_256_GCM = symmetric cipher (AES-256 in GCM mode). SHA384 = hash/Pseudo-Random Function. In TLS 1.3, this is simplified to just TLS_AES_256_GCM_SHA384 — key exchange and auth are negotiated separately.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">What does a "NET::ERR_CERT_DATE_INVALID" error mean? What are the possible causes?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The certificate's validity period (notBefore to notAfter) does not include the current time. Most common: certificate EXPIRED (forgot to renew). Also possible: system clock is wrong (check with `date`), or the certificate's notBefore date is in the future (issued with future start date). Fix: renew the certificate, or correct the system clock.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">How do you check a TLS certificate's expiry date using openssl?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p><code>echo | openssl s_client -connect anihpj.com:443 -servername anihpj.com 2>/dev/null | openssl x509 -noout -dates</code>. Shows notBefore and notAfter dates. For monitoring: <code>openssl s_client -connect host:443 2>/dev/null | openssl x509 -noout -enddate</code> returns just the expiry date.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">What is TLS termination? When would you use it and when would you NOT?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>TLS termination: decrypting TLS at a proxy/load balancer and forwarding plain HTTP to backends. Use when: internal network is trusted (VPC), you want to offload crypto overhead, or you need the LB to inspect HTTP headers for routing. Do NOT use when: internal network is untrusted, compliance requires end-to-end encryption, or you're in a zero-trust environment. In those cases, re-encrypt (TLS from LB to backend) or use mTLS.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">What is mTLS? How does it differ from regular TLS?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Regular TLS: only the server proves its identity (client verifies server's certificate). mTLS: BOTH client and server prove their identities by presenting certificates. The server also verifies the client's certificate. Used in zero-trust networks, service mesh (Istio/Linkerd), and API gateway authentication. In K8s, Istio automatically provisions certificates and enforces mTLS between all pods.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">What happens if an intermediate CA certificate is missing from the chain?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>The browser cannot build a trust chain from the server certificate to a trusted Root CA. It shows CERT_AUTHORITY_INVALID ("Your connection is not private"). This is one of the most common TLS configuration errors — the server sends its own certificate but forgets to include the intermediate CA certificate. Fix: configure the server to send the full chain (server cert + intermediate cert).</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">How would you debug "curl: (60) SSL certificate problem: unable to get local issuer certificate"?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>This means curl can't verify the certificate chain — the issuing CA is not in curl's trust store. Common causes: self-signed certificate, corporate proxy doing TLS inspection, or missing CA cert on the system. Diagnosis: <code>openssl s_client -connect host:443 -showcerts</code> to see the chain. Fix: <code>curl --cacert /path/to/ca.pem</code> to trust a specific CA, or add the CA to the system trust store (<code>update-ca-certificates</code> on Linux). NEVER use <code>curl -k</code> in production.</p></div></details></div>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════════════════════════════════════
+                 CHAPTER 14 — Load Balancing, Proxies & CDNs
+                 ════════════════════════════════════════════════════════════════════════ -->
+            <div id="ch14">
+                <div class="chapter-intro">
+                    <h3>Chapter 14: Load Balancing, Proxies &amp; CDNs — Scaling HTTP</h3>
+                    <p>Once you have HTTP and TLS working, the next challenge is <strong>scale</strong>. A single server can only handle so many requests. Load balancers distribute traffic across multiple backends. Reverse proxies add security, caching, and routing. CDNs push content to the edge, serving users from the nearest location. <strong>This chapter covers the infrastructure patterns that make the modern web possible.</strong></p>
+                    <div class="chapter-meta">
+                        <span class="meta-tag">🟡 INTERMEDIATE</span>
+                        <span class="meta-tag">⏱️ ~1.5 hours</span>
+                        <span class="meta-tag">⚖️ Load Balancing</span>
+                        <span class="meta-tag">🌍 CDN</span>
+                    </div>
+                </div>
+
+                <div class="learning-objectives">
+                    <h4>🎯 By the End of This Chapter, You Will:</h4>
+                    <ul>
+                        <li>Understand forward vs reverse proxies and how nginx sits in front of gunicorn</li>
+                        <li>Explain L4 vs L7 load balancing and choose the right one for each scenario</li>
+                        <li>Master load balancing algorithms: round-robin, least connections, IP hash, weighted</li>
+                        <li>Understand VIPs, keepalived, and how K8s LoadBalancer Services work</li>
+                        <li>Grasp Direct Server Return (DSR) and when it's needed for high-throughput</li>
+                        <li>Understand CDN architecture: edge locations, cache invalidation, origin shielding</li>
+                    </ul>
+                </div>
+
+                <div class="chapter-relevance">
+                    <div class="relevance-label">🔗 Applies To:</div>
+                    <div class="domain-badge">DevOps</div>
+                    <div class="domain-badge">SRE</div>
+                    <div class="domain-badge">Cloud Eng</div>
+                    <div class="domain-badge">Backend Dev</div>
+                    <div class="domain-badge">SysAdmin</div>
+                    <span class="domain-weight">Weight: Every production service sits behind a load balancer. Understanding how they work is essential for scaling and debugging.</span>
+                </div>
+
+                <!-- ─── 14.1 Reverse Proxies ─── -->
+                <div class="section-block" id="s14-1">
+                    <h3>14.1 Reverse Proxies — The Front Door to Your Application</h3>
+                    <p>A <strong>forward proxy</strong> sits in front of clients (your office proxy that filters web traffic). A <strong>reverse proxy</strong> sits in front of servers — it receives requests from the internet and forwards them to backend servers. The reverse proxy handles TLS termination, routing, caching, compression, and rate limiting. In the anihpj stack: <strong>Internet → nginx → gunicorn → Django</strong>.</p>
+
+                    <div class="info-box note">
+                        <h5>🔄 Forward Proxy vs Reverse Proxy</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Feature</th><th>Forward Proxy</th><th>Reverse Proxy</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>Sits in front of</strong></td><td>Clients (your laptop)</td><td>Servers (your web app)</td></tr>
+                                <tr><td><strong>Purpose</strong></td><td>Hide client identity, filter content, cache</td><td>Hide server identity, TLS termination, load balance, cache</td></tr>
+                                <tr><td><strong>Examples</strong></td><td>Squid, corporate proxy, VPN</td><td>nginx, HAProxy, Envoy, AWS ALB</td></tr>
+                                <tr><td><strong>anihpj usage</strong></td><td>Your office network proxy</td><td>nginx in front of gunicorn/Django</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ─── 14.2 Load Balancing ─── -->
+                <div class="section-block" id="s14-2">
+                    <h3>14.2 Load Balancing — Spreading the Load</h3>
+
+                    <div class="info-box note">
+                        <h5>⚖️ Layer 4 vs Layer 7 Load Balancing</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Feature</th><th>L4 (TCP/UDP)</th><th>L7 (HTTP/HTTPS)</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>How it routes</strong></td><td>By IP:Port (5-tuple hash)</td><td>By HTTP headers, path, host, cookies</td></tr>
+                                <tr><td><strong>Can route by URL?</strong></td><td>❌ No</td><td>✅ Yes (/api/ → backend-a, /static/ → backend-b)</td></tr>
+                                <tr><td><strong>TLS termination?</strong></td><td>❌ Pass-through only</td><td>✅ Can terminate and re-encrypt</td></tr>
+                                <tr><td><strong>Performance</strong></td><td>Very high (kernel-level)</td><td>High (user-space, but optimized)</td></tr>
+                                <tr><td><strong>Examples</strong></td><td>AWS NLB, HAProxy (TCP mode)</td><td>AWS ALB, nginx, Envoy, Traefik</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🎯 Load Balancing Algorithms</h5>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Algorithm</th><th>How It Works</th><th>Best For</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>Round Robin</strong></td><td>Each backend gets requests in turn. Simple, fair.</td><td>Identical backends, stateless apps</td></tr>
+                                <tr><td><strong>Least Connections</strong></td><td>Send to the backend with fewest active connections</td><td>Long-lived connections (WebSocket, gRPC)</td></tr>
+                                <tr><td><strong>IP Hash</strong></td><td>Hash client IP to always send to same backend</td><td>Sticky sessions without cookies</td></tr>
+                                <tr><td><strong>Weighted</strong></td><td>Backends have weights; larger instances get more traffic</td><td>Heterogeneous servers, canary deploys</td></tr>
+                                <tr><td><strong>Random</strong></td><td>Pick a random healthy backend</td><td>Simple, surprisingly effective at scale</td></tr>
+                                <tr><td><strong>Consistent Hashing</strong></td><td>Hash request attribute to a ring. Backend change only remaps ~1/N keys (minimal disruption)</td><td>Distributed caches (Redis cluster), CDN origins</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-box note">
+                        <h5>🏥 Health Checks — How Load Balancers Know Backends Are Alive</h5>
+                        <p>A load balancer is only as good as its health checks. Two types: <strong>Active</strong> (LB probes /health every N seconds) and <strong>Passive</strong> (LB observes real traffic failures and marks backend unhealthy).</p>
+                        <table class="comparison-table" style="width:100%;">
+                            <thead><tr><th>Check Type</th><th>How It Works</th><th>Detection Speed</th><th>Best For</th></tr></thead>
+                            <tbody>
+                                <tr><td><strong>TCP Connect</strong></td><td>Can the LB establish a TCP connection to backend:port?</td><td>Fast (~1s)</td><td>Any TCP service</td></tr>
+                                <tr><td><strong>HTTP GET</strong></td><td>Does GET /health return 200 OK?</td><td>Fast (~1s)</td><td>Web apps, APIs</td></tr>
+                                <tr><td><strong>HTTP with Body Check</strong></td><td>Does response body contain expected text (e.g., "ok")?</td><td>Medium (~1-2s)</td><td>Apps that return 200 even when broken</td></tr>
+                                <tr><td><strong>Custom Script</strong></td><td>Run a script that checks DB connectivity, disk space, etc.</td><td>Slow (~5-30s)</td><td>Complex health dependencies</td></tr>
+                                <tr><td><strong>Passive (observing)</strong></td><td>Track real requests: 3 consecutive TCP errors = unhealthy</td><td>Depends on traffic</td><td>Reducing probe load at scale</td></tr>
+                            </tbody>
+                        </table>
+                        <pre><code><span class="comment"># K8s READINESSPROBE (active health check):</span>
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 5   <span class="comment"># Wait 5s after start before first probe</span>
+  periodSeconds: 10         <span class="comment"># Probe every 10 seconds</span>
+  failureThreshold: 3       <span class="comment"># 3 consecutive failures = pod removed from Service</span></code></pre>
+                    </div>
+
+                    <div class="info-box warning">
+                        <h5>⚠️ GOTCHA — Sticky Sessions Break on Pod Restart</h5>
+                        <p>Sticky sessions (session affinity) bind a client to a specific backend. In K8s, when a pod restarts, it gets a NEW IP — breaking the stickiness. Use external session stores (Redis) instead of LB stickiness for stateful apps. AWS ALB supports application-based stickiness via cookies which survives backend IP changes.</p>
+                    </div>
+                </div>
+
+                <!-- ─── 14.3 VIPs ─── -->
+                <div class="section-block" id="s14-3">
+                    <h3>14.3 VIPs &amp; High Availability Load Balancing</h3>
+                    <p>A <strong>Virtual IP (VIP)</strong> is one IP address that floats between multiple servers. If the primary server fails, the VIP moves to the backup. This is implemented via <strong>VRRP</strong> (Virtual Router Redundancy Protocol) and tools like <strong>keepalived</strong>. In K8s, <strong>MetalLB</strong> and <strong>kube-vip</strong> provide VIP-based LoadBalancer Services for bare-metal clusters. The mechanism: master sends gratuitous ARP to update the network's MAC-to-IP mapping when VIP ownership changes.</p>
+
+                    <div class="diagram-container">
+                        <div class="diagram-title">KEEPALIVED — Two Nodes Sharing a VIP, One Is Master</div>
+                        <pre>┌──────────────────────────────────────────────────────────────────────┐
+│  NODE 1 (MASTER)                         NODE 2 (BACKUP)              │
+│  ┌─────────────────────┐                ┌─────────────────────┐       │
+│  │ IP: 10.0.1.10       │                │ IP: 10.0.1.11       │       │
+│  │ VIP: 10.0.1.100 ✓   │   VRRP         │ VIP: (standby)      │       │
+│  │ keepalived: MASTER  │◄──────────────►│ keepalived: BACKUP  │       │
+│  │                     │  heartbeats    │                     │       │
+│  │ Sends gratuitous ARP│                │ If master fails:     │       │
+│  │ "10.0.1.100 is at   │                │ ① Detects failure   │       │
+│  │  MAC aa:bb:cc:dd"   │                │ ② Takes MASTER role │       │
+│  └─────────────────────┘                │ ③ Sends gratuitous  │       │
+│                                          │    ARP for VIP      │       │
+│  WHEN MASTER FAILS:                     │ ④ Traffic now flows │       │
+│  ‣ Backup detects no heartbeats         │    to Node 2!       │       │
+│  ‣ Backup promotes to MASTER            └─────────────────────┘       │
+│  ‣ Backup sends gratuitous ARP                                       │
+│  ‣ Network switches update MAC table                                 │
+│  ‣ Traffic flows to new master (Node 2)                              │
+│                                                                       │
+│  IN KUBERNETES (bare-metal):                                          │
+│  ‣ MetalLB: announces Service LoadBalancer IPs via ARP/BGP           │
+│  ‣ kube-vip: provides VIP for control plane HA                       │
+│  ‣ Same principle: one IP, multiple possible owners                  │
+└──────────────────────────────────────────────────────────────────────┘</pre>
+                    </div>
+                </div>
+
+                <!-- ─── 14.4 DSR ─── -->
+                <div class="section-block" id="s14-4">
+                    <h3>14.4 DSR — Direct Server Return</h3>
+                    <p>In normal load balancing, ALL traffic flows through the LB (both directions). This creates a bottleneck — the LB's bandwidth limits total throughput. <strong>Direct Server Return</strong> solves this: the LB forwards the request to a backend, but the backend responds <strong>directly to the client</strong>, bypassing the LB on the return path. Used in high-throughput scenarios (video streaming, CDN origins). Tradeoffs: DSR breaks TLS termination (backend must handle TLS), complicates firewalls (asymmetric routing), and requires backend servers to respond with the VIP as source IP.</p>
+
+                    <div class="diagram-container">
+                        <div class="diagram-title">Normal LB (Symmetric) vs DSR (Asymmetric — Response Bypasses LB)</div>
+                        <pre>┌──────────────────────────────────────────────────────────────────────┐
+│  NORMAL LB (all traffic flows through LB in both directions):         │
+│  ┌────────┐     request     ┌────────┐     request     ┌──────────┐  │
+│  │ CLIENT │ ──────────────▶ │   LB   │ ──────────────▶ │ BACKEND  │  │
+│  │        │ ◀────────────── │        │ ◀────────────── │          │  │
+│  └────────┘    response     └────────┘    response     └──────────┘  │
+│  LB handles both directions → LB bandwidth = total system capacity!  │
+│                                                                       │
+│  DSR (response bypasses LB — backend sends directly to client):      │
+│  ┌────────┐     request     ┌────────┐     request     ┌──────────┐  │
+│  │ CLIENT │ ──────────────▶ │   LB   │ ──────────────▶ │ BACKEND  │  │
+│  │        │ ◀────────────── │        │                 │          │  │
+│  └────────┘    response     └────────┘                 └──────────┘  │
+│       ▲                        │                                      │
+│       └────────────────────────┘  (response bypasses LB entirely!)   │
+│                                                                       │
+│  TRADEOFFS:                                                           │
+│  ‣ Breaks TLS termination (backend must handle TLS)                  │
+│  ‣ Complicates firewalls (asymmetric routing)                        │
+│  ‣ Backend must respond with VIP as source IP                        │
+│  ‣ Used for: video streaming, CDN origins, high-throughput scenarios │
+└──────────────────────────────────────────────────────────────────────┘</pre>
+                    </div>
+                </div>
+
+                <!-- ─── 14.6 CDNs ─── -->
+                <div class="section-block" id="s14-6">
+                    <h3>14.6 CDNs — Caching at the Edge</h3>
+                    <p>A <strong>CDN (Content Delivery Network)</strong> caches your content at <strong>edge locations</strong> worldwide. When a user requests jobpost.anihpj.com, the CDN serves cached content from the nearest edge (5ms latency) instead of the origin server (100ms latency). Cache misses go to the origin. CDN providers: <strong>CloudFront</strong> (AWS), <strong>Cloudflare</strong>, <strong>Fastly</strong>. Cache invalidation (purging stale content) is the hardest CDN problem — use versioned URLs (style.v2.css) or cache-busting query strings.</p>
+                </div>
+
+                <!-- ─── 14.7 LAB ─── -->
+                <div class="section-block" id="s14-7">
+                    <h3>14.7 LAB: Proxy &amp; LB Lab</h3>
+
+                    <div class="sre-callout">
+                        <h5>🛠️ Proxy & LB Lab — 4 Hands-On Exercises</h5>
+                        <div class="lab-cards">
+                            <div class="lab-card"><div class="lab-card-num">1</div><div class="lab-card-content"><strong>Set Up nginx as Reverse Proxy</strong><pre><code><span class="comment"># nginx.conf — reverse proxy for gunicorn on port 8000</span>
+server {
+    listen 80;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}</code></pre></div></div>
+                            <div class="lab-card"><div class="lab-card-num">2</div><div class="lab-card-content"><strong>Test Load Balancing Algorithms</strong><pre><code><span class="comment"># nginx upstream block with different algorithms:</span>
+upstream backend {
+    least_conn;  <span class="comment"># Round-robin is default</span>
+    server 10.0.1.5:8000;
+    server 10.0.1.6:8000;
+}</code></pre></div></div>
+                            <div class="lab-card"><div class="lab-card-num">3</div><div class="lab-card-content"><strong>Inspect Proxy Headers</strong><pre><code>$ curl -v http://jobpost.anihpj.com/api/jobs/ 2>&1 | grep -i "x-forwarded\|x-real-ip"
+<span class="comment"># X-Forwarded-For: original client IP</span>
+<span class="comment"># X-Forwarded-Proto: https (if TLS terminated at LB)</span>
+<span class="comment"># X-Real-IP: client IP (nginx-specific)</span></code></pre></div></div>
+                            <div class="lab-card"><div class="lab-card-num">4</div><div class="lab-card-content"><strong>Test Health Check Behavior</strong><pre><code>$ curl -v http://jobpost.anihpj.com/health
+<span class="comment"># Check response code (200 = healthy)</span>
+<span class="comment"># If the LB health check path is wrong, the backend</span>
+<span class="comment"># is marked unhealthy even if the app works!</span></code></pre></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ Chapter 14 Visual Summary ═══ -->
+                <div class="visual-summary">
+                    <h4>🔭 Chapter 14 — Visual Summary</h4>
+                    <div class="vs-grid">
+                        <div class="vs-item"><span class="vs-icon">🔄</span><strong>Reverse Proxy</strong><p>nginx sits in front of gunicorn. Handles TLS, routing, caching, rate limiting. Forward proxy = client-side, reverse = server-side.</p></div>
+                        <div class="vs-item"><span class="vs-icon">⚖️</span><strong>L4 vs L7 LB</strong><p>L4 routes by IP:Port. L7 routes by HTTP headers/path/cookies. L7 can terminate TLS and route /api/ to different backends.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🎯</span><strong>LB Algorithms</strong><p>Round-Robin, Least Connections, IP Hash, Weighted, Random. Choose based on workload: stateless vs stateful, short vs long connections.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🔄</span><strong>DSR</strong><p>Direct Server Return: backend responds directly to client, bypassing LB on return. For high-throughput: video, CDN origins.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🌍</span><strong>CDN Edge Caching</strong><p>Content cached at edge locations worldwide. Cache hit = 5ms. Cache miss = origin fetch. Use versioned URLs for invalidation.</p></div>
+                        <div class="vs-item"><span class="vs-icon">🔧</span><strong>X-Forwarded Headers</strong><p>X-Forwarded-For (client IP), X-Forwarded-Proto (http/https), X-Real-IP. Essential when behind a proxy/LB.</p></div>
+                    </div>
+                </div>
+
+                <!-- ═══ Key Terminology ═══ -->
+                <div class="anatomy-card">
+                    <div class="anatomy-header"><h4>📖 Key Terms from Chapter 14</h4></div>
+                    <div class="anatomy-body">
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔄</span>Reverse Proxy</div><div class="anatomy-value">Sits in front of servers. Receives requests from clients, forwards to backends. Handles TLS termination, routing, caching, compression. Examples: nginx, HAProxy, Envoy, AWS ALB.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">⚖️</span>Load Balancer</div><div class="anatomy-value">Distributes traffic across multiple backends for scale and reliability. L4 (TCP, by IP:Port) or L7 (HTTP, by path/headers/cookies). Algorithms: round-robin, least-conn, IP hash, weighted.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔀</span>DSR</div><div class="anatomy-value">Direct Server Return: request flows through LB, response goes directly from backend to client. Eliminates LB bandwidth bottleneck. Used in high-throughput scenarios.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🌍</span>CDN</div><div class="anatomy-value">Content Delivery Network: caches content at edge locations worldwide. Reduces latency (edge = 5ms vs origin = 100ms). Cache invalidation via versioned URLs or purge APIs.</div></div>
+                        <div class="anatomy-row"><div class="anatomy-label"><span class="anat-icon">🔧</span>X-Forwarded-For</div><div class="anatomy-value">HTTP header added by proxies to preserve the original client IP. Essential for logging, rate limiting, and geo-IP when behind a load balancer or CDN.</div></div>
+                    </div>
+                </div>
+
+                <!-- ═══ NETWORKING EXAM QUESTIONS — Chapter 14 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>📝 Chapter 14 — Practice Questions</h4>
+
+                    <div class="exam-question-item"><span class="eq-number">Q1</span><div class="eq-question">What's the difference between a forward proxy and a reverse proxy?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Forward proxy sits in front of CLIENTS — it makes requests on behalf of clients (hiding client identity, filtering content). Reverse proxy sits in front of SERVERS — it receives requests from clients and forwards them to backends (hiding server identity, TLS termination, load balancing). Forward = client-side, Reverse = server-side.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q2</span><div class="eq-question">What's the difference between L4 and L7 load balancing? When would you use each?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>L4 (TCP/UDP) routes by IP:Port using 5-tuple hash. No visibility into HTTP. Very high performance. Use for: non-HTTP protocols (gRPC, databases), simple TCP load balancing. L7 (HTTP) routes by headers, path, host, cookies. Can terminate TLS, compress, cache. Use for: HTTP APIs, path-based routing (/api/ vs /static/), cookie-based stickiness.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q3</span><div class="eq-question">Explain three load balancing algorithms and when to use each.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Round-Robin: each backend gets requests in turn. Best for stateless apps with identical backends. Least Connections: send to backend with fewest active connections. Best for long-lived connections (WebSocket, streaming). IP Hash: hash client IP to always send to same backend. Use for sticky sessions without cookies. Weighted: assign weights to backends for heterogeneous server sizes or canary deploys.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q4</span><div class="eq-question">What is Direct Server Return (DSR) and why is it used?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>DSR is a load balancing pattern where the LB forwards requests to backends, but backends respond DIRECTLY to the client — bypassing the LB on the return path. This eliminates the LB as a bandwidth bottleneck. Used for high-throughput scenarios (video streaming, CDN origins). Tradeoffs: breaks TLS termination, complicates firewalls, requires backends to respond with VIP as source IP.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q5</span><div class="eq-question">How does a CDN work? What happens on a cache miss vs cache hit?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>CDN caches content at edge locations worldwide. Cache hit: user request → nearest edge → cached content served (~5ms). Cache miss: user request → edge → origin server → edge caches and serves (~100ms). Subsequent requests get cache hits. Cache invalidation: purge cached content when origin changes. Use versioned URLs (style.v2.css) to avoid stale cache issues.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q6</span><div class="eq-question">What is a reverse proxy and what functions does it typically perform?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>A reverse proxy sits in front of backend servers, receiving client requests and forwarding them. Functions: TLS termination (decrypt HTTPS, forward HTTP), load balancing (distribute across backends), caching (store responses), compression (gzip), rate limiting, authentication, request routing (path-based). Examples: nginx, HAProxy, Envoy, AWS ALB. In anihpj: nginx sits in front of gunicorn/Django.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q7</span><div class="eq-question">How does keepalived/VRRP provide high availability? What happens during failover?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>keepalived uses VRRP (Virtual Router Redundancy Protocol). Two nodes share a Virtual IP (VIP). The MASTER owns the VIP and sends gratuitous ARP. The BACKUP monitors heartbeats. If the master fails (no heartbeats for 3× advert interval), the backup promotes to MASTER, sends its own gratuitous ARP to update switch MAC tables, and takes over the VIP. Failover typically takes 3-10 seconds. Both nodes must be in the same L2 domain.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q8</span><div class="eq-question">What is Consistent Hashing and why is it important for load balancing?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Consistent Hashing maps requests to backends via a hash ring. When a backend is added or removed, only ~1/N of keys are remapped (vs all keys with modulo hashing). This minimizes cache invalidation and connection disruption. Critical for distributed caches (Redis cluster, Memcached) and CDN origin selection. Without it, adding one server invalidates ALL cached data across the entire cluster.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q9</span><div class="eq-question">What are active vs passive health checks? Give examples of each.</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>Active: LB periodically probes backends (TCP connect, HTTP GET /health). Detects failures in ~1-10 seconds. Example: AWS ALB health checks, K8s readinessProbe. Passive: LB observes real traffic — if a backend returns 3 consecutive TCP errors or 5xx responses, it's marked unhealthy. Detects failures based on traffic volume. Example: Envoy outlier detection, HAProxy observe mode. Best practice: use BOTH for fastest detection.</p></div></details></div>
+
+                    <div class="exam-question-item"><span class="eq-number">Q10</span><div class="eq-question">What are X-Forwarded headers and why are they essential behind a proxy/LB?</div><details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div><p>When a request passes through proxies, the backend sees the PROXY's IP, not the client's. X-Forwarded-For preserves the original client IP through a chain of proxies (comma-separated list). X-Forwarded-Proto tells the backend whether the client used HTTP or HTTPS (essential when TLS terminates at LB). X-Forwarded-Host preserves the original Host header. Without these, logging shows wrong IPs, Django request.is_secure() returns False, and rate limiting breaks.</p></div></details></div>
                 </div>
             </div>
     </section>
