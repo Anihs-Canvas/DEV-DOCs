@@ -10938,6 +10938,61 @@ Plus Hubble gives you per-packet observability that iptables can't.</code></pre>
 
         <!-- 11.3 Dynamic Provisioning -->
         <div id="s11-3" class="section-block"><h4>11.3 Dynamic Provisioning — Storage On Demand</h4>
+        <p>Without dynamic provisioning: admin creates PV manually → user creates PVC → K8s binds them. With dynamic provisioning: user creates PVC with StorageClass → CSI driver auto-creates PV AND cloud volume. <strong>No admin involvement. No tickets. No waiting.</strong></p>
+
+        <div class="diagram-container">
+            <div class="diagram-title">DYNAMIC PROVISIONING — Self-Service Storage Flow</div>
+            <pre class="diagram-text">
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │              DYNAMIC PROVISIONING — 4 Steps                              │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Developer                            K8s                              Cloud
+  ─────────                            ───                              ─────
+
+  ① kubectl apply -f pvc.yaml
+     ┌──────────────────────┐
+     │ kind: PersistentVolumeClaim
+     │ spec:
+     │   storageClassName: fast-ssd  ← References StorageClass
+     │   accessModes: [ReadWriteOnce]
+     │   resources: {requests: {storage: 20Gi}}
+     └──────────────────────┘
+              │
+              ▼
+  ② K8s finds StorageClass "fast-ssd"
+     ┌──────────────────────┐
+     │ kind: StorageClass
+     │ provisioner: ebs.csi.aws.com  ← Which CSI driver to call
+     │ parameters:
+     │   type: gp3         ← Cloud-specific params
+     │   iops: "3000"
+     │ volumeBindingMode: WaitForFirstConsumer  ← Smart!
+     └──────────────────────┘
+              │
+              ▼
+  ③ CSI Driver (ebs-csi-controller) receives request
+     → Calls AWS API: ec2 create-volume --size 20 --type gp3
+     → AWS creates EBS volume in the SAME AZ as the pod
+       (WaitForFirstConsumer ensures AZ-aware provisioning!)
+              │
+              ▼
+  ④ CSI creates PV → binds PVC → pod starts
+     PV automatically created with cloud volume reference
+     Pod mounts the volume → application sees 20GB disk
+
+  ═══════════════════════════════════════════════════════════════════════════
+  TOTAL TIME: ~30-60 seconds. ZERO admin intervention.
+  ═══════════════════════════════════════════════════════════════════════════
+            </pre>
+        </div>
+
+        <div class="info-box tip">
+            <h5>💡 volumeBindingMode — Immediate vs WaitForFirstConsumer</h5>
+            <p><strong>Immediate (default):</strong> CSI provisions volume as soon as PVC is created, BEFORE pod is scheduled. Risk: volume created in us-east-1a but pod scheduled to us-east-1b → can't attach → pod stuck Pending. <strong>WaitForFirstConsumer:</strong> CSI waits until a pod USING this PVC is scheduled. Only THEN does it provision the volume in the pod's AZ. This guarantees the volume and pod are in the same zone. <strong>Always use WaitForFirstConsumer for production.</strong></p>
+        </div>
+
+        <p><strong>StorageClass YAML — the full configuration:</strong></p>
         <p>Without dynamic provisioning: admin creates PV manually → user creates PVC → K8s binds them. With dynamic provisioning: user creates PVC with StorageClass → CSI driver auto-creates PV AND cloud volume. No admin involvement.</p>
         <pre><code class="language-yaml"># StorageClass defines HOW to provision
 apiVersion: storage.k8s.io/v1
@@ -10982,7 +11037,51 @@ spec:
 
         <!-- 11.6 Backup -->
         <div id="s11-6" class="section-block"><h4>11.6 Backup with Velero — Protect Your Data</h4>
-        <p><strong>Velero</strong> backs up K8s objects (YAML manifests) AND persistent volumes (snapshots) to S3-compatible storage. It can restore entire namespaces or individual resources.</p>
+        <p><strong>Velero</strong> is the standard backup tool for Kubernetes. It backs up K8s objects (YAML manifests) AND persistent volumes (cloud snapshots) to S3-compatible storage. If your cluster burns down, Velero can restore everything — namespaces, deployments, PVCs, AND the actual data on those volumes.</p>
+
+        <div class="diagram-container">
+            <div class="diagram-title">VELERO BACKUP — What Gets Backed Up and Where</div>
+            <pre class="diagram-text">
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                     VELERO BACKUP ARCHITECTURE                           │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  K8S CLUSTER                                                         │
+  │                                                                      │
+  │  ┌──────────────────┐    ┌──────────────────┐                        │
+  │  │ Velero Controller │    │ CSI Driver       │                        │
+  │  │ (Deployment)      │    │ (ebs-csi)        │                        │
+  │  │                   │    │                  │                        │
+  │  │ ① Backup command  │    │ ② Create snapshot│                        │
+  │  │ → Query API server│    │ → EC2 API call   │                        │
+  │  │ → Serialize all   │    │ → EBS snapshot   │                        │
+  │  │   objects as JSON │    │   created        │                        │
+  │  └────────┬─────────┘    └────────┬─────────┘                        │
+  └───────────┼──────────────────────┼──────────────────────────────────┘
+              │                      │
+              ▼                      ▼
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                        S3 BUCKET (anihpj-velero-backups)              │
+  │                                                                      │
+  │  📁 backups/anihpj-daily-20260621/                                   │
+  │  ├── anihpj-daily-20260621.tar.gz    ← K8s objects (JSON)            │
+  │  └── velero-backup.json              ← Metadata + PV snapshot IDs    │
+  │                                                                      │
+  │  ☁️  EBS Snapshot snap-abc123         ← Actual data (via CSI)        │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  RESTORE: Velero reads backup.json → creates objects via K8s API →
+  creates EBS volumes FROM snapshots → pods mount restored volumes.
+  ═══════════════════════════════════════════════════════════════════════
+            </pre>
+        </div>
+
+        <div class="info-box tip">
+            <h5>💡 Velero Backup Strategy — RPO and RTO Planning</h5>
+            <p><strong>RPO (Recovery Point Objective):</strong> How much data can you afford to lose? Hourly Velero backups = RPO of 1 hour. <strong>RTO (Recovery Time Objective):</strong> How fast must you recover? 10 min for objects + 5 min for snapshots + 5 min smoke tests = ~20 min RTO.</p>
+            <p><strong>Schedule strategy:</strong> Hourly backups during business hours (8AM-8PM), daily at 2AM with 30-day retention. Monthly full backup with 1-year retention for compliance. <strong>Critical:</strong> Test restores monthly in a sandbox cluster. An untested backup is not a backup — it's a hope.</p>
+        </div>
         <pre><code class="language-bash"># Backup entire anihpj namespace (objects + PV snapshots)
 velero backup create anihpj-daily --include-namespaces anihpj
 
@@ -12172,7 +12271,14 @@ spec:
 
         <!-- 13.9 Infra GitOps -->
         <div id="s13-9" class="section-block"><h4>13.9 Infrastructure GitOps — Crossplane & Terraform via Flux</h4>
-        <p>GitOps isn't just for applications. Infrastructure-as-Code can also be GitOps-managed. <strong>Crossplane</strong> provisions cloud infrastructure (RDS, S3, IAM) as K8s CRDs — managed by Argo CD/Flux like any other K8s resource. <strong>Terraform</strong> can be run via Flux's TF-controller — Git commit triggers <code>terraform plan</code> → manual approval → <code>terraform apply</code>.</p>
+        <p>GitOps isn't just for applications. Your INFRASTRUCTURE can be declared in Git and reconciled by the same GitOps tools that manage your apps. Two approaches dominate:</p>
+        <div class="compare-table"><table>
+            <thead><tr><th>Approach</th><th>How It Works</th><th>Example</th><th>Best For</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Crossplane</strong></td><td>Infra is CRDs. <code>kubectl apply -f rds.yaml</code> → Crossplane controller calls AWS API → creates RDS. Argo CD syncs the CRDs like any K8s resource.</td><td><code>kind: XRDSInstance</code> with <code>size: db.t3.medium</code> committed to Git. Argo CD syncs → DB appears.</td><td>K8s-native teams. Want infrastructure managed the SAME way as applications (GitOps, CRDs, controllers).</td></tr>
+                <tr><td><strong>Terraform + Flux</strong></td><td>TF-controller watches Git for <code>.tf</code> files. On change: runs <code>terraform plan</code> → creates a K8s resource showing the plan → manual approval → <code>terraform apply</code>.</td><td>Git commit with <code>main.tf</code> changes → Flux detects → plan PR comment → merge → apply.</td><td>Teams with existing Terraform investment. Want to gradually adopt GitOps without rewriting all IaC.</td></tr>
+            </tbody>
+        </table></div>
         </div>
 
         <!-- 13.10 Multi-Cluster -->
@@ -12868,7 +12974,8 @@ Why: Migration runs IN the cluster, close to DB. No external DB access from CI.<
         </div>
 
         <div id="s15-2" class="section-block"><h4>15.2 Helm Charts — Values, Templates, and Overrides</h4>
-        <pre><code class="language-yaml"># values.yaml (defaults)
+        <p>Helm separates configuration from templates. <strong>values.yaml</strong> provides defaults. You override them per environment using <code>-f</code> (file) or <code>--set</code> (command line). The override precedence is: <code>--set</code> (highest) → <code>-f</code> files (left to right) → parent chart values → <code>values.yaml</code> (lowest).</p>
+        <pre><code class="language-yaml"># values.yaml (committed to Git — defaults only, NO secrets!)
 replicas: 1
 image:
   repository: anihpj-web
@@ -12877,8 +12984,10 @@ image:
 db:
   host: postgres
   port: 5432
+
 # Override per environment:
-# helm install anihpj ./chart -f values-prod.yaml --set replicas=3</code></pre>
+# helm install anihpj ./chart -f values-prod.yaml --set replicas=3
+# The --set flag OVERRIDES values-prod.yaml which OVERRIDES values.yaml</code></pre>
         </div>
 
         <div id="s15-3" class="section-block"><h4>15.3 Helm Hooks — Controlling Deployment Order</h4>
@@ -13352,7 +13461,17 @@ spec:
         </div>
 
         <div id="s16-6" class="section-block"><h4>16.6 Flagger — Progressive Delivery Operator</h4>
-        <p>Flagger works WITH existing Deployments (no need to replace them). Integrates with Istio, Linkerd, NGINX, Contour. Automatically creates canary Services, shifts traffic, runs metrics analysis. Simpler than Argo Rollouts for teams already using a service mesh.</p>
+        <p>Flagger is a progressive delivery K8s operator that automates canary deployments and rollbacks. Unlike Argo Rollouts (which replaces Deployments with a new Rollout CRD), Flagger works WITH your existing Deployments — no migration needed.</p>
+        <div class="compare-table"><table>
+            <thead><tr><th>Feature</th><th>Flagger</th><th>Argo Rollouts</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Resource Type</strong></td><td>Uses K8s Deployment (no replacement)</td><td>Uses Rollout CRD (replaces Deployment)</td></tr>
+                <tr><td><strong>Traffic Routing</strong></td><td>Integrates with service mesh (Istio, Linkerd) or ingress (NGINX, Contour)</td><td>Built-in traffic routing or service mesh integration</td></tr>
+                <tr><td><strong>Metrics Analysis</strong></td><td>Queries Prometheus, Datadog, CloudWatch. Auto-rollback if metrics fail.</td><td>AnalysisRun CRD queries Prometheus, Datadog, NewRelic, Wavefront</td></tr>
+                <tr><td><strong>Complexity</strong></td><td>⭐⭐ Simpler — works with what you already have</td><td>⭐⭐⭐ More features but requires Rollout migration</td></tr>
+                <tr><td><strong>Best For</strong></td><td>Teams with existing Deployments + service mesh. Quick adoption.</td><td>Teams wanting full control. Advanced analysis scenarios.</td></tr>
+            </tbody>
+        </table></div>
         </div>
 
         <div id="s16-7" class="section-block"><h4>16.7 Deployment Safety — Probes, PDBs, Graceful Shutdown</h4>
@@ -13584,11 +13703,28 @@ Session data must survive pod replacement for ANY deployment strategy.</code></p
         </div>
 
         <div id="s17-4" class="section-block"><h4>17.4 Digest Pinning — The Ultimate Image Immutability</h4>
-        <p><strong>Tag:</strong> <code>anihpj:v1.0.0</code> — mutable. Attackers can push a malicious image with the same tag. <strong>Digest:</strong> <code>anihpj@sha256:abc123...</code> — immutable. The hash is the content. Digest pinning prevents TOCTOU (Time-of-Check-Time-of-Use) attacks: the image you scanned is the image you deployed.</p>
+        <p><strong>Tag:</strong> <code>anihpj:v1.0.0</code> — mutable pointer. Anyone with push access can overwrite it. The image you tested yesterday may NOT be the image running today. <strong>Digest:</strong> <code>anihpj@sha256:abc123...</code> — the cryptographic hash of the image content. Change a single byte → completely different hash.</p>
+        <pre><code class="language-bash"># See the difference:
+docker pull anihpj:v1.0.0
+docker inspect anihpj:v1.0.0 | jq '.[0].RepoDigests'
+# ["anihpj@sha256:abc123..."]  ← This is the REAL identity
+
+# Attacker pushes malicious image with same tag
+docker pull anihpj:v1.0.0  # Pulls ATTACKER'S image!
+docker inspect anihpj:v1.0.0 | jq '.[0].RepoDigests'
+# ["anihpj@sha256:xyz789..."]  ← DIFFERENT hash! But same tag!
+
+# Pin by digest to prevent this:
+# Deployment spec: image: anihpj@sha256:abc123...
+# K8s will ONLY run this exact hash. Attacker's xyz789 will never be pulled.</code></pre>
         </div>
 
         <div id="s17-5" class="section-block"><h4>17.5 The :latest Danger — 3 Concrete Scenarios</h4>
-        <p>1) <strong>Unpredictable:</strong> What version is :latest today? Nobody knows. Yesterday's deploy ≠ today's. 2) <strong>Non-reproducible:</strong> Rollback to yesterday → :latest is DIFFERENT. Impossible to recreate exact state. 3) <strong>Untraceable:</strong> Bug in production. Which git commit is :latest? Check 3 different nodes → 3 different answers if pull timing differs.</p>
+        <div class="card-grid three-col">
+            <div class="info-card"><div class="card-icon-lg">❓</div><h5>1. Unpredictable</h5><p>What version is :latest at 10:00 AM? At 10:05 AM? Nobody knows. CI pushes a new build → :latest silently changes. Your deployment at 9:55 got version X. Your colleague's at 10:02 got version Y. Same tag, completely different images.</p></div>
+            <div class="info-card"><div class="card-icon-lg">⏪</div><h5>2. Non-Reproducible</h5><p>Bug in production at 2PM. "Rollback to yesterday's version!" But :latest NOW points to today's build. Yesterday's :latest is GONE — overwritten. Nobody recorded the sha256. The only way to rollback is to guess which git commit yesterday's build came from and rebuild.</p></div>
+            <div class="info-card"><div class="card-icon-lg">🔍</div><h5>3. Untraceable</h5><p>Bug reported. "Which commit is running?" Check node A: :latest = sha256:abc. Check node B: :latest = sha256:xyz (pulled at different times). Security scan says "anihpj:latest has 0 CVEs." But which sha256 was scanned? The scan result is meaningless.</p></div>
+        </div>
         </div>
 
         <div id="s17-6" class="section-block"><h4>17.6 Lifecycle Policies — Auto-Clean Old Images to Control Costs</h4>
@@ -13637,7 +13773,20 @@ Session data must survive pod replacement for ANY deployment strategy.</code></p
         </div>
 
         <div id="s17-9" class="section-block"><h4>17.9 Image Scanning — Trivy, Clair, ECR Scan</h4>
-        <p><strong>Trivy:</strong> Fast, CLI + CI. Scans OS packages + language deps. <strong>Clair:</strong> Harbor built-in. <strong>ECR Scan:</strong> AWS native. CRITICAL CVE → BLOCK deployment. HIGH CVE → investigate, possibly block. MEDIUM/LOW → warn, track in backlog.</p>
+        <p>Image scanning catches vulnerabilities BEFORE they reach production. Every image pushed to your registry should be scanned. Every image deployed to your cluster should have passed a scan.</p>
+        <div class="compare-table"><table>
+            <thead><tr><th>Scanner</th><th>Type</th><th>What It Scans</th><th>Speed</th><th>Best For</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Trivy</strong></td><td>CLI + CI plugin (OSS)</td><td>OS packages (Alpine, Debian, RHEL) + language deps (pip, npm, gem) + IaC files</td><td>⚡ Very fast (seconds for most images)</td><td>CI/CD pipelines. GitHub Actions integration. Default choice for most teams.</td></tr>
+                <tr><td><strong>Clair</strong></td><td>API server (+ Harbor UI)</td><td>OS packages. Vulnerability DB updated continuously.</td><td>⚠️ Moderate (API-based)</td><td>Harbor registry users. Self-hosted scanning with web UI.</td></tr>
+                <tr><td><strong>ECR Scan</strong></td><td>AWS managed (Basic/Enhanced)</td><td>OS packages. Enhanced adds continuous scanning on push.</td><td>⚠️ Moderate (AWS-managed)</td><td>AWS-native workflows. No separate tool to install.</td></tr>
+                <tr><td><strong>Grype</strong></td><td>CLI (Anchore, OSS)</td><td>OS packages + language deps. Same DB as commercial Anchore.</td><td>⚡ Fast</td><td>Alternative to Trivy. Anchore ecosystem users.</td></tr>
+            </tbody>
+        </table></div>
+        <div class="info-box warning">
+            <h5>⚠️ Image Scanning Severity Policy — What to Block</h5>
+            <p><strong>CRITICAL CVE → BLOCK deployment.</strong> Fix immediately. Usually means remote code execution possible. <strong>HIGH CVE → BLOCK</strong> if fix is available within 30 days. Document the exception if bypassing. <strong>MEDIUM → WARN.</strong> Track in backlog. Fix within 90 days. <strong>LOW / INFO → WARN.</strong> May be false positives. <strong>The key:</strong> consistency. If you block CRITICAL today but let it pass tomorrow ("we need to ship"), the policy loses all meaning. Automate enforcement — don't rely on humans to check scan results.</p>
+        </div>
         </div>
 
         <!-- ===== DEEP DIVE: Registry Core Concepts ===== -->
