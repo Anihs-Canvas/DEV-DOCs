@@ -17575,6 +17575,48 @@ app.kubernetes.io/instance: {{ .Release.Name }}
             <div><strong>Gotcha — Mixed Version Window:</strong> During a rolling update, old and new Pods coexist. If v2.0 writes data in a new format that v1.0 can't read, you have a problem. <strong>Always ensure backward compatibility</strong> of data formats, API contracts, and database schemas across at least ONE version. This is called the "N-1 compatibility rule."</div>
         </div>
 
+        <!-- 🔬 Rolling Update Analogy & Traffic Distribution -->
+        <div class="info-box note" style="margin-top:1.5rem;">
+            <h5>🔬 The "Changing Tires on a Moving Car" Analogy</h5>
+            <p><strong>maxSurge=1, maxUnavailable=0</strong> is like changing one tire at a time while the car keeps moving. You lift one corner (add a new pod), swap the tire (new pod becomes ready), lower that corner (remove old pod), then move to the next. At no point is the car on fewer than 4 wheels. But for a brief moment, one wheel is the new model while the others are old — the car handles slightly differently.</p>
+            <p><strong>maxUnavailable=1, maxSurge=0</strong> is like removing one tire FIRST, driving on 3 wheels briefly, then putting the new one on. Faster? Yes (no extra pods needed). Riskier? Absolutely — you're running degraded during the swap.</p>
+        </div>
+
+        <!-- 🔬 Rolling Update Progress Visualization -->
+        <div class="stat-bar-group" style="margin-top:1.5rem;">
+            <h5 style="color:#93c5fd;margin-bottom:12px;">📊 Rolling Update Progress — 5 Replicas, maxSurge=1, maxUnavailable=0</h5>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Start (0%)</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" style="width:0%;">0%</div></div>
+                <div class="stat-bar-value">5 old, 0 new</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Step 1</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" style="width:16.6%;">16%</div></div>
+                <div class="stat-bar-value">5 old + 1 new (surge)</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Step 2</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" style="width:20%;">20%</div></div>
+                <div class="stat-bar-value">4 old, 1 new (old removed)</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Step 3</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" style="width:40%;">40%</div></div>
+                <div class="stat-bar-value">3 old, 2 new</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Step 5</div>
+                <div class="stat-bar"><div class="stat-bar-fill green" style="width:80%;">80%</div></div>
+                <div class="stat-bar-value">1 old, 4 new</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Done (100%)</div>
+                <div class="stat-bar"><div class="stat-bar-fill green" style="width:100%;">100%</div></div>
+                <div class="stat-bar-value">0 old, 5 new ✓</div>
+            </div>
+        </div>
+
         <!-- 🔬 kubectl rollout CLI Reference -->
         <div class="info-box tip" style="margin-top:1.5rem;">
             <h5>🔬 kubectl rollout — Essential Commands for Rolling Update Control</h5>
@@ -17590,6 +17632,45 @@ app.kubernetes.io/instance: {{ .Release.Name }}
                 </tbody>
             </table></div>
             <p style="margin-top:0.8rem;"><strong>CNPE Exam:</strong> You'll almost certainly use <code>kubectl rollout status</code> and <code>kubectl rollout undo</code>. Memorize: <code>status</code> blocks and shows progress. <code>undo</code> goes back one revision by default. <code>history</code> shows what happened. <code>restart</code> creates a new ReplicaSet without changing anything.</p>
+        </div>
+
+        <!-- 🔬 How the Deployment Controller Orchestrates a Rolling Update -->
+        <div class="info-box note" style="margin-top:1.5rem;">
+            <h5>🔬 Inside the Deployment Controller — How Rolling Updates Actually Work</h5>
+            <p>The Deployment controller doesn't directly manage pods. It creates and scales <strong>ReplicaSets</strong>. Each time you change the Pod template (new image tag, new env var), the controller creates a NEW ReplicaSet and scales it up while scaling the OLD one down. Here's the exact algorithm:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item active">
+                    <div class="step-number">1</div>
+                    <h5>Detect Change</h5>
+                    <p>Deployment spec changed (new image tag). Controller detects difference between desired and observed state.</p>
+                </div>
+                <div class="process-step-item active">
+                    <div class="step-number">2</div>
+                    <h5>New ReplicaSet</h5>
+                    <p>Controller creates new ReplicaSet with updated Pod template. Initially scaled to 0 replicas.</p>
+                </div>
+                <div class="process-step-item active">
+                    <div class="step-number">3</div>
+                    <h5>Scale Up New</h5>
+                    <p>New ReplicaSet scaled up by 1 (maxSurge). Old still at full count. Total pods = desired + surge.</p>
+                </div>
+                <div class="process-step-item active">
+                    <div class="step-number">4</div>
+                    <h5>Wait Ready</h5>
+                    <p>New pod must pass readiness probe + minReadySeconds. If it fails, rollout stalls — not proceeds.</p>
+                </div>
+                <div class="process-step-item active">
+                    <div class="step-number">5</div>
+                    <h5>Scale Down Old</h5>
+                    <p>Old ReplicaSet scaled down by 1 (maxUnavailable). Pod receives SIGTERM. Graceful shutdown begins.</p>
+                </div>
+                <div class="process-step-item active">
+                    <div class="step-number">6</div>
+                    <h5>Repeat</h5>
+                    <p>Loop steps 3-5 until new ReplicaSet = desired replicas, old ReplicaSet = 0. Old ReplicaSet kept for rollback.</p>
+                </div>
+            </div>
+            <p style="margin-top:12px;"><strong>Key insight:</strong> The controller <strong>never deletes the old ReplicaSet</strong> — it scales it to 0. This preserves the exact Pod template for <code>kubectl rollout undo</code>. Rolling back simply reverses the process: scale old ReplicaSet up, scale new one down. <code>revisionHistoryLimit</code> controls how many old ReplicaSets are kept. When the limit is exceeded, the OLDEST ReplicaSet (not the one scaled to 0 but the one from revision N-revisionHistoryLimit) is deleted.</p>
         </div>
         </div>
 
@@ -17677,6 +17758,49 @@ app.kubernetes.io/instance: {{ .Release.Name }}
                 </div>
             </div>
         </div>
+
+        <!-- 🔬 Resource Cost Comparison — Stat Bar Visualization -->
+        <div class="stat-bar-group" style="margin-top:1.5rem;">
+            <h5 style="color:#93c5fd;margin-bottom:12px;">📊 Resource Cost Comparison — Deployment Strategies (4 replicas, 2 CPU / 4Gi each)</h5>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Rolling</div>
+                <div class="stat-bar"><div class="stat-bar-fill green" style="width:31.25%;">10 CPU / 20Gi</div></div>
+                <div class="stat-bar-value">maxSurge=1 → 5 pods peak</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Blue/Green</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" style="width:50%;">16 CPU / 32Gi</div></div>
+                <div class="stat-bar-value">2× environments → 8 pods</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Canary</div>
+                <div class="stat-bar"><div class="stat-bar-fill green" style="width:33%;">10.5 CPU / 21Gi</div></div>
+                <div class="stat-bar-value">4 stable + 1 canary → 5 pods</div>
+            </div>
+            <p style="margin-top:12px;color:#8b949e;font-size:0.85em;"><strong>Blue/Green is 60% more expensive than Canary for the same deployment</strong>. This is why Canary is preferred for routine deployments — you get automated analysis AND lower cost. Blue/Green is reserved for critical releases where instant rollback justifies the cost.</p>
+        </div>
+
+        <!-- 🔬 Ingress-Level Blue/Green — Beyond Simple Service Selector -->
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🔬 Ingress-Level Blue/Green — Production-Grade Traffic Switching</h5>
+            <p>The basic Service selector switch works, but production platforms need more control. <strong>Ingress-level Blue/Green</strong> uses the Ingress controller to route traffic based on annotations or host headers, providing:</p>
+            <div class="card-grid cols-2" style="margin-top:0.8rem;">
+                <div class="info-card highlight">
+                    <div class="card-icon-lg">🔀</div>
+                    <h5>NGINX Ingress Canary Annotations</h5>
+                    <p>NGINX Ingress supports canary/blue-green natively via annotations on a SECOND Ingress resource:</p>
+                    <p style="font-family:monospace;font-size:0.78em;margin-top:6px;"><code>nginx.ingress.kubernetes.io/canary: "true"</code><br><code>nginx.ingress.kubernetes.io/canary-weight: "100"</code><br><code># 100 = full switch to Green. 0 = all Blue.</code></p>
+                    <p style="margin-top:6px;">Create TWO Ingresses: one for Blue (stable, no annotations), one for Green (canary annotations). Adjust <code>canary-weight</code> from 0→100 to switch.</p>
+                </div>
+                <div class="info-card">
+                    <div class="card-icon-lg">🌐</div>
+                    <h5>Istio VirtualService Weight</h5>
+                    <p>Istio routes traffic by weight at the mesh level — no Ingress changes needed:</p>
+                    <p style="font-family:monospace;font-size:0.78em;margin-top:6px;"><code>spec:</code><br><code>  http:</code><br><code>  - route:</code><br><code>    - destination:</code><br><code>        host: anihpj-web</code><br><code>        subset: blue</code><br><code>      weight: 0</code><br><code>    - destination:</code><br><code>        host: anihpj-web</code><br><code>        subset: green</code><br><code>      weight: 100</code></p>
+                </div>
+            </div>
+            <p style="margin-top:0.8rem;"><strong>Production recommendation:</strong> Use Ingress-level Blue/Green (not Service selector) when you need: (1) Sticky sessions that survive the switch, (2) Header-based routing for internal testers during the Blue phase, (3) Gradual weight shifting (not all-or-nothing), (4) Integration with cert-manager for automatic TLS on both environments.</p>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -17753,6 +17877,55 @@ app.kubernetes.io/instance: {{ .Release.Name }}
                 </tbody>
             </table></div>
             <p style="margin-top:0.8rem;"><strong>Golden rule:</strong> Your threshold should be <strong>wider than normal variance but narrower than "definitely broken."</strong> A 2× multiplier on P95 values works well for most services. Also: use <code>count</code> (consecutive successes required) to avoid flapping — a single spike above threshold doesn't abort. Require 2-3 consecutive failures before aborting.</p>
+        </div>
+
+        <!-- 🔬 Istio-Based Canary Implementation + Stateful Canary -->
+        <div class="card-grid cols-2" style="margin-top:1.5rem;">
+            <div class="code-block-wrapper" style="margin:0;">
+                <div class="code-block-header"><span class="code-lang">🔬 Istio Canary — VirtualService + DestinationRule</span></div>
+<pre><span class="code-cmt"># DestinationRule: Define subsets (stable vs canary)</span>
+<span class="code-kw">apiVersion:</span> networking.istio.io/v1beta1
+<span class="code-kw">kind:</span> DestinationRule
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web
+<span class="code-kw">spec:</span>
+  <span class="code-kw">host:</span> anihpj-web
+  <span class="code-kw">subsets:</span>
+    <span class="code-kw">- name:</span> stable      <span class="code-cmt"># v1.0 pods</span>
+      <span class="code-kw">labels:</span>
+        <span class="code-kw">version:</span> stable
+    <span class="code-kw">- name:</span> canary      <span class="code-cmt"># v2.0 pods</span>
+      <span class="code-kw">labels:</span>
+        <span class="code-kw">version:</span> canary
+
+<span class="code-cmt"># VirtualService: Split traffic by weight</span>
+<span class="code-kw">apiVersion:</span> networking.istio.io/v1beta1
+<span class="code-kw">kind:</span> VirtualService
+<span class="code-kw">spec:</span>
+  <span class="code-kw">hosts:</span>
+    <span class="code-kw">-</span> anihpj-web
+  <span class="code-kw">http:</span>
+    <span class="code-kw">- route:</span>
+        <span class="code-kw">- destination:</span>
+            <span class="code-kw">host:</span> anihpj-web
+            <span class="code-kw">subset:</span> stable
+          <span class="code-kw">weight:</span> <span class="code-num">80</span>     <span class="code-cmt"># 80% → stable v1.0</span>
+        <span class="code-kw">- destination:</span>
+            <span class="code-kw">host:</span> anihpj-web
+            <span class="code-kw">subset:</span> canary
+          <span class="code-kw">weight:</span> <span class="code-num">20</span>     <span class="code-cmt"># 20% → canary v2.0</span>
+</pre>
+            </div>
+            <div class="info-box warning" style="margin:0;">
+                <h5>🔬 Handling Stateful Canary — The DB Write Problem</h5>
+                <p>When canary pods write to the SAME database as stable pods, schema changes or new data formats can corrupt data. Three solutions:</p>
+                <ul style="margin-top:8px;">
+                    <li><strong>Backward-compatible schema:</strong> New columns must be NULLABLE or have defaults. Old code ignores new columns. New code handles missing columns gracefully. This is the "expand-contract" pattern.</li>
+                    <li><strong>Separate DB per version:</strong> Canary pods write to <code>anihpj-db-v2</code>, stable to <code>anihpj-db-v1</code>. At full promotion, switch the app to v2 DB and decommission v1. Doubles DB cost during canary.</li>
+                    <li><strong>Read-only canary:</strong> Canary pods handle reads only. Writes go to stable pods. Works for read-heavy services (search, catalog). Requires app-level routing logic.</li>
+                </ul>
+                <p style="margin-top:8px;"><strong>Golden rule for databases:</strong> Never run schema migrations that break backward compatibility during a canary. Migrate in two phases: Phase 1 = add new columns (safe, old code ignores them). Phase 2 = remove old columns AFTER full promotion and verification.</p>
+            </div>
         </div>
         </div>
 
@@ -17931,6 +18104,26 @@ app.kubernetes.io/instance: {{ .Release.Name }}
                 <p style="margin-top:8px;"><strong>BlueGreen specific:</strong> <code>activeService</code> always points at the LIVE environment. <code>previewService</code> points at the STAGING environment (not live). After promotion, the "preview" ReplicaSet becomes the new "active" and vice versa. This is more sophisticated than the basic label-switch Blue/Green.</p>
             </div>
         </div>
+
+        <!-- 🔬 AnalysisRun Providers Beyond Prometheus -->
+        <div class="info-box note" style="margin-top:1.5rem;">
+            <h5>🔬 AnalysisRun Providers — Beyond Prometheus</h5>
+            <p>Argo Rollouts AnalysisRuns support multiple metric providers. You're not limited to Prometheus. Here's when to use each:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Provider</th><th>What It Queries</th><th>Best For</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Prometheus</strong></td><td>Any PromQL metric</td><td>Error rate, latency, throughput, saturation</td><td><code>rate(http_errors[5m]) / rate(http_requests[5m]) < 0.01</code></td></tr>
+                    <tr><td><strong>Datadog</strong></td><td>Datadog metrics API</td><td>Teams already on Datadog. APM traces, logs correlation</td><td>Error rate from Datadog APM, custom metrics from app</td></tr>
+                    <tr><td><strong>NewRelic</strong></td><td>NRQL queries</td><td>NewRelic APM users</td><td><code>SELECT rate(count(*), 5 minutes) FROM TransactionError WHERE appName='anihpj'</code></td></tr>
+                    <tr><td><strong>Job</strong></td><td>Runs a K8s Job. Success = Job completes (exit 0). Fail = any other exit code</td><td>Custom validation: integration tests, DB query, external API check</td><td>Run pytest against canary endpoint, verify all tests pass</td></tr>
+                    <tr><td><strong>Web</strong></td><td>HTTP POST to an external endpoint. Success = 2xx response</td><td>Custom webhooks: pipeline status, security scan results, approval gates</td><td>POST to Jenkins/GitHub Actions for CI check status</td></tr>
+                    <tr><td><strong>Wavefront</strong></td><td>Wavefront Query Language</td><td>VMware Tanzu users</td><td>Error rate from Wavefront metrics</td></tr>
+                    <tr><td><strong>CloudWatch</strong></td><td>AWS CloudWatch metrics</td><td>AWS-native monitoring</td><td>ALB 5xx count, ECS task health</td></tr>
+                    <tr><td><strong>Kayenta</strong></td><td>Canary analysis from Netflix/Spinnaker</td><td>Statistical canary analysis (Mann-Whitney U test)</td><td>Compare canary vs baseline metrics with statistical significance</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;"><strong>CNPE relevance:</strong> The exam doesn't expect you to know every provider. But you MUST know: (1) The <code>Job</code> provider runs arbitrary K8s Jobs — this is the escape hatch for ANY custom check. (2) The <code>Web</code> provider integrates with external systems via HTTP. (3) <code>successCondition</code> always evaluates <code>result</code> — the query output is always named <code>result</code>.</p>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -17981,6 +18174,53 @@ app.kubernetes.io/instance: {{ .Release.Name }}
         <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
             <span class="tip-icon">⚡</span>
             <div><strong>Speed Tip:</strong> If your CNPE exam question mentions "existing Deployments that can't be modified" — the answer is <strong>Flagger</strong>, not Argo Rollouts. If the question mentions "GitOps with Argo CD already in place" — the answer is <strong>Argo Rollouts</strong>. Context matters.</div>
+        </div>
+
+        <!-- 🔬 Flagger Canary CRD — How Flagger Defines Progressive Delivery -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">🔬 Flagger Canary CRD — Declarative Progressive Delivery for anihpj</span></div>
+<pre><span class="code-kw">apiVersion:</span> flagger.app/v1beta1
+<span class="code-kw">kind:</span> Canary
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web
+  <span class="code-kw">namespace:</span> anihpj-prod
+<span class="code-kw">spec:</span>
+  <span class="code-cmt"># Reference YOUR existing Deployment (unchanged!)</span>
+  <span class="code-kw">targetRef:</span>
+    <span class="code-kw">apiVersion:</span> apps/v1
+    <span class="code-kw">kind:</span> Deployment
+    <span class="code-kw">name:</span> anihpj-web
+  <span class="code-cmt"># How traffic reaches the app (mesh/ingress)</span>
+  <span class="code-kw">service:</span>
+    <span class="code-kw">port:</span> <span class="code-num">8080</span>
+    <span class="code-kw">gateways:</span>              <span class="code-cmt"># Istio-specific</span>
+      <span class="code-kw">-</span> istio-system/public-gateway
+  <span class="code-cmt"># Canary strategy definition</span>
+  <span class="code-kw">analysis:</span>
+    <span class="code-kw">interval:</span> 1m             <span class="code-cmt"># Check every 1 minute</span>
+    <span class="code-kw">threshold:</span> <span class="code-num">5</span>             <span class="code-cmt"># Max failures before rollback</span>
+    <span class="code-kw">maxWeight:</span> <span class="code-num">50</span>            <span class="code-cmt"># Max canary traffic %</span>
+    <span class="code-kw">stepWeight:</span> <span class="code-num">10</span>           <span class="code-cmt"># Increase by 10% each step</span>
+    <span class="code-kw">stepWeightPromotion:</span> <span class="code-num">10</span>  <span class="code-cmt"># Steps after passing checks</span>
+    <span class="code-kw">metrics:</span>
+      <span class="code-kw">- name:</span> request-success-rate
+        <span class="code-kw">thresholdRange:</span>
+          <span class="code-kw">min:</span> <span class="code-num">99</span>          <span class="code-cmt"># Must be > 99% success</span>
+        <span class="code-kw">interval:</span> 1m
+      <span class="code-kw">- name:</span> request-duration
+        <span class="code-kw">thresholdRange:</span>
+          <span class="code-kw">max:</span> <span class="code-num">500</span>        <span class="code-cmt"># P99 must be < 500ms</span>
+        <span class="code-kw">interval:</span> 1m
+    <span class="code-kw">webhooks:</span>                 <span class="code-cmt"># Optional: external checks</span>
+      <span class="code-kw">- name:</span> smoke-test
+        <span class="code-kw">type:</span> pre-rollout       <span class="code-cmt"># Run BEFORE traffic shift</span>
+        <span class="code-kw">url:</span> http://flagger-loadtester.anihpj/
+        <span class="code-kw">timeout:</span> 30s
+</pre>
+        </div>
+        <div class="cnpe-gotcha" style="margin-top:1rem;">
+            <span class="gotcha-icon">⚠️</span>
+            <div><strong>Gotcha — Flagger Creates Resources Automatically:</strong> When you apply this Canary CR, Flagger creates: a canary Deployment, a canary Service, and modifies your Istio VirtualService. <strong>Do NOT manually create these</strong> — Flagger manages them. If you delete the Flagger-created canary Deployment, Flagger re-creates it. The primary Deployment stays untouched.</div>
         </div>
         </div>
 
@@ -18037,6 +18277,63 @@ app.kubernetes.io/instance: {{ .Release.Name }}
                 <p><strong>Problem:</strong> Pod receives SIGTERM. kube-proxy removes it from endpoints. But there's a RACE: new connections may still arrive before iptables rules update. <strong>Solution:</strong> Add a <code>preStop</code> hook that sleeps 5-10 seconds BEFORE the container receives SIGTERM. This gives kube-proxy time to update.</p>
                 <p style="margin-top:8px;"><code>lifecycle:</code><br><code>  preStop:</code><br><code>    exec:</code><br><code>      command: ["/bin/sh","-c",</code><br><code>        "sleep 10"]</code><br><code># Sleep 10s → iptables updated →</code><br><code># THEN SIGTERM sent to app</code></p>
             </div>
+        </div>
+
+        <!-- 🔬 Pod Termination Lifecycle — The Full Sequence -->
+        <div class="info-box note" style="margin-top:1.5rem;">
+            <h5>🔬 Pod Termination Lifecycle — The Full Sequence of Events</h5>
+            <p>When a Pod is deleted (rolling update, node drain, scale-down), a precise sequence of events unfolds. Understanding this sequence is critical for zero-downtime deployments:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item">
+                    <div class="step-number">1</div>
+                    <h5>DELETE</h5>
+                    <p>API Server marks Pod for deletion. <code>deletionTimestamp</code> set. <code>terminating</code> state.</p>
+                </div>
+                <div class="process-step-item">
+                    <div class="step-number">2</div>
+                    <h5>preStop</h5>
+                    <p>If <code>preStop</code> hook defined, it runs FIRST. Sleep 5-10s here gives kube-proxy time to update iptables.</p>
+                </div>
+                <div class="process-step-item">
+                    <div class="step-number">3</div>
+                    <h5>SIGTERM</h5>
+                    <p>Container receives SIGTERM. App should: stop accepting connections, finish in-flight work, close DB pools.</p>
+                </div>
+                <div class="process-step-item">
+                    <div class="step-number">4</div>
+                    <h5>GRACE PERIOD</h5>
+                    <p><code>terminationGracePeriodSeconds</code> countdown (default 30s). App has this long to shut down.</p>
+                </div>
+                <div class="process-step-item">
+                    <div class="step-number">5</div>
+                    <h5>SIGKILL</h5>
+                    <p>If still running after grace period, SIGKILL (force stop). No chance to clean up. Data loss possible.</p>
+                </div>
+                <div class="process-step-item active">
+                    <div class="step-number">6</div>
+                    <h5>REMOVED</h5>
+                    <p>Pod removed from API Server. Endpoints updated. Replacement Pod scheduled if needed.</p>
+                </div>
+            </div>
+            <p style="margin-top:12px;"><strong>Key timing insight:</strong> The race condition between steps 2-3 and kube-proxy is real. Even with <code>preStop</code>, some requests MAY still reach the dying Pod. That's why your app must handle SIGTERM gracefully — stop accepting but finish processing. Don't just crash.</p>
+        </div>
+
+        <!-- 🔬 PDB Deep Dive — minAvailable vs maxUnavailable Tradeoffs -->
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🔬 PodDisruptionBudget — The Math Behind Safe Disruptions</h5>
+            <p>A PDB doesn't PREVENT disruptions — it LIMITS them. During voluntary disruptions (node drains, cluster upgrades), the eviction API checks the PDB: "If I evict this Pod, will the PDB still be satisfied?" If not, the eviction is REJECTED (HTTP 429).</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>PDB Setting</th><th>With 5 Replicas</th><th>Max Pods Evictable at Once</th><th>Best For</th></tr></thead>
+                <tbody>
+                    <tr><td><code>minAvailable: 4</code></td><td>At least 4 must be running</td><td><strong>1</strong> (5 − 4 = 1)</td><td>Critical services that need most pods running</td></tr>
+                    <tr><td><code>minAvailable: 3</code></td><td>At least 3 must be running</td><td><strong>2</strong> (5 − 3 = 2)</td><td>Balanced safety vs drain speed</td></tr>
+                    <tr><td><code>minAvailable: 1</code></td><td>At least 1 must be running</td><td><strong>4</strong> (5 − 1 = 4)</td><td>Fast drains, but risk of single point of failure</td></tr>
+                    <tr><td><code>maxUnavailable: 1</code></td><td>At most 1 can be down</td><td><strong>1</strong></td><td>Same as minAvailable:4 — expressed differently</td></tr>
+                    <tr><td><code>maxUnavailable: 25%</code></td><td>At most 25% can be down</td><td><strong>1</strong> (25% of 5 = 1.25, rounded down to 1)</td><td>Dynamic scaling — works with HPA</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;"><strong>minAvailable vs maxUnavailable:</strong> Use <code>minAvailable</code> when you think in terms of "I need X pods running." Use <code>maxUnavailable</code> when you think in terms of "I can tolerate X pods down." They're mathematically equivalent: <code>minAvailable = replicas − maxUnavailable</code>. The difference is mental model. <strong>maxUnavailable with percentages works better with HPA</strong> because it scales automatically.</p>
+            <p style="margin-top:8px;"><strong>CNPE Exam Gotcha:</strong> PDBs only protect against <strong>voluntary disruptions</strong> (evictions). A node crash (involuntary) ignores the PDB entirely. Also: if you set <code>minAvailable: 5</code> with 5 replicas, <strong>no Pod can ever be evicted</strong> — not even one at a time. This blocks cluster upgrades. Always leave at least 1 pod of "headroom" in your PDB.</p>
         </div>
         </div>
 
@@ -18208,6 +18505,22 @@ client = api.get_client()
                 </ul>
             </div>
         </div>
+
+        <!-- 🔬 Dark Launching vs Canary — Key Differences -->
+        <div class="compare-table" style="margin-top:1.5rem;"><table>
+            <thead><tr><th colspan="2">🔬 Dark Launching vs Canary — Don't Confuse These!</th></tr></thead>
+            <thead><tr><th>Dark Launching</th><th>Canary</th></tr></thead>
+            <tbody>
+                <tr><td>Traffic is <strong>MIRRORED</strong> (copied) to v2.0</td><td>Traffic is <strong>ROUTED</strong> (redirected) to v2.0</td></tr>
+                <tr><td>v2.0 response is <strong>DISCARDED</strong> — user never sees it</td><td>v2.0 response is <strong>RETURNED</strong> — user sees it</td></tr>
+                <tr><td>v1.0 receives <strong>100% of traffic</strong></td><td>v1.0 receives <strong>decreasing %</strong> as canary grows</td></tr>
+                <tr><td>Goal: <strong>Performance testing</strong> under real load</td><td>Goal: <strong>Safety validation</strong> before full rollout</td></tr>
+                <tr><td>Runs before/during development — test new code</td><td>Runs during deployment — validate new version</td></tr>
+                <tr><td>Side effects (DB writes) must be isolated or discarded</td><td>Side effects are REAL — v2.0 is the live version for its users</td></tr>
+                <tr><td>No traffic % control needed — it's a copy</td><td>Precise traffic % control required (5% → 25% → 100%)</td></tr>
+                <tr><td>Use when: you want to see if v2.0 SURVIVES real traffic</td><td>Use when: you want to safely ROLL OUT v2.0 to users</td></tr>
+            </tbody>
+        </table></div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -18324,6 +18637,941 @@ client = api.get_client()
                         <div class="decision-branch-label">Test Feature Behavior</div>
                         <div class="decision-node">A/B Testing</div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <hr class="chapter-divider">
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- CHAPTER 17: CONTAINER REGISTRIES & IMAGE MANAGEMENT -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div id="ch17">
+        <div class="chapter-intro">
+            <h3>Chapter 17: Container Registries &amp; Image Management</h3>
+            <p>Docker Hub, ECR, Harbor, GHCR, Quay — <strong>the "app store" for your platform</strong>. How images are stored, pulled, scanned, promoted, and kept secure across environments.</p>
+            <div class="chapter-meta"><span class="meta-tag">🟡 Intermediate</span><span class="meta-tag">⏱️ ~2.5 hours</span><span class="meta-tag">🚀 Domain 2 · 25%</span></div>
+        </div>
+
+        <div class="info-box note" style="margin-bottom:1.5rem;">
+            <p><strong>📖 Chapter Overview:</strong> Container registries are where your images live. Every <code>kubectl apply</code> that creates a Pod triggers a registry pull. Understanding registries is understanding the supply chain of your platform. This chapter covers: the five major registry types (Docker Hub, ECR, Harbor, GHCR, Quay), pull policies and when to use each, ImagePullSecrets for private registry auth, digest pinning for immutability, the dangers of the :latest tag, lifecycle policies to manage storage, cross-region replication for speed and DR, pull-through caching to reduce latency and egress costs, vulnerability scanning with Trivy/Clair/ECR Scan, and image promotion pipelines from dev to production. CNPE Domain 2 (GitOps &amp; CD — 25%).</p>
+        </div>
+
+        <div class="learning-objectives">
+            <h4>🎯 What You'll Learn</h4>
+            <ul>
+                <li>✅ Choose the right registry for your platform: Docker Hub, ECR, Harbor, GHCR, or Quay</li>
+                <li>✅ Configure pull policies correctly: <code>Always</code>, <code>IfNotPresent</code>, <code>Never</code></li>
+                <li>✅ Authenticate to private registries using ImagePullSecrets</li>
+                <li>✅ Pin images by digest (<code>sha256:...</code>) for immutability and security</li>
+                <li>✅ Understand why <code>:latest</code> is dangerous and what to use instead</li>
+                <li>✅ Manage registry storage with lifecycle policies and replication</li>
+                <li>✅ Set up pull-through caching to reduce latency and egress costs</li>
+                <li>✅ Scan images for vulnerabilities with Trivy, Clair, and ECR Scan</li>
+                <li>✅ Build image promotion pipelines from dev → staging → production</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <span class="relevance-label">🎓 CNPE Relevance</span>
+            <div class="relevance-domains">
+                <span class="cnpe-domain-badge">GitOps &amp; Continuous Delivery <span class="cnpe-weight">Domain 2 — 25%</span></span>
+                <span class="cnpe-domain-badge">Security &amp; Policy <span class="cnpe-weight">Domain 5 — 15%</span></span>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.1 REGISTRY TYPES -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-1" class="section-block"><h4>17.1 Registry Types — The "App Store" for Your Platform</h4>
+
+        <div class="info-box note" style="margin-bottom:1.2rem;">
+            <p><strong>🧠 What Is a Container Registry?</strong> A container registry stores and distributes container images. When you <code>docker push</code>, images go to a registry. When Kubernetes creates a Pod, the kubelet <code>docker pull</code>s from a registry. Think of it as the "app store" for your platform — developers publish images, clusters download them.</p>
+        </div>
+
+        <div class="compare-table" style="margin-top:1.2rem;"><table>
+            <thead><tr><th>Registry</th><th>Type</th><th>Auth</th><th>Scanning</th><th>Best For</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Docker Hub</strong></td><td>Public SaaS</td><td>Username/Password, Access Token</td><td>Docker Scout (basic)</td><td>Open-source, public images, small teams</td></tr>
+                <tr><td><strong>ECR</strong> (Elastic Container Registry)</td><td>AWS-native</td><td>IAM roles (no password needed!)</td><td>ECR Scan (Basic + Enhanced)</td><td>AWS workloads, EKS clusters</td></tr>
+                <tr><td><strong>Harbor</strong></td><td>Self-hosted</td><td>LDAP, OIDC, DB, local users</td><td>Clair (built-in), Trivy plug-in</td><td>Air-gapped, compliance, enterprise</td></tr>
+                <tr><td><strong>GHCR</strong> (GitHub Container Registry)</td><td>GitHub-integrated</td><td>GITHUB_TOKEN, OIDC, PAT</td><td>Dependabot, CodeQL integration</td><td>GitHub Actions CI/CD, OCI artifacts</td></tr>
+                <tr><td><strong>Quay</strong></td><td>Red Hat SaaS / self-hosted</td><td>OAuth, Robot Accounts</td><td>Clair (built-in)</td><td>OpenShift, Red Hat ecosystem</td></tr>
+                <tr><td><strong>ACR</strong> (Azure Container Registry)</td><td>Azure-native</td><td>Azure AD, Managed Identity</td><td>Microsoft Defender</td><td>Azure workloads, AKS clusters</td></tr>
+                <tr><td><strong>GCR/Artifact Registry</strong></td><td>GCP-native</td><td>Service Accounts, Workload Identity</td><td>Container Analysis (Grype)</td><td>GCP workloads, GKE clusters</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="card-grid cols-2" style="margin-top:1.5rem;">
+            <div class="info-card highlight">
+                <div class="card-icon-lg">🏢</div>
+                <h5>Self-Hosted (Harbor)</h5>
+                <ul style="text-align:left;">
+                    <li><strong>Full control:</strong> You own the data, the network, the auth</li>
+                    <li><strong>Air-gapped ready:</strong> Works without internet</li>
+                    <li><strong>RBAC + Projects:</strong> Per-team registries within one Harbor instance</li>
+                    <li><strong>Built-in scanning:</strong> Clair + Trivy without external tools</li>
+                    <li><strong>Replication:</strong> Pull from Docker Hub, push to your Harbor</li>
+                </ul>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">☁️</div>
+                <h5>Cloud-Native (ECR/GHCR/ACR)</h5>
+                <ul style="text-align:left;">
+                    <li><strong>Zero infrastructure:</strong> No servers to manage</li>
+                    <li><strong>IAM integration:</strong> No passwords — use cloud IAM roles</li>
+                    <li><strong>Cross-region replication:</strong> Built-in, one checkbox</li>
+                    <li><strong>Lifecycle policies:</strong> Auto-delete old images</li>
+                    <li><strong>Lower latency:</strong> Same region as your cluster = faster pulls</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <span class="tip-icon">⚡</span>
+            <div><strong>Speed Tip:</strong> For the CNPE exam, know these: <strong>Harbor</strong> = self-hosted with scanning. <strong>ECR</strong> = AWS-native, IAM auth (no passwords). <strong>GHCR</strong> = GitHub-integrated, supports OCI artifacts (Helm charts too). The exam may ask you to choose the right registry for a scenario — air-gapped → Harbor, AWS EKS → ECR, GitHub Actions → GHCR.</div>
+        </div>
+
+        <!-- 🔬 Registry Authentication Deep Dive -->
+        <div class="info-box note" style="margin-top:1.5rem;">
+            <h5>🔬 How Each Registry Handles Authentication — Deep Dive</h5>
+            <p>Each registry authenticates differently. Understanding this prevents <code>ImagePullBackOff</code> errors:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Registry</th><th>Auth Mechanism</th><th>How K8s Authenticates</th><th>Token Expiry</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Docker Hub</strong></td><td>Username + Password OR Personal Access Token (PAT)</td><td><code>kubectl create secret docker-registry</code> with username/token</td><td>PAT: never expires. Password: until changed.</td></tr>
+                    <tr><td><strong>ECR</strong></td><td>IAM role → STS → temporary credentials (valid 12 hours)</td><td><strong>IRSA</strong> (IAM Roles for Service Accounts) — NO static secret. Or <code>docker-registry</code> secret refreshed by cron.</td><td>12 hours. Must refresh or use IRSA which auto-refreshes.</td></tr>
+                    <tr><td><strong>GHCR</strong></td><td>GITHUB_TOKEN (Actions, expires per job) OR Personal Access Token (PAT, long-lived)</td><td><code>docker-registry</code> secret with PAT. In Actions: auto-injected via <code>ghcr.io</code> credentials.</td><td>GITHUB_TOKEN: 1 hour (job lifetime). PAT: configurable (7d to never).</td></tr>
+                    <tr><td><strong>Harbor</strong></td><td>Local users, LDAP, OIDC, Robot Accounts (per-project tokens)</td><td><code>docker-registry</code> secret with Robot Account credentials</td><td>Robot Account: never expires (unless rotated).</td></tr>
+                    <tr><td><strong>ACR</strong></td><td>Azure AD → Managed Identity OR Admin credentials</td><td><code>az acr login</code> on nodes, or <code>docker-registry</code> secret</td><td>Managed Identity tokens: auto-refreshed by Azure.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;"><strong>The ECR/IRSA pattern is the most elegant:</strong> K8s ServiceAccount annotated with an AWS IAM role ARN. The EKS pod identity webhook injects AWS credentials automatically. No static secret. No token rotation. No cron job. The pod authenticates to ECR the same way an EC2 instance does — via IAM.</p>
+        </div>
+
+        <!-- 🔬 Registry Decision Tree -->
+        <div class="decision-tree" style="margin-top:1.5rem;">
+            <div class="decision-node question">Which registry should I use for anihpj?</div>
+            <div class="decision-branches" style="margin-top:8px;">
+                <div style="text-align:center;">
+                    <div class="decision-branch-label">Air-gapped / Compliance</div>
+                    <div class="decision-node yes">Harbor (self-hosted)</div>
+                </div>
+                <div style="text-align:center;">
+                    <div class="decision-branch-label">On AWS EKS</div>
+                    <div class="decision-node yes">ECR (IAM, no passwords)</div>
+                </div>
+                <div style="text-align:center;">
+                    <div class="decision-branch-label">GitHub Actions CI/CD</div>
+                    <div class="decision-node yes">GHCR (auto-auth)</div>
+                </div>
+                <div style="text-align:center;">
+                    <div class="decision-branch-label">OpenShift / Red Hat</div>
+                    <div class="decision-node">Quay (built-in Clair)</div>
+                </div>
+            </div>
+            <div class="decision-node question" style="margin-top:12px;">Multi-cloud platform?</div>
+            <div class="decision-node yes" style="max-width:400px;">Harbor (one registry everywhere) OR cloud-native per cloud (ECR+AWS, ACR+Azure, GCR+GCP)</div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.2 PULL POLICIES -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-2" class="section-block"><h4>17.2 Pull Policies — When Does Kubernetes Pull Your Image?</h4>
+
+        <p>The <code>imagePullPolicy</code> on a container tells the kubelet when to check the registry for a new image. Getting this wrong causes stale images (running old code) or rate-limiting (Docker Hub blocks you).</p>
+
+        <div class="compare-table" style="margin-top:1.2rem;"><table>
+            <thead><tr><th>Policy</th><th>Behavior</th><th>When to Use</th><th>Risk</th></tr></thead>
+            <tbody>
+                <tr><td><code>Always</code></td><td>Pull from registry EVERY time a Pod starts. Even if image exists locally. Checks for updated tag.</td><td>Development, CI/CD, when using mutable tags like <code>:dev</code> or <code>:staging</code></td><td>Rate-limiting from Docker Hub (100 pulls/6h free). Slower pod starts.</td></tr>
+                <tr><td><code>IfNotPresent</code></td><td>Pull ONLY if image is NOT cached on the node. If cached, use cached version.</td><td>Production with immutable tags (<code>v1.2.3</code> or digest). Saves bandwidth, avoids rate limits.</td><td>If tag IS reused (bad practice), node may run old image.</td></tr>
+                <tr><td><code>Never</code></td><td>NEVER pull from registry. Image MUST exist on the node already (pre-loaded).</td><td>Air-gapped environments, offline clusters, pre-seeded images via <code>ctr image import</code></td><td>Pod won't start if image isn't pre-loaded. Hard to manage at scale.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="diagram-container" style="margin-top:1.5rem;">
+            <div class="diagram-title">Pull Policy Decision Flow — What Happens on Pod Start</div>
+<pre>
+  Pod Created
+       │
+       ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │ imagePullPolicy?                                             │
+  │                                                              │
+  │  Always ─────────────────────────────────────────────────►  │
+  │  │  Pull from registry EVERY time. Use digest to verify.    │
+  │  │  ┌──────────┐    ┌──────────┐    ┌──────────┐           │
+  │  │  │ Registry │───►│  kubelet │───►│   Pod    │           │
+  │  │  └──────────┘    └──────────┘    └──────────┘           │
+  │  │                                                          │
+  │  IfNotPresent ────────────────────────────────────────────► │
+  │  │  Is image on node?                                       │
+  │  │  ├── YES → Use cached image (FAST — no network)         │
+  │  │  └── NO  → Pull from registry                           │
+  │  │                                                          │
+  │  Never ───────────────────────────────────────────────────► │
+  │     Is image on node?                                       │
+  │     ├── YES → Use local image                               │
+  │     └── NO  → ErrImageNeverPull → Pod FAILS                │
+  └─────────────────────────────────────────────────────────────┘
+</pre>
+        </div>
+
+        <!-- 🔬 The Pod-to-Image Journey — How a Pod Gets Its Image -->
+        <div class="process-steps" style="margin-top:1.5rem;">
+            <div class="process-step-item active">
+                <div class="step-number">1</div>
+                <h5>Pod Created</h5>
+                <p>Scheduler assigns Pod to a Node. kubelet on that Node receives the Pod spec including the image reference.</p>
+            </div>
+            <div class="process-step-item active">
+                <div class="step-number">2</div>
+                <h5>Check Cache</h5>
+                <p>kubelet checks local image cache. If <code>imagePullPolicy: IfNotPresent</code> and image exists → SKIP to step 6.</p>
+            </div>
+            <div class="process-step-item active">
+                <div class="step-number">3</div>
+                <h5>Authenticate</h5>
+                <p>If private registry: read ImagePullSecrets from Pod spec OR ServiceAccount. Decode credentials.</p>
+            </div>
+            <div class="process-step-item active">
+                <div class="step-number">4</div>
+                <h5>Pull Layers</h5>
+                <p>Fetch image manifest → pull each layer (parallel for uncached, skip cached layers). Check digest if specified.</p>
+            </div>
+            <div class="process-step-item active">
+                <div class="step-number">5</div>
+                <h5>Verify Digest</h5>
+                <p>If <code>@sha256:...</code> specified: compute hash of pulled image. MUST match exactly. Mismatch → <code>ErrImagePull</code>.</p>
+            </div>
+            <div class="process-step-item active">
+                <div class="step-number">6</div>
+                <h5>Start Container</h5>
+                <p>Image unpacked → container runtime (containerd/CRI-O) creates container from the image layers. Container starts.</p>
+            </div>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <span class="gotcha-icon">⚠️</span>
+            <div><strong>Gotcha — The :latest Default:</strong> If you omit the tag (or use <code>:latest</code>), Kubernetes defaults <code>imagePullPolicy</code> to <code>Always</code>. This means EVERY pod restart pulls from the registry — even if nothing changed. For production, always specify a tag AND set <code>imagePullPolicy: IfNotPresent</code>. This one setting can save you from Docker Hub rate limits and 3-second pod start delays.</div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.3 IMAGEPULLSECRETS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-3" class="section-block"><h4>17.3 ImagePullSecrets — Authenticating to Private Registries</h4>
+
+        <p>Public images (Docker Hub official images) require no authentication. Private registries (ECR, Harbor, GHCR private repos) need credentials. <strong>ImagePullSecrets</strong> are Kubernetes Secrets of type <code>kubernetes.io/dockerconfigjson</code> that store registry credentials and are attached to Pods or ServiceAccounts.</p>
+
+        <div class="code-block-wrapper" style="margin-top:1.2rem;">
+            <div class="code-block-header"><span class="code-lang">Creating an ImagePullSecret for GHCR</span></div>
+<pre><span class="code-cmt"># Step 1: Create the Secret from Docker config</span>
+kubectl create secret docker-registry ghcr-secret \
+  --docker-server=ghcr.io \
+  --docker-username=anihs \
+  --docker-password=$GITHUB_TOKEN \
+  --docker-email=platform@anihs.com \
+  --namespace=anihpj-prod
+
+<span class="code-cmt"># Step 2: Reference in Pod spec</span>
+<span class="code-kw">spec:</span>
+  <span class="code-kw">imagePullSecrets:</span>
+    <span class="code-kw">- name:</span> ghcr-secret
+  <span class="code-kw">containers:</span>
+    <span class="code-kw">- name:</span> anihpj-web
+      <span class="code-kw">image:</span> ghcr.io/anihs/anihpj-web:v2.0.0
+
+<span class="code-cmt"># Step 3: OR attach to ServiceAccount (recommended for all Pods)</span>
+kubectl patch serviceaccount default \
+  -p '{"imagePullSecrets": [{"name": "ghcr-secret"}]}' \
+  -n anihpj-prod
+</pre>
+        </div>
+
+        <div class="card-grid cols-2" style="margin-top:1.5rem;">
+            <div class="info-card highlight">
+                <div class="card-icon-lg">🔑</div>
+                <h5>Per-Pod ImagePullSecret</h5>
+                <p>Specify in <code>spec.imagePullSecrets</code>. Works but requires EVERY Pod manifest to include it. Easy to forget. Good for one-off Pods.</p>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">👤</div>
+                <h5>ServiceAccount ImagePullSecret (Recommended)</h5>
+                <p>Attach the secret to a ServiceAccount. ALL Pods using that SA automatically get the pull secret. No per-Pod config needed. <strong>This is the production pattern.</strong></p>
+            </div>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <span class="tip-icon">🎯</span>
+            <div><strong>Exam Tip:</strong> ECR has NO password — it uses IAM. You can't <code>kubectl create secret docker-registry</code> with a password for ECR. Instead, use <code>aws ecr get-login-password | kubectl create secret docker-registry ...</code> or better, use <strong>eksctl create iamserviceaccount</strong> with an IAM role that has ECR pull permissions. The CNPE exam may test this distinction.</div>
+        </div>
+
+        <!-- 🔬 ECR IRSA Pattern — The Proper Way -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">🔬 ECR IRSA (IAM Roles for Service Accounts) — No Static Secrets</span></div>
+<pre><span class="code-cmt"># Step 1: Create IAM policy for ECR pull access</span>
+<span class="code-cmt"># (Attach AWS-managed: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly)</span>
+
+<span class="code-cmt"># Step 2: Create IAM role with trust relationship for K8s SA</span>
+<span class="code-cmt"># Trust policy allows sts:AssumeRoleWithWebIdentity from EKS OIDC provider</span>
+
+<span class="code-cmt"># Step 3: Create K8s ServiceAccount with IAM role annotation</span>
+<span class="code-kw">apiVersion:</span> v1
+<span class="code-kw">kind:</span> ServiceAccount
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-sa
+  <span class="code-kw">namespace:</span> anihpj-prod
+  <span class="code-kw">annotations:</span>
+    <span class="code-kw">eks.amazonaws.com/role-arn:</span> arn:aws:iam::123456789:role/anihpj-ecr-read
+
+<span class="code-cmt"># Step 4: Use the SA in your Pod</span>
+<span class="code-kw">spec:</span>
+  <span class="code-kw">serviceAccountName:</span> anihpj-sa
+  <span class="code-kw">containers:</span>
+    <span class="code-kw">- image:</span> 123456789.dkr.ecr.us-east-1.amazonaws.com/anihpj-web:v2.0.0
+<span class="code-cmt"># NO imagePullSecrets needed! EKS webhook injects AWS creds automatically.</span>
+
+<span class="code-cmt"># What happens under the hood:</span>
+<span class="code-cmt"># 1. Pod starts with anihpj-sa ServiceAccount</span>
+<span class="code-cmt"># 2. EKS pod identity webhook sees the eks.amazonaws.com/role-arn annotation</span>
+<span class="code-cmt"># 3. Webhook injects AWS_WEB_IDENTITY_TOKEN_FILE + AWS_ROLE_ARN env vars</span>
+<span class="code-cmt"># 4. AWS SDK in kubelet calls sts:AssumeRoleWithWebIdentity</span>
+<span class="code-cmt"># 5. Gets temporary ECR credentials → authenticates → pulls image</span>
+</pre>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.4 DIGEST PINNING -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-4" class="section-block"><h4>17.4 Digest Pinning — Immutability by Hash</h4>
+
+        <div class="info-box warning" style="border-left-color:#eab308;margin-bottom:1.2rem;">
+            <p><strong>⚠️ The Problem:</strong> Tags are MUTABLE. <code>anihpj:v1.0.0</code> can point to image A today and image B tomorrow. If an attacker pushes a malicious image with the same tag, your cluster pulls it automatically. Between your scan and your deploy, the image could change — this is the <strong>TOCTOU</strong> (Time-Of-Check-Time-Of-Use) vulnerability.</p>
+        </div>
+
+        <div class="diagram-container">
+            <div class="diagram-title">Digest Pinning — The Solution to TOCTOU</div>
+<pre>
+  ❌ TAGS (Mutable — Dangerous)              ✅ DIGESTS (Immutable — Safe)
+  ┌─────────────────────────┐               ┌─────────────────────────────┐
+  │ anihpj:v1.0.0           │               │ anihpj@sha256:              │
+  │                         │               │   a1b2c3d4e5f6...           │
+  │ Monday:  → Image A      │               │                             │
+  │ Tuesday: → Image B (!)  │               │ FOREVER: → Image A          │
+  │                         │               │ (the exact same bytes)      │
+  │ Same tag, DIFFERENT img │               │                             │
+  └─────────────────────────┘               └─────────────────────────────┘
+
+  HOW TO GET THE DIGEST:
+  docker pull ghcr.io/anihs/anihpj-web:v2.0.0
+  docker inspect ghcr.io/anihs/anihpj-web:v2.0.0 --format='{{.RepoDigests}}'
+  # Output: [ghcr.io/anihs/anihpj-web@sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2]
+
+  USE THE DIGEST:
+  image: ghcr.io/anihs/anihpj-web@sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+</pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <span class="tip-icon">⚡</span>
+            <div><strong>Speed Tip:</strong> In CI/CD, after <code>docker push</code>, capture the digest from the push output and use it in your Kubernetes manifests. GitOps tools like Argo CD and Flux support digest references natively. <strong>Never deploy by tag in production</strong> — always deploy by digest. Tags are for humans. Digests are for machines.</div>
+        </div>
+
+        <!-- 🔬 How Image Digests Work — The Merkle Tree of Layers -->
+        <div class="info-box note" style="margin-top:1.5rem;">
+            <h5>🔬 How Image Digests Work — The Merkle Tree Inside Every Image</h5>
+            <p>A container image digest isn't just a hash of the image file — it's a <strong>content-addressable Merkle tree</strong> of all the image layers. Understanding this explains why digests are cryptographically immutable:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">Image Digest = Hash of the Manifest (which hashes all layers)</div>
+<pre>
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    IMAGE DIGEST (sha256:a1b2c3...)          │
+  │                    = hash(Manifest JSON)                    │
+  │                         │                                   │
+  │         ┌───────────────┼───────────────┐                  │
+  │         ▼               ▼               ▼                  │
+  │  ┌────────────┐  ┌────────────┐  ┌────────────┐           │
+  │  │  Layer 1   │  │  Layer 2   │  │  Layer 3   │           │
+  │  │ sha256:A1  │  │ sha256:B2  │  │ sha256:C3  │           │
+  │  │ (OS base)  │  │ (apt deps) │  │ (app code) │           │
+  │  └────────────┘  └────────────┘  └────────────┘           │
+  │                                                             │
+  │  Manifest JSON = {                                          │
+  │    "config":    { "digest": "sha256:cfg..." },              │
+  │    "layers": [                                              │
+  │      { "digest": "sha256:A1...", "size": 75123456 },       │
+  │      { "digest": "sha256:B2...", "size": 23456789 },       │
+  │      { "digest": "sha256:C3...", "size": 1234567 }         │
+  │    ]                                                        │
+  │  }                                                          │
+  └─────────────────────────────────────────────────────────────┘
+
+  WHY THIS MATTERS:
+  • If ANY byte in ANY layer changes → layer hash changes
+  • If ANY layer hash changes → manifest changes
+  • If manifest changes → IMAGE DIGEST CHANGES
+  • Two images with the SAME digest are guaranteed byte-for-byte IDENTICAL
+  • This is why digest pinning prevents TOCTOU attacks — the hash chain is unbreakable
+</pre>
+            </div>
+            <p style="margin-top:0.8rem;"><strong>Practical implication:</strong> Even a 1-byte change in your application code produces a completely different digest. This means you can't "update" a digest — you can only reference a new digest. This is exactly what you want for supply chain security: every image is uniquely and immutably identified.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.5 :LATEST DANGERS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-5" class="section-block"><h4>17.5 :latest Dangers — The Most Dangerous 7 Characters in Kubernetes</h4>
+
+        <p>The <code>:latest</code> tag is the default when no tag is specified. It's convenient for development but <strong>catastrophic for production</strong>. Here's why, with concrete scenarios:</p>
+
+        <div class="scenario-box" style="margin-top:1.2rem;">
+            <h5>🔴 Scenario 1: The "It Works for Me" Mystery</h5>
+            <ul>
+                <li>Monday 9am: Developer pushes <code>anihpj:latest</code>. Cluster pulls and runs it. App works.</li>
+                <li>Monday 6pm: CI pipeline pushes a new <code>anihpj:latest</code> (v2.1.0) with a bug.</li>
+                <li>Monday 7pm: A crashed node restarts. Pod rescheduled. kubelet pulls <code>anihpj:latest</code> — gets the NEW, BROKEN image.</li>
+                <li><strong>No code was deployed.</strong> No GitOps change. No CI trigger. Just a Pod restart. And production is down.</li>
+            </ul>
+        </div>
+
+        <div class="card-grid cols-2" style="margin-top:1.5rem;">
+            <div class="info-card highlight">
+                <div class="card-icon-lg">❓</div>
+                <h5>Unpredictable</h5>
+                <p>What EXACT version is <code>:latest</code> right now? Only the registry knows. Two Pods starting 5 minutes apart may run different code with the same manifest.</p>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">🔄</div>
+                <h5>Non-Reproducible</h5>
+                <p>Last week's deployment used <code>:latest</code> = Image A. This week's deployment uses <code>:latest</code> = Image B. If B has a regression, you can't "rollback to last week's <code>:latest</code>" — it's been overwritten.</p>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">🔍</div>
+                <h5>Untraceable</h5>
+                <p>Production is broken. Which git commit is running? With <code>:latest</code>, you don't know. With <code>:git-sha-abc123</code>, you know exactly. With a digest, you know the exact bytes.</p>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">⏱️</div>
+                <h5>Always Pulled</h5>
+                <p><code>:latest</code> forces <code>imagePullPolicy: Always</code>. Every Pod restart = registry pull = latency + Docker Hub rate limit risk.</p>
+            </div>
+        </div>
+
+        <!-- 🔬 :latest Incident Probability Over Time -->
+        <div class="stat-bar-group" style="margin-top:1.5rem;">
+            <h5 style="color:#f87171;margin-bottom:12px;">📊 Probability of :latest Causing an Incident (increases with time & activity)</h5>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Week 1</div>
+                <div class="stat-bar"><div class="stat-bar-fill green" style="width:5%;">5%</div></div>
+                <div class="stat-bar-value">Only 1 push, low risk</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Month 1</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" style="width:30%;">30%</div></div>
+                <div class="stat-bar-value">Multiple pushes, devs overwriting</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Month 3</div>
+                <div class="stat-bar"><div class="stat-bar-fill blue" style="width:60%;">60%</div></div>
+                <div class="stat-bar-value">Pod restart = surprise new version</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Month 6</div>
+                <div class="stat-bar"><div class="stat-bar-fill red" style="width:85%;">85%</div></div>
+                <div class="stat-bar-value">Node failure → reschedule → crash</div>
+            </div>
+            <div class="stat-bar-item">
+                <div class="stat-bar-label">Year 1</div>
+                <div class="stat-bar"><div class="stat-bar-fill red" style="width:99%;">99%</div></div>
+                <div class="stat-bar-value">Only a matter of time before incident</div>
+            </div>
+            <p style="margin-top:12px;color:#f87171;font-size:0.85em;"><strong>:latest in production is not "if" it breaks — it's "when."</strong> The longer you use it, the more pushes accumulate, and the more likely a Pod restart pulls a broken version. Switch to explicit tags or digests TODAY.</p>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <span class="tip-icon">🎯</span>
+            <div><strong>Exam Tip:</strong> The CNPE exam WILL test your understanding of why <code>:latest</code> is dangerous. The answer must include: (1) mutability — same tag, different images over time, (2) non-reproducibility — can't rollback to "yesterday's latest", (3) untraceability — can't map running code to a git commit. <strong>Always use explicit version tags or digests in production manifests.</strong></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.6 LIFECYCLE POLICIES -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-6" class="section-block"><h4>17.6 Lifecycle Policies — Don't Let Your Registry Become a Landfill</h4>
+
+        <p>Every CI pipeline push creates a new image. With 20 microservices × 10 commits/day × 30 days = <strong>6,000 images/month</strong>. Without cleanup, your registry fills up and costs skyrocket. Lifecycle policies automatically delete old images based on rules.</p>
+
+        <div class="card-grid cols-2" style="margin-top:1.2rem;">
+            <div class="info-card highlight">
+                <div class="card-icon-lg">📦</div>
+                <h5>ECR Lifecycle Policy (JSON)</h5>
+                <p style="font-family:monospace;font-size:0.78em;text-align:left;">
+<code>{</code><br>
+<code>  "rules": [{</code><br>
+<code>    "rulePriority": 1,</code><br>
+<code>    "selection": {</code><br>
+<code>      "tagStatus": "any",</code><br>
+<code>      "countType": "imageCountMoreThan",</code><br>
+<code>      "countNumber": 10</code><br>
+<code>    },</code><br>
+<code>    "action": { "type": "expire" }</code><br>
+<code>  }]</code><br>
+<code>}</code>
+                </p>
+                <p style="margin-top:6px;">Keeps the 10 most recent images. Deletes the 11th oldest. Runs automatically every 24 hours.</p>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">🗑️</div>
+                <h5>Common Policy Patterns</h5>
+                <ul style="text-align:left;">
+                    <li><strong>Keep last N:</strong> Keep most recent 10 images per repo</li>
+                    <li><strong>Age-based:</strong> Delete images older than 30 days</li>
+                    <li><strong>Tag-based:</strong> Delete all <code>:dev-*</code> tags after 7 days</li>
+                    <li><strong>Untagged only:</strong> Delete images with no tags (dangling)</li>
+                    <li><strong>Harbor:</strong> Per-project retention policies in UI</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <span class="gotcha-icon">⚠️</span>
+            <div><strong>Gotcha — Lifecycle Policies Don't Recover Space Immediately:</strong> ECR lifecycle policies only "expire" images — they become un-pullable but the storage isn't freed until ECR's garbage collection runs (typically within 24 hours). Harbor's garbage collection must be triggered manually or scheduled. <strong>Also:</strong> if an image is referenced by digest in a running Deployment, deleting it from the registry won't affect the running Pods — they already pulled it. But if those Pods restart, they WON'T be able to pull the deleted image.</div>
+        </div>
+
+        <!-- 🔬 Harbor Retention vs ECR Lifecycle — Comparison -->
+        <div class="compare-table" style="margin-top:1.5rem;"><table>
+            <thead><tr><th colspan="3">🔬 Harbor Retention Policies vs ECR Lifecycle Policies</th></tr></thead>
+            <thead><tr><th>Feature</th><th>ECR Lifecycle</th><th>Harbor Retention</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Configuration</strong></td><td>JSON policy document (CLI/Console/Terraform)</td><td>UI-based per-project retention rules</td></tr>
+                <tr><td><strong>Rule types</strong></td><td>Keep N most recent, delete by age, tag pattern matching</td><td>Keep N most recent, keep by days, exclude pinned/tagged</td></tr>
+                <tr><td><strong>Schedule</strong></td><td>Automatic (runs every 24h, you can't trigger manually)</td><td>Manual trigger OR scheduled (cron-like). You control when.</td></tr>
+                <tr><td><strong>Garbage collection</strong></td><td>Automatic within 24h of expiration</td><td><strong>Must trigger manually</strong> via Harbor UI or API. Not automatic.</td></tr>
+                <tr><td><strong>Preview/Simulate</strong></td><td>Yes — lifecycle policy preview shows what WOULD be deleted</td><td>Yes — retention rule shows matching artifacts before execution</td></tr>
+                <tr><td><strong>Scope</strong></td><td>Per-registry (applies to ALL repos matching filter)</td><td>Per-project (more granular, one project = one team's images)</td></tr>
+                <tr><td><strong>Best for</strong></td><td>AWS-native, set-and-forget, Terraform-managed</td><td>Teams who need control over WHEN cleanup happens</td></tr>
+            </tbody>
+        </table></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.7 REPLICATION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-7" class="section-block"><h4>17.7 Replication — Images Where You Need Them</h4>
+
+        <p>If your cluster is in Singapore but your registry is in us-east-1, every image pull crosses the Pacific — adding 2-3 seconds of latency per pull, per Pod. <strong>Replication</strong> copies images to registries in multiple regions for faster pulls and disaster recovery.</p>
+
+        <div class="diagram-container">
+            <div class="diagram-title">Multi-Region Replication — Faster Pulls, DR Ready</div>
+<pre>
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                     CI/CD (us-east-1)                                │
+  │                     ┌──────────┐                                     │
+  │                     │ Push     │                                     │
+  │                     │ anihpj   │                                     │
+  │                     └────┬─────┘                                     │
+  └──────────────────────────┼──────────────────────────────────────────┘
+                             │
+                             ▼
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  ECR us-east-1 (SOURCE)                                              │
+  │  ┌──────────────────────────────────────────────────────────────┐   │
+  │  │ anihpj-web@sha256:a1b2c3...  ← Pushed by CI                  │   │
+  │  └──────────────────────────────────────────────────────────────┘   │
+  └──────────────────────────┬───────────────────────────────────────────┘
+                             │
+                    ┌────────┴────────┐
+                    ▼                 ▼
+  ┌──────────────────────┐  ┌──────────────────────┐
+  │ ECR eu-west-1        │  │ ECR ap-southeast-1   │
+  │ (Ireland)            │  │ (Singapore)          │
+  │ ┌──────────────────┐ │  │ ┌──────────────────┐ │
+  │ │ anihpj-web@      │ │  │ │ anihpj-web@      │ │
+  │ │ sha256:a1b2c3... │ │  │ │ sha256:a1b2c3... │ │
+  │ └──────────────────┘ │  │ └──────────────────┘ │
+  └──────────┬───────────┘  └──────────┬───────────┘
+             │                         │
+             ▼                         ▼
+  ┌──────────────────────┐  ┌──────────────────────┐
+  │ EKS eu-west-1        │  │ EKS ap-southeast-1   │
+  │ Pull latency: 50ms   │  │ Pull latency: 50ms   │
+  │ (vs 2s from us-east) │  │ (vs 3s from us-east) │
+  └──────────────────────┘  └──────────────────────┘
+</pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <span class="tip-icon">⚡</span>
+            <div><strong>Speed Tip:</strong> ECR cross-region replication is a single checkbox in the AWS Console. Harbor replication is configured per-project with filters (by tag, by repository, by label). <strong>Registry replication is NOT the same as image promotion.</strong> Replication copies everything. Promotion moves only approved images through quality gates.</div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.8 REGISTRY CACHING -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-8" class="section-block"><h4>17.8 Registry Caching — Pull-Through Cache for Speed and Savings</h4>
+
+        <p>A <strong>pull-through cache</strong> is a local registry that proxies requests to an upstream registry. The first pull fetches from upstream and caches locally. Subsequent pulls serve from cache — reducing latency and egress costs.</p>
+
+        <div class="diagram-container">
+            <div class="diagram-title">Pull-Through Cache Architecture</div>
+<pre>
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  Without Cache                     With Cache                    │
+  │                                                                    │
+  │  Pod ──► Registry (us-east)       Pod ──► Cache (local)          │
+  │  │          │                      │         │                    │
+  │  │   3s latency                    │   50ms  │ (first pull only)  │
+  │  │          │                      │         ▼                    │
+  │  ▼          ▼                      │    Registry (us-east)        │
+  │  Image                           ▼                              │
+  │  Egress: $0.09/GB                 Image (from cache)             │
+  │                                    Egress: $0 (local)            │
+  └──────────────────────────────────────────────────────────────────┘
+
+  HARBOR PROXY CACHE CONFIGURATION:
+   Registries → New Endpoint → Provider: Docker Hub / ECR / GHCR
+   Enable "Proxy Cache" — Harbor acts as a transparent proxy
+   Configure cache retention: keep images for 7 days, max 500GB
+   Point your cluster's image references to Harbor instead of upstream:
+      image: harbor.anihs.com/proxy-docker.io/library/nginx:1.25
+</pre>
+        </div>
+
+        <div class="card-grid cols-2" style="margin-top:1.5rem;">
+            <div class="info-card highlight">
+                <div class="card-icon-lg">⚡</div>
+                <h5>Cache Benefits</h5>
+                <ul style="text-align:left;">
+                    <li><strong>Faster pulls:</strong> 50ms (local) vs 3000ms (cross-region)</li>
+                    <li><strong>Zero egress cost:</strong> Images served from local cache</li>
+                    <li><strong>Docker Hub rate limit bypass:</strong> Cache absorbs repeated pulls</li>
+                    <li><strong>Offline resilience:</strong> Cached images available during upstream outage</li>
+                </ul>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">⚠️</div>
+                <h5>Cache Limitations</h5>
+                <ul style="text-align:left;">
+                    <li><strong>First pull is slow:</strong> Cache miss = full upstream pull</li>
+                    <li><strong>Stale cache:</strong> If upstream image updates, cache may serve old version</li>
+                    <li><strong>Storage cost:</strong> Cache is another registry — needs its own lifecycle policies</li>
+                    <li><strong>Digests break proxying:</strong> Some proxies can't resolve digest references</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 🔬 Real-World Pull Latency Comparison -->
+        <div class="case-study-grid" style="margin-top:1.5rem;">
+            <div class="case-card">
+                <div class="case-icon">🇸🇬</div>
+                <h5>Singapore → us-east-1 (No Cache)</h5>
+                <div class="case-stat">❌ 3,200ms avg pull</div>
+                <p>EKS in ap-southeast-1 pulling from ECR in us-east-1. Cross-Pacific latency. $0.09/GB egress × 500 pulls/day = $1,350/month.</p>
+            </div>
+            <div class="case-card">
+                <div class="case-icon">🇸🇬</div>
+                <h5>Singapore → ap-southeast-1 (Replication)</h5>
+                <div class="case-stat">✅ 50ms avg pull</div>
+                <p>ECR cross-region replication to ap-southeast-1. Same-region pull. $0.02/GB replication cost. Total: ~$300/month.</p>
+            </div>
+            <div class="case-card">
+                <div class="case-icon">🇸🇬</div>
+                <h5>Singapore + Harbor Cache</h5>
+                <div class="case-stat">✅ 45ms avg pull (cached)</div>
+                <p>Harbor pull-through cache in the cluster. First pull: 3s (cache miss). Subsequent: 45ms. Egress: $0. Storage: local only.</p>
+            </div>
+            <div class="case-card">
+                <div class="case-icon">🌍</div>
+                <h5>Multi-Region + Cache</h5>
+                <div class="case-stat">✅ 40ms avg pull worldwide</div>
+                <p>ECR replication to 3 regions + Harbor cache per cluster. Sub-50ms pulls globally. Best of both worlds: replication + caching.</p>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.9 IMAGE SCANNING -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-9" class="section-block"><h4>17.9 Image Scanning — Find CVEs Before Attackers Do</h4>
+
+        <p>Container images bundle OS packages and application dependencies — both can have known vulnerabilities (CVEs). <strong>Image scanning</strong> checks every layer of your image against vulnerability databases and blocks deployment if critical issues are found.</p>
+
+        <div class="compare-table" style="margin-top:1.2rem;"><table>
+            <thead><tr><th>Scanner</th><th>How It Works</th><th>Integration</th><th>Best For</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Trivy</strong> (Aqua)</td><td>Scans OS packages + language deps (pip, npm, gem). Fast, single binary. Outputs SARIF, JSON, table.</td><td>CLI, CI (GitHub Actions, GitLab CI), Harbor plug-in, K8s operator</td><td>CI/CD pipelines. <code>trivy image ghcr.io/anihs/anihpj-web:v2.0.0</code></td></tr>
+                <tr><td><strong>Clair</strong> (Quay/Harbor)</td><td>Indexes image layers → matches against vulnerability DBs (NVD, Alpine SecDB, Red Hat OVAL). API-driven.</td><td>Built into Harbor and Quay. No CLI needed — auto-scans on push.</td><td>Self-hosted registries (Harbor, Quay). Set-and-forget.</td></tr>
+                <tr><td><strong>ECR Scan</strong> (AWS)</td><td>Basic: scans on push, uses Clair DB. Enhanced: continuous scanning, uses Inspector + Snyk.</td><td>AWS-native. Results in ECR console + EventBridge.</td><td>ECR users. Enhanced = continuous monitoring.</td></tr>
+                <tr><td><strong>Grype</strong> (Anchore)</td><td>Fast, local scanner. Same vulnerability DBs as Trivy. Outputs JSON, table, CycloneDX.</td><td>CLI, CI, K8s admission controller</td><td>Local dev + CI. <code>grype ghcr.io/anihs/anihpj-web:v2.0.0</code></td></tr>
+                <tr><td><strong>Snyk</strong></td><td>Commercial. Scans images + infrastructure-as-code + open-source deps.</td><td>SaaS + CLI + CI + registry webhooks</td><td>Enterprise with compliance requirements</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🔬 Vulnerability Severity Levels — When to Block Deployment</h5>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Severity</th><th>Action</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>CRITICAL</strong></td><td>BLOCK deployment immediately. Fix NOW.</td><td>RCE in log4j (CVE-2021-44228). CVSS 9.0+</td></tr>
+                    <tr><td><strong>HIGH</strong></td><td>BLOCK deployment. Fix within 24 hours.</td><td>SQL injection in Django (CVSS 7.0-8.9)</td></tr>
+                    <tr><td><strong>MEDIUM</strong></td><td>WARN but allow deployment. Fix in next sprint.</td><td>Information disclosure. CVSS 4.0-6.9</td></tr>
+                    <tr><td><strong>LOW</strong></td><td>Log. No action required.</td><td>Theoretical exploit. CVSS 0.1-3.9</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;"><strong>Pipeline integration:</strong> Add Trivy/Grype as a CI stage AFTER build, BEFORE push. If CRITICAL or HIGH CVEs are found, the pipeline FAILS and the image is never pushed. Use <code>trivy image --severity CRITICAL,HIGH --exit-code 1</code> to fail the build on critical/high findings.</p>
+        </div>
+
+        <!-- 🔬 Trivy in GitHub Actions — CI Integration -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">🔬 Trivy in GitHub Actions — Scan Before Push, Block on Failure</span></div>
+<pre><span class="code-kw">name:</span> Scan anihpj Image
+<span class="code-kw">on:</span>
+  <span class="code-kw">push:</span>
+    <span class="code-kw">branches:</span> [main]
+<span class="code-kw">jobs:</span>
+  <span class="code-kw">scan:</span>
+    <span class="code-kw">runs-on:</span> ubuntu-latest
+    <span class="code-kw">steps:</span>
+      <span class="code-kw">- uses:</span> actions/checkout@v4
+      <span class="code-kw">- name:</span> Build image
+        <span class="code-kw">run:</span> docker build -t anihpj-web:${{ github.sha }} .
+      <span class="code-kw">- name:</span> Scan with Trivy
+        <span class="code-kw">uses:</span> aquasecurity/trivy-action@master
+        <span class="code-kw">with:</span>
+          <span class="code-kw">image-ref:</span> anihpj-web:${{ github.sha }}
+          <span class="code-kw">format:</span> sarif
+          <span class="code-kw">output:</span> trivy-results.sarif
+          <span class="code-kw">severity:</span> CRITICAL,HIGH
+          <span class="code-kw">exit-code:</span> <span class="code-str">'1'</span>          <span class="code-cmt"># FAIL pipeline on findings</span>
+          <span class="code-kw">vuln-type:</span> os,library  <span class="code-cmt"># Scan OS + language deps</span>
+      <span class="code-kw">- name:</span> Push if clean
+        <span class="code-kw">if:</span> success()              <span class="code-cmt"># Only push if scan passed</span>
+        <span class="code-kw">run:</span> |
+          docker tag anihpj-web:${{ github.sha }} \
+            ghcr.io/anihs/anihpj-web:${{ github.sha }}
+          docker push ghcr.io/anihs/anihpj-web:${{ github.sha }}
+      <span class="code-kw">- name:</span> Upload SARIF results
+        <span class="code-kw">if:</span> always()
+        <span class="code-kw">uses:</span> github/codeql-action/upload-sarif@v3
+        <span class="code-kw">with:</span>
+          <span class="code-kw">sarif_file:</span> trivy-results.sarif
+</pre>
+        </div>
+        <p style="margin-top:0.8rem;"><strong>Key pattern:</strong> <code>severity: CRITICAL,HIGH</code> + <code>exit-code: '1'</code> = pipeline fails on critical/high CVEs. <code>if: success()</code> on push step ensures compromised images never reach the registry. The SARIF upload (always runs for visibility) creates a security dashboard in GitHub's Security tab.</p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 17.10 IMAGE PROMOTION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s17-10" class="section-block"><h4>17.10 Image Promotion — From Dev to Production, Safely</h4>
+
+        <p><strong>Image promotion</strong> moves an image through a pipeline of registries, each with increasing quality gates. You build ONCE, scan, and promote the SAME image (by digest) — never rebuild between environments.</p>
+
+        <div class="diagram-container">
+            <div class="diagram-title">Image Promotion Pipeline — Build Once, Promote Many</div>
+<pre>
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                       IMAGE PROMOTION PIPELINE                           │
+  │                                                                          │
+  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐          │
+  │  │  BUILD   │    │   SCAN   │    │  STAGE   │    │  PROD    │          │
+  │  │          │    │          │    │          │    │          │          │
+  │  │ CI builds│───►│ Trivy    │───►│ Deploy   │───►│ Deploy   │          │
+  │  │ image    │    │ scan     │    │ to       │    │ to       │          │
+  │  │          │    │          │    │ staging  │    │ prod     │          │
+  │  └────┬─────┘    └────┬─────┘    └────┬─────┘    └────┬─────┘          │
+  │       │               │               │               │                │
+  │       ▼               ▼               ▼               ▼                │
+  │  ┌─────────────────────────────────────────────────────────────────┐   │
+  │  │  DEV REGISTRY          STAGING REGISTRY       PROD REGISTRY     │   │
+  │  │  (dev-anihpj)          (staging-anihpj)       (prod-anihpj)     │   │
+  │  │                       │                                          │   │
+  │  │  anihpj@sha256:abc    │  anihpj@sha256:abc    │  anihpj@sha256:abc│  │
+  │  │  ↑ SAME IMAGE ────────┼─── SAME IMAGE ───────┼─── SAME IMAGE    │  │
+  │  │                       │                      │                  │   │
+  │  │  Access: devs write   │  Access: CI only     │  Access: CI only │   │
+  │  │  Scan: optional       │  Scan: required      │  Scan: required  │   │
+  │  │  Lifecycle: 7 days    │  Lifecycle: 30 days  │  Lifecycle: 90 days│  │
+  │  └─────────────────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  PROMOTION COMMAND (copy image between registries without re-pulling):
+  crane copy dev-registry/anihpj@sha256:abc staging-registry/anihpj@sha256:abc
+
+  WHY crane? It copies directly between registries WITHOUT docker pull/push.
+  This preserves the digest and avoids local disk usage.
+</pre>
+        </div>
+
+        <div class="card-grid cols-2" style="margin-top:1.5rem;">
+            <div class="info-card highlight">
+                <div class="card-icon-lg">✅</div>
+                <h5>Promotion Best Practices</h5>
+                <ul style="text-align:left;">
+                    <li><strong>Build ONCE:</strong> Never rebuild between environments</li>
+                    <li><strong>Promote by digest:</strong> <code>crane copy ...@sha256:abc</code></li>
+                    <li><strong>Separate registries:</strong> Different access controls per stage</li>
+                    <li><strong>Gate at each stage:</strong> Scan → Test → Approve → Promote</li>
+                    <li><strong>Audit trail:</strong> Every promotion logged with who, when, what</li>
+                </ul>
+            </div>
+            <div class="info-card">
+                <div class="card-icon-lg">🔧</div>
+                <h5>Promotion Tools</h5>
+                <ul style="text-align:left;">
+                    <li><strong>crane:</strong> Google's Go tool for registry operations. <code>crane copy</code>, <code>crane digest</code></li>
+                    <li><strong>skopeo:</strong> Red Hat's image manipulation tool. <code>skopeo copy docker://src docker://dst</code></li>
+                    <li><strong>regctl:</strong> regclient's CLI. Registry API operations</li>
+                    <li><strong>Harbor replication:</strong> Built-in push/pull replication rules</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 🔬 Full Promotion Pipeline — CI/CD Bash Script with Quality Gates -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">🔬 Complete Image Promotion Script — 4 Quality Gates</span></div>
+<pre><span class="code-cmt">#!/bin/bash — IMAGE PROMOTION WITH QUALITY GATES</span>
+<span class="code-cmt"># Usage: ./promote.sh &lt;src-registry&gt; &lt;dst-registry&gt; &lt;image:tag&gt;</span>
+
+<span class="code-kw">set</span> -e  <span class="code-cmt"># Exit on any error — any gate failure stops the pipeline</span>
+
+<span class="code-kw">SRC</span>=<span class="code-str">"$1"</span>        <span class="code-cmt"># e.g., dev-registry.anihs.com</span>
+<span class="code-kw">DST</span>=<span class="code-str">"$2"</span>        <span class="code-cmt"># e.g., staging-registry.anihs.com</span>
+<span class="code-kw">IMG</span>=<span class="code-str">"$3"</span>        <span class="code-cmt"># e.g., anihpj-web:v2.0.0</span>
+
+<span class="code-cmt"># GATE 1: Get immutable digest (fail if image doesn't exist)</span>
+<span class="code-kw">DIGEST</span>=$(crane digest ${SRC}/${IMG}) || {
+  <span class="code-kw">echo</span> <span class="code-str">"FAILED GATE 1: Image not found in source registry"</span>
+  <span class="code-kw">exit</span> 1
+}
+<span class="code-kw">echo</span> <span class="code-str">"GATE 1 PASSED: Digest = ${DIGEST}"</span>
+
+<span class="code-cmt"># GATE 2: Scan for vulnerabilities (fail on CRITICAL or HIGH)</span>
+<span class="code-kw">trivy</span> image --severity CRITICAL,HIGH --exit-code 1 \n  ${SRC}/${IMG} || {
+  <span class="code-kw">echo</span> <span class="code-str">"FAILED GATE 2: CRITICAL or HIGH vulnerabilities found"</span>
+  <span class="code-kw">exit</span> 2
+}
+<span class="code-kw">echo</span> <span class="code-str">"GATE 2 PASSED: No critical/high vulnerabilities"</span>
+
+<span class="code-cmt"># GATE 3: Verify image signature (Cosign — supply chain integrity)</span>
+<span class="code-kw">cosign</span> verify --key cosign.pub ${SRC}/${IMG} || {
+  <span class="code-kw">echo</span> <span class="code-str">"FAILED GATE 3: Image signature invalid or missing"</span>
+  <span class="code-kw">exit</span> 3
+}
+<span class="code-kw">echo</span> <span class="code-str">"GATE 3 PASSED: Signature verified"</span>
+
+<span class="code-cmt"># GATE 4: Verify SBOM attestation exists</span>
+<span class="code-kw">cosign</span> verify-attestation --key cosign.pub \
+  --type spdx ${SRC}/${IMG} || {
+  <span class="code-kw">echo</span> <span class="code-str">"FAILED GATE 4: No SBOM attestation found"</span>
+  <span class="code-kw">exit</span> 4
+}
+<span class="code-kw">echo</span> <span class="code-str">"GATE 4 PASSED: SBOM verified"</span>
+
+<span class="code-cmt"># ALL GATES PASSED — Promote by immutable digest</span>
+<span class="code-kw">crane</span> copy ${SRC}/${IMG}@${DIGEST} ${DST}/${IMG}@${DIGEST}
+<span class="code-kw">echo</span> <span class="code-str">"✅ PROMOTED: ${IMG}@${DIGEST} → ${DST}"</span>
+<span class="code-cmt"># Log: who=$(git config user.email) when=$(date -Iseconds) what=${DIGEST}</span>
+</pre>
+        </div>
+        <p style="margin-top:0.8rem;color:#c9d1d9;font-size:0.92em;"><strong>Each gate is an exit point.</strong> If any gate fails, the image never reaches the destination registry. This pattern — scan → verify → attest → promote — is the industry standard for secure image promotion. The same image (by digest) is moved; it's never rebuilt between environments.</p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- PRACTICE DRILLS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="cnpe-practice-drill" id="drill17-1">
+            <div class="drill-header"><span class="drill-num">Drill 17.1</span> Create ImagePullSecret & Deploy from Private Registry</div>
+            <div class="drill-instructions">
+                <p><strong>Scenario:</strong> anihpj-web image is in GHCR (private). Create the secret and deploy.</p>
+                <ol>
+                    <li><code>kubectl create secret docker-registry ghcr-secret --docker-server=ghcr.io --docker-username=YOUR_USER --docker-password=$GITHUB_TOKEN --docker-email=platform@anihs.com -n anihpj-prod</code></li>
+                    <li>Attach to ServiceAccount: <code>kubectl patch sa default -p '{"imagePullSecrets":[{"name":"ghcr-secret"}]}' -n anihpj-prod</code></li>
+                    <li>Deploy with <code>image: ghcr.io/anihs/anihpj-web:v2.0.0</code></li>
+                    <li>Verify: <code>kubectl describe pod -n anihpj-prod | grep -A5 "Pulled"</code></li>
+                </ol>
+            </div>
+            <div class="drill-hint">💡 Hint: If the pod stays in <code>ImagePullBackOff</code>, run <code>kubectl describe pod</code> and check the Events section for the exact error (401 Unauthorized, 404 Not Found, etc.).</div>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill17-2">
+            <div class="drill-header"><span class="drill-num">Drill 17.2</span> Scan an Image with Trivy & Block on Critical CVEs</div>
+            <div class="drill-instructions">
+                <p><strong>Scenario:</strong> Add Trivy scanning to your CI pipeline. Block on CRITICAL or HIGH CVEs.</p>
+                <ol>
+                    <li>Install: <code>curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh</code></li>
+                    <li>Scan: <code>trivy image --severity CRITICAL,HIGH --exit-code 1 ghcr.io/anihs/anihpj-web:v2.0.0</code></li>
+                    <li>If exit code 1 → pipeline FAILS → image never pushed to staging</li>
+                    <li>Check output format: <code>trivy image --format sarif --output trivy-results.sarif ghcr.io/anihs/anihpj-web:v2.0.0</code></li>
+                </ol>
+            </div>
+            <div class="drill-hint">💡 Hint: <code>--exit-code 1</code> makes Trivy return non-zero on findings — this is what CI platforms use to fail the job. Without this flag, Trivy always exits 0 (success) even when CVEs are found.</div>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill17-3">
+            <div class="drill-header"><span class="drill-num">Drill 17.3</span> Promote an Image Between Registries</div>
+            <div class="drill-instructions">
+                <p><strong>Scenario:</strong> Image passed CI + scan. Promote from dev registry to staging registry.</p>
+                <ol>
+                    <li>Get digest: <code>crane digest dev-registry.anihs.com/anihpj-web:v2.0.0</code> → sha256:abc123...</li>
+                    <li>Promote: <code>crane copy dev-registry.anihs.com/anihpj-web@sha256:abc123 staging-registry.anihs.com/anihpj-web@sha256:abc123</code></li>
+                    <li>Verify: <code>crane digest staging-registry.anihs.com/anihpj-web@sha256:abc123</code> → same digest</li>
+                    <li>Update Argo CD: point staging at <code>staging-registry.anihs.com/anihpj-web@sha256:abc123</code></li>
+                </ol>
+            </div>
+            <div class="drill-hint">💡 Hint: <code>crane copy</code> copies directly between registries WITHOUT pulling to your local machine. This is MUCH faster than <code>docker pull → docker tag → docker push</code> and preserves the digest exactly.</div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- PRACTICE QUESTIONS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="cnpe-knowledge-check" style="margin-top:2rem;">
+            <div class="kc-q"><strong>Q1:</strong> Configure ECR as private registry for anihpj. Create ImagePullSecret. Attach to Deployment.<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer"><strong>ECR auth is IAM-based, not password-based.</strong> Use <code>aws ecr get-login-password --region us-east-1 | kubectl create secret docker-registry ecr-secret --docker-server=ACCOUNT.dkr.ecr.us-east-1.amazonaws.com --docker-username=AWS --docker-password-stdin -n anihpj-prod</code>. Attach via <code>spec.imagePullSecrets: [{name: ecr-secret}]</code>. For EKS, use IAM Roles for Service Accounts (IRSA) instead — no secret needed.</div></details></div>
+            <div class="kc-q"><strong>Q2:</strong> Image tag is <code>anihpj:v1.0.0</code>. Attacker pushes malicious image with same tag. How does digest pinning prevent?<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer"><strong>Tags are pointers — they can change.</strong> <code>anihpj:v1.0.0</code> can point to Image A (your scan) and later to Image B (attacker's). Digest pinning uses <code>anihpj@sha256:abc123...</code> — a cryptographic hash of the image content. The hash changes if ANY byte changes. Your Deployment specifies the exact hash → kubelet verifies the pulled image matches that hash → attacker's image with a different hash is REJECTED. This prevents TOCTOU attacks.</div></details></div>
+            <div class="kc-q"><strong>Q3:</strong> Harbor vs ECR for an air-gapped environment.<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer"><strong>Harbor wins for air-gapped.</strong> Harbor is self-hosted — you install it inside the air-gapped network. Images are pushed directly via internal network. ECR is AWS SaaS — requires internet access. For air-gapped ECR, you'd need AWS Outposts or ECR on EKS Anywhere (limited). Also: Harbor's built-in Clair scanner works offline — it pre-downloads vulnerability databases.</div></details></div>
+            <div class="kc-q"><strong>Q4:</strong> :latest tag in production — a developer says "it works for me." Explain 3 dangers.<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer">(1) <strong>Mutability:</strong> <code>:latest</code> today ≠ <code>:latest</code> yesterday. A Pod restart pulls a different image with no deployment change. (2) <strong>Non-reproducibility:</strong> Can't rollback to "last week's latest" — it's been overwritten. Use <code>:v2.0.0</code> or <code>@sha256:...</code>. (3) <strong>Untraceability:</strong> Production is broken — which git commit is running? With <code>:latest</code> you don't know. With <code>:git-abc123</code> you know immediately.</div></details></div>
+            <div class="kc-q"><strong>Q5:</strong> ECR lifecycle policy — keep last 10 images, delete older than 30 days.<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer">Create two rules: Rule 1 (priority 1): <code>"selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10}, "action": {"type": "expire"}</code>. Rule 2 (priority 2): <code>"selection": {"tagStatus": "any", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 30}, "action": {"type": "expire"}</code>. Rules are evaluated in priority order; the first matching rule wins. Images matching Rule 1 (top 10) are never evaluated against Rule 2.</div></details></div>
+            <div class="kc-q"><strong>Q6:</strong> Multi-region ECR replication — us-east-1 and eu-west-1. Configure.<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer">In ECR console → Private registry → Replication → Create rule. Source: us-east-1 registry. Destination: eu-west-1 registry. Filters: all repositories, or specific repos like <code>anihpj-*</code>. ECR replicates within minutes. For cross-account replication, add a registry policy in the destination account allowing the source account to replicate. Note: replication is push-based (source pushes to destination), not pull-based.</div></details></div>
+            <div class="kc-q"><strong>Q7:</strong> Trivy scan in CI finds CRITICAL CVE. What's your pipeline's response?<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer">Pipeline <strong>FAILS immediately</strong>. The image is <strong>never pushed</strong> to the registry. Alert sent to #platform-security Slack channel with CVE ID, severity, affected package, and fix version. Developer must: (1) update the vulnerable package, (2) rebuild, (3) re-scan. If the CVE is in a base image (<code>python:3.11-slim</code>), update <code>FROM</code> to a newer digest. <strong>Never suppress or ignore CRITICAL CVEs</strong> — even if "not exploitable" — let the security team decide.</div></details></div>
+            <div class="kc-q"><strong>Q8:</strong> Registry cache — Singapore cluster pulls from ECR us-east-1. 3s latency per pull. Fix it.<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer"><strong>Option 1 (best):</strong> ECR cross-region replication to ap-southeast-1. Cluster pulls from local region → 50ms latency. <strong>Option 2:</strong> Deploy Harbor in Singapore as a pull-through cache. Configure proxy cache for ECR us-east-1. Point cluster's image references to Harbor. First pull: 3s. Subsequent pulls: 50ms. <strong>Option 3:</strong> ECR pull-through cache (new feature). Create a pull-through cache rule in ap-southeast-1 pointing to us-east-1.</div></details></div>
+            <div class="kc-q"><strong>Q9:</strong> Image promotion — dev:abc123 → staging → production. What gates must the image pass?<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer"><strong>Dev → Staging gates:</strong> (1) CI pipeline passes (lint, test, build). (2) Trivy scan — 0 CRITICAL, 0 HIGH CVEs. (3) Image pushed to dev registry. <strong>Staging → Production gates:</strong> (1) Staging deployment succeeds. (2) Smoke tests pass (health check, critical flows). (3) Performance test within 20% of baseline. (4) Manual approval (optional, for Continuous Delivery). (5) <code>crane copy</code> to production registry. (6) Argo CD syncs production to new digest.</div></details></div>
+            <div class="kc-q"><strong>Q10:</strong> GHCR vs ECR for GitHub Actions CI/CD. Compare auth, cost, integration.<p></p><details><summary>▶ Show Answer</summary><div class="kc-answer"><strong>GHCR:</strong> Auth via GITHUB_TOKEN (automatic in Actions — no setup). Free for public repos. Private: included in GitHub Teams/Enterprise. Native OCI support (Helm charts too). <strong>ECR:</strong> Auth via <code>aws-actions/configure-aws-credentials</code> → IAM role. Free tier: 500MB/month. After: $0.10/GB/month. Cross-region replication costs extra. <strong>For GitHub Actions:</strong> GHCR wins on simplicity — zero config auth. <strong>For EKS on AWS:</strong> ECR wins on latency (same region) and IAM integration (IRSA).</div></details></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CHAPTER SUMMARY -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="info-box note" style="margin-top:2rem;">
+            <p><strong>📖 Chapter 17 Summary:</strong> <strong>Registries hold your images. Digest pinning keeps them immutable. Scanning keeps them secure. Promotion pipelines move them safely from dev to production.</strong> Choose the right registry for your platform: Harbor for air-gapped/self-hosted, ECR for AWS, GHCR for GitHub Actions. Set <code>imagePullPolicy: IfNotPresent</code> in production with explicit tags. Always deploy by digest (<code>@sha256:...</code>) — tags are mutable pointers. Never use <code>:latest</code> in production. Use lifecycle policies to auto-clean old images. Replicate to regions near your clusters. Cache locally to reduce latency and egress. Scan EVERY image with Trivy/Clair — block on CRITICAL and HIGH. Promote images (never rebuild) through dev → staging → production registries with quality gates at each stage.</p>
+        </div>
+
+        <div class="visual-summary" style="margin-top:1.5rem;">
+            <div class="card-grid cols-4" style="margin-top:0;">
+                <div class="info-card highlight">
+                    <div class="card-icon-lg">🏪</div>
+                    <h5>Registry Types</h5>
+                    <p>Docker Hub, ECR, Harbor, GHCR, Quay. Cloud-native or self-hosted. Choose by auth, scanning, latency.</p>
+                </div>
+                <div class="info-card">
+                    <div class="card-icon-lg">🔒</div>
+                    <h5>Digest Pinning</h5>
+                    <p><code>@sha256:abc...</code> = immutable. Prevents TOCTOU. Always deploy by digest. Tags are for humans.</p>
+                </div>
+                <div class="info-card">
+                    <div class="card-icon-lg">🔍</div>
+                    <h5>Scanning</h5>
+                    <p>Trivy, Clair, Grype. Block CRITICAL + HIGH. Scan in CI, not just in registry. Never skip.</p>
+                </div>
+                <div class="info-card">
+                    <div class="card-icon-lg">📦</div>
+                    <h5>Promotion</h5>
+                    <p>Build once, promote many. <code>crane copy</code> between registries. Gates at each stage: scan → test → approve.</p>
                 </div>
             </div>
         </div>
