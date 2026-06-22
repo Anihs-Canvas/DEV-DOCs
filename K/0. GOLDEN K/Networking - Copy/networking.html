@@ -4473,6 +4473,218 @@ kubectl exec anihpj-web-xxx -- ss -tlnp | grep 8000
                         </details>
                     </div>
                 </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 1 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 1 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Encapsulation in Action:</strong> On your Linux machine, run <code>curl -v http://localhost:8000</code> (start a simple HTTP server first with <code>python3 -m http.server 8000</code>). In another terminal, capture the traffic with <code>sudo tcpdump -i lo -nn -X port 8000</code>. Identify in the tcpdump output: (a) the TCP 3-way handshake, (b) the HTTP GET request line, and (c) the HTTP response. Copy the relevant tcpdump lines.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Terminal 1: Start a simple HTTP server</span>
+$ python3 -m http.server 8000
+
+<span class="comment"># Terminal 2: Start capture</span>
+$ sudo tcpdump -i lo -nn -X port 8000
+
+<span class="comment"># Terminal 3: Make the request</span>
+$ curl -v http://localhost:8000
+
+<span class="comment"># TCPDUMP OUTPUT (annotated):</span>
+<span class="comment"># [TCP 3-way handshake]</span>
+IP 127.0.0.1.54321 > 127.0.0.1.8000: Flags [S], seq 1000      <span class="comment">← SYN</span>
+IP 127.0.0.1.8000 > 127.0.0.1.54321: Flags [S.], seq 5000, ack 1001 <span class="comment">← SYN-ACK</span>
+IP 127.0.0.1.54321 > 127.0.0.1.8000: Flags [.], ack 5001     <span class="comment">← ACK (established)</span>
+
+<span class="comment"># [HTTP GET request — look for "GET" in the hex dump]</span>
+IP 127.0.0.1.54321 > 127.0.0.1.8000: Flags [P.], seq 1001:1080
+<span class="comment"># Hex dump shows: 47 45 54 20 2f 20 48 54 54 50  = "GET / HTTP"</span>
+
+<span class="comment"># [HTTP response]</span>
+IP 127.0.0.1.8000 > 127.0.0.1.54321: Flags [P.], seq 5001:5500
+<span class="comment"># Hex dump shows: 48 54 54 50 2f 31 2e 30 20 32 30 30 = "HTTP/1.0 200"</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>Layer-by-Layer Debugging:</strong> Your production Django app on port 8000 is unreachable. Execute the following diagnostic sequence and explain what each command tells you: <code>ip link show eth0</code>, <code>ethtool eth0</code>, <code>ip neigh show</code>, <code>ping -c 2 8.8.8.8</code>, <code>ss -tlnp | grep 8000</code>, <code>curl -v http://localhost:8000/health</code>. What layer does each command test?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Command</th><th>Layer</th><th>What It Tests</th></tr></thead><tbody>
+                                <tr><td><code>ip link show eth0</code></td><td>L1</td><td>Is the interface UP? Link detected?</td></tr>
+                                <tr><td><code>ethtool eth0</code></td><td>L1</td><td>Speed, duplex, driver, error counters (CRC, collisions)</td></tr>
+                                <tr><td><code>ip neigh show</code></td><td>L2</td><td>ARP cache — can we resolve MAC addresses?</td></tr>
+                                <tr><td><code>ping -c 2 8.8.8.8</code></td><td>L3</td><td>Can we reach the internet? ICMP = routing works</td></tr>
+                                <tr><td><code>ss -tlnp \| grep 8000</code></td><td>L4</td><td>Is anything LISTENING on port 8000?</td></tr>
+                                <tr><td><code>curl localhost:8000/health</code></td><td>L7</td><td>Is the application responding with HTTP?</td></tr></tbody></table>
+                            <p><strong>The systematic approach:</strong> If <code>ip link</code> shows DOWN → cable/interface issue (L1). If <code>ss</code> shows nothing on :8000 → app not running (L4). If <code>curl</code> returns 500 → app running but broken (L7). Always bottom-up.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Calculate Protocol Overhead:</strong> An anihpj API response is 4,096 bytes of JSON. Calculate the total frame size on the wire (Ethernet + IPv4 + TCP + HTTP response headers ~200 bytes + JSON payload). What percentage of bytes on the wire is actual application data? Show your work.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Component</th><th>Size</th></tr></thead><tbody>
+                                <tr><td>HTTP response headers</td><td>~200 bytes</td></tr>
+                                <tr><td>JSON payload</td><td>4,096 bytes</td></tr>
+                                <tr><td>TCP header</td><td>20 bytes</td></tr>
+                                <tr><td>IPv4 header</td><td>20 bytes</td></tr>
+                                <tr><td>Ethernet header + FCS</td><td>18 bytes</td></tr>
+                                <tr><td><strong>Total overhead</strong></td><td><strong>258 bytes</strong></td></tr>
+                                <tr><td><strong>Total frame</strong></td><td><strong>4,354 bytes</strong></td></tr>
+                            </tbody></table>
+                            <p><strong>Efficiency:</strong> 4,096 / 4,354 = <strong>94.1%</strong>. Only 5.9% overhead. For larger payloads, overhead becomes negligible. For a 2-byte health check: 2/(2+258) = <strong>0.77% efficiency</strong> — 99.23% overhead!</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>tcpdump Flag Recognition:</strong> Capture any TCP connection with <code>sudo tcpdump -i any -nn port 443</code> while browsing. Identify packets with these flag combinations in the output: <code>[S]</code>, <code>[S.]</code>, <code>[.]</code>, <code>[F.]</code>, <code>[R]</code>, <code>[P.]</code>. What TCP state does each represent?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Flags</th><th>Meaning</th><th>TCP State</th></tr></thead><tbody>
+                                <tr><td><code>[S]</code></td><td>SYN only</td><td>Connection initiation — "I want to connect"</td></tr>
+                                <tr><td><code>[S.]</code></td><td>SYN + ACK</td><td>Server accepts — "I received your SYN, here's mine"</td></tr>
+                                <tr><td><code>[.]</code></td><td>ACK only</td><td>Normal data acknowledgment — connection established</td></tr>
+                                <tr><td><code>[F.]</code></td><td>FIN + ACK</td><td>Connection teardown — "I'm done sending"</td></tr>
+                                <tr><td><code>[R]</code></td><td>RST</td><td>Connection reset — port closed or firewall REJECT</td></tr>
+                                <tr><td><code>[P.]</code></td><td>PSH + ACK</td><td>Data push — "send this to the app immediately"</td></tr></tbody></table>
+                            <p><strong>Hands-on:</strong> Run the capture, then <code>curl https://google.com</code>. You'll see <code>[S] → [S.] → [.]</code> (handshake), then <code>[P.]</code> (TLS ClientHello), then <code>[F.]</code> (teardown).</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Real-World Layer Identification:</strong> For each failure symptom, identify the OSI layer and the most likely root cause: (a) <code>ethtool eth0</code> shows "Link detected: no", (b) <code>ping 8.8.8.8</code> works but <code>curl https://google.com</code> times out, (c) <code>ss -tlnp</code> shows nothing on port 8000, (d) <code>curl</code> returns "SSL certificate problem: certificate has expired", (e) <code>ip neigh show</code> shows "FAILED" for the gateway.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Symptom</th><th>Layer</th><th>Root Cause</th></tr></thead><tbody>
+                                <tr><td>(a) Link detected: no</td><td>L1 — Physical</td><td>Cable unplugged, bad cable, or switch port disabled</td></tr>
+                                <tr><td>(b) ping works, curl times out</td><td>L4 — Transport</td><td>Firewall blocking TCP/443. ICMP allowed but TCP denied. L3 is fine.</td></tr>
+                                <tr><td>(c) Nothing on port 8000</td><td>L4 — Transport</td><td>Application not running or bound to wrong interface. Check <code>systemctl status gunicorn</code>.</td></tr>
+                                <tr><td>(d) SSL cert expired</td><td>L6 — Presentation</td><td>TLS certificate validity period ended. Renew with cert-manager or ACM.</td></tr>
+                                <tr><td>(e) ARP FAILED</td><td>L2 — Data Link</td><td>Gateway is down, wrong IP, or on a different L2 segment. Check <code>arping</code>.</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>Network Namespace Hands-On:</strong> Create two network namespaces, connect them with a veth pair, assign IPs, and verify connectivity with ping. Write the exact sequence of <code>ip netns</code> and <code>ip link</code> commands.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Create two network namespaces</span>
+sudo ip netns add ns1
+sudo ip netns add ns2
+
+<span class="comment"># Create a veth pair (virtual cable)</span>
+sudo ip link add veth-ns1 type veth peer name veth-ns2
+
+<span class="comment"># Assign each end to a namespace</span>
+sudo ip link set veth-ns1 netns ns1
+sudo ip link set veth-ns2 netns ns2
+
+<span class="comment"># Assign IPs</span>
+sudo ip netns exec ns1 ip addr add 10.0.0.1/24 dev veth-ns1
+sudo ip netns exec ns2 ip addr add 10.0.0.2/24 dev veth-ns2
+
+<span class="comment"># Bring interfaces up</span>
+sudo ip netns exec ns1 ip link set veth-ns1 up
+sudo ip netns exec ns2 ip link set veth-ns2 up
+sudo ip netns exec ns1 ip link set lo up
+sudo ip netns exec ns2 ip link set lo up
+
+<span class="comment"># Test connectivity</span>
+sudo ip netns exec ns1 ping -c 2 10.0.0.2
+<span class="comment"># 64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.05 ms ✅</span>
+
+<span class="comment"># Cleanup</span>
+sudo ip netns del ns1
+sudo ip netns del ns2</code></pre>
+                            <p>This is EXACTLY how Docker creates container networking — veth pairs with one end in the container namespace and one end in the host namespace, connected via a bridge.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>TCP Connection States:</strong> Run <code>ss -tan</code> on your machine. You'll see connections in various states. Identify at least one connection in each of these states (or explain when each occurs): LISTEN, ESTABLISHED, TIME_WAIT, CLOSE_WAIT, SYN_SENT. What does each state mean?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>State</th><th>Meaning</th><th>How to See It</th></tr></thead><tbody>
+                                <tr><td>LISTEN</td><td>Server waiting for connections. <code>ss -tlnp</code> shows listening sockets.</td><td>Any server process (nginx, gunicorn, sshd)</td></tr>
+                                <tr><td>ESTABLISHED</td><td>Active connection. Data flowing in both directions.</td><td>Your SSH session, browser connections</td></tr>
+                                <tr><td>TIME_WAIT</td><td>Active closer waiting 2MSL (60s) before port reuse. <code>ss -tan state time-wait</code>.</td><td>After closing a connection you initiated</td></tr>
+                                <tr><td>CLOSE_WAIT</td><td>Remote side sent FIN. Local app hasn't called close() yet. <strong>Leaked if persists.</strong></td><td>App bug — forgot to close connection</td></tr>
+                                <tr><td>SYN_SENT</td><td>Client sent SYN, waiting for SYN-ACK. Brief state. Persistent = firewall drop.</td><td><code>curl</code> to unreachable host</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>Real-World MTU Discovery:</strong> On your machine, find the MTU of your primary interface (<code>ip link show eth0</code> or similar). Then run <code>ping -M do -s 1472 8.8.8.8</code> and <code>ping -M do -s 1473 8.8.8.8</code>. Explain: why does one work and the other fail? What does <code>-M do</code> mean? What does <code>-s 1472</code> represent?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Check MTU</span>
+$ ip link show eth0 | grep mtu
+<span class="comment"># mtu 1500</span>
+
+<span class="comment"># Test with maximum payload for 1500-byte MTU</span>
+$ ping -M do -s 1472 8.8.8.8
+<span class="comment"># 1472 (payload) + 8 (ICMP header) + 20 (IP header) = 1500 bytes ✅</span>
+
+$ ping -M do -s 1473 8.8.8.8
+<span class="comment"># 1473 + 8 + 20 = 1501 bytes > 1500 MTU ❌</span>
+<span class="comment"># Output: "ping: local error: message too long, mtu=1500"</span></code></pre>
+                            <p><strong>Explanation:</strong> <code>-M do</code> sets the DF (Don't Fragment) bit. <code>-s 1472</code> specifies ICMP payload size. Total packet = payload + ICMP header (8B) + IP header (20B) = 1472+28 = 1500. At 1473, total = 1501 > MTU. Router must fragment but DF=1 prevents it → ICMP "Frag Needed" returned → ping reports the MTU.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>DNS Resolution Tracing:</strong> Use <code>dig +trace jobpost.anihpj.com</code> to trace the full DNS resolution chain. Identify each server queried (root, TLD, authoritative). What record type is returned at each step? How many total queries were made?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ dig +trace jobpost.anihpj.com
+
+<span class="comment"># Step 1: Root servers (.) — returns NS records for .com TLD</span>
+.   518400  IN  NS  a.root-servers.net.
+.   518400  IN  NS  b.root-servers.net.
+<span class="comment"># → 13 root server names returned. Query: "." NS?</span>
+
+<span class="comment"># Step 2: .com TLD servers — returns NS records for anihpj.com</span>
+anihpj.com.  172800  IN  NS  ns1.digitalocean.com.
+anihpj.com.  172800  IN  NS  ns2.digitalocean.com.
+<span class="comment"># → Domain's authoritative nameservers identified</span>
+
+<span class="comment"># Step 3: Authoritative — returns the actual A/AAAA/CNAME record</span>
+jobpost.anihpj.com.  300  IN  CNAME  k8s-alb-123.elb.amazonaws.com.
+k8s-alb-123.elb.amazonaws.com.  60  IN  A  34.120.45.67
+<span class="comment"># → Final answer: CNAME chain → A record → IP</span></code></pre>
+                            <p><strong>Total queries:</strong> 3 (root → TLD → authoritative) + potential CNAME follow-up. Each step returns NS records pointing to the next level. The final step returns the actual A/AAAA record.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Build a Mini-Network Lab:</strong> Using ONLY the commands from Chapter 1 (ip, ping, ss, nc, tcpdump), set up a simple client-server TCP connection between two terminals on localhost. In Terminal 1: listen with <code>nc -l 9000</code>. In Terminal 2: capture with <code>tcpdump -i lo port 9000</code>. In Terminal 3: connect with <code>nc localhost 9000</code> and type "hello". Verify: (a) the 3-way handshake is captured, (b) the word "hello" appears in the tcpdump hex output, (c) "hello" appears in Terminal 1.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Terminal 1: Listen</span>
+$ nc -l 9000
+<span class="comment"># (waits for connection)</span>
+
+<span class="comment"># Terminal 2: Capture</span>
+$ sudo tcpdump -i lo -nn -X port 9000
+
+<span class="comment"># Terminal 3: Connect and send data</span>
+$ nc localhost 9000
+hello
+<span class="comment"># (type "hello" and press Enter)</span>
+
+<span class="comment"># Terminal 1 shows: hello ✅</span>
+<span class="comment"># Terminal 2 shows: 3-way handshake [S]→[S.]→[.],</span>
+<span class="comment"># then [P.] with hex: 68 65 6c 6c 6f 0a = "hello\n"</span>
+
+<span class="comment"># This is the simplest possible client-server TCP interaction.</span>
+<span class="comment"># Every production system works the same way — just with TLS,</span>
+<span class="comment"># load balancers, and K8s in between.</span></code></pre>
+                        </div></details>
+                    </div>
+                </div>
             </div>
 
             <!-- ═══════════════════════════════════════════════════════════
@@ -5963,6 +6175,217 @@ docker network create --opt com.docker.network.driver.mtu=<span class="number">1
                         </details>
                     </div>
                 </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 2 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 2 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Interface Diagnostics:</strong> Run <code>ethtool eth0</code> (or your primary interface) and <code>ethtool -S eth0</code>. Identify: speed, duplex, link status, and any non-zero error counters. What does a non-zero <code>rx_crc_errors</code> indicate? What about <code>rx_missed_errors</code>?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Check basic link parameters</span>
+$ ethtool eth0
+Settings for eth0:
+    Speed: 10000Mb/s           <span class="comment">← 10 Gbps</span>
+    Duplex: Full                <span class="comment">← No collisions possible</span>
+    Link detected: yes          <span class="comment">← Physical connection exists</span>
+
+<span class="comment"># Check error counters</span>
+$ ethtool -S eth0 | grep -E "crc|missed|drop"
+rx_crc_errors: 0               <span class="comment">← Frame corruption. >0 = bad cable/connector.</span>
+rx_missed_errors: 0            <span class="comment">← Ring buffer overflow. >0 = increase ring buffer.</span>
+rx_dropped: 0                  <span class="comment">← Kernel dropped. >0 = CPU can't keep up.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>ARP Table Inspection:</strong> Run <code>ip neigh show</code>. Identify the state of each entry (REACHABLE, STALE, DELAY, FAILED). Force a refresh by pinging your gateway. What state does the gateway entry transition to? How long does REACHABLE last before becoming STALE?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ ip neigh show
+10.0.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE  <span class="comment">← confirmed recently</span>
+10.0.1.5 dev eth0 lladdr 11:22:33:44:55:66 STALE      <span class="comment">← not used recently</span>
+
+<span class="comment"># Force refresh</span>
+$ ping -c 1 10.0.1.1
+$ ip neigh show | grep 10.0.1.1
+10.0.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE  <span class="comment">← refreshed!</span></code></pre>
+                            <p>ARP states: REACHABLE (confirmed within <code>base_reachable_time</code> ms, default 30s), STALE (older than reachable time but still usable), DELAY (STALE entry being probed), PROBE (actively sending ARP requests), FAILED (no ARP reply after probes).</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Watch ARP in Real Time:</strong> Open two terminals. In Terminal 1: <code>sudo tcpdump -i eth0 -nn -e arp</code>. In Terminal 2: <code>ping -c 1 &lt;a-host-on-your-network&gt;</code>. What ARP packets do you see? What's the target MAC address in the ARP request? Why is it <code>ff:ff:ff:ff:ff:ff</code>?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo tcpdump -i eth0 -nn -e arp
+<span class="comment"># When you ping a host NOT in ARP cache:</span>
+ARP, Request who-has 10.0.1.5 tell 10.0.1.10, length 28
+    <span class="comment"># Dest MAC: ff:ff:ff:ff:ff:ff (BROADCAST — everyone receives!)</span>
+    <span class="comment"># Src MAC:  your MAC</span>
+ARP, Reply 10.0.1.5 is-at 11:22:33:44:55:66, length 28
+    <span class="comment"># Dest MAC: your MAC (UNICAST reply)</span>
+    <span class="comment"># Src MAC:  11:22:33:44:55:66</span></code></pre>
+                            <p>The ARP request uses broadcast MAC (<code>ff:ff:ff:ff:ff:ff</code>) because the sender doesn't know the target's MAC — it asks EVERYONE on the L2 segment. Only the host with the matching IP responds (unicast). This is why large L2 broadcast domains cause ARP storms.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>VLAN Tag Inspection:</strong> If you have a VLAN-tagged interface, capture traffic with <code>tcpdump -i eth0 -nn -e vlan</code>. Identify the VLAN ID in the captured frames. What does an 802.1Q tag add to an Ethernet frame? How many bits is the VLAN ID field?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo tcpdump -i eth0 -nn -e vlan
+<span class="comment"># Tagged frame output:</span>
+aa:bb:cc:11:22:33 > dd:ee:ff:44:55:66, 802.1Q VLAN 100: 
+    IPv4 10.0.1.5 > 10.0.1.50
+<span class="comment">#                       ↑ VLAN ID = 100</span></code></pre>
+                            <p>The 802.1Q tag adds 4 bytes: TPID (2B, always 0x8100) + PCP (3 bits priority) + DEI (1 bit) + VLAN ID (12 bits = 4094 usable VLANs). The tag is inserted between the Source MAC and EtherType fields.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Ring Buffer Tuning:</strong> Check your NIC's ring buffer size with <code>ethtool -g eth0</code>. If <code>ethtool -S eth0 | grep rx_missed</code> shows non-zero, double the RX ring buffer. What command accomplishes this? Why does increasing the ring buffer help with packet loss?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Check current ring buffer sizes</span>
+$ ethtool -g eth0
+Ring parameters for eth0:
+Pre-set maximums:
+RX:             4096
+TX:             4096
+Current hardware settings:
+RX:             256              <span class="comment">← Only 256 descriptors!</span>
+TX:             256
+
+<span class="comment"># Check for dropped packets due to ring buffer overflow</span>
+$ ethtool -S eth0 | grep rx_missed
+rx_missed_errors: 15234         <span class="comment">← Packets lost! Ring buffer too small.</span>
+
+<span class="comment"># Increase to maximum</span>
+$ sudo ethtool -G eth0 rx 4096 tx 4096</code></pre>
+                            <p>The ring buffer is a circular buffer in NIC RAM. Each slot holds one packet descriptor. If the kernel doesn't process packets fast enough, the buffer fills up and new packets are dropped (rx_missed). Larger buffer = more time before overflow.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>MAC Address Table on a Linux Bridge:</strong> Create a Linux bridge, add two veth interfaces, and observe the MAC learning process. Use <code>bridge fdb show</code> to display the forwarding database. What does "master" mean in the output?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Create bridge and veth pairs</span>
+sudo ip link add br0 type bridge
+sudo ip link add veth1 type veth peer name veth1-br
+sudo ip link add veth2 type veth peer name veth2-br
+sudo ip link set veth1-br master br0
+sudo ip link set veth2-br master br0
+sudo ip link set br0 up
+sudo ip link set veth1-br up && sudo ip link set veth2-br up
+
+<span class="comment"># Generate traffic to populate MAC table</span>
+sudo ip netns exec ns1 ping -c 1 10.0.0.2
+
+<span class="comment"># View the MAC forwarding table</span>
+$ bridge fdb show br0
+aa:bb:cc:11:22:33 dev veth1-br master br0  <span class="comment">← Learned MAC on veth1-br</span>
+dd:ee:ff:44:55:66 dev veth2-br master br0  <span class="comment">← Learned MAC on veth2-br</span></code></pre>
+                            <p>"master br0" means the entry belongs to bridge br0. The bridge learns which MAC addresses are reachable through which port by observing source MAC addresses in incoming frames. This is identical to how physical switches populate their CAM tables.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>Signal-to-Noise Reality Check:</strong> Run <code>cat /proc/net/dev</code> and calculate the error rate for your primary interface: <code>errors / (packets_received + packets_transmitted)</code>. What percentage of packets have errors? If above 0.01%, what physical layer problems could cause this?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ cat /proc/net/dev | grep eth0
+eth0: 152345678 12345 0 0 0 0 0 0 98765432 0 0 0 0 0 0 0
+<span class="comment">       ↑rx_pkts  ↑rx_err                  ↑tx_pkts</span>
+
+<span class="comment"># Error rate = errors / total packets</span>
+<span class="comment"># = 12345 / (152345678 + 98765432)</span>
+<span class="comment"># = 12345 / 251111110</span>
+<span class="comment"># = 0.0049% ≈ acceptable</span>
+
+<span class="comment"># If errors > 0.01%: check cable, connectors, EMI sources,</span>
+<span class="comment"># NIC firmware, switch port errors.</span></code></pre>
+                            <p>Acceptable error rate: < 0.001%. Investigate at 0.01%. Critical at 0.1%+. Common causes: damaged cable (bent/kinked), loose connector, electromagnetic interference (motors, fluorescent lights), faulty NIC, switch port going bad.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>Gratuitous ARP Detection:</strong> Capture all ARP traffic on your network for 60 seconds: <code>sudo tcpdump -i eth0 -nn arp -w /tmp/arp.pcap</code>. Analyze with <code>tcpdump -r /tmp/arp.pcap -nn</code>. Do you see any gratuitous ARPs (unsolicited ARP replies)? What are they used for?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo tcpdump -i eth0 -nn arp -c 50
+<span class="comment"># Normal ARP request-reply:</span>
+ARP, Request who-has 10.0.1.5 tell 10.0.1.1
+ARP, Reply 10.0.1.5 is-at aa:bb:cc:11:22:33
+
+<span class="comment"># Gratuitous ARP (unsolicited reply — no request preceded it):</span>
+ARP, Reply 10.0.1.10 is-at dd:ee:ff:44:55:66
+<span class="comment"># ↑ This is gratuitous! No one asked "who-has 10.0.1.10"</span></code></pre>
+                            <p>Gratuitous ARPs are used for: (1) IP address conflict detection (announcing "I own this IP"), (2) MAC address change notification (VRRP/keepalived failover — new MASTER announces its MAC), (3) updating ARP caches after NIC failover. If you see many per second = possible IP conflict or misconfiguration.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>Interface Bonding Verification:</strong> If you have bonded interfaces, check <code>cat /proc/net/bonding/bond0</code>. What bonding mode is configured? How many slaves? What does MII Status show? What happens if one slave fails in active-backup mode vs 802.3ad mode?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ cat /proc/net/bonding/bond0
+Ethernet Channel Bonding Driver: v5.15.0
+Bonding Mode: IEEE 802.3ad Dynamic link aggregation  <span class="comment">← LACP mode</span>
+MII Status: up
+MII Polling Interval (ms): 100
+Up Delay (ms): 0
+Down Delay (ms): 0
+
+Slave Interface: eth0
+MII Status: up
+Speed: 10000 Mbps
+Duplex: full
+Link Failure Count: 0
+
+Slave Interface: eth1
+MII Status: up
+Speed: 10000 Mbps
+Duplex: full
+Link Failure Count: 0</code></pre>
+                            <p>Modes: active-backup (1 active, others standby — failover only), 802.3ad/LACP (all active, requires switch support, dynamic negotiation), balance-rr (round-robin, no switch support needed), balance-xor (hash-based distribution).</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Full L1/L2 Health Check Script:</strong> Write a bash script that checks: interface link state, speed/duplex, error counters, ARP cache health, and bridge MAC table. The script should output PASS/FAIL for each check and a summary. Run it on your machine.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>#!/bin/bash
+<span class="comment"># L1/L2 Health Check — save as l2-health.sh</span>
+IFACE=${1:-eth0}
+echo "=== L1/L2 Health Check: $IFACE ==="
+
+<span class="comment"># L1: Link state</span>
+LINK=$(ip link show $IFACE | grep -oP 'state \K\w+')
+[[ "$LINK" == "UP" ]] && echo "✅ L1 Link: UP" || echo "❌ L1 Link: $LINK"
+
+<span class="comment"># L1: Speed & Duplex</span>
+SPEED=$(ethtool $IFACE | grep Speed | awk '{print $2}')
+DUPLEX=$(ethtool $IFACE | grep Duplex | awk '{print $2}')
+echo "   Speed: $SPEED, Duplex: $DUPLEX"
+
+<span class="comment"># L1: CRC errors</span>
+CRC=$(ethtool -S $IFACE | grep rx_crc | awk '{print $2}')
+[[ "$CRC" -eq 0 ]] && echo "✅ L1 CRC errors: 0" || echo "❌ L1 CRC errors: $CRC"
+
+<span class="comment"># L2: ARP cache</span>
+ARP_COUNT=$(ip neigh show | wc -l)
+ARP_FAILED=$(ip neigh show | grep FAILED | wc -l)
+[[ "$ARP_FAILED" -eq 0 ]] && echo "✅ L2 ARP: $ARP_COUNT entries, 0 failed" || echo "❌ L2 ARP: $ARP_FAILED FAILED"
+
+<span class="comment"># Summary</span>
+echo "=== Summary: $( [[ "$LINK" == "UP" && "$CRC" -eq 0 && "$ARP_FAILED" -eq 0 ]] && echo '✅ ALL PASS' || echo '❌ ISSUES FOUND' ) ==="</code></pre>
+                        </div></details>
+                    </div>
+                </div>
             </div>
 
             <!-- ═══════════════════════════════════════════════════════════
@@ -7089,6 +7512,195 @@ $ tcpdump -nn -r /tmp/anihpj-debug.pcap</code></pre>
                                 <p>This is a real SRE debugging scenario. The <code>nsenter</code> pattern is the standard way to capture container traffic from the host. By tracing DNS → TCP → TLS in order, you isolate the failing layer in seconds. The tcpdump output is the ground truth — if you see a SYN-ACK from the API server but curl reports "connection refused," the issue is NOT the network (perhaps curl is configured with a proxy you forgot about).</p>
                             </div>
                         </details>
+                    </div>
+                </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 3 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 3 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Write BPF Capture Filters:</strong> Write tcpdump capture filters for: (a) only TCP traffic on port 443, (b) only traffic from host 10.0.1.5, (c) only ICMP echo requests (not replies), (d) all traffic EXCEPT SSH (port 22), (e) only SYN packets. Test each filter.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># (a) TCP/443 only</span>
+sudo tcpdump -i eth0 -nn 'tcp port 443'
+
+<span class="comment"># (b) From host 10.0.1.5</span>
+sudo tcpdump -i eth0 -nn 'host 10.0.1.5'
+
+<span class="comment"># (c) ICMP echo requests only (Type 8)</span>
+sudo tcpdump -i eth0 -nn 'icmp[icmptype] = 8'
+
+<span class="comment"># (d) All except SSH</span>
+sudo tcpdump -i eth0 -nn 'not port 22'
+
+<span class="comment"># (e) SYN packets only (TCP flags: SYN=1, all others=0)</span>
+sudo tcpdump -i eth0 -nn 'tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'</code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>Save and Analyze Captures:</strong> Capture 30 seconds of traffic with <code>tcpdump -i any -nn -w /tmp/capture.pcap</code> while browsing. Then analyze: (a) <code>capinfos /tmp/capture.pcap</code> — what's the packet count and data rate? (b) <code>tcpdump -r /tmp/capture.pcap -nn tcp</code> — how many TCP connections? (c) <code>tcpdump -r /tmp/capture.pcap -nn 'tcp[tcpflags] & tcp-syn != 0' | wc -l</code> — count SYN packets.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ capinfos /tmp/capture.pcap
+Number of packets: 1,234
+File size: 892 KB
+Data size: 845 KB
+Capture duration: 30.5 seconds
+Data rate: 221 kbps
+Average packet size: 684 bytes
+
+$ tcpdump -r /tmp/capture.pcap -nn tcp | wc -l
+987  <span class="comment"># TCP packets</span>
+
+$ tcpdump -r /tmp/capture.pcap -nn 'tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0' | wc -l
+23  <span class="comment"># SYN packets = 23 new connection attempts</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Follow TCP Stream:</strong> Using Wireshark or tshark, find a complete HTTP request-response in your capture. With tshark: <code>tshark -r /tmp/capture.pcap -q -z follow,tcp,ascii,0</code> (try stream 0, 1, 2...). What was the request? What was the response status? Can you see the full HTTP conversation?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -q -z follow,tcp,ascii,0
+===================================================================
+Follow: tcp,ascii
+Filter: tcp.stream eq 0
+Node 0: 10.0.1.5:54321
+Node 1: 93.184.216.34:80
+
+GET / HTTP/1.1
+Host: example.com
+User-Agent: curl/8.0
+Accept: */*
+
+HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: 1256
+...
+===================================================================</code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>Packet Statistics:</strong> Run <code>tshark -r /tmp/capture.pcap -q -z io,stat,1</code> to see packets-per-second. Then run <code>tshark -r /tmp/capture.pcap -q -z conv,tcp</code> to see TCP conversation statistics. Which conversation transferred the most data?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -q -z io,stat,1
+| Interval | Packets |    Bytes |
+| 0-1 sec  |      45 |    32 KB |
+| 1-2 sec  |      78 |    89 KB |
+| 2-3 sec  |      12 |     4 KB |
+
+$ tshark -r /tmp/capture.pcap -q -z conv,tcp
+| Src IP:Port → Dst IP:Port       | Packets | Bytes   |
+| 10.0.1.5:54321 → 93.184.216.34:80 | 156   | 234 KB  |  <span class="comment">← Most data!</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Protocol Hierarchy:</strong> Run <code>tshark -r /tmp/capture.pcap -q -z io,phs</code>. What percentage of packets are TCP? UDP? ICMP? What's the most common application protocol in your capture?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -q -z io,phs
+Protocol Hierarchy Statistics
+eth:  frames:1234 bytes:845000
+  ip:  frames:1200 bytes:840000
+    tcp: frames:1100 bytes:820000    <span class="comment">← 89% TCP</span>
+      http: frames:45 bytes:350000   <span class="comment">← Most common app protocol</span>
+      tls: frames:800 bytes:420000
+    udp: frames:80 bytes:15000       <span class="comment">← 6.5% UDP</span>
+      dns: frames:60 bytes:8000
+    icmp: frames:20 bytes:2000       <span class="comment">← 1.6% ICMP</span>
+  arp: frames:34 bytes:5000          <span class="comment">← 2.7% ARP</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>Identify Retransmissions:</strong> In your capture, find TCP retransmissions: <code>tshark -r /tmp/capture.pcap -Y "tcp.analysis.retransmission"</code>. How many retransmissions? What do they indicate? If none in your capture, browse a site with packet loss simulation.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -Y "tcp.analysis.retransmission"
+3 packets found:
+
+<span class="comment"># Each retransmission = packet lost + TCP recovered</span>
+<span class="comment"># Multiple retransmissions for same connection = network loss</span>
+<span class="comment"># To simulate: sudo tc qdisc add dev eth0 root netem loss 5%</span>
+<span class="comment"># Then browse. Then: sudo tc qdisc del dev eth0 root</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>Extract HTTP Objects:</strong> From your capture, extract all HTTP-transferred files: <code>tshark -r /tmp/capture.pcap --export-objects http,/tmp/http-files/</code>. List the extracted files. What types of content were transferred?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap --export-objects http,/tmp/http-files/
+$ ls -la /tmp/http-files/
+-rw-r--r--  index.html     12,456 bytes
+-rw-r--r--  style.css       8,234 bytes
+-rw-r--r--  script.js      45,678 bytes
+-rw-r--r--  logo.png      234,567 bytes
+
+<span class="comment"># This extracts actual files transferred over unencrypted HTTP.</span>
+<span class="comment"># HTTPS (TLS) content is encrypted — cannot extract.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>DNS Query Analysis:</strong> Capture DNS traffic: <code>sudo tcpdump -i any -nn port 53 -w /tmp/dns.pcap</code> while running <code>dig google.com</code>. Analyze: <code>tshark -r /tmp/dns.pcap -Y "dns.flags.response == 0" -T fields -e dns.qry.name</code>. What queries were made?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/dns.pcap -Y "dns.flags.response == 0" -T fields -e dns.qry.name
+google.com                  <span class="comment">← Query</span>
+
+$ tshark -r /tmp/dns.pcap -Y "dns.flags.response == 1" -T fields -e dns.a
+142.250.80.46              <span class="comment">← Response: A record</span>
+
+$ tshark -r /tmp/dns.pcap -Y "dns.flags.response == 1" -T fields -e dns.resp.ttl
+300                         <span class="comment">← TTL = 5 minutes</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>TLS Handshake Analysis:</strong> Capture TLS traffic: <code>sudo tcpdump -i any -nn port 443 -w /tmp/tls.pcap</code> while browsing. In Wireshark or tshark, find a TLS ClientHello. What TLS version is negotiated? What cipher suite? What SNI (Server Name Indication)?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/tls.pcap -Y "tls.handshake.type == 1" -T fields \
+    -e tls.handshake.version -e tls.handshake.ciphersuite -e tls.handshake.extensions_server_name
+0x0304  <span class="comment">← TLS 1.3 (0x0304 = TLS 1.3)</span>
+0x1301  <span class="comment">← Cipher: TLS_AES_128_GCM_SHA256</span>
+www.google.com  <span class="comment">← SNI: google.com</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Capture Script for Production:</strong> Write a script that captures 60 seconds of traffic with rotation (new file every 10 seconds) and a BPF filter for only your application port. Include size limits and automatic cleanup. Test it.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>#!/bin/bash
+<span class="comment"># Production-grade rotating capture script</span>
+APP_PORT=${1:-8000}
+DURATION=${2:-60}
+ROTATE=${3:-10}
+OUTDIR="/var/tmp/pcap/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$OUTDIR"
+
+sudo tcpdump -i any -nn \
+    -w "$OUTDIR/capture.pcap" \
+    -G $ROTATE \
+    -W $((DURATION / ROTATE)) \
+    -C 100 <span class="comment"># Max 100MB per file</span> \
+    -z gzip <span class="comment"># Compress rotated files</span> \
+    "tcp port $APP_PORT" &
+PID=$!
+sleep $DURATION
+sudo kill $PID
+
+echo "Capture saved to $OUTDIR"
+ls -lh "$OUTDIR"</code></pre>
+                        </div></details>
                     </div>
                 </div>
             </div>

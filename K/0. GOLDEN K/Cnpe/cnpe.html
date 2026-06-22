@@ -31797,8 +31797,1496 @@ profile anihpj-web flags=(attach_disconnected,mediate_deleted) {
 
     <hr class="chapter-divider">
 
-    <div id="ch29"><div class="chapter-intro"><h3>Ch 29: Policy Engines</h3><p>OPA/Gatekeeper (Rego), Kyverno (YAML), common policies, CEL, admission webhooks.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">📜</div><p>Coming soon</p></div></div>
-    <div id="ch30"><div class="chapter-intro"><h3>Ch 30: Supply Chain Security</h3><p>SBOM, Cosign/Sigstore, SLSA, Trivy/Grype, Falco, Vault, kube-bench, compliance.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🔐</div><p>Coming soon</p></div></div>
+    <div id="ch29">
+        <div class="chapter-intro">
+            <h3>Ch 29: Policy Engines &amp; Governance</h3>
+            <p><strong>Policies as code — enforce rules automatically at admission time.</strong> OPA/Gatekeeper uses Rego to define constraint-based policies. Kyverno uses YAML for generate/mutate/validate patterns. CEL-based ValidatingAdmissionPolicy is built into Kubernetes — no webhook needed. Together they form a complete governance layer.</p>
+            <div class="chapter-meta">
+                <span class="meta-tag">🔴 Advanced</span>
+                <span class="meta-tag">⏱️ ~2h</span>
+                <span class="meta-tag">CNPE Domain 5: 15%</span>
+            </div>
+        </div>
+
+        <div class="learning-objectives">
+            <h5>🎯 What You'll Learn</h5>
+            <ul>
+                <li>OPA/Gatekeeper — constraint-based policy engine using Rego language</li>
+                <li>Kyverno — YAML-based policy engine with generate, mutate, and validate capabilities</li>
+                <li>Common policies every platform should enforce (block :latest, require labels, enforce limits)</li>
+                <li>Policy-as-code in CI/CD pipelines — testing policies before deployment</li>
+                <li>ValidatingAdmissionPolicy — native CEL-based validation built into Kubernetes 1.26+</li>
+                <li>How to combine all policy engines into a complete anihpj governance stack</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <h5>📋 CNPE Exam Relevance — Domain 5 (15%)</h5>
+            <p>Domain 5 tests your ability to <strong>use policy engines and admission controllers for governance</strong>. You will be asked to create Kyverno policies, write OPA constraints, and configure CEL-based validation. <strong>Policy engines are a key differentiator for CNPE vs CKA — CKA focuses on RBAC, CNPE adds policy-as-code.</strong></p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 29.1 OPA/GATEKEEPER -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s29-1" class="section-block"><h4>29.1 OPA/Gatekeeper — Constraint-Based Policy Engine</h4>
+        <p><strong>OPA (Open Policy Agent)</strong> is a general-purpose policy engine. <strong>Gatekeeper</strong> integrates OPA with Kubernetes as an admission controller. You define <strong>ConstraintTemplates</strong> (written in Rego) that describe WHAT to check, and <strong>Constraints</strong> that specify the PARAMETERS for those checks.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🧠 OPA/Gatekeeper Architecture — ConstraintTemplate + Constraint</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    OPA/GATEKEEPER POLICY MODEL                                 │
+│                                                                               │
+│  ┌─────────────────────────────────┐                                         │
+│  │     ConstraintTemplate           │  ← Written ONCE by platform team        │
+│  │     (Rego code)                  │     "WHAT to check"                     │
+│  │                                  │     Rego language logic                 │
+│  │  Example: "Check if any          │                                         │
+│  │  container image has the         │                                         │
+│  │  :latest tag. If yes, deny."     │                                         │
+│  └───────────────┬─────────────────┘                                         │
+│                  │                                                            │
+│                  │  Instantiated by:                                          │
+│                  ▼                                                            │
+│  ┌─────────────────────────────────┐                                         │
+│  │     Constraint                   │  ← Created per-use by anyone            │
+│  │     (YAML parameters)            │     "HOW to check"                      │
+│  │                                  │     Specific parameters                 │
+│  │  Example: "Apply the BlockLatest │                                         │
+│  │  template to ALL pods in         │                                         │
+│  │  namespace anihpj-prod."         │                                         │
+│  └───────────────┬─────────────────┘                                         │
+│                  │                                                            │
+│                  ▼                                                            │
+│  ┌─────────────────────────────────┐                                         │
+│  │  Gatekeeper Admission Webhook    │  ← Enforces at admission time          │
+│  │  • Intercepts CREATE/UPDATE      │                                         │
+│  │  • Runs Rego on the resource     │                                         │
+│  │  • Returns allow/deny             │                                         │
+│  └─────────────────────────────────┘                                         │
+│                                                                               │
+│  🔑 KEY CONCEPT: ConstraintTemplate = Rego logic (WHAT). Constraint = params  │
+│     (HOW). Platform team writes templates. App teams create constraints.      │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- OPA/Gatekeeper Code Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 OPA/Gatekeeper — Block :latest Images</span></div>
+<pre><span class="code-cmt"># ── STEP 1: ConstraintTemplate (Rego logic — written once) ──</span>
+<span class="code-kw">apiVersion:</span> templates.gatekeeper.sh/v1
+<span class="code-kw">kind:</span> ConstraintTemplate
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> k8sblocklatesttag
+<span class="code-kw">spec:</span>
+  <span class="code-kw">crd:</span>
+    <span class="code-kw">spec:</span>
+      <span class="code-kw">names:</span>
+        <span class="code-kw">kind:</span> K8sBlockLatestTag       <span class="code-cmt"># This becomes the Constraint kind</span>
+  <span class="code-kw">targets:</span>
+  - <span class="code-kw">target:</span> admission.k8s.gatekeeper.sh
+    <span class="code-kw">rego:</span> |
+      <span class="code-kw">package</span> k8sblocklatesttag
+
+      <span class="code-cmt"># Check every container in every pod</span>
+      violation[{"msg": msg}] {
+        <span class="code-cmt"># Find all containers across all pods</span>
+        container := input.review.object.spec.containers[_]
+        <span class="code-cmt"># Check if image ends with :latest</span>
+        endswith(container.image, ":latest")
+        <span class="code-cmt"># Build error message</span>
+        msg := sprintf("container <%v> uses :latest tag — pinned version required", [container.name])
+      }
+
+<span class="code-cmt"># ── STEP 2: Constraint (parameters — applied per namespace) ──</span>
+<span class="code-kw">apiVersion:</span> constraints.gatekeeper.sh/v1beta1
+<span class="code-kw">kind:</span> K8sBlockLatestTag           <span class="code-cmt"># Matches ConstraintTemplate name</span>
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> block-latest-in-production
+<span class="code-kw">spec:</span>
+  <span class="code-kw">match:</span>
+    <span class="code-kw">kinds:</span>
+    - <span class="code-kw">apiGroups:</span> [""]
+      <span class="code-kw">kinds:</span> ["Pod"]
+    <span class="code-kw">namespaces:</span> ["anihpj-prod"]      <span class="code-cmt"># Only enforce in production</span>
+
+<span class="code-cmt"># ── VERIFY ──</span>
+<span class="code-cmt"># kubectl get constrainttemplates</span>
+<span class="code-cmt"># kubectl get k8sblocklatesttag</span>
+<span class="code-cmt"># kubectl describe k8sblocklatesttag block-latest-in-production</span></pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ OPA/Gatekeeper Quick Reference</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>ConstraintTemplate</strong> = the Rego logic (written by platform team). Defines the policy CHECK.</li>
+                <li><strong>Constraint</strong> = the parameters (created per-namespace/team). Defines WHERE and HOW STRICT.</li>
+                <li><strong>Rego</strong> = OPA's policy language. Declarative: you describe WHAT violates policy, not HOW to check.</li>
+                <li><strong>violation[{...}]</strong> = The Rego rule that defines what constitutes a policy violation. Empty = compliant.</li>
+                <li><strong>input.review.object</strong> = The Kubernetes resource being validated (pod, deployment, etc.).</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 29.2 KYVERNO -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s29-2" class="section-block"><h4>29.2 Kyverno — YAML-Based Policy Engine</h4>
+        <p><strong>Kyverno</strong> (Greek for "govern") is a policy engine designed specifically for Kubernetes. Unlike OPA's Rego, Kyverno policies are written in <strong>YAML</strong> — the same language as Kubernetes manifests. No new language to learn.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Feature</th><th>OPA/Gatekeeper</th><th>Kyverno</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Policy language</strong></td><td>Rego (custom DSL)</td><td>YAML (Kubernetes-native)</td></tr>
+                <tr><td><strong>Learning curve</strong></td><td>🔴 Steep. Rego is a logic programming language.</td><td>🟢 Gentle. If you know YAML, you know Kyverno.</td></tr>
+                <tr><td><strong>Policy types</strong></td><td>Validate only (deny/allow)</td><td>✅ Validate + Mutate + Generate</td></tr>
+                <tr><td><strong>Mutation</strong></td><td>❌ Separate mutating webhook needed</td><td>✅ Built-in. Can add labels, defaults, sidecars.</td></tr>
+                <tr><td><strong>Generation</strong></td><td>❌ Not supported</td><td>✅ Auto-create resources (ConfigMaps, Secrets, NetworkPolicies)</td></tr>
+                <tr><td><strong>Ecosystem</strong></td><td>Larger. Used beyond Kubernetes (Terraform, Envoy, API gateways)</td><td>Kubernetes-only. Tighter K8s integration.</td></tr>
+                <tr><td><strong>CNPE exam</strong></td><td>🟡 Know the concept and Rego structure</td><td>✅ HIGH — most commonly tested policy engine</td></tr>
+            </tbody>
+        </table></div>
+
+        <!-- Kyverno Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Kyverno Policies — Validate, Mutate, Generate</span></div>
+<pre><span class="code-cmt"># ── VALIDATE: Require team label on all pods ──</span>
+<span class="code-kw">apiVersion:</span> kyverno.io/v1
+<span class="code-kw">kind:</span> ClusterPolicy
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> require-team-label
+<span class="code-kw">spec:</span>
+  <span class="code-kw">validationFailureAction:</span> Enforce   <span class="code-cmt"># Enforce = REJECT. Audit = LOG only.</span>
+  <span class="code-kw">rules:</span>
+  - <span class="code-kw">name:</span> check-team-label
+    <span class="code-kw">match:</span>
+      <span class="code-kw">any:</span>
+      - <span class="code-kw">resources:</span>
+          <span class="code-kw">kinds:</span> ["Pod"]
+    <span class="code-kw">validate:</span>
+      <span class="code-kw">message:</span> "Every pod must have a 'team' label"
+      <span class="code-kw">pattern:</span>
+        <span class="code-kw">metadata:</span>
+          <span class="code-kw">labels:</span>
+            <span class="code-kw">team:</span> "?*"                    <span class="code-cmt"># Must exist and can be any value</span>
+
+<span class="code-cmt"># ── MUTATE: Add default resource limits ──</span>
+<span class="code-kw">apiVersion:</span> kyverno.io/v1
+<span class="code-kw">kind:</span> ClusterPolicy
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> add-default-resources
+<span class="code-kw">spec:</span>
+  <span class="code-kw">rules:</span>
+  - <span class="code-kw">name:</span> add-resource-limits
+    <span class="code-kw">match:</span>
+      <span class="code-kw">any:</span>
+      - <span class="code-kw">resources:</span>
+          <span class="code-kw">kinds:</span> ["Pod"]
+    <span class="code-kw">mutate:</span>
+      <span class="code-kw">patchStrategicMerge:</span>
+        <span class="code-kw">spec:</span>
+          <span class="code-kw">containers:</span>
+          - <span class="code-kw">(name)</span>: "*"                <span class="code-cmt"># All containers</span>
+            <span class="code-kw">resources:</span>
+              <span class="code-kw">requests:</span>
+                <span class="code-kw">cpu:</span> "100m"
+                <span class="code-kw">memory:</span> "128Mi"
+              <span class="code-kw">limits:</span>
+                <span class="code-kw">cpu:</span> "500m"
+                <span class="code-kw">memory:</span> "512Mi"
+
+<span class="code-cmt"># ── GENERATE: Auto-create a NetworkPolicy per namespace ──</span>
+<span class="code-kw">apiVersion:</span> kyverno.io/v1
+<span class="code-kw">kind:</span> ClusterPolicy
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> auto-generate-netpol
+<span class="code-kw">spec:</span>
+  <span class="code-kw">rules:</span>
+  - <span class="code-kw">name:</span> generate-default-deny
+    <span class="code-kw">match:</span>
+      <span class="code-kw">any:</span>
+      - <span class="code-kw">resources:</span>
+          <span class="code-kw">kinds:</span> ["Namespace"]
+    <span class="code-kw">generate:</span>
+      <span class="code-kw">kind:</span> NetworkPolicy
+      <span class="code-kw">name:</span> default-deny-ingress
+      <span class="code-kw">data:</span>
+        <span class="code-kw">spec:</span>
+          <span class="code-kw">podSelector:</span> {}
+          <span class="code-kw">policyTypes:</span> ["Ingress"]</pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: Kyverno = Most Likely Policy Engine</h5>
+            <p>Kyverno is the most commonly tested policy engine on the CNPE exam because: (1) It's YAML-based — no new language to learn in an exam setting. (2) It supports validate, mutate, AND generate — the exam can test all three. (3) Its <code>validationFailureAction: Audit</code> mode is perfect for "test the policy first" scenarios. <strong>Expect at least 1 Kyverno task on the exam.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 29.3 COMMON POLICIES -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s29-3" class="section-block"><h4>29.3 Common Policies — The Policies Every Platform Should Enforce</h4>
+        <p>There are 5 policies that EVERY production Kubernetes cluster should enforce. These are not optional — they're the minimum viable governance for a platform:</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>#</th><th>Policy</th><th>What It Blocks</th><th>Kyverno</th><th>OPA/Gatekeeper</th><th>Priority</th></tr></thead>
+            <tbody>
+                <tr><td><strong>1</strong></td><td>Block :latest tag</td><td>Pods using image:latest (version drift, rollback impossible)</td><td>✅ Validate</td><td>✅ ConstraintTemplate</td><td>🔴 P0 — Immediate</td></tr>
+                <tr><td><strong>2</strong></td><td>Require labels</td><td>Pods without team, app, environment labels (no ownership, no cost tracking)</td><td>✅ Validate</td><td>✅ ConstraintTemplate</td><td>🔴 P0 — Immediate</td></tr>
+                <tr><td><strong>3</strong></td><td>Enforce resource limits</td><td>Pods without CPU/memory limits (noisy neighbor, node OOM)</td><td>✅ Validate or Mutate (add defaults)</td><td>✅ ConstraintTemplate</td><td>🔴 P0 — Immediate</td></tr>
+                <tr><td><strong>4</strong></td><td>Block privileged containers</td><td>Pods with privileged: true (container-to-node escape)</td><td>✅ Validate</td><td>✅ ConstraintTemplate</td><td>🟡 P1 — Within month</td></tr>
+                <tr><td><strong>5</strong></td><td>Require non-root user</td><td>Pods running as UID 0 (container-to-node escape via root)</td><td>✅ Validate</td><td>✅ ConstraintTemplate</td><td>🟡 P1 — Within month</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ Policy Enforcement Order — Which Takes Priority?</h5>
+            <p>When multiple admission controllers and policies are configured, they execute in a specific order. Understanding this prevents "my policy should have blocked that!" moments:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>PSA (Built-in):</strong> Pod Security Admission runs FIRST. If the pod violates Restricted PSS, it's rejected before any policy engine sees it.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Mutating Webhooks / Kyverno Mutate:</strong> Run SECOND. Add defaults, inject sidecars, set labels. The resource is modified before validation.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Validating Webhooks / Kyverno Validate / OPA:</strong> Run THIRD. Check the MUTATED resource against policies. If any policy rejects, the request is denied.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;">🔑 <strong>WHY THIS MATTERS:</strong> Kyverno's Mutate rules run BEFORE its Validate rules. So a Mutation that adds <code>team: anihpj</code> label will satisfy a Validation that requires the <code>team</code> label. The developer doesn't need to add it — Kyverno adds it, then Kyverno validates it exists. This is the "platform defaults" pattern.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 29.4 POLICY-AS-CODE IN CI/CD -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s29-4" class="section-block"><h4>29.4 Policy-as-Code in CI/CD — Testing Policies Before Deployment</h4>
+        <p>Policy engines are powerful, but <strong>testing policies before they hit the cluster</strong> is critical. A misconfigured policy can block ALL deployments. The solution: test policies in CI/CD pipelines using the same tools the engines themselves provide.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔄 Policy-as-Code CI/CD Pipeline</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────┐
+│              POLICY-AS-CODE CI/CD PIPELINE                                │
+│                                                                           │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌────────────┐  │
+│  │ DEVELOPER │───▶│  PR OPENED    │───▶│  CI CHECKS    │───▶│  MERGE TO  │  │
+│  │ writes     │    │  Policy YAML  │    │  Run Tests    │    │  policy/   │  │
+│  │ policy.yaml│   │  in policy/    │    │               │    │  main      │  │
+│  └──────────┘    └──────────────┘    └──────┬────────┘    └─────┬──────┘  │
+│                                             │                     │        │
+│                    ┌────────────────────────┘                     │        │
+│                    ▼                                               ▼        │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │                     CI TEST SUITE (policy-test.yaml)                 │  │
+│  │                                                                      │  │
+│  │  ┌─────────────────────┐  ┌──────────────────┐  ┌────────────────┐  │  │
+│  │  │ 1. kyverno test     │  │ 2. OPA conftest   │  │ 3. gator verify │  │  │
+│  │  │ kyverno test        │  │ conftest test     │  │ gator verify    │  │  │
+│  │  │ policy.yaml         │  │ policy/           │  │ constraint.yaml │  │  │
+│  │  │ -f test-resources/  │  │                   │  │ -f fixtures/    │  │  │
+│  │  │ ✅ PASS / ❌ FAIL    │  │ ✅ PASS / ❌ FAIL  │  │ ✅ PASS / ❌ FAIL│  │  │
+│  │  └─────────────────────┘  └──────────────────┘  └────────────────┘  │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                       │
+│                                    ▼                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │                    GITOPS DEPLOYMENT (ArgoCD / Flux)                  │  │
+│  │  • Policies synced to cluster                                        │  │
+│  │  • Kyverno/OPA picks up new CRDs automatically                       │  │
+│  │  • Audit mode first → Enforce mode after validation                  │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- CI/CD Testing Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Policy Testing — Kyverno, OPA, and Gatekeeper</span></div>
+<pre><span class="code-cmt"># ── KYVERNO: Test policy against sample resources ──</span>
+<span class="code-cmt"># kyverno test &lt;policy-dir&gt;</span>
+kyverno test ./policies/
+<span class="code-cmt"># Directory structure:</span>
+<span class="code-cmt"># policies/</span>
+<span class="code-cmt"># ├── require-team-label.yaml          (the ClusterPolicy)</span>
+<span class="code-cmt"># └── tests/</span>
+<span class="code-cmt">#     ├── good-pod.yaml                (should PASS)</span>
+<span class="code-cmt">#     ├── bad-pod.yaml                 (should FAIL)</span>
+<span class="code-cmt">#     └── kyverno-test.yaml            (test expectations)</span>
+
+<span class="code-cmt"># ── OPA: Test Rego policies with conftest ──</span>
+<span class="code-cmt"># conftest test &lt;resource.yaml&gt; -p &lt;policy-dir&gt;</span>
+conftest test deployment.yaml -p policies/rego/
+<span class="code-cmt"># Output:</span>
+<span class="code-cmt"># FAIL - deployment.yaml - main container uses :latest tag</span>
+<span class="code-cmt"># 1 test, 0 passed, 1 warning, 1 failure</span>
+
+<span class="code-cmt"># ── GATEKEEPER: gator verify for ConstraintTemplates ──</span>
+<span class="code-cmt"># gator verify constraint.yaml -f fixtures/</span>
+gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
+<span class="code-cmt"># Output:</span>
+<span class="code-cmt"># ok    block-latest-in-production    must-block-latest-tag     0.042s</span>
+<span class="code-cmt"># ok    block-latest-in-production    must-allow-pinned-tag     0.038s</span>
+
+<span class="code-cmt"># ── GITHUB ACTIONS EXAMPLE: Policy CI Pipeline ──</span>
+<span class="code-kw">name:</span> Policy Validation
+<span class="code-kw">on:</span> [pull_request]
+<span class="code-kw">jobs:</span>
+  <span class="code-kw">policy-test:</span>
+    <span class="code-kw">runs-on:</span> ubuntu-latest
+    <span class="code-kw">steps:</span>
+      - <span class="code-kw">uses:</span> actions/checkout@v4
+      - <span class="code-kw">name:</span> Kyverno Test
+        <span class="code-kw">run:</span> |
+          kyverno test ./kyverno-policies/
+      - <span class="code-kw">name:</span> OPA Conftest
+        <span class="code-kw">run:</span> |
+          conftest test ./kyverno-policies/tests/*.yaml -p ./rego-policies/
+      - <span class="code-kw">name:</span> Gatekeeper gator verify
+        <span class="code-kw">run:</span> |
+          gator verify ./gatekeeper-constraints/ -f ./test-fixtures/</pre>
+        </div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 Policy Testing Strategy — The Audit-Enforce Ladder</h5>
+            <div class="process-steps" style="margin-top:0.5rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Write &amp; Test Locally:</strong> Use kyverno test / conftest test / gator verify on your machine.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>CI Validation:</strong> Tests run automatically on every PR. Block merge if tests fail.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Deploy as Audit:</strong> Deploy policy with <code>validationFailureAction: Audit</code> (Kyverno) or <code>enforcementAction: dryrun</code> (Gatekeeper).</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Monitor Violations:</strong> Watch audit logs for 1-2 weeks. Identify false positives. Tune policy.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Promote to Enforce:</strong> Switch to <code>Enforce</code> mode. Policy now blocks violations at admission.</div></div>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 29.5 VALIDATINGADMISSIONPOLICY (CEL) -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s29-5" class="section-block"><h4>29.5 ValidatingAdmissionPolicy — Built-In CEL Validation (No Webhook)</h4>
+        <p><strong>ValidatingAdmissionPolicy (VAP)</strong>, introduced in Kubernetes 1.26 (GA in 1.30), is the <strong>native validation mechanism</strong> using <strong>Common Expression Language (CEL)</strong>. Unlike OPA and Kyverno, VAP runs <strong>inside the API server</strong> — no external webhooks, no extra pods, no additional latency.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Feature</th><th>ValidatingAdmissionPolicy (VAP)</th><th>Kyverno / OPA</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Runs in</strong></td><td>API server (built-in)</td><td>External webhook pods</td></tr>
+                <tr><td><strong>Language</strong></td><td>CEL (Common Expression Language)</td><td>YAML (Kyverno) / Rego (OPA)</td></tr>
+                <tr><td><strong>Latency</strong></td><td>✅ Minimal (no network hop)</td><td>⚠️ Webhook overhead (~10-50ms)</td></tr>
+                <tr><td><strong>Installation</strong></td><td>✅ Built-in. Enable <code>ValidatingAdmissionPolicy</code> feature gate (K8s &lt;1.30)</td><td>❌ Must install Kyverno/OPA separately</td></tr>
+                <tr><td><strong>Mutate/Generate</strong></td><td>❌ Validate only</td><td>✅ Kyverno supports all three</td></tr>
+                <tr><td><strong>Type checking</strong></td><td>✅ Compile-time type checking (catches errors before apply)</td><td>❌ Runtime errors only</td></tr>
+                <tr><td><strong>Parameterization</strong></td><td>✅ Via ValidatingAdmissionPolicyBinding</td><td>✅ Constraint parameters (OPA) / Policy rules (Kyverno)</td></tr>
+                <tr><td><strong>When to use</strong></td><td>Simple validations (field checks, min/max, required labels)</td><td>Complex logic (cross-resource, external data lookups)</td></tr>
+            </tbody>
+        </table></div>
+
+        <!-- VAP Code Example -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 ValidatingAdmissionPolicy — CEL-Based Validation</span></div>
+<pre><span class="code-cmt"># ── ValidatingAdmissionPolicy: Block :latest images ──</span>
+<span class="code-kw">apiVersion:</span> admissionregistration.k8s.io/v1
+<span class="code-kw">kind:</span> ValidatingAdmissionPolicy
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> block-latest-tag
+<span class="code-kw">spec:</span>
+  <span class="code-kw">failurePolicy:</span> Fail                 <span class="code-cmt"># Fail = reject if policy errors</span>
+  <span class="code-kw">matchConstraints:</span>
+    <span class="code-kw">resourceRules:</span>
+    - <span class="code-kw">apiGroups:</span> [""]
+      <span class="code-kw">apiVersions:</span> ["v1"]
+      <span class="code-kw">operations:</span> ["CREATE", "UPDATE"]
+      <span class="code-kw">resources:</span> ["pods"]
+  <span class="code-kw">validations:</span>
+  - <span class="code-kw">expression:</span> >
+      object.spec.containers.all(c,
+        !c.image.endsWith(':latest')
+      )
+    <span class="code-kw">message:</span> "Container images must not use :latest tag"
+    <span class="code-kw">reason:</span> Invalid
+
+<span class="code-cmt"># ── ValidatingAdmissionPolicyBinding: Bind to namespace ──</span>
+<span class="code-kw">apiVersion:</span> admissionregistration.k8s.io/v1
+<span class="code-kw">kind:</span> ValidatingAdmissionPolicyBinding
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> block-latest-binding
+<span class="code-kw">spec:</span>
+  <span class="code-kw">policyName:</span> block-latest-tag
+  <span class="code-kw">matchResources:</span>
+    <span class="code-kw">namespaceSelector:</span>
+      <span class="code-kw">matchLabels:</span>
+        <span class="code-kw">environment:</span> production     <span class="code-cmt"># Only in production namespaces</span>
+
+<span class="code-cmt"># ── VAP with parameters (like Gatekeeper Constraint params) ──</span>
+<span class="code-cmt"># First, define what params look like:</span>
+<span class="code-kw">apiVersion:</span> admissionregistration.k8s.io/v1
+<span class="code-kw">kind:</span> ValidatingAdmissionPolicy
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> require-resource-limits
+<span class="code-kw">spec:</span>
+  <span class="code-kw">paramKind:</span>
+    <span class="code-kw">apiVersion:</span> v1
+    <span class="code-kw">kind:</span> ConfigMap                    <span class="code-cmt"># Params come from a ConfigMap</span>
+  <span class="code-kw">validations:</span>
+  - <span class="code-kw">expression:</span> >
+      object.spec.containers.all(c,
+        has(c.resources) &amp;&amp;
+        has(c.resources.limits) &amp;&amp;
+        has(c.resources.limits.cpu) &amp;&amp;
+        has(c.resources.limits.memory)
+      )
+    <span class="code-kw">message:</span> "All containers must have CPU and memory limits"</pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ CEL Quick Reference for VAP</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>object.spec</strong> = the submitted resource (pod, deployment, etc.). Access ANY field.</li>
+                <li><strong>oldObject.spec</strong> = the previous version (available on UPDATE operations).</li>
+                <li><strong>.all(c, condition)</strong> = check if ALL containers satisfy the condition. Use <code>.exists(c, condition)</code> for "at least one".</li>
+                <li><strong>has(field)</strong> = check if an optional field exists. Prevents null-pointer errors.</li>
+                <li><strong>params</strong> = the parameter resource bound via ValidatingAdmissionPolicyBinding.</li>
+                <li><strong>Type checking:</strong> VAP validates CEL expressions against the CRD schema at apply time — catches field name typos BEFORE deployment.</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ VAP Limitation — Validate ONLY</h5>
+            <p>ValidatingAdmissionPolicy can ONLY validate (allow/deny). It cannot <strong>mutate</strong> resources. If you need to add default labels, inject sidecars, or modify resources at admission time, you still need Kyverno or a custom mutating webhook. <strong>VAP replaces simple Kyverno/OPA validation use cases — not mutation or generation.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 29.6 COMBINING ALL POLICIES -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s29-6" class="section-block"><h4>29.6 Combining All Policy Engines — The Complete Governance Stack</h4>
+        <p>No single policy engine does everything. The CNPE-grade platform combines <strong>built-in PSA + VAP + Kyverno + OPA</strong> for complete governance:</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🏛️ Complete Governance Stack — Layered Defense</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    COMPLETE KUBERNETES GOVERNANCE STACK                         │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  LAYER 1: BUILT-IN (No installation needed)                              │ │
+│  │  ┌───────────────────┐  ┌───────────────────────────────────────────┐   │ │
+│  │  │ PSA (Pod Security │  │ VAP (ValidatingAdmissionPolicy)             │   │ │
+│  │  │ Admission)        │  │ • Simple field validations                 │   │ │
+│  │  │ • privileged/     │  │ • Block :latest, require labels/limits     │   │ │
+│  │  │   baseline/       │  │ • Type-safe CEL expressions                │   │ │
+│  │  │   restricted      │  │ • No webhook latency                       │   │ │
+│  │  └───────────────────┘  └───────────────────────────────────────────┘   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│  ┌────────────────────────────────▼────────────────────────────────────────┐ │
+│  │  LAYER 2: POLICY ENGINES (Optional install — richer features)            │ │
+│  │  ┌──────────────────────────────────┐  ┌──────────────────────────────┐ │ │
+│  │  │  Kyverno                           │  │  OPA / Gatekeeper             │ │ │
+│  │  │  • Mutate (add defaults)           │  │  • Complex Rego logic         │ │ │
+│  │  │  • Generate (auto-create resources)│  │  • External data lookups      │ │ │
+│  │  │  • Validate (YAML policies)        │  │  • Multi-cluster policy       │ │ │
+│  │  │  • Image verification              │  │  • Beyond K8s (Terraform,     │ │ │
+│  │  │  • Cleanup (TTL-based)             │  │    Envoy, API gateways)       │ │ │
+│  │  └──────────────────────────────────┘  └──────────────────────────────┘ │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         EXECUTION ORDER                                    │ │
+│  │                                                                           │ │
+│  │  API Request → PSA → Mutating(Kyverno) → VAP → Validating(Kyverno/OPA)   │ │
+│  │                                                                           │ │
+│  │  🔑 PSA blocks obvious security violations first (fastest).               │ │
+│  │  🔑 Mutations add platform defaults (labels, limits, sidecars).           │ │
+│  │  🔑 VAP checks simple validations (no webhook cost).                      │ │
+│  │  🔑 Kyverno/OPA handle complex policies (cross-resource, external data).  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="compare-table" style="margin-top:1.5rem;"><table>
+            <thead><tr><th>Policy Type</th><th>Best Engine</th><th>Why</th></tr></thead>
+            <tbody>
+                <tr><td>PSA (privileged/baseline/restricted)</td><td>Built-in PSA</td><td>No external dependency. Fastest path. K8s native.</td></tr>
+                <tr><td>Block :latest images</td><td>VAP (CEL)</td><td>Simple field check. No webhook needed. Type-safe.</td></tr>
+                <tr><td>Require labels (team, app)</td><td>VAP or Kyverno Validate</td><td>VAP is simpler. Kyverno if you also want to mutate.</td></tr>
+                <tr><td>Add default resource limits</td><td>Kyverno Mutate</td><td>VAP cannot mutate. Kyverno's patchStrategicMerge is perfect.</td></tr>
+                <tr><td>Auto-create NetworkPolicies</td><td>Kyverno Generate</td><td>Only Kyverno supports generation. Auto-deploy on namespace create.</td></tr>
+                <tr><td>Cross-resource validation</td><td>OPA/Gatekeeper</td><td>Rego can query cluster state (k8s_introspection). VAP cannot.</td></tr>
+                <tr><td>Image signature verification</td><td>Kyverno or Sigstore</td><td>Kyverno has built-in image verification. VAP cannot verify signatures.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 Decision Flow: Which Policy Engine Should I Use?</h5>
+            <div class="flow-diagram" style="margin-top:0.5rem;">
+                <div class="flow-step"><div class="flow-step-num">Q1</div><div class="flow-step-text">Is it a pod security baseline (privileged/baseline/restricted)?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → PSA (Built-in)</div></div>
+                <div class="flow-step"><div class="flow-step-num">Q2</div><div class="flow-step-text">Do you need to MUTATE (add defaults, inject sidecars)?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → Kyverno Mutate</div></div>
+                <div class="flow-step"><div class="flow-step-num">Q3</div><div class="flow-step-text">Do you need to GENERATE auto-resources (NetworkPolicy, ConfigMap)?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → Kyverno Generate</div></div>
+                <div class="flow-step"><div class="flow-step-num">Q4</div><div class="flow-step-text">Do you need to query external data or cluster state (cross-resource)?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → OPA/Gatekeeper</div></div>
+                <div class="flow-step"><div class="flow-step-num">Q5</div><div class="flow-step-text">Is it a simple field validation (label exists, image not :latest)?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → VAP (CEL) — no webhook overhead</div></div>
+                <div class="flow-step"><div class="flow-step-num">Q6</div><div class="flow-step-text">Do you need YAML-based policies without learning Rego?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → Kyverno Validate</div></div>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 29.7 ANIHPJ POLICY STACK -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s29-7" class="section-block"><h4>29.7 anihpj Policy Stack — Governance for the Platform</h4>
+        <p>Here's how the <strong>anihpj Django job board platform</strong> implements its governance stack. This is a real-world example of combining all the policy engines from this chapter:</p>
+
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🏢 anihpj Production Governance Stack</h5>
+            <div class="scenario-grid" style="margin-top:0.5rem;">
+                <div class="scenario-item">
+                    <div class="scenario-icon">🔒</div>
+                    <div class="scenario-title">PSA: Restricted (Baseline)</div>
+                    <div class="scenario-desc">All anihpj namespaces labelled <code>pod-security.kubernetes.io/enforce: restricted</code>. Blocks privileged containers, hostPath, hostNetwork at the built-in level.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">📋</div>
+                    <div class="scenario-title">VAP: Block :latest + Require Labels</div>
+                    <div class="scenario-desc">Two CEL-based ValidatingAdmissionPolicies. Fast, no webhook cost. All pods in anihpj-prod MUST have pinned versions and team/app labels.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🔄</div>
+                    <div class="scenario-title">Kyverno: Mutate Defaults</div>
+                    <div class="scenario-desc">Auto-adds <code>team: anihpj</code> label, <code>app: jobboard</code> label, default resource limits (100m CPU/128Mi RAM requests, 500m/512Mi limits) if not specified.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">📜</div>
+                    <div class="scenario-title">Kyverno: Generate NetworkPolicy</div>
+                    <div class="scenario-desc">Every new anihpj namespace auto-gets a default-deny-ingress NetworkPolicy. Dev teams opt-in to allowed sources.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🧠</div>
+                    <div class="scenario-title">OPA: Complex Cross-Resource Check</div>
+                    <div class="scenario-desc">OPA validates that every Service in anihpj-prod has a corresponding NetworkPolicy that explicitly allows traffic. Prevents "orphan services" with no access control.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🔬</div>
+                    <div class="scenario-title">CI/CD: Policy Testing</div>
+                    <div class="scenario-desc">All policies live in <code>anihpj-infra/policies/</code>. GitHub Actions runs kyverno test + conftest test + gator verify on every PR. Policies are GitOps-deployed via ArgoCD.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
+            <h5>💪 Practice Drill — anihpj Policy Stack</h5>
+            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
+                <li><strong>Kyverno: Require team label</strong> — Create a ClusterPolicy that rejects Pods without <code>team</code> label in anihpj-prod namespace.</li>
+                <li><strong>OPA: Block :latest</strong> — Write a ConstraintTemplate (Rego) that denies pods using image:latest.</li>
+                <li><strong>Kyverno: Mutate resource limits</strong> — Create a ClusterPolicy that adds default resource limits to pods without them.</li>
+                <li><strong>VAP: CEL validation</strong> — Create a ValidatingAdmissionPolicy that ensures all containers have <code>securityContext.runAsNonRoot: true</code>.</li>
+                <li><strong>Policy testing</strong> — Write a kyverno test that validates your require-team-label policy against a good-pod.yaml and bad-pod.yaml.</li>
+            </ol>
+        </div>
+
+        <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
+            <h5>🧠 Knowledge Check — Ch 29: Policy Engines &amp; Governance</h5>
+            <div class="quiz-question">
+                <p><strong>Q1.</strong> What determines WHAT a Gatekeeper policy checks — the ConstraintTemplate or the Constraint?</p>
+                <p class="quiz-answer"><strong>A:</strong> The <strong>ConstraintTemplate</strong> contains the Rego logic (WHAT to check). The Constraint specifies WHERE and with WHAT PARAMETERS. Platform team writes the template once. App teams create constraints from it.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q2.</strong> What are the three policy actions Kyverno supports that OPA/Gatekeeper does NOT?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Mutate</strong> (add defaults, inject sidecars), <strong>Generate</strong> (auto-create resources like NetworkPolicies on namespace creation), and <strong>Cleanup</strong> (TTL-based resource cleanup). OPA/Gatekeeper only validates (allow/deny).</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q3.</strong> Why does ValidatingAdmissionPolicy have lower latency than Kyverno or OPA?</p>
+                <p class="quiz-answer"><strong>A:</strong> VAP runs <strong>inside the API server</strong> (built-in). There's no webhook call, no network hop, no external pod to contact. CEL expressions are compiled and cached. Kyverno and OPA require an HTTP call to an external webhook pod.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q4.</strong> In the admission chain, when do Mutating webhooks (Kyverno Mutate) run relative to Validating webhooks?</p>
+                <p class="quiz-answer"><strong>A:</strong> Mutating webhooks run <strong>BEFORE</strong> validating webhooks. This means a Kyverno Mutate policy that adds a <code>team</code> label will satisfy a Kyverno Validate policy that requires the <code>team</code> label — the mutation happens first, then validation checks the mutated resource.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q5.</strong> What's the CNPE-recommended strategy for deploying a new policy to production?</p>
+                <p class="quiz-answer"><strong>A:</strong> The <strong>Audit-Enforce Ladder</strong>: (1) Write &amp; test locally, (2) CI validation on PR, (3) Deploy as <code>Audit</code> mode (log only, no rejections), (4) Monitor violations for 1-2 weeks, (5) Promote to <code>Enforce</code> mode (reject violations).</p>
+            </div>
+        </div>
+
+        <div class="chapter-summary" id="s29-summary" style="margin-top:1.5rem;">
+            <h5>📝 Ch 29 Chapter Summary</h5>
+            <div class="card-grid" style="margin-top:0.5rem;">
+                <div class="info-card"><h5>🧠 OPA/Gatekeeper</h5><p>Rego language. ConstraintTemplate = logic (WHAT). Constraint = params (WHERE). Violations defined with <code>violation[{...}]</code> rules. Used beyond K8s (Terraform, Envoy, API gateways). Complex cross-resource lookups with <code>k8s_introspection</code>.</p></div>
+                <div class="info-card"><h5>📋 Kyverno</h5><p>YAML-based. Three actions: Validate (deny), Mutate (add defaults), Generate (auto-create resources). Most commonly tested on CNPE exam. <code>validationFailureAction: Audit</code> for safe rollout. CNPE domain 5: HIGH probability.</p></div>
+                <div class="info-card"><h5>⚡ VAP (CEL)</h5><p>Built-in K8s 1.26+ (GA 1.30). CEL expressions evaluated inside API server — no webhook. Validate only (no mutate/generate). Type-safe (compile-time checking). Best for simple field validations that don't need external data.</p></div>
+                <div class="info-card"><h5>🔒 Common Policies</h5><p>5 must-have policies: (1) Block :latest, (2) Require labels, (3) Enforce resource limits, (4) Block privileged containers, (5) Require non-root user. Enforce first 3 immediately (P0). Add 4-5 within the first month (P1).</p></div>
+                <div class="info-card"><h5>🔄 Policy-as-Code CI/CD</h5><p>kyverno test + conftest test + gator verify in CI pipeline. Audit-Enforce Ladder: local test → CI → deploy as Audit → monitor → promote to Enforce. Policies are GitOps-managed (ArgoCD/Flux synced to cluster).</p></div>
+                <div class="info-card"><h5>🏛️ anihpj Stack</h5><p>PSA (restricted) → Kyverno Mutate (labels + limits) → VAP (block :latest) → Kyverno Validate (team label) → OPA (cross-resource). Policies in anihpj-infra/policies/, tested in CI, deployed via ArgoCD. Layered defense.</p></div>
+            </div>
+        </div>
+
+        <div class="visual-summary" id="s29-visual" style="margin-top:1.5rem;">
+            <h5>🖼️ Visual Summary — Ch 29 Policy Engines &amp; Governance</h5>
+            <div class="evolution-strip" style="margin-top:0.5rem;">
+                <div class="evo-item"><div class="evo-year">Built-in</div><div class="evo-desc"><strong>PSA</strong><br>privileged<br>baseline<br>restricted</div></div>
+                <div class="evo-item"><div class="evo-year">Built-in 1.26+</div><div class="evo-desc"><strong>VAP (CEL)</strong><br>Simple validation<br>No webhook<br>Type-safe</div></div>
+                <div class="evo-item"><div class="evo-year">Install</div><div class="evo-desc"><strong>Kyverno</strong><br>Validate+Mutate+Generate<br>YAML policies<br>Image verify</div></div>
+                <div class="evo-item"><div class="evo-year">Install</div><div class="evo-desc"><strong>OPA/Gatekeeper</strong><br>Rego language<br>Cross-resource<br>Multi-domain</div></div>
+                <div class="evo-item"><div class="evo-year">CI/CD</div><div class="evo-desc"><strong>Pipeline</strong><br>kyverno test<br>conftest test<br>gator verify</div></div>
+            </div>
+            <pre style="background:#161b22;font-size:0.75rem;margin-top:0.8rem;">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              POLICY ENGINE SELECTION — QUICK REFERENCE                        │
+│                                                                              │
+│  POLICIES THAT EVERY PLATFORM NEEDS:                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ ① Block :latest tag   → VAP (CEL) or Kyverno Validate              │    │
+│  │ ② Require labels      → VAP (CEL) or Kyverno (Validate or Mutate)  │    │
+│  │ ③ Enforce limits      → Kyverno Mutate (adds defaults if missing)  │    │
+│  │ ④ Block privileged     → PSA Restricted (built-in, fastest path)    │    │
+│  │ ⑤ Require non-root     → PSA Restricted or VAP (CEL)               │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ADMISSION ORDER: PSA → Kyverno Mutate → VAP → Kyverno Validate → OPA       │
+│                                                                              │
+│  KEY INSIGHT: Mutations run BEFORE validations. A policy can ADD a label    │
+│  that another policy REQUIRES — all in the same admission request.           │
+└─────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+        </div>
+
+    <hr class="chapter-divider">
+
+    <div id="ch30">
+        <div class="chapter-intro">
+            <h3>Ch 30: Supply Chain Security &amp; Compliance</h3>
+            <p><strong>Know what's in your images, sign them, scan them, and monitor runtime.</strong> SBOM generation with syft. Image signing with Cosign/Sigstore. SLSA framework for build integrity. Vulnerability scanning with Trivy/Grype. Runtime detection with Falco. Compliance is automated, not manual.</p>
+            <div class="chapter-meta">
+                <span class="meta-tag">🔴 Advanced</span>
+                <span class="meta-tag">⏱️ ~2h</span>
+                <span class="meta-tag">CNPE Domain 5: 15%</span>
+            </div>
+        </div>
+
+        <div class="learning-objectives">
+            <h5>🎯 What You'll Learn</h5>
+            <ul>
+                <li>Generate SBOMs with syft in SPDX and CycloneDX formats</li>
+                <li>Sign container images with Cosign and verify signatures with Sigstore</li>
+                <li>Assess software supply chain maturity using the SLSA framework (L0-L4)</li>
+                <li>Scan images for vulnerabilities with Trivy and Grype in CI/CD</li>
+                <li>Detect runtime threats with Falco and write custom detection rules</li>
+                <li>Manage secrets securely with Vault and External Secrets Operator</li>
+                <li>Assess cluster compliance with kube-bench (CIS benchmarks)</li>
+                <li>Build a complete supply chain security pipeline for anihpj</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <h5>📋 CNPE Exam Relevance — Domain 5 (15%)</h5>
+            <p>Domain 5 tests your ability to <strong>secure the software supply chain</strong>. Expect practical tasks: generate an SBOM, sign an image with Cosign, scan with Trivy, write a Falco rule, and assess a cluster with kube-bench. <strong>Supply chain security is a CNPE differentiator — CKA barely touches it.</strong></p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.1 SBOM -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-1" class="section-block"><h4>30.1 SBOM — Software Bill of Materials</h4>
+        <p>A <strong>Software Bill of Materials (SBOM)</strong> is a machine-readable inventory of EVERY component in your container image — base image, apt packages, pip packages, Go modules, everything. It answers: <strong>"What's inside this image?"</strong> Two formats dominate: <strong>SPDX</strong> (Linux Foundation) and <strong>CycloneDX</strong> (OWASP).</p>
+
+        <div class="card-grid" style="margin-top:1rem;">
+            <div class="info-card"><h5>syft</h5><p>CLI tool by Anchore. Generates SBOM from container images, directories, or filesystems. Supports SPDX, CycloneDX, Syft-json. <strong>CNPE exam tool.</strong></p></div>
+            <div class="info-card"><h5>SPDX</h5><p>Software Package Data Exchange. ISO 5962 standard. Linux Foundation project. Tags: name, version, supplier, license, relationship.</p></div>
+            <div class="info-card"><h5>CycloneDX</h5><p>OWASP standard. XML/JSON/Protocol Buffers. Designed for BOM interchange. Richer vulnerability extension (VEX). Widely used in security tools.</p></div>
+        </div>
+
+        <!-- SBOM Code Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 syft — Generate SBOM for anihpj Image</span></div>
+<pre><span class="code-cmt"># ── Install syft ──</span>
+<span class="code-cmt"># curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin</span>
+
+<span class="code-cmt"># ── Generate SBOM for a container image ──</span>
+syft anihpj/jobboard:v1.2.3 -o spdx-json > anihpj-sbom.spdx.json
+<span class="code-cmt"># Output: JSON file listing all packages, versions, and licenses</span>
+
+<span class="code-cmt"># ── Generate CycloneDX format ──</span>
+syft anihpj/jobboard:v1.2.3 -o cyclonedx-json > anihpj-sbom.cdx.json
+
+<span class="code-cmt"># ── Generate SBOM for current directory (source code) ──</span>
+syft dir:. -o spdx-json > anihpj-source-sbom.json
+
+<span class="code-cmt"># ── What syft finds ──</span>
+<span class="code-cmt"># ✔ Indexed anihpj/jobboard:v1.2.3  [999 packages]</span>
+<span class="code-cmt">#   • 3 APK (Alpine) packages: musl, busybox, ssl_client</span>
+<span class="code-cmt">#   • 2 Python packages: django==4.2, psycopg2-binary==2.9.9</span>
+<span class="code-cmt">#   • 245 Go modules (transitive deps of gosu)</span>
+
+<span class="code-cmt"># ── Parse SBOM with grype (vulnerability matching) ──</span>
+grype sbom:anihpj-sbom.spdx.json
+<span class="code-cmt"># Matches SBOM packages against known CVE databases</span>
+
+<span class="code-cmt"># ── CI/CD: Generate SBOM and attach to image ──</span>
+syft anihpj/jobboard:${TAG} -o spdx-json | \
+  cosign attest --type spdxjson --predicate - ${IMAGE_REF} \
+  -o cosign-attestation.json</pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ SBOM Quick Reference</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>syft &lt;image&gt; -o spdx-json</strong> = Generate SPDX SBOM. Most commonly needed on CNPE.</li>
+                <li><strong>syft &lt;image&gt; -o cyclonedx-json</strong> = Generate CycloneDX SBOM. Preferred by security scanners.</li>
+                <li><strong>grype sbom:&lt;file&gt;</strong> = Scan an SBOM for vulnerabilities (offline, no image pull needed).</li>
+                <li><strong>SBOM ≠ Vulnerability scan</strong> — SBOM is the INVENTORY. Trivy/Grype use the inventory to find CVEs.</li>
+                <li><strong>SPDX</strong> = License-focused. <strong>CycloneDX</strong> = Security-focused. Know both for the exam.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.2 COSIGN/SIGSTORE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-2" class="section-block"><h4>30.2 Cosign/Sigstore — Image Signing &amp; Verification</h4>
+        <p><strong>Cosign</strong> signs container images using <strong>keyless signing</strong> (OIDC-based, no long-lived keys to manage). It's part of the <strong>Sigstore</strong> project. Signed images prove: (1) WHO built the image, (2) that the image hasn't been tampered with since signing.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔏 Cosign Keyless Signing Flow</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    COSIGN KEYLESS SIGNING (SIGSTORE)                            │
+│                                                                               │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌────────────────┐  │
+│  │  CI/CD    │───▶│  OIDC         │───▶│  Fulcio       │───▶│  Rekor          │  │
+│  │  Pipeline │    │  (GitHub/     │    │  (CA)          │    │  (Transparency  │  │
+│  │  signs    │    │   GitLab)      │    │  Issues short- │    │   Log)           │  │
+│  │  image    │    │  Identity      │    │  lived cert    │    │  Immutable       │  │
+│  │  with     │    │  token         │    │                │    │  record of       │  │
+│  │  Cosign   │    │                │    │                │    │  signature       │  │
+│  └──────────┘    └──────────────┘    └──────────────┘    └────────────────┘  │
+│       │                                                                       │
+│       │  1. Developer pushes code → CI runs                                   │
+│       │  2. CI obtains OIDC token (proves identity: repo, workflow, ref)      │
+│       │  3. Cosign exchanges OIDC token for short-lived X.509 cert (Fulcio)   │
+│       │  4. Cosign signs image with ephemeral key                             │
+│       │  5. Signature + cert recorded in Rekor transparency log               │
+│       │                                                                       │
+│       ▼                                                                       │
+│  ┌──────────────────────────────────────────────────────────────────────────┐│
+│  │  VERIFICATION: cosign verify anihpj/jobboard:v1.2.3                      ││
+│  │  • Checks Rekor log → signature exists                                    ││
+│  │  • Validates certificate chain → trusted OIDC issuer                      ││
+│  │  • Confirms identity → repo:anihpj/anihpj workflow:release                ││
+│  └──────────────────────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- Cosign Code Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Cosign — Sign and Verify Images</span></div>
+<pre><span class="code-cmt"># ── KEYLESS SIGN (recommended — no key management) ──</span>
+cosign sign anihpj/jobboard:v1.2.3
+<span class="code-cmt"># Cosign opens browser → OIDC flow → ephemeral key → signature in Rekor</span>
+
+<span class="code-cmt"># ── SIGN WITH A KEY (traditional) ──</span>
+cosign generate-key-pair                <span class="code-cmt"># Creates cosign.key + cosign.pub</span>
+cosign sign --key cosign.key anihpj/jobboard:v1.2.3
+
+<span class="code-cmt"># ── VERIFY signature ──</span>
+cosign verify --key cosign.pub anihpj/jobboard:v1.2.3
+<span class="code-cmt"># Output:</span>
+<span class="code-cmt"># Verification for anihpj/jobboard:v1.2.3 --</span>
+<span class="code-cmt"># The following checks were performed on each of these signatures:</span>
+<span class="code-cmt">#   - The cosign claims were validated</span>
+<span class="code-cmt">#   - The signatures were verified against the specified public key</span>
+
+<span class="code-cmt"># ── VERIFY keyless (check identity) ──</span>
+cosign verify \
+  --certificate-identity "anihpj/anihpj/.github/workflows/release.yml@refs/heads/main" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  anihpj/jobboard:v1.2.3
+
+<span class="code-cmt"># ── SIGN + ATTEST (attach SBOM) ──</span>
+cosign attest --type spdxjson \
+  --predicate anihpj-sbom.spdx.json \
+  anihpj/jobboard:v1.2.3
+
+<span class="code-cmt"># ── VERIFY attestation ──</span>
+cosign verify-attestation --type spdxjson \
+  --certificate-identity "anihpj/anihpj/.github/workflows/release.yml@refs/heads/main" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  anihpj/jobboard:v1.2.3</pre>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ Keyless vs Key-Based — Which Should YOU Use?</h5>
+            <p><strong>Keyless (OIDC):</strong> Recommended for CI/CD. No long-lived key to rotate, steal, or lose. But requires trust in OIDC provider. <strong>Key-Based:</strong> Useful for air-gapped environments or when OIDC is unavailable. But you MUST manage key rotation, secure storage, and revocation. <strong>CNPE exam tip:</strong> Know both, expect keyless to be the preferred approach.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.3 SLSA FRAMEWORK -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-3" class="section-block"><h4>30.3 SLSA Framework — Supply Chain Levels for Software Artifacts (L0-L4)</h4>
+        <p><strong>SLSA</strong> (pronounced "salsa") is a security framework that defines increasing levels of supply chain integrity. It answers: <strong>"How trustworthy is this build?"</strong> — not just the image, but the entire build process that produced it.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Level</th><th>Name</th><th>Requirements</th><th>Protects Against</th><th>Real-World Status</th></tr></thead>
+            <tbody>
+                <tr><td><strong>L0</strong></td><td>None</td><td>No guarantees. Build could be from anywhere.</td><td>Nothing</td><td>Most projects without CI/CD</td></tr>
+                <tr><td><strong>L1</strong></td><td>Provenance</td><td>Build is fully scripted. Provenance generated (HOW it was built).</td><td>Mistakes (wrong source built)</td><td>Easy with GitHub Actions</td></tr>
+                <tr><td><strong>L2</strong></td><td>Hosted Build</td><td>Build runs on hosted CI/CD (not dev laptop). Provenance is signed.</td><td>Tampering after build</td><td>Standard CI/CD + Cosign</td></tr>
+                <tr><td><strong>L3</strong></td><td>Hardened Build</td><td>Isolated build environment. Build cannot be influenced by attacker. Reproducible builds.</td><td>Compromised build platform</td><td>Requires hermetic builds</td></tr>
+                <tr><td><strong>L4</strong></td><td>Hermetic</td><td>All dependencies declared, no network access, signed &amp; reviewed. Two-person review.</td><td>Advanced persistent threats</td><td>Air-gapped builds + epoxied deps</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="diagram-container" style="margin-top:1.5rem;">
+            <div class="diagram-title">📊 SLSA Level Progression — Most Teams Are at L1-L2</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+SLSA Compliance Progression (per anihpj maturity):
+────────────────────────────────────────────────────────────────────────────────
+L0  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  "docker build && docker push" from laptop
+    │  → Add CI/CD pipeline
+    ▼
+L1  ██████████░░░░░░░░░░░░░░░░░░░░░░░░  Build fully scripted in GitHub Actions
+    │  → Sign provenance with Cosign
+    ▼
+L2  ████████████████████░░░░░░░░░░░░░░░  Provenance signed. Build on GitHub-hosted runner.
+    │  → Isolate build, make it reproducible
+    ▼
+L3  ██████████████████████████████░░░░░░  Isolated build. No secrets leaked. Two-reviewer policy.
+    │  → Hermetic builds, no network
+    ▼
+L4  ████████████████████████████████████  Fully hermetic. Epoxied deps. Ephemeral isolation.
+
+🎯 CNPE GOAL: Achieve SLSA L2 for all anihpj production images.
+🎯 STRETCH GOAL: Achieve SLSA L3 for anihpj authentication and payment microservices.</pre>
+        </div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 SLSA L2 Checklist (Minimum for CNPE Production)</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li>✅ All builds run in CI/CD (GitHub Actions, GitLab CI, etc.) — no local builds.</li>
+                <li>✅ Build provenance is generated and signed (Cosign attest).</li>
+                <li>✅ Source code is version-controlled and tagged (Git tags map to image tags).</li>
+                <li>✅ Build scripts are in the repo (Dockerfile, Makefile, CI config).</li>
+                <li>✅ Build runs on a hosted platform (not self-managed with admin access by devs).</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.4 TRIVY/GRYPE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-4" class="section-block"><h4>30.4 Trivy/Grype — Vulnerability Scanning</h4>
+        <p><strong>Trivy</strong> (Aqua Security) and <strong>Grype</strong> (Anchore) scan container images for <strong>known vulnerabilities (CVEs)</strong>. They compare your image's package inventory against public vulnerability databases. Both can scan images, filesystems, git repos, and Kubernetes clusters.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Feature</th><th>Trivy</th><th>Grype</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Maker</strong></td><td>Aqua Security</td><td>Anchore (same as syft)</td></tr>
+                <tr><td><strong>Scans</strong></td><td>Images, filesystem, git repos, K8s clusters, IaC (misconfigs), secrets</td><td>Images, SBOMs, directories. Focused on vulnerability matching.</td></tr>
+                <tr><td><strong>Databases</strong></td><td>Multiple: NVD, Red Hat, Debian, Alpine, etc.</td><td>Multiple: NVD, GitHub Advisory, etc.</td></tr>
+                <tr><td><strong>SBOM</strong></td><td>Can generate AND scan SBOMs (CycloneDX, SPDX)</td><td>Scans SBOMs (generated by syft — same vendor)</td></tr>
+                <tr><td><strong>K8s scanning</strong></td><td>✅ trivy k8s cluster — scans running cluster</td><td>❌ No built-in K8s cluster scanning</td></tr>
+                <tr><td><strong>Output formats</strong></td><td>Table, JSON, SARIF, HTML, GitHub Security</td><td>Table, JSON, CycloneDX</td></tr>
+                <tr><td><strong>CNPE exam</strong></td><td>✅ HIGH probability — more features</td><td>🟡 Know the concept (syft + grype combo)</td></tr>
+            </tbody>
+        </table></div>
+
+        <!-- Trivy/Grype Code Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Trivy & Grype — Vulnerability Scanning in CI/CD</span></div>
+<pre><span class="code-cmt"># ── TRIVY: Scan an image ──</span>
+trivy image anihpj/jobboard:v1.2.3
+<span class="code-cmt"># Output: TABLE with CVE-ID, Severity, Installed Version, Fixed Version</span>
+
+<span class="code-cmt"># ── TRIVY: Scan with severity filter + exit on critical ──</span>
+trivy image --severity CRITICAL,HIGH --exit-code 1 anihpj/jobboard:v1.2.3
+<span class="code-cmt"># CI/CD: If any CRITICAL or HIGH CVE found → pipeline fails (exit code 1)</span>
+
+<span class="code-cmt"># ── TRIVY: Scan Kubernetes cluster ──</span>
+trivy k8s cluster --report summary
+<span class="code-cmt"># Scans ALL images running in the cluster + misconfigurations</span>
+
+<span class="code-cmt"># ── TRIVY: Scan IaC (misconfigurations) ──</span>
+trivy config ./kubernetes/
+<span class="code-cmt"># Scans Kubernetes manifests for security misconfigurations</span>
+
+<span class="code-cmt"># ── GRYPE: Scan an image ──</span>
+grype anihpj/jobboard:v1.2.3
+<span class="code-cmt"># grype -f json anihpj/jobboard:v1.2.3 -o results.json</span>
+
+<span class="code-cmt"># ── GRYPE: Scan an SBOM (offline) ──</span>
+<span class="code-cmt"># First generate SBOM, then scan it — no image pull needed</span>
+syft anihpj/jobboard:v1.2.3 -o spdx-json > sbom.json
+grype sbom:sbom.json
+
+<span class="code-cmt"># ── GITHUB ACTIONS INTEGRATION ──</span>
+<span class="code-kw">- name:</span> Trivy Vulnerability Scan
+  <span class="code-kw">uses:</span> aquasecurity/trivy-action@master
+  <span class="code-kw">with:</span>
+    <span class="code-kw">image-ref:</span> anihpj/jobboard:${{ github.sha }}
+    <span class="code-kw">format:</span> sarif
+    <span class="code-kw">output:</span> trivy-results.sarif
+    <span class="code-kw">severity:</span> CRITICAL,HIGH
+    <span class="code-kw">exit-code:</span> '1'                     <span class="code-cmt"># Fail if critical/high CVEs found</span>
+
+<span class="code-cmt"># ── TRIVY IGNORE: Exclude known false positives ──</span>
+<span class="code-cmt"># .trivyignore.yaml</span>
+<span class="code-kw">vulnerabilities:</span>
+  - <span class="code-kw">id:</span> CVE-2023-XXXX
+    <span class="code-kw">statement:</span> "False positive — not exploitable in our configuration"
+    <span class="code-kw">expiry:</span> 2025-12-31             <span class="code-cmt"># Review after this date</span></pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: Trivy = Most Likely Scanner</h5>
+            <p>Trivy is the most commonly tested vulnerability scanner because: (1) It scans images, K8s clusters, AND IaC — one tool for many exam tasks. (2) The <code>--exit-code 1</code> flag is the standard CI/CD integration pattern. (3) <code>trivy k8s cluster</code> tests your understanding of runtime scanning. <strong>Expect at least 1 Trivy task (scan + CI integration).</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.5 FALCO -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-5" class="section-block"><h4>30.5 Falco — Runtime Threat Detection</h4>
+        <p><strong>Falco</strong> is a <strong>runtime security tool</strong> that monitors system calls (syscalls) and Kubernetes audit events to detect anomalous behavior. While Trivy scans BEFORE deployment (shift left), Falco monitors DURING runtime (shift right). Together they form the complete security picture.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔍 Falco Runtime Detection Architecture</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         FALCO RUNTIME DETECTION                                 │
+│                                                                               │
+│  ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐         │
+│  │  Kernel Module   │     │  eBPF Probe      │     │  K8s Audit       │         │
+│  │  (syscalls)      │     │  (syscalls)      │     │  Events          │         │
+│  └────────┬────────┘     └────────┬────────┘     └────────┬────────┘         │
+│           │                       │                       │                   │
+│           └───────────────────────┼───────────────────────┘                   │
+│                                   │                                           │
+│                                   ▼                                           │
+│                    ┌─────────────────────────────┐                            │
+│                    │         Falco Engine          │                            │
+│                    │  • Evaluates rules            │                            │
+│                    │  • Matches patterns           │                            │
+│                    │  • Generates alerts           │                            │
+│                    └─────────────┬───────────────┘                            │
+│                                  │                                            │
+│                    ┌─────────────┼───────────────┐                            │
+│                    ▼             ▼               ▼                            │
+│              ┌──────────┐ ┌──────────┐ ┌──────────────┐                      │
+│              │  stdout   │ │  Webhook  │ │  Sidekick     │                      │
+│              │  (log)    │ │  (custom) │ │  → Slack/Pager│                      │
+│              └──────────┘ └──────────┘ └──────────────┘                      │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  FALCO DETECTS (Partial list):                                            │ │
+│  │  • Shell spawned in container    • Unexpected process started             │ │
+│  │  • File written below /etc       • Sensitive file read (shadow, certs)    │ │
+│  │  • Privileged container launched • Network connection to suspicious IP    │ │
+│  │  • Kubernetes Secret accessed     • kubectl exec detected                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- Falco Rules Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Falco — Custom Detection Rules</span></div>
+<pre><span class="code-cmt"># ── FALCO RULE: Detect shell inside anihpj container ──</span>
+- <span class="code-kw">rule:</span> Shell in anihpj container
+  <span class="code-kw">desc:</span> A shell was spawned inside an anihpj container (may indicate breach)
+  <span class="code-kw">condition:</span> >
+    spawned_process
+    and container.name startswith "anihpj"
+    and proc.name in (bash, sh, ash, zsh)
+    and not proc.args startswith "/usr/local/bin/anihpj-healthcheck"
+  <span class="code-kw">output:</span> >
+    Shell spawned in anihpj container (user=%user.name
+    container=%container.name cmdline=%proc.cmdline)
+  <span class="code-kw">priority:</span> WARNING
+  <span class="code-kw">tags:</span> [anihpj, shell, runtime]
+
+<span class="code-cmt"># ── FALCO RULE: Unexpected outbound network from DB container ──</span>
+- <span class="code-kw">rule:</span> Unexpected outbound from DB
+  <span class="code-kw">desc:</span> Database container making outbound connection (data exfiltration?)
+  <span class="code-kw">condition:</span> >
+    outbound
+    and container.name startswith "anihpj-db"
+    and fd.sport != 5432                  <span class="code-cmt"># NOT the PostgreSQL port</span>
+    and not fd.snet in (10.0.0.0/8)       <span class="code-cmt"># NOT internal traffic</span>
+  <span class="code-kw">output:</span> >
+    DB container connected to external IP (container=%container.name
+    connection=%fd.name ip=%fd.cip)
+  <span class="code-kw">priority:</span> CRITICAL
+  <span class="code-kw">tags:</span> [anihpj, network, exfiltration]
+
+<span class="code-cmt"># ── FALCO RULE: Privileged container launched (always alert) ──</span>
+- <span class="code-kw">rule:</span> Privileged container launched
+  <span class="code-kw">desc:</span> A container with privileged mode was started
+  <span class="code-kw">condition:</span> >
+    evt.type = container
+    and container.privileged = true
+  <span class="code-kw">output:</span> >
+    PRIVILEGED CONTAINER DETECTED (image=%container.image
+    name=%container.name)
+  <span class="code-kw">priority:</span> CRITICAL
+  <span class="code-kw">tags:</span> [container, privileged, compliance]</pre>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ Falco Rules: condition vs output vs priority</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>condition:</strong> The FILTER expression. If this evaluates to TRUE, the rule fires. Uses Falco's macro language (spawned_process, container.name, proc.name, etc.).</li>
+                <li><strong>output:</strong> The MESSAGE logged/alerted when the rule fires. Include variables like <code>%user.name</code>, <code>%container.name</code>.</li>
+                <li><strong>priority:</strong> DEBUG &lt; INFORMATIONAL &lt; NOTICE &lt; WARNING &lt; ERROR &lt; CRITICAL &lt; EMERGENCY. Determines alert severity.</li>
+                <li><strong>Macros:</strong> Reusable named conditions. e.g., <code>- macro: anihpj_container\n  condition: container.name startswith "anihpj"</code></li>
+                <li><strong>Lists:</strong> Named lists of values. e.g., <code>- list: shell_binaries\n  items: [bash, sh, ash, zsh]</code></li>
+            </ul>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.6 VAULT / EXTERNAL SECRETS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-6" class="section-block"><h4>30.6 Vault / External Secrets — Secure Secret Management</h4>
+        <p>Kubernetes Secrets are base64-encoded (NOT encrypted) and stored in etcd. <strong>HashiCorp Vault</strong> and <strong>External Secrets Operator (ESO)</strong> solve the "secret zero" problem — where do you securely store secrets so they're encrypted at rest, audited, rotated, and dynamically generated?</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Feature</th><th>Kubernetes Secrets</th><th>Vault (CSI/Injector)</th><th>External Secrets Operator</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Encryption at rest</strong></td><td>🟡 If etcd encryption enabled</td><td>✅ Yes (Vault encrypts)</td><td>✅ Yes (provider encrypts)</td></tr>
+                <tr><td><strong>Dynamic secrets</strong></td><td>❌ Static only</td><td>✅ DB creds, PKI, cloud IAM — auto-rotated</td><td>❌ Syncs from external stores</td></tr>
+                <tr><td><strong>Audit</strong></td><td>❌ Only K8s audit logs</td><td>✅ Full audit trail per secret access</td><td>⚠️ Provider-dependent</td></tr>
+                <tr><td><strong>Rotation</strong></td><td>❌ Manual</td><td>✅ Automated rotation + notification</td><td>✅ RefreshInterval auto-sync</td></tr>
+                <tr><td><strong>Providers</strong></td><td>N/A</td><td>Vault only</td><td>AWS SM, GCP SM, Azure KV, Vault, 1Password, etc.</td></tr>
+                <tr><td><strong>Complexity</strong></td><td>🟢 Zero</td><td>🔴 High — Run Vault cluster</td><td>🟡 Medium — Operator + provider config</td></tr>
+            </tbody>
+        </table></div>
+
+        <!-- ESO Example -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 External Secrets Operator — Sync AWS Secrets Manager → K8s Secret</span></div>
+<pre><span class="code-cmt"># ── STEP 1: SecretStore (tells ESO WHERE to fetch secrets from) ──</span>
+<span class="code-kw">apiVersion:</span> external-secrets.io/v1beta1
+<span class="code-kw">kind:</span> SecretStore
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> aws-secrets-manager
+  <span class="code-kw">namespace:</span> anihpj-prod
+<span class="code-kw">spec:</span>
+  <span class="code-kw">provider:</span>
+    <span class="code-kw">aws:</span>
+      <span class="code-kw">service:</span> SecretsManager
+      <span class="code-kw">region:</span> us-east-1
+      <span class="code-kw">auth:</span>
+        <span class="code-kw">jwt:</span>                          <span class="code-cmt"># IRSA (IAM Role for Service Account)</span>
+          <span class="code-kw">serviceAccountRef:</span>
+            <span class="code-kw">name:</span> eso-sa
+
+<span class="code-cmt"># ── STEP 2: ExternalSecret (tells ESO WHAT to fetch) ──</span>
+<span class="code-kw">apiVersion:</span> external-secrets.io/v1beta1
+<span class="code-kw">kind:</span> ExternalSecret
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-db-credentials
+  <span class="code-kw">namespace:</span> anihpj-prod
+<span class="code-kw">spec:</span>
+  <span class="code-kw">refreshInterval:</span> 1h               <span class="code-cmt"># Auto-refresh every hour</span>
+  <span class="code-kw">secretStoreRef:</span>
+    <span class="code-kw">name:</span> aws-secrets-manager
+    <span class="code-kw">kind:</span> SecretStore
+  <span class="code-kw">target:</span>
+    <span class="code-kw">name:</span> anihpj-db-credentials      <span class="code-cmt"># K8s Secret name to create</span>
+  <span class="code-kw">data:</span>
+  - <span class="code-kw">secretKey:</span> DB_PASSWORD            <span class="code-cmt"># Key IN the K8s Secret</span>
+    <span class="code-kw">remoteRef:</span>
+      <span class="code-kw">key:</span> anihpj/prod/db              <span class="code-cmt"># Key IN AWS Secrets Manager</span>
+      <span class="code-kw">property:</span> password
+  - <span class="code-kw">secretKey:</span> DB_HOST
+    <span class="code-kw">remoteRef:</span>
+      <span class="code-kw">key:</span> anihpj/prod/db
+      <span class="code-kw">property:</span> host</pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ External Secrets Quick Reference</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>SecretStore</strong> = WHERE to fetch from (cluster-scoped or namespace-scoped).</li>
+                <li><strong>ExternalSecret</strong> = WHAT to fetch and WHICH K8s Secret to create.</li>
+                <li><strong>refreshInterval</strong> = How often to re-sync from the provider (e.g., <code>1h</code>).</li>
+                <li><strong>Supported providers:</strong> AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp Vault, 1Password, and more.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.7 KUBE-BENCH -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-7" class="section-block"><h4>30.7 kube-bench — CIS Benchmark Assessment</h4>
+        <p><strong>kube-bench</strong> (Aqua Security) checks whether your Kubernetes cluster is configured according to the <strong>CIS (Center for Internet Security) Kubernetes Benchmark</strong>. It's a compliance scanner — it doesn't fix anything, it TELLS you what's misconfigured.</p>
+
+        <div class="code-block-wrapper" style="margin-top:1rem;">
+            <div class="code-block-header"><span class="code-lang">📋 kube-bench — CIS Benchmark Assessment</span></div>
+<pre><span class="code-cmt"># ── RUN kube-bench against the cluster ──</span>
+kube-bench run --targets master,node,controlplane,etcd,policies
+<span class="code-cmt"># Scans the node where kube-bench runs. Use kubectl/kube-bench job for full cluster.</span>
+
+<span class="code-cmt"># ── RUN as a Kubernetes Job (scans all nodes) ──</span>
+kubectl apply -f https://raw.githubusercontent.com/aquasecurity/kube-bench/main/job.yaml
+<span class="code-cmt"># Deploys a DaemonSet-like Job to scan each node</span>
+
+<span class="code-cmt"># ── SPECIFIC CHECK: Check only master node configuration ──</span>
+kube-bench run --targets master
+<span class="code-cmt"># Sample output:</span>
+<span class="code-cmt"># [FAIL] 1.1.1 Ensure that the API server pod specification file permissions</span>
+<span class="code-cmt">#         are set to 644 or more restrictive (Automated)</span>
+<span class="code-cmt"># [PASS] 1.1.2 Ensure that the API server pod specification file ownership</span>
+<span class="code-cmt">#         is set to root:root (Automated)</span>
+<span class="code-cmt"># [WARN] 1.2.1 Ensure that the --anonymous-auth argument is set to false</span>
+
+<span class="code-cmt"># ── OUTPUT FORMATS ──</span>
+kube-bench run --targets master -o json > kube-bench-results.json
+kube-bench run --targets master -o junit > kube-bench-results.xml
+
+<span class="code-cmt"># ── CIS BENCHMARK SECTIONS CHECKED ──</span>
+<span class="code-cmt"># Section 1: Control Plane Components (API server, scheduler, controller, etcd)</span>
+<span class="code-cmt"># Section 2: etcd</span>
+<span class="code-cmt"># Section 3: Control Plane Configuration</span>
+<span class="code-cmt"># Section 4: Worker Node Configuration</span>
+<span class="code-cmt"># Section 5: Policies (RBAC, PSP, NetworkPolicy, etc.)</span></pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: kube-bench = CIS Compliance</h5>
+            <p>The exam may ask you to run kube-bench and interpret results. Key facts: (1) CIS benchmark sections 1-5 map to cluster components. (2) <code>--targets</code> flag controls which component to scan. (3) Results are PASS/FAIL/WARN. WARN means "needs manual review". (4) kube-bench is READ-ONLY — it never modifies your cluster.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.8 COMPLIANCE AUTOMATION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-8" class="section-block"><h4>30.8 Compliance Automation — Audits as Code</h4>
+        <p>Compliance is not a one-time checklist — it's continuous. The CNPE platform automates compliance with scheduled scans, policy enforcement, and evidence collection. <strong>If you can't prove compliance automatically, you're not compliant.</strong></p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔄 Continuous Compliance Automation Pipeline</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    CONTINUOUS COMPLIANCE AUTOMATION                              │
+│                                                                               │
+│  ┌──────────────────────────────────────────────────────────────────────────┐│
+│  │                        COMPLIANCE TOOLS                                    ││
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  ││
+│  │  │  kube-bench   │  │  Kyverno     │  │  Trivy        │  │  Falco       │  ││
+│  │  │  CIS scan     │  │  Policy as   │  │  CVE scan     │  │  Runtime     │  ││
+│  │  │  Weekly cron  │  │  code        │  │  Every push   │  │  Continuous  │  ││
+│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬──────┘  ││
+│  └─────────┼──────────────────┼──────────────────┼─────────────────┼────────┘│
+│            │                  │                  │                 │          │
+│            ▼                  ▼                  ▼                 ▼          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                     COMPLIANCE DATA LAKE (S3 / GCS)                       │ │
+│  │  • kube-bench-reports/YYYY-MM-DD/                                        │ │
+│  │  • kyverno-policy-violations/                                            │ │
+│  │  • trivy-scan-results/                                                   │ │
+│  │  • falco-alerts/                                                         │ │
+│  └────────────────────────────────────┬────────────────────────────────────┘ │
+│                                       │                                       │
+│                                       ▼                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                     COMPLIANCE DASHBOARD (Grafana)                         │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  │ │
+│  │  │ CIS Score    │  │ Policy       │  │ Vulnerability│  │ Runtime     │  │ │
+│  │  │ 87/100       │  │ Compliance   │  │ Status       │  │ Alerts      │  │ │
+│  │  │ ▲ +2 from    │  │ 94% (▲ 2%)   │  │ 0 CRITICAL   │  │ 3 events    │  │ │
+│  │  │ last month   │  │              │  │ 2 HIGH (▾)   │  │ (all INFO)  │  │ │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └─────────────┘  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  AUDIT READY: Export aggregated reports for auditors on demand.               │
+│  AUTOMATED REMEDIATION: Kyverno enforces fixes. ArgoCD syncs drift.           │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 Compliance Automation Checklist for CNPE</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li>✅ <strong>Scheduled CIS scans:</strong> kube-bench runs weekly as a CronJob. Reports stored in S3/GCS.</li>
+                <li>✅ <strong>Policy-as-code:</strong> Kyverno policies are version-controlled and CI-tested. Every violation is logged.</li>
+                <li>✅ <strong>Continuous vulnerability scanning:</strong> Trivy scans every image push. No image deployed with CRITICAL CVEs.</li>
+                <li>✅ <strong>Runtime monitoring:</strong> Falco monitors 24/7 for anomalous behavior. Alerts go to Slack/PagerDuty.</li>
+                <li>✅ <strong>Evidence collection:</strong> All scan results, policy violations, and alerts are archived to S3 (immutable, time-stamped).</li>
+                <li>✅ <strong>Dashboard:</strong> Single Grafana dashboard shows CIS score, policy compliance %, vulnerability count, and Falco alerts.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.9 SBOM IN CI/CD PIPELINE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-9" class="section-block"><h4>30.9 SBOM in CI/CD Pipeline — End-to-End Automation</h4>
+        <p>The SBOM isn't just a compliance checkbox — it's a <strong>pipeline artifact</strong> that enables automated vulnerability matching, license compliance, and supply chain attestation. Here's the complete CI/CD integration:</p>
+
+        <div class="flow-diagram" style="margin-top:1rem;">
+            <div class="flow-step"><div class="flow-step-num">1</div><div class="flow-step-text">Build image with Docker/buildah</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">IMAGE</div></div>
+            <div class="flow-step"><div class="flow-step-num">2</div><div class="flow-step-text">syft generates SBOM (SPDX + CycloneDX)</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">SBOM</div></div>
+            <div class="flow-step"><div class="flow-step-num">3</div><div class="flow-step-text">grype scans SBOM for CVEs</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">CVE REPORT</div></div>
+            <div class="flow-step"><div class="flow-step-num">4</div><div class="flow-step-text">Trivy scans image for misconfigs + CVEs</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">SCAN REPORT</div></div>
+            <div class="flow-step"><div class="flow-step-num">5</div><div class="flow-step-text">Block if CRITICAL CVEs found (exit code 1)</div><div class="flow-step-arrow">→</div><div class="flow-step-result no">FAIL → STOP</div></div>
+            <div class="flow-step"><div class="flow-step-num">6</div><div class="flow-step-text">Cosign signs image + attests SBOM</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">SIGNED</div></div>
+            <div class="flow-step"><div class="flow-step-num">7</div><div class="flow-step-text">Push image to registry + SBOM to OCI</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">PUBLISHED</div></div>
+        </div>
+
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 GitHub Actions — Complete Supply Chain Pipeline</span></div>
+<pre><span class="code-cmt"># .github/workflows/supply-chain.yml</span>
+<span class="code-kw">name:</span> Supply Chain Security
+<span class="code-kw">on:</span>
+  <span class="code-kw">push:</span>
+    <span class="code-kw">branches:</span> [main]
+    <span class="code-kw">tags:</span> ['v*']
+<span class="code-kw">jobs:</span>
+  <span class="code-kw">sbom-sign-scan:</span>
+    <span class="code-kw">runs-on:</span> ubuntu-latest
+    <span class="code-kw">steps:</span>
+      - <span class="code-kw">name:</span> Checkout
+        <span class="code-kw">uses:</span> actions/checkout@v4
+
+      - <span class="code-kw">name:</span> Build Image
+        <span class="code-kw">run:</span> docker build -t anihpj/jobboard:${{ github.sha }} .
+
+      - <span class="code-kw">name:</span> Generate SBOM (syft)
+        <span class="code-kw">run:</span> |
+          syft anihpj/jobboard:${{ github.sha }} \
+            -o spdx-json > sbom.spdx.json
+          syft anihpj/jobboard:${{ github.sha }} \
+            -o cyclonedx-json > sbom.cdx.json
+
+      - <span class="code-kw">name:</span> Scan SBOM for CVEs (grype)
+        <span class="code-kw">run:</span> |
+          grype sbom:sbom.spdx.json \
+            --fail-on critical \
+            --file grype-report.json
+
+      - <span class="code-kw">name:</span> Scan Image (Trivy)
+        <span class="code-kw">uses:</span> aquasecurity/trivy-action@master
+        <span class="code-kw">with:</span>
+          <span class="code-kw">image-ref:</span> anihpj/jobboard:${{ github.sha }}
+          <span class="code-kw">severity:</span> CRITICAL,HIGH
+          <span class="code-kw">exit-code:</span> '1'
+
+      - <span class="code-kw">name:</span> Sign Image (Cosign)
+        <span class="code-kw">run:</span> |
+          cosign sign \
+            --certificate-identity "${{ github.repository }}/.github/workflows/supply-chain.yml@${{ github.ref }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            anihpj/jobboard:${{ github.sha }}
+
+      - <span class="code-kw">name:</span> Attach SBOM (Cosign attest)
+        <span class="code-kw">run:</span> |
+          cosign attest --type spdxjson \
+            --predicate sbom.spdx.json \
+            anihpj/jobboard:${{ github.sha }}
+
+      - <span class="code-kw">name:</span> Push Image
+        <span class="code-kw">run:</span> docker push anihpj/jobboard:${{ github.sha }}</pre>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.10 IMAGE ATTESTATION & VERIFICATION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-10" class="section-block"><h4>30.10 Image Attestation &amp; Verification — Trust Before Deploy</h4>
+        <p><strong>Attestation</strong> is a signed statement about an image. Beyond just signing the image digest, you can attest: "This image was built from commit X, passed test suite Y, has SBOM Z." Verification at deploy time ensures only trusted images run in production.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔏 Supply Chain Attestation Chain</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    IMAGE ATTESTATION CHAIN                                      │
+│                                                                               │
+│  ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐          │
+│  │  SLSA Provenance  │   │  SBOM Atstation   │   │  Test Atstation   │          │
+│  │  "Built from      │   │  "Contains        │   │  "Passed          │          │
+│  │   commit abc123,   │   │   django==4.2,     │   │   unit tests,      │          │
+│  │   in GitHub Actions│   │    psycopg2 2.9.9, │   │    integration     │          │
+│  │   workflow v2,      │   │    no critical    │   │    tests,          │          │
+│  │   on 2025-01-15"   │   │    CVEs"           │   │    linting"        │          │
+│  └────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘          │
+│           │                      │                      │                     │
+│           └──────────────────────┼──────────────────────┘                     │
+│                                  │                                            │
+│                    ┌─────────────▼─────────────┐                              │
+│                    │     IMAGE IN REGISTRY       │                              │
+│                    │  anihpj/jobboard:v1.2.3     │                              │
+│                    │  ┌───────────────────────┐  │                              │
+│                    │  │ Digest: sha256:abc... │  │                              │
+│                    │  │ Signature: ✅          │  │                              │
+│                    │  │ SBOM attestation: ✅   │  │                              │
+│                    │  │ Provenance: ✅         │  │                              │
+│                    │  │ Test attestation: ✅   │  │                              │
+│                    │  └───────────────────────┘  │                              │
+│                    └─────────────┬───────────────┘                              │
+│                                  │                                            │
+│                    ┌─────────────▼───────────────┐                            │
+│                    │  KYVERNO VERIFY IMAGES RULE  │                            │
+│                    │  • Verify Cosign signature   │                            │
+│                    │  • Check attestation exists   │                            │
+│                    │  • Enforce before deployment  │                            │
+│                    └──────────────────────────────┘                            │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Kyverno — Verify Image Signatures at Admission</span></div>
+<pre><span class="code-cmt"># ── Kyverno ClusterPolicy: Verify Cosign signature ──</span>
+<span class="code-kw">apiVersion:</span> kyverno.io/v1
+<span class="code-kw">kind:</span> ClusterPolicy
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> verify-image-signature
+<span class="code-kw">spec:</span>
+  <span class="code-kw">validationFailureAction:</span> Enforce
+  <span class="code-kw">rules:</span>
+  - <span class="code-kw">name:</span> check-image-signature
+    <span class="code-kw">match:</span>
+      <span class="code-kw">any:</span>
+      - <span class="code-kw">resources:</span>
+          <span class="code-kw">kinds:</span> ["Pod"]
+    <span class="code-kw">verifyImages:</span>
+    - <span class="code-kw">imageReferences:</span> ["anihpj/jobboard:*"]
+      <span class="code-kw">attestors:</span>
+      - <span class="code-kw">count:</span> 1
+        <span class="code-kw">entries:</span>
+        - <span class="code-kw">keyless:</span>
+            <span class="code-kw">subject:</span> "anihpj/anihpj/.github/workflows/supply-chain.yml@*"
+            <span class="code-kw">issuer:</span> "https://token.actions.githubusercontent.com"
+            <span class="code-kw">rekor:</span>
+              <span class="code-kw">url:</span> https://rekor.sigstore.dev</pre>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ Kyverno verifyImages = Gate Before Deploy</h5>
+            <p>Kyverno's <code>verifyImages</code> rule runs at admission time — when a Pod is CREATED. If the image signature is missing or invalid, the Pod is rejected. This means: (1) Even if an attacker bypasses CI/CD and pushes a malicious image to the registry, Kyverno will block it at deploy time. (2) The signature check is the LAST line of defense before the image runs.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 30.11 ANIHPJ SUPPLY CHAIN SECURITY -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s30-11" class="section-block"><h4>30.11 anihpj Supply Chain Security — Complete Implementation</h4>
+        <p>Here's how the <strong>anihpj Django job board platform</strong> implements end-to-end supply chain security:</p>
+
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🏢 anihpj Supply Chain Security — Full Stack</h5>
+            <div class="scenario-grid" style="margin-top:0.5rem;">
+                <div class="scenario-item">
+                    <div class="scenario-icon">📦</div>
+                    <div class="scenario-title">SBOM Generation</div>
+                    <div class="scenario-desc">syft generates SPDX + CycloneDX SBOM for every build. SBOMs are attached to images via Cosign attest and archived to S3 for audit.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🔏</div>
+                    <div class="scenario-title">Image Signing</div>
+                    <div class="scenario-desc">Cosign keyless signing via GitHub OIDC. Every image pushed to ECR is signed. Kyverno verifyImages rule enforces signature check at admission.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">📊</div>
+                    <div class="scenario-title">SLSA L2</div>
+                    <div class="scenario-desc">All anihpj production images meet SLSA L2: scripted builds, signed provenance, hosted CI/CD. Target: SLSA L3 for auth and payment microservices.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🔍</div>
+                    <div class="scenario-title">Vulnerability Scanning</div>
+                    <div class="scenario-desc">Trivy scans every image push. CI/CD blocks on CRITICAL. Grype scans SBOMs for CVEs. Weekly cluster-wide scan with trivy k8s cluster.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🛡️</div>
+                    <div class="scenario-title">Runtime Detection</div>
+                    <div class="scenario-desc">Falco monitors anihpj-prod for: shell in containers, unexpected processes, privilege escalation, sensitive file access. Alerts sent to PagerDuty.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🔐</div>
+                    <div class="scenario-title">Secret Management</div>
+                    <div class="scenario-desc">External Secrets Operator syncs DB credentials from AWS Secrets Manager to K8s Secrets. Auto-rotated every 30 days. No secrets in Git.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">📋</div>
+                    <div class="scenario-title">CIS Compliance</div>
+                    <div class="scenario-desc">kube-bench runs weekly as CronJob. Results exported to Grafana dashboard. Policy violations from Kyverno tracked separately. CIS score > 85%.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">📜</div>
+                    <div class="scenario-title">Audit Trail</div>
+                    <div class="scenario-desc">All evidence (SBOMs, scan results, signatures, Falco alerts) archived to S3. Immutable, time-stamped, queryable. Audit-ready in < 5 minutes.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
+            <h5>💪 Practice Drill — anihpj Supply Chain Security</h5>
+            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
+                <li><strong>Generate SBOM:</strong> Run <code>syft anihpj/jobboard:latest -o spdx-json > sbom.json</code>. Count the packages.</li>
+                <li><strong>Sign image:</strong> Use <code>cosign sign anihpj/jobboard:latest</code> (keyless). Verify with <code>cosign verify</code>.</li>
+                <li><strong>Scan for CVEs:</strong> Run <code>trivy image --severity CRITICAL anihpj/jobboard:latest</code>. Note any findings.</li>
+                <li><strong>Run kube-bench:</strong> Deploy kube-bench Job. Check the CIS score. Identify top 3 failures.</li>
+                <li><strong>Write Falco rule:</strong> Create a rule that detects <code>kubectl exec</code> into any anihpj container.</li>
+                <li><strong>ESO setup:</strong> Create a SecretStore and ExternalSecret to sync a test secret from AWS Secrets Manager.</li>
+            </ol>
+        </div>
+
+        <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
+            <h5>🧠 Knowledge Check — Ch 30: Supply Chain Security</h5>
+            <div class="quiz-question">
+                <p><strong>Q1.</strong> What's the difference between an SBOM and a vulnerability scan?</p>
+                <p class="quiz-answer"><strong>A:</strong> An <strong>SBOM</strong> is an INVENTORY of all packages in an image (what's inside). A <strong>vulnerability scan</strong> (Trivy/Grype) matches SBOM packages against known CVE databases to find security issues. You need an SBOM before you can do a proper vulnerability scan.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q2.</strong> How does Cosign keyless signing work without long-lived keys?</p>
+                <p class="quiz-answer"><strong>A:</strong> Cosign uses OIDC (OpenID Connect) to prove the identity of the signer (e.g., "this is GitHub Actions workflow X from repo Y"). Fulcio (Sigstore CA) issues a short-lived X.509 certificate based on the OIDC token. Cosign signs with an ephemeral key, and the signature + certificate are recorded in Rekor (transparency log). No long-lived key exists to steal or rotate.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q3.</strong> What does SLSA L2 require that SLSA L1 does not?</p>
+                <p class="quiz-answer"><strong>A:</strong> SLSA L2 requires that builds run on a <strong>hosted CI/CD platform</strong> (not a developer's laptop) AND that the <strong>provenance is signed</strong>. SLSA L1 only requires that the build is fully scripted and provenance is generated (unsigned).</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q4.</strong> What's the purpose of External Secrets Operator's SecretStore vs ExternalSecret?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>SecretStore</strong> defines WHERE to fetch secrets from (provider, auth, region). It's the connection configuration. <strong>ExternalSecret</strong> defines WHAT to fetch (which remote secret, which K8s Secret to create, refresh interval). You create one SecretStore per provider, and many ExternalSecrets referencing it.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q5.</strong> Trivy can scan images, filesystems, git repos, K8s clusters, and IaC. What command scans an entire running Kubernetes cluster?</p>
+                <p class="quiz-answer"><strong>A:</strong> <code>trivy k8s cluster --report summary</code>. This scans ALL images currently running in the cluster, plus misconfigurations in Kubernetes resources. It's a comprehensive "what's running and is it safe?" check.</p>
+            </div>
+        </div>
+
+        <div class="chapter-summary" id="s30-summary" style="margin-top:1.5rem;">
+            <h5>📝 Ch 30 Chapter Summary</h5>
+            <div class="card-grid" style="margin-top:0.5rem;">
+                <div class="info-card"><h5>📦 SBOM (syft)</h5><p>Inventory of all packages in an image. SPDX (license-focused) and CycloneDX (security-focused). <code>syft image -o spdx-json</code>. Attach with Cosign attest.</p></div>
+                <div class="info-card"><h5>🔏 Cosign/Sigstore</h5><p>Keyless signing via OIDC. Ephemeral keys. Fulcio (CA) + Rekor (transparency log). <code>cosign sign</code> + <code>cosign verify</code>. Kyverno verifyImages enforces at admission.</p></div>
+                <div class="info-card"><h5>📊 SLSA (L0-L4)</h5><p>Build integrity framework. L1: scripted build + provenance. L2: hosted CI + signed provenance. L3: isolated builds. L4: hermetic. Target L2 for production.</p></div>
+                <div class="info-card"><h5>🔍 Trivy/Grype</h5><p>Vulnerability scanners. Trivy: images + K8s clusters + IaC + secrets. Grype: images + SBOMs. CI/CD: <code>--exit-code 1 --severity CRITICAL</code>. Block on critical.</p></div>
+                <div class="info-card"><h5>🛡️ Falco</h5><p>Runtime threat detection via syscall + K8s audit monitoring. Custom rules with conditions, macros, lists. Detects shells, unexpected processes, privilege escalation.</p></div>
+                <div class="info-card"><h5>🔐 Vault/ESO</h5><p>K8s Secrets are base64 (not encrypted). Vault: dynamic secrets + auto-rotation. ESO: syncs from AWS/GCP/Azure/Vault to K8s Secrets. <code>refreshInterval</code> for auto-sync.</p></div>
+                <div class="info-card"><h5>📋 kube-bench</h5><p>CIS Kubernetes Benchmark scanner. <code>--targets master,node,etcd,policies</code>. Results: PASS/FAIL/WARN. Weekly CronJob. Grafana dashboard for CIS score tracking.</p></div>
+                <div class="info-card"><h5>🏢 anihpj Stack</h5><p>syft → SBOM → Cosign sign → Trivy scan → Kyverno verifyImages → ESO for secrets → Falco for runtime → kube-bench weekly. Audit trail in S3. SLSA L2.</p></div>
+            </div>
+        </div>
+
+        <div class="visual-summary" id="s30-visual" style="margin-top:1.5rem;">
+            <h5>🖼️ Visual Summary — Ch 30 Supply Chain Security</h5>
+            <div class="evolution-strip" style="margin-top:0.5rem;">
+                <div class="evo-item"><div class="evo-year">Build</div><div class="evo-desc"><strong>SBOM</strong><br>syft<br>SPDX<br>CycloneDX</div></div>
+                <div class="evo-item"><div class="evo-year">Sign</div><div class="evo-desc"><strong>Cosign</strong><br>Keyless<br>Fulcio<br>Rekor</div></div>
+                <div class="evo-item"><div class="evo-year">Scan</div><div class="evo-desc"><strong>Trivy</strong><br>CVEs<br>Misconfig<br>Secrets</div></div>
+                <div class="evo-item"><div class="evo-year">Verify</div><div class="evo-desc"><strong>Kyverno</strong><br>verifyImages<br>Admission<br>Gate</div></div>
+                <div class="evo-item"><div class="evo-year">Detect</div><div class="evo-desc"><strong>Falco</strong><br>Runtime<br>Syscalls<br>Alerts</div></div>
+                <div class="evo-item"><div class="evo-year">Audit</div><div class="evo-desc"><strong>kube-bench</strong><br>CIS<br>Weekly<br>Dashboard</div></div>
+            </div>
+            <pre style="background:#161b22;font-size:0.75rem;margin-top:0.8rem;">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              SUPPLY CHAIN SECURITY — END-TO-END PIPELINE                      │
+│                                                                              │
+│  CODE → BUILD → SBOM → SIGN → SCAN → ATTEST → PUSH → VERIFY → DEPLOY → DETECT│
+│         │      │      │      │      │        │      │        │         │     │
+│         ▼      ▼      ▼      ▼      ▼        ▼      ▼        ▼         ▼     │
+│       Docker  syft   Cosign Trivy  Cosign   ECR   Kyverno   K8s     Falco   │
+│       Build   SPDX   Keyless CVE  attest   Push   verify   Pod     Runtime  │
+│              CDX     Sigstore Scan                    Images                │
+│                                                                              │
+│  🔑 KEY: Every image is INVENTORIED → SIGNED → SCANNED → VERIFIED → MONITORED│
+│  🔑 No image enters production without passing ALL gates.                     │
+│  🔑 Audit trail at every step. Compliance is continuous, not point-in-time.   │
+└─────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+        </div>
+
+    </div>
+
+    <hr class="chapter-divider">
 
     <div class="chapter-section" id="part8"><h2>🔴 Part 8: Production Platform Operations <span class="meta-tag">BEYOND CNPE</span></h2></div>
     <div id="ch31"><div class="chapter-intro"><h3>Ch 31: HA & Disaster Recovery</h3><p>Multi-master, etcd quorum, multi-zone, Velero, etcd backup/restore, GitOps DR.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🔄</div><p>Coming soon</p></div></div>
