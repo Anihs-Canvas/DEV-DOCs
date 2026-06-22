@@ -31831,6 +31831,35 @@ profile anihpj-web flags=(attach_disconnected,mediate_deleted) {
         <div id="s29-1" class="section-block"><h4>29.1 OPA/Gatekeeper — Constraint-Based Policy Engine</h4>
         <p><strong>OPA (Open Policy Agent)</strong> is a general-purpose policy engine. <strong>Gatekeeper</strong> integrates OPA with Kubernetes as an admission controller. You define <strong>ConstraintTemplates</strong> (written in Rego) that describe WHAT to check, and <strong>Constraints</strong> that specify the PARAMETERS for those checks.</p>
 
+        <!-- 🔬 Why Policy Engines? — The Problem They Solve -->
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🔍 Why Policy Engines? — The Problem They Solve</h5>
+            <p style="color:#c9d1d9;font-size:0.9em;margin:10px 0;">Kubernetes RBAC controls WHO can do WHAT. But RBAC doesn't control WHAT they create. A developer with Deployment creation rights can deploy a container running as root, with no resource limits, using an untagged :latest image from Docker Hub. <strong>RBAC is authorization. Policy engines are VALIDATION.</strong></p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+                <div style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#f87171;font-weight:700;margin-bottom:6px;">❌ Without Policy Engines</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• Dev creates pod with <code>image: nginx:latest</code> → allowed</li>
+                        <li>• Dev creates pod as <code>runAsUser: 0</code> (root) → allowed</li>
+                        <li>• Dev creates pod with no CPU/memory limits → allowed</li>
+                        <li>• Dev creates pod with <code>privileged: true</code> → allowed</li>
+                        <li style="color:#f87171;margin-top:8px;"><strong>Result: Cluster is a ticking time bomb. Every pod is a potential security incident.</strong></li>
+                    </ul>
+                </div>
+                <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#4ade80;font-weight:700;margin-bottom:6px;">✅ With Policy Engines</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• Dev creates pod with <code>image: nginx:latest</code> → <strong style="color:#f85149;">BLOCKED</strong></li>
+                        <li>• Dev creates pod as root → <strong style="color:#f85149;">BLOCKED</strong></li>
+                        <li>• Dev creates pod without limits → Kyverno MUTATES to add defaults</li>
+                        <li>• Dev creates pod with privileged → <strong style="color:#f85149;">BLOCKED</strong></li>
+                        <li style="color:#4ade80;margin-top:8px;"><strong>Result: Every deployment is safe by default. Policy is code — versioned, tested, enforced automatically.</strong></li>
+                    </ul>
+                </div>
+            </div>
+            <p style="color:#8b949e;font-size:0.82em;margin-top:10px;"><strong>🔑 THE SHIFT:</strong> From "trust developers to do the right thing" → "the platform guarantees the right thing happens." This is the essence of platform engineering. You don't ask developers to be security experts. You build security into the platform so it's automatic, invisible, and non-negotiable.</p>
+        </div>
+
         <div class="diagram-container" style="margin-top:1rem;">
             <div class="diagram-title">🧠 OPA/Gatekeeper Architecture — ConstraintTemplate + Constraint</div>
             <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
@@ -31868,6 +31897,98 @@ profile anihpj-web flags=(attach_disconnected,mediate_deleted) {
 │  🔑 KEY CONCEPT: ConstraintTemplate = Rego logic (WHAT). Constraint = params  │
 │     (HOW). Platform team writes templates. App teams create constraints.      │
 └──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- 🔬 Admission Webhook Internals — How the API Server Calls Your Policy Engine -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Admission Webhook Internals — How the API Server Actually Calls Your Policy Engine</h5>
+            <p>Understanding the HTTP-level mechanics of admission webhooks is critical. When a policy blocks a deployment and developers are screaming "why can't I deploy?!", you need to know exactly what happened under the hood:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">🌐 Admission Webhook — The Full HTTP Request/Response Lifecycle</div>
+                <pre style="background:#161b22;font-size:0.75rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│              ADMISSION WEBHOOK — STEP-BY-STEP HTTP FLOW                            │
+│                                                                                   │
+│  ┌──────────┐      ┌──────────────┐      ┌──────────────────┐                    │
+│  │ Developer │      │  API Server   │      │  Policy Engine    │                    │
+│  │ kubectl   │      │  (kube-apiserver)    │  (Kyverno/OPA)   │                    │
+│  │ apply     │      │                │      │  Port 8443        │                    │
+│  └─────┬─────┘      └───────┬────────┘      └────────┬─────────┘                    │
+│        │                    │                        │                              │
+│        │ ① POST /api/v1/   │                        │                              │
+│        │    namespaces/     │                        │                              │
+│        │    anihpj/pods     │                        │                              │
+│        │──────────────────▶│                        │                              │
+│        │                    │                        │                              │
+│        │                    │ ② AUTHENTICATION       │                              │
+│        │                    │    Who is this?        │                              │
+│        │                    │    (X.509 cert/token)  │                              │
+│        │                    │                        │                              │
+│        │                    │ ③ AUTHORIZATION (RBAC) │                              │
+│        │                    │    Can they create     │                              │
+│        │                    │    pods in anihpj?     │                              │
+│        │                    │                        │                              │
+│        │                    │ ④ ADMISSION CONTROL    │                              │
+│        │                    │    ┌─────────────────┐ │                              │
+│        │                    │    │ Built-in         │ │                              │
+│        │                    │    │ controllers      │ │                              │
+│        │                    │    │ (PSA, Namespace  │ │                              │
+│        │                    │    │  Lifecycle, etc) │ │                              │
+│        │                    │    └────────┬────────┘ │                              │
+│        │                    │             │          │                              │
+│        │                    │    ┌────────▼────────┐ │                              │
+│        │                    │    │ Mutating         │ │                              │
+│        │                    │    │ Webhooks         │ │                              │
+│        │                    │    │ (Kyverno Mutate) │ │                              │
+│        │                    │    └────────┬────────┘ │                              │
+│        │                    │             │          │                              │
+│        │                    │             │ ⑤ POST /mutate?timeout=10s              │
+│        │                    │             │    AdmissionReview JSON                 │
+│        │                    │             │────────────────────────────────────────▶│
+│        │                    │             │                                         │
+│        │                    │             │ ⑥ AdmissionResponse JSON                 │
+│        │                    │             │    { "allowed": true,                    │
+│        │                    │             │      "patch": [JSONPatch],               │
+│        │                    │             │      "patchType": "JSONPatch" }          │
+│        │                    │             │◀────────────────────────────────────────│
+│        │                    │             │                                         │
+│        │                    │    ┌────────▼────────┐ │                              │
+│        │                    │    │ Validating       │ │                              │
+│        │                    │    │ Webhooks         │ │                              │
+│        │                    │    │ (Kyverno Validate│ │                              │
+│        │                    │    │  OPA, VAP)       │ │                              │
+│        │                    │    └────────┬────────┘ │                              │
+│        │                    │             │          │                              │
+│        │                    │             │ ⑦ POST /validate?timeout=10s             │
+│        │                    │             │    AdmissionReview JSON                 │
+│        │                    │             │────────────────────────────────────────▶│
+│        │                    │             │                                         │
+│        │                    │             │ ⑧ AdmissionResponse JSON                 │
+│        │                    │             │    { "allowed": true/false,              │
+│        │                    │             │      "status": { "message": "..." } }   │
+│        │                    │             │◀────────────────────────────────────────│
+│        │                    │             │                                         │
+│        │                    │ ⑨ If all pass →                                     │
+│        │                    │    Store in etcd                                    │
+│        │                    │    Return 201 Created                                │
+│        │◀───────────────────│                                                      │
+│        │                    │                                                      │
+│  🔑 CRITICAL DETAILS:                                                              │
+│  • AdmissionReview wraps the object in JSON: {"kind":"AdmissionReview",           │
+│    "request":{"uid":"...","object":{...pod spec...},"oldObject":null,...}}         │
+│  • Policy engine receives input.review.object = the pod spec                      │
+│  • Mutating webhooks return JSON Patches (RFC 6902) to modify the object          │
+│  • Validating webhooks return allowed: true/false with an optional message        │
+│  • If ANY webhook returns allowed: false → ENTIRE request is rejected             │
+│  • Timeout: default 10s. If webhook doesn't respond in time → failurePolicy kicks in│
+│  • failurePolicy: Fail = reject request. Ignore = allow request (DANGEROUS!)      │
+└──────────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+            <div class="cnpe-gotcha" style="margin-top:1rem;">
+                <h5>⚠️ The Webhook Availability Problem — Why Policy Engines Can Break Your Cluster</h5>
+                <p>If your policy engine pods are DOWN (crash, OOM, network partition) and <code>failurePolicy: Fail</code> is set, <strong>ALL resource creation/update requests will be REJECTED</strong>. This includes critical system operations — new nodes joining, system pods restarting, even the policy engine itself trying to restart. This is called the <strong>"webhook deadlock"</strong>: your cluster is down because the policy engine is down, but the policy engine can't restart because the cluster rejects pod creation.</p>
+                <p style="margin-top:0.5rem;">🔑 <strong>THE FIX:</strong> Always run policy engines with high availability (2+ replicas, pod anti-affinity). Set <code>failurePolicy: Ignore</code> on webhook configurations during maintenance windows. Monitor webhook latency and availability with Prometheus alerts. Kyverno's Helm chart defaults to 3 replicas for this exact reason.</p>
+            </div>
         </div>
 
         <!-- OPA/Gatekeeper Code Examples -->
@@ -31925,6 +32046,89 @@ profile anihpj-web flags=(attach_disconnected,mediate_deleted) {
                 <li><strong>violation[{...}]</strong> = The Rego rule that defines what constitutes a policy violation. Empty = compliant.</li>
                 <li><strong>input.review.object</strong> = The Kubernetes resource being validated (pod, deployment, etc.).</li>
             </ul>
+        </div>
+
+        <!-- 🔬 Rego Language Deep-Dive -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Rego Patterns — The 3 Most Common Policy Idioms</h5>
+            <p>Rego is a declarative logic language. You describe WHAT a violation looks like, not HOW to find it. Here are the 3 patterns you'll use in 90% of OPA policies:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Pattern</th><th>Rego Code</th><th>What It Does</th><th>When to Use</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Field Check</strong></td><td><code>violation[{"msg": msg}] {<br>  input.review.object.spec.containers[_].securityContext.runAsNonRoot != true<br>  msg := "must run as non-root"<br>}</code></td><td>Check if a specific field has the right value. Most common pattern.</td><td>Require labels, enforce limits, block :latest, check securityContext.</td></tr>
+                    <tr><td><strong>Deny List</strong></td><td><code>violation[{"msg": msg}] {<br>  forbidden := {"latest", "stable", "dev"}<br>  image := input.review.object.spec.containers[_].image<br>  tag := split(image, ":")[1]<br>  forbidden[tag]<br>  msg := sprintf("tag %v is forbidden", [tag])<br>}</code></td><td>Block specific values from an allowed set. Check if value IS in forbidden list.</td><td>Block specific image registries, block dangerous capabilities, block specific hostPaths.</td></tr>
+                    <tr><td><strong>Must Exist</strong></td><td><code>violation[{"msg": msg}] {<br>  container := input.review.object.spec.containers[_]<br>  not container.resources.limits.cpu<br>  msg := sprintf("container %v has no CPU limit", [container.name])<br>}</code></td><td>Verify a field EXISTS. Use <code>not</code> to check absence. A violation occurs when the field is MISSING.</td><td>Require resource limits, require probes, require specific annotations.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 REGO MENTAL MODEL:</strong> Think of Rego as a QUERY language, not a programming language. You write rules that FIND violations. If the query returns results → policy is violated. If the query returns empty → policy is satisfied. <code>violation[{...}]</code> is the query that finds violations. No results = compliant.</p>
+        </div>
+
+        <!-- 🔬 Rego Step-by-Step — Tracing a Policy Evaluation -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Rego Step-by-Step — How OPA Actually Evaluates a Policy</h5>
+            <p>Let's trace through a real Rego policy evaluation to understand EXACTLY how OPA thinks. We'll use a policy that blocks containers without both CPU and memory limits:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 Rego Policy — Require CPU + Memory Limits (Annotated)</span></div>
+<pre><span class="code-cmt"># ── THE POLICY ──</span>
+<span class="code-kw">package</span> k8srequirelimits
+
+<span class="code-cmt"># violation is a PARTIAL RULE — it generates MULTIPLE results</span>
+<span class="code-cmt"># Each iteration of the rule body that succeeds = one violation</span>
+violation[{"msg": msg}] {
+    <span class="code-cmt"># STEP 1: Iterate over ALL containers in the pod</span>
+    <span class="code-cmt"># containers[_] means "for each container in the array"</span>
+    <span class="code-cmt"># _ is an anonymous variable — "I don't care about the index"</span>
+    container := input.review.object.spec.containers[_]
+
+    <span class="code-cmt"># STEP 2: Check if CPU limit is MISSING</span>
+    <span class="code-cmt"># not = negation. If the field doesn't exist OR is undefined, this is true</span>
+    <span class="code-cmt"># container.resources.limits.cpu accesses nested fields</span>
+    not container.resources.limits.cpu
+
+    <span class="code-cmt"># STEP 3: Check if Memory limit is MISSING</span>
+    <span class="code-cmt"># Combined with STEP 2 via logical AND (all statements must be true)</span>
+    not container.resources.limits.memory
+
+    <span class="code-cmt"># STEP 4: Build the error message</span>
+    <span class="code-cmt"># sprintf formats a string with variables</span>
+    msg := sprintf("container <%v> is missing CPU and memory limits", [container.name])
+}
+
+<span class="code-cmt"># ── HOW OPA EVALUATES THIS ──</span>
+<span class="code-cmt"># Given this input pod:</span>
+<span class="code-cmt"># containers:</span>
+<span class="code-cmt">#   - name: anihpj-web</span>
+<span class="code-cmt">#     resources:</span>
+<span class="code-cmt">#       limits:</span>
+<span class="code-cmt">#         cpu: "500m"</span>
+<span class="code-cmt">#         (memory is MISSING)</span>
+<span class="code-cmt">#   - name: redis</span>
+<span class="code-cmt">#     (resources is MISSING entirely)</span>
+
+<span class="code-cmt"># OPA evaluation trace:</span>
+<span class="code-cmt"># ITERATION 1: container = anihpj-web</span>
+<span class="code-cmt">#   not container.resources.limits.cpu → cpu="500m" EXISTS → this is FALSE</span>
+<span class="code-cmt">#   → Rule body FAILS (logical AND requires all statements true)</span>
+<span class="code-cmt">#   → No violation generated for anihpj-web</span>
+
+<span class="code-cmt"># ITERATION 2: container = redis</span>
+<span class="code-cmt">#   not container.resources.limits.cpu → resources is MISSING → this is TRUE</span>
+<span class="code-cmt">#   (Rego treats missing fields as undefined, and not undefined = true)</span>
+<span class="code-cmt">#   not container.resources.limits.memory → resources is MISSING → TRUE</span>
+<span class="code-cmt">#   → ALL statements true → Rule body SUCCEEDS</span>
+<span class="code-cmt">#   → Generates: violation[{"msg": "container <redis> is missing CPU and memory limits"}]</span>
+
+<span class="code-cmt"># RESULT: 1 violation. Pod is REJECTED.</span>
+
+<span class="code-cmt"># ── KEY REGO CONCEPTS DEMONSTRATED ──</span>
+<span class="code-cmt"># 1. [_] = iteration over arrays — processes ALL containers</span>
+<span class="code-cmt"># 2. not = negation — true when something is absent/undefined</span>
+<span class="code-cmt"># 3. := = assignment — binds a variable locally</span>
+<span class="code-cmt"># 4. Logical AND — all statements in body must be true</span>
+<span class="code-cmt"># 5. Partial rules — generate MULTIPLE results (one per matching container)</span>
+<span class="code-cmt"># 6. Undefined handling — accessing missing fields returns undefined, not error</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY THIS MATTERS:</strong> Rego's "undefined is not an error" behavior is both powerful and dangerous. <code>not container.resources.limits.cpu</code> catches BOTH "cpu limit is not set" AND "resources block doesn't exist" AND "container spec is malformed" — all in one statement. But it also means a TYPO like <code>container.resources.limitts.cpu</code> (double 't') silently evaluates to undefined and not(undefined)=true — your policy always passes but for the WRONG reason. <strong>Always use precise field names and test your policies with deliberate error cases.</strong></p>
         </div>
         </div>
 
@@ -32020,6 +32224,42 @@ profile anihpj-web flags=(attach_disconnected,mediate_deleted) {
             <h5>🎓 CNPE Exam: Kyverno = Most Likely Policy Engine</h5>
             <p>Kyverno is the most commonly tested policy engine on the CNPE exam because: (1) It's YAML-based — no new language to learn in an exam setting. (2) It supports validate, mutate, AND generate — the exam can test all three. (3) Its <code>validationFailureAction: Audit</code> mode is perfect for "test the policy first" scenarios. <strong>Expect at least 1 Kyverno task on the exam.</strong></p>
         </div>
+
+        <!-- 🔬 Kyverno Background Scan & Audit -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Kyverno Background Scan — Policing EXISTING Resources, Not Just New Ones</h5>
+            <p>Admission controllers only check NEW or UPDATED resources. What about hundreds of pods ALREADY running that violate policy? Kyverno's <strong>background scan</strong> periodically checks ALL existing resources against policies and generates reports:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 Kyverno Background Scan & Policy Reports</span></div>
+<pre><span class="code-cmt"># ── POLICY REPORT (auto-generated by Kyverno) ──</span>
+<span class="code-cmt"># Shows which EXISTING resources violate which policies</span>
+kubectl get policyreport -n anihpj -o wide
+<span class="code-cmt"># NAME                  KIND   PASS   FAIL   WARN   ERROR</span>
+<span class="code-cmt"># cpol-require-labels   Pod    12     3      0      0</span>
+<span class="code-cmt"># → 3 pods in namespace anihpj are violating "require-team-label" policy</span>
+<span class="code-cmt"># → These pods were created BEFORE the policy existed. They won't be blocked.</span>
+<span class="code-cmt"># → But they're REPORTED so you can fix them.</span>
+
+<span class="code-cmt"># ── CLUSTER POLICY REPORT (cluster-wide) ──</span>
+kubectl get clusterpolicyreport
+<span class="code-cmt"># Shows violations across ALL namespaces for cluster-wide policies</span>
+
+<span class="code-cmt"># ── DETAIL VIEW ──</span>
+kubectl describe policyreport cpol-require-labels -n anihpj
+<span class="code-cmt"># Results:</span>
+<span class="code-cmt">#   - policy: require-team-label</span>
+<span class="code-cmt">#     result: fail</span>
+<span class="code-cmt">#     resources:</span>
+<span class="code-cmt">#     - name: old-pod-1</span>
+<span class="code-cmt">#       message: "Every pod must have a 'team' label"</span>
+<span class="code-cmt">#     - name: old-pod-2</span>
+<span class="code-cmt">#       message: "Every pod must have a 'team' label"</span>
+
+<span class="code-cmt"># 🔑 KEY INSIGHT: Background scan tells you the "blast radius" of a new</span>
+<span class="code-cmt"># policy BEFORE you switch from Audit to Enforce. If a policy would</span>
+<span class="code-cmt"># block 50 production pods, you fix them first — then enforce.</span></pre>
+            </div>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -32048,6 +32288,67 @@ profile anihpj-web flags=(attach_disconnected,mediate_deleted) {
                 <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Validating Webhooks / Kyverno Validate / OPA:</strong> Run THIRD. Check the MUTATED resource against policies. If any policy rejects, the request is denied.</div></div>
             </div>
             <p style="margin-top:0.8rem;font-size:0.82rem;">🔑 <strong>WHY THIS MATTERS:</strong> Kyverno's Mutate rules run BEFORE its Validate rules. So a Mutation that adds <code>team: anihpj</code> label will satisfy a Validation that requires the <code>team</code> label. The developer doesn't need to add it — Kyverno adds it, then Kyverno validates it exists. This is the "platform defaults" pattern.</p>
+        </div>
+
+        <!-- 🔬 Kyverno vs OPA Decision Tree -->
+        <div class="decision-tree" style="margin-top:1.5rem;">
+            <div class="diagram-title" style="text-align:center;margin-bottom:1rem;">🌳 Should This Policy Be Kyverno or OPA/Gatekeeper?</div>
+            <div class="decision-node question">🤔 Does the policy need to MUTATE or GENERATE resources?</div>
+            <div style="display:flex;justify-content:center;gap:40px;margin:8px 0;">
+                <div style="text-align:center;"><span style="color:#3fb950;font-weight:700;">✅ YES — Need mutation/generation</span></div>
+                <div style="text-align:center;"><span style="color:#f85149;font-weight:700;">❌ NO — Validate only</span></div>
+            </div>
+            <div style="display:flex;justify-content:space-around;gap:20px;">
+                <div style="flex:1;">
+                    <div class="decision-node yes">📋 <strong>Use Kyverno</strong> — Only Kyverno supports Mutate (add defaults, inject sidecars) and Generate (auto-create resources). OPA/Gatekeeper cannot do either.</div>
+                </div>
+                <div style="flex:1;">
+                    <div class="decision-node question">🤔 Does the validation query other cluster resources?</div>
+                    <div class="decision-node">🧠 <strong>Use OPA/Gatekeeper</strong> — Rego's <code>k8s_introspection</code> can query pods, services, namespaces. "Does this Service have a matching NetworkPolicy?"</div>
+                    <div class="decision-node question" style="margin-top:0.5rem;">🤔 Is it a simple field check (label, image tag, resource limit)?</div>
+                    <div class="decision-node">⚡ <strong>Use VAP (CEL)</strong> — Fastest. Built-in. No webhook. If VAP can express it, use VAP. Fall back to Kyverno if you need YAML simplicity.</div>
+                </div>
+            </div>
+            <p style="font-size:0.78rem;color:#8b949e;margin-top:1rem;text-align:center;"><strong>🎯 THE HEURISTIC:</strong> Need mutation? → Kyverno. Cross-resource validation? → OPA. Simple field check? → VAP (CEL). YAML-based validate-only? → Kyverno or VAP. Rego required? → OPA.</p>
+        </div>
+
+        <!-- 🔬 Policy Engine Ecosystem — Where Everything Fits -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 The Policy Engine Ecosystem — Where Each Tool Fits in Your Platform</h5>
+            <p>Policy engines aren't competitors — they're complementary tools in a layered governance strategy. Think of them like security layers: you don't pick ONE — you use the right tool for each layer:</p>
+            <div class="ecosystem-grid" style="margin-top:0.8rem;">
+                <div class="eco-card">
+                    <div class="eco-icon">🏗️</div>
+                    <h5>PSA (Built-in)</h5>
+                    <p>Pod Security Admission. Fastest path. privileged/baseline/restricted profiles. No installation. Blocks hostPath, hostNetwork, privilege escalation at the API server level.</p>
+                </div>
+                <div class="eco-card">
+                    <div class="eco-icon">⚡</div>
+                    <h5>VAP (CEL)</h5>
+                    <p>ValidatingAdmissionPolicy. Built-in K8s 1.26+. CEL expressions. No webhook latency. Type-safe compile checks. Best for simple field validations (labels, tags, limits).</p>
+                </div>
+                <div class="eco-card">
+                    <div class="eco-icon">📋</div>
+                    <h5>Kyverno</h5>
+                    <p>YAML-based. Validate + Mutate + Generate. Kubernetes-native. Image verification. Background scanning. Cleanup policies. Best for platform teams that want simplicity.</p>
+                </div>
+                <div class="eco-card">
+                    <div class="eco-icon">🧠</div>
+                    <h5>OPA/Gatekeeper</h5>
+                    <p>Rego language. Cross-resource lookups. Multi-domain (K8s + Terraform + Envoy). Large community library. Best for complex logic and multi-cluster governance.</p>
+                </div>
+                <div class="eco-card">
+                    <div class="eco-icon">🔬</div>
+                    <h5>Conftest</h5>
+                    <p>OPA-based testing CLI. Test policies against structured data (YAML, JSON, Terraform plans, Dockerfiles). Runs in CI. Catches policy violations BEFORE deployment.</p>
+                </div>
+                <div class="eco-card">
+                    <div class="eco-icon">📊</div>
+                    <h5>Policy Reporter</h5>
+                    <p>Aggregates PolicyReports from Kyverno + OPA. Dashboards. Metrics. Slack/Teams notifications. Shows policy compliance across ALL clusters in one view.</p>
+                </div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧩 THE COMPLETE PICTURE:</strong> PSA blocks the worst offenses (kernel-level). VAP handles simple checks (fast, built-in). Kyverno adds mutation + generation (platform defaults). OPA handles complex cross-resource logic ("does this Service have a NetworkPolicy?"). Conftest tests everything in CI. Policy Reporter shows compliance status. <strong>Together, they form a complete governance fabric — not a single tool, but a layered defense.</strong></p>
         </div>
         </div>
 
@@ -32138,6 +32439,35 @@ gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
       - <span class="code-kw">name:</span> Gatekeeper gator verify
         <span class="code-kw">run:</span> |
           gator verify ./gatekeeper-constraints/ -f ./test-fixtures/</pre>
+        </div>
+
+        <!-- 🔬 Policy Adoption Journey — From Zero to Full Governance -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 The Policy Adoption Journey — From Zero to Full Governance</h5>
+            <p>You don't go from zero policies to blocking everything overnight. Policy adoption is a JOURNEY — each stage builds on the previous one. Here's the path every platform team follows:</p>
+            <div class="journey-bar" style="margin-top:0.8rem;">
+                <div class="journey-segment" style="background:rgba(248,113,113,0.08);">
+                    <div class="step-number" style="font-size:1.4em;margin-bottom:4px;">🏴</div>
+                    <div class="step-label" style="color:#f87171;font-weight:700;">Stage 0: Nothing</div>
+                    <div class="step-detail" style="color:#8b949e;font-size:0.75em;">No policies. Developers deploy anything. "We trust our team." Every pod is a potential incident.</div>
+                </div>
+                <div class="journey-segment" style="background:rgba(234,179,8,0.08);">
+                    <div class="step-number" style="font-size:1.4em;margin-bottom:4px;">📋</div>
+                    <div class="step-label" style="color:#facc15;font-weight:700;">Stage 1: Audit</div>
+                    <div class="step-detail" style="color:#8b949e;font-size:0.75em;">Policies deployed in Audit mode. Violations logged but NOT blocked. "What would we break?" Learn the blast radius.</div>
+                </div>
+                <div class="journey-segment" style="background:rgba(59,130,246,0.08);">
+                    <div class="step-number" style="font-size:1.4em;margin-bottom:4px;">⚡</div>
+                    <div class="step-label" style="color:#60a5fa;font-weight:700;">Stage 2: Enforce P0</div>
+                    <div class="step-detail" style="color:#8b949e;font-size:0.75em;">Block :latest, require labels, enforce limits. The 3 non-negotiables. "The minimum viable security."</div>
+                </div>
+                <div class="journey-segment" style="background:rgba(34,197,94,0.08);">
+                    <div class="step-number" style="font-size:1.4em;margin-bottom:4px;">🔒</div>
+                    <div class="step-label" style="color:#4ade80;font-weight:700;">Stage 3: Full Governance</div>
+                    <div class="step-detail" style="color:#8b949e;font-size:0.75em;">PSA + VAP + Kyverno + OPA. All policies in CI. Policy Reports dashboards. "Every deployment is verified."</div>
+                </div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 KEY INSIGHT:</strong> Stage 1 (Audit) is the most important stage people skip. Deploying a policy in Audit mode for 2 weeks tells you: (a) how many resources violate this policy, (b) whether the policy has false positives, (c) whether the error messages make sense. <strong>Never skip Audit. Never go straight to Enforce.</strong> The platform team that skips Audit is the platform team that accidentally blocks all production deployments on a Friday afternoon.</p>
         </div>
 
         <div class="cnpe-strategy" style="margin-top:1.5rem;">
@@ -32244,6 +32574,39 @@ gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
         <div class="cnpe-gotcha" style="margin-top:1.5rem;">
             <h5>⚠️ VAP Limitation — Validate ONLY</h5>
             <p>ValidatingAdmissionPolicy can ONLY validate (allow/deny). It cannot <strong>mutate</strong> resources. If you need to add default labels, inject sidecars, or modify resources at admission time, you still need Kyverno or a custom mutating webhook. <strong>VAP replaces simple Kyverno/OPA validation use cases — not mutation or generation.</strong></p>
+        </div>
+
+        <!-- 🔬 Real-World Policy Engine Adoption — Case Studies -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Real-World Policy Engine Adoption — Who Uses What and Why</h5>
+            <p>Policy engines aren't theoretical. Here's how major organizations use them in production. These patterns inform YOUR platform decisions:</p>
+            <div class="case-study-grid" style="margin-top:0.8rem;">
+                <div class="case-card">
+                    <div class="case-icon">🏦</div>
+                    <h5>Capital One</h5>
+                    <div class="case-stat">OPA/Gatekeeper — 200+ Constraints</div>
+                    <p>Uses OPA across Kubernetes AND Terraform AND Envoy. One policy language (Rego) governs all infrastructure — not just K8s. The "OPA everywhere" pattern.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🛒</div>
+                    <h5>Shopify</h5>
+                    <div class="case-stat">Kyverno — 500+ ClusterPolicies</div>
+                    <p>Chose Kyverno because YAML-based policies meant platform team and app teams spoke the same language. Mutation rules automatically add labels, annotations, and resource defaults.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🎬</div>
+                    <h5>Netflix</h5>
+                    <div class="case-stat">Custom Admission + OPA</div>
+                    <p>Uses OPA for cross-resource validation ("does every Service have a corresponding NetworkPolicy?"). Custom controllers for Spinnaker integration. Policy is a first-class product.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">☁️</div>
+                    <h5>Google (GKE)</h5>
+                    <div class="case-stat">PSA + VAP + Gatekeeper</div>
+                    <p>GKE Autopilot uses PSA (Restricted) by default. Recommends VAP for simple validations (no webhook latency matters at Google scale). Gatekeeper for complex multi-tenant policies.</p>
+                </div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 PATTERN:</strong> Organizations don't pick ONE policy engine — they pick the RIGHT engine for each layer. PSA for baseline security. VAP for simple field checks (fastest path). Kyverno for mutation and generation (platform defaults). OPA for cross-resource and multi-domain governance. <strong>Your platform should follow the same layered approach.</strong></p>
         </div>
         </div>
 
@@ -32364,15 +32727,53 @@ gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
             </div>
         </div>
 
-        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
-            <h5>💪 Practice Drill — anihpj Policy Stack</h5>
-            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
-                <li><strong>Kyverno: Require team label</strong> — Create a ClusterPolicy that rejects Pods without <code>team</code> label in anihpj-prod namespace.</li>
-                <li><strong>OPA: Block :latest</strong> — Write a ConstraintTemplate (Rego) that denies pods using image:latest.</li>
-                <li><strong>Kyverno: Mutate resource limits</strong> — Create a ClusterPolicy that adds default resource limits to pods without them.</li>
-                <li><strong>VAP: CEL validation</strong> — Create a ValidatingAdmissionPolicy that ensures all containers have <code>securityContext.runAsNonRoot: true</code>.</li>
-                <li><strong>Policy testing</strong> — Write a kyverno test that validates your require-team-label policy against a good-pod.yaml and bad-pod.yaml.</li>
-            </ol>
+        <div class="cnpe-practice-drill" id="drill29-1" style="margin-top:1.5rem;">
+            <h5>🛠️ Drill 1: Kyverno Require Team Label</h5>
+            <p><strong>Scenario:</strong> All pods in anihpj-prod must have the <code>team</code> label.</p>
+            <p><strong>Task:</strong> Create a Kyverno ClusterPolicy that validates the team label exists on all Pods in namespaces labeled <code>environment: production</code>. Test with a valid pod and an invalid pod.</p>
+            <p><strong>Time: 15 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill29-2">
+            <h5>🛠️ Drill 2: OPA/Gatekeeper Block :latest</h5>
+            <p><strong>Scenario:</strong> No pod in any namespace should use <code>:latest</code> image tag.</p>
+            <p><strong>Task:</strong> Write a ConstraintTemplate (Rego) and a Constraint that blocks pods with <code>:latest</code> tag across the entire cluster. Test with gator verify.</p>
+            <p><strong>Time: 15 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill29-3">
+            <h5>🛠️ Drill 3: Kyverno Mutate Resource Limits</h5>
+            <p><strong>Scenario:</strong> Pods without resource limits should automatically get defaults: CPU 100m/500m, Memory 128Mi/512Mi.</p>
+            <p><strong>Task:</strong> Create a Kyverno ClusterPolicy with a Mutate rule that adds default resource requests/limits to containers that don't specify them. Test that a pod without limits gets defaults injected.</p>
+            <p><strong>Time: 15 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill29-4" style="margin-top:1.5rem;">
+            <h5>🛠️ Drill 4: CEL-Based Validation — Block Non-Root Containers</h5>
+            <p><strong>Scenario:</strong> All containers in anihpj-prod must run as non-root. No container should use <code>runAsUser: 0</code>.</p>
+            <p><strong>Task:</strong> Create a ValidatingAdmissionPolicy that blocks any Pod where <code>securityContext.runAsNonRoot != true</code>. Bind it to namespaces with label <code>environment: production</code>. Test your policy by submitting a pod that runs as root and verifying it's rejected.</p>
+            <p><strong>Time: 15 min</strong></p>
+            <p style="font-size:0.85em;color:#8b949e;margin-top:0.5rem;"><strong>💡 Hint:</strong> Use <code>object.spec.containers.all(c, has(c.securityContext) && c.securityContext.runAsNonRoot == true)</code> in your CEL expression. Remember you need BOTH a ValidatingAdmissionPolicy AND a ValidatingAdmissionPolicyBinding.</p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill29-5">
+            <h5>🛠️ Drill 5: Policy Testing Pipeline — kyverno test + conftest</h5>
+            <p><strong>Scenario:</strong> Your platform team maintains 5 Kyverno policies and 2 OPA policies in <code>anihpj-infra/policies/</code>. Every PR must pass automated policy tests.</p>
+            <p><strong>Task:</strong> Set up a policy test directory structure with <code>kyverno-test.yaml</code> expectations. Write good-pod.yaml and bad-pod.yaml test fixtures. Run <code>kyverno test</code> and <code>conftest test</code> locally. Create a GitHub Actions workflow that runs both. Verify that a bad policy change fails CI.</p>
+            <p><strong>Time: 20 min</strong></p>
+            <p style="font-size:0.85em;color:#8b949e;margin-top:0.5rem;"><strong>💡 Hint:</strong> Directory structure: <code>policies/require-team-label/</code> → <code>policy.yaml</code> + <code>tests/good.yaml</code> + <code>tests/bad.yaml</code> + <code>kyverno-test.yaml</code> with expected pass/fail results.</p>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam Strategy — Domain 5 Policy Engines</h5>
+            <p>Domain 5 (Security &amp; Policy, 15%) includes policy engines. Expect 1-2 policy engine tasks:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Write a Kyverno policy:</strong> Most likely task. Know Validate (deny), Mutate (add defaults), and Generate (auto-create). YAML syntax is straightforward — match + action.</li>
+                <li><strong>Write an OPA ConstraintTemplate:</strong> Know the Rego <code>violation[{...}]</code> pattern. Understand ConstraintTemplate (Rego logic) vs Constraint (parameters + scope).</li>
+                <li><strong>Choose the right engine:</strong> Given a scenario, pick Kyverno (mutation/generation), OPA (cross-resource), or VAP (simple field check). Justify your choice.</li>
+                <li><strong>Policy testing:</strong> Know <code>kyverno test</code> and <code>conftest test</code>. The exam may ask you to validate a policy against test resources.</li>
+            </ul>
+            <p style="margin-top:0.5rem;"><strong>🔑 EXAM MINDSET:</strong> CNPE is a PLATFORM exam — you're building governance for ALL developers. Your policies should balance security (block dangerous things) with developer experience (add helpful defaults, give clear error messages). A policy that blocks everything is easy. A policy that enables safe velocity is engineering.</p>
         </div>
 
         <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
@@ -32396,6 +32797,26 @@ gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
             <div class="quiz-question">
                 <p><strong>Q5.</strong> What's the CNPE-recommended strategy for deploying a new policy to production?</p>
                 <p class="quiz-answer"><strong>A:</strong> The <strong>Audit-Enforce Ladder</strong>: (1) Write &amp; test locally, (2) CI validation on PR, (3) Deploy as <code>Audit</code> mode (log only, no rejections), (4) Monitor violations for 1-2 weeks, (5) Promote to <code>Enforce</code> mode (reject violations).</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q6.</strong> You need to enforce that every Deployment in namespace "anihpj-prod" has <code>replicas &gt;= 2</code> for high availability. Which policy engine would you use and why?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Kyverno Validate</strong> or <strong>VAP (CEL)</strong>. This is a simple field validation (<code>object.spec.replicas &gt;= 2</code>). VAP if you want no webhook overhead — the CEL expression is straightforward. Kyverno if you want YAML-based policies without a new language. OPA/Gatekeeper would be overkill for this simple check.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q7.</strong> What's the difference between Kyverno's <code>validationFailureAction: Audit</code> and <code>validationFailureAction: Enforce</code>? When would you use each?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Audit</strong> = log violations but ALLOW the request. Used during policy rollout to discover blast radius without breaking anything. <strong>Enforce</strong> = REJECT violating requests. Used after Audit confirms the policy is correct and false positives are resolved. <strong>Rule:</strong> Always deploy new policies as Audit first, monitor for 1-2 weeks, then promote to Enforce.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q8.</strong> A developer complains "I deployed my app but got 'admission webhook denied the request: Every pod must have a team label.'" What happened and how should the platform team have prevented this confusion?</p>
+                <p class="quiz-answer"><strong>A:</strong> The Kyverno Validate policy enforced the team label requirement, and the developer's pod didn't have the <code>team</code> label. The platform team should have: (1) Used a Kyverno <strong>Mutate</strong> policy to auto-add the team label (so developers don't need to remember), OR (2) Provided clear documentation about required labels in the developer portal, OR (3) Used a more descriptive <code>message</code> field: "Pod 'my-app' is missing the 'team' label. Add 'team: your-team-name' to pod metadata.labels. See: https://wiki.anihpj.com/labels."</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q9.</strong> Your cluster has both Kyverno (Mutate: add resource defaults) and OPA (Validate: require resource limits). In what order do they execute, and does the Kyverno mutation satisfy the OPA validation?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>YES</strong> — the Kyverno mutation satisfies the OPA validation. Execution order: Kyverno Mutate runs FIRST (adds default CPU/memory limits), then OPA Validate runs SECOND (checks if limits exist). By the time OPA checks, the limits are already present because Kyverno added them. This is the <strong>"platform defaults" pattern</strong>: Mutate adds what's missing, Validate confirms it's present. The developer doesn't need to specify limits — the platform handles it.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q10.</strong> You're designing the governance strategy for a new platform. You have 3 namespaces: dev (experimental), staging (pre-prod), and production (customer-facing). How would you apply policies differently to each?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Dev:</strong> Audit mode only. Log violations but never block. Developers need freedom to experiment. <strong>Staging:</strong> Enforce P0 policies (block :latest, require labels, enforce limits). Give clear error messages. This is where developers learn the rules before production. <strong>Production:</strong> Full governance. PSA Restricted + VAP + Kyverno Enforce + OPA cross-resource checks. Block :latest, require labels, enforce limits, block privileged, require non-root, verify image signatures. <strong>Graduated enforcement:</strong> Policies get stricter as you move toward production. Dev is a sandbox. Production is a fortress.</p>
             </div>
         </div>
 
@@ -33289,9 +33710,1212 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
     <hr class="chapter-divider">
 
     <div class="chapter-section" id="part8"><h2>🔴 Part 8: Production Platform Operations <span class="meta-tag">BEYOND CNPE</span></h2></div>
-    <div id="ch31"><div class="chapter-intro"><h3>Ch 31: HA & Disaster Recovery</h3><p>Multi-master, etcd quorum, multi-zone, Velero, etcd backup/restore, GitOps DR.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🔄</div><p>Coming soon</p></div></div>
-    <div id="ch32"><div class="chapter-intro"><h3>Ch 32: Multi-Cluster & Multi-Cloud</h3><p>Why multi-cluster, KubeFed/Submariner/Cilium Mesh, multi-cloud, global traffic.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🌍</div><p>Coming soon</p></div></div>
-    <div id="ch33"><div class="chapter-intro"><h3>Ch 33: Platform as a Product</h3><p>IDP as SaaS, team structure, roadmap, maturity, golden paths, NPS, career path.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🏢</div><p>Coming soon</p></div></div>
+    <div id="ch31">
+        <div class="chapter-intro">
+            <h3>Ch 31: High Availability &amp; Disaster Recovery</h3>
+            <p><strong>Production platforms must survive failures.</strong> HA control planes with stacked or external etcd. etcd quorum (N/2+1) for fault tolerance. Multi-zone deployments for zone-level failures. Velero to backup K8s resources and PVs. etcd snapshot automation. GitOps DR for full recovery from code.</p>
+            <div class="chapter-meta">
+                <span class="meta-tag">🔴 Advanced</span>
+                <span class="meta-tag">⏱️ ~2h</span>
+                <span class="meta-tag">CNPE Domain 6: 10%</span>
+            </div>
+        </div>
+
+        <div class="learning-objectives">
+            <h5>🎯 What You'll Learn</h5>
+            <ul>
+                <li>Design a multi-master control plane with HA topology</li>
+                <li>Choose between stacked and external etcd architectures</li>
+                <li>Understand etcd quorum (N/2+1) and fault tolerance math</li>
+                <li>Configure load balancers for API server high availability</li>
+                <li>Deploy across multiple availability zones for zone-level resilience</li>
+                <li>Backup and restore with Velero (K8s objects + PV snapshots)</li>
+                <li>Automate etcd snapshots and verify restore procedures</li>
+                <li>Implement GitOps DR — redeploy everything from Git after complete failure</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <h5>📋 CNPE Exam Relevance — Domain 6 (10%)</h5>
+            <p>Domain 6 tests your ability to <strong>design and implement platform resilience</strong>. Expect scenario-based questions: "A zone fails. How does your platform survive?" "How many etcd nodes can fail?" "Walk through a Velero restore." <strong>HA/DR is a practical skill — you'll configure these components in the exam.</strong></p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.1 MULTI-MASTER CONTROL PLANE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-1" class="section-block"><h4>31.1 Multi-Master Control Plane — HA at the Core</h4>
+        <p>A <strong>single control plane node is a single point of failure</strong>. Multi-master deployments run 3 or 5 control plane nodes, each with: API server (stateless, load-balanced), controller manager + scheduler (leader-elected, only one active at a time), and etcd (replicated via Raft consensus).</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🏗️ Multi-Master HA Architecture (3 Control Plane Nodes)</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    MULTI-MASTER HA TOPOLOGY (3 CP Nodes)                        │
+│                                                                               │
+│                        ┌──────────────────────┐                               │
+│                        │    LOAD BALANCER      │                               │
+│                        │  (TCP 6443)           │                               │
+│                        │  haproxy / cloud LB   │                               │
+│                        └──────┬───────┬───────┘                               │
+│                               │       │                                       │
+│              ┌────────────────┼───────┼────────────────┐                      │
+│              │                │       │                │                      │
+│              ▼                ▼       ▼                ▼                      │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐              │
+│  │  CP NODE 1        │ │  CP NODE 2        │ │  CP NODE 3        │              │
+│  │  ┌──────────────┐ │ │  ┌──────────────┐ │ │  ┌──────────────┐ │              │
+│  │  │ API Server    │ │ │  │ API Server    │ │ │  │ API Server    │ │              │
+│  │  │ (active)      │ │ │  │ (active)      │ │ │  │ (active)      │ │              │
+│  │  └──────────────┘ │ │  └──────────────┘ │ │  └──────────────┘ │              │
+│  │  ┌──────────────┐ │ │  ┌──────────────┐ │ │  ┌──────────────┐ │              │
+│  │  │ C-Mgr / Sched│ │ │  │ C-Mgr / Sched│ │ │  │ C-Mgr / Sched│ │              │
+│  │  │ (leader) ✅   │ │ │  │ (standby)     │ │ │  │ (standby)     │ │              │
+│  │  └──────────────┘ │ │  └──────────────┘ │ │  └──────────────┘ │              │
+│  │  ┌──────────────┐ │ │  ┌──────────────┐ │ │  ┌──────────────┐ │              │
+│  │  │ etcd (Raft)   │◄┼─┼─┤ etcd (Raft)   │◄┼─┼─┤ etcd (Raft)   │ │              │
+│  │  │ (Leader) ✅   │ │ │  │ (Follower)    │ │ │  │ (Follower)    │ │              │
+│  │  └──────────────┘ │ │  └──────────────┘ │ │  └──────────────┘ │              │
+│  └──────────────────┘ └──────────────────┘ └──────────────────┘              │
+│              │                │                │                               │
+│              └────────────────┼────────────────┘                               │
+│                               │                                                │
+│                               ▼                                                │
+│                    ┌──────────────────────┐                                    │
+│                    │    WORKER NODES       │                                    │
+│                    │  (3-100+ nodes)       │                                    │
+│                    └──────────────────────┘                                    │
+│                                                                               │
+│  🔑 KEY: API servers are ALL active (stateless). C-Mgr/Scheduler have ONE     │
+│     leader (leader election via --leader-elect). etcd uses Raft consensus.    │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ Multi-Master Quick Reference</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>API Server:</strong> Stateless. ALL instances are active. Load-balanced by external LB.</li>
+                <li><strong>Controller Manager &amp; Scheduler:</strong> Leader-elected. Only ONE active at a time. <code>--leader-elect=true</code>.</li>
+                <li><strong>etcd:</strong> Raft consensus. Odd number of nodes (3, 5, 7). Leader handles all writes.</li>
+                <li><strong>Minimum HA:</strong> 3 control plane nodes. Survives 1 node failure.</li>
+                <li><strong>Production HA:</strong> 3 nodes across 3 zones. Survives 1 zone failure.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.2 STACKED VS EXTERNAL ETCD -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-2" class="section-block"><h4>31.2 Stacked vs External etcd — Two HA Topologies</h4>
+        <p>etcd can be deployed in two modes: <strong>stacked</strong> (etcd runs on the same nodes as the control plane) or <strong>external</strong> (etcd runs on dedicated nodes). Each has tradeoffs in complexity, performance, and failure domains.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Feature</th><th>Stacked etcd</th><th>External etcd</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Architecture</strong></td><td>etcd on same nodes as API server</td><td>etcd on dedicated nodes</td></tr>
+                <tr><td><strong>Node count</strong></td><td>3 nodes for both CP + etcd</td><td>3 CP nodes + 3 etcd nodes = 6 nodes minimum</td></tr>
+                <tr><td><strong>Cost</strong></td><td>🟢 Lower. Fewer nodes.</td><td>🔴 Higher. More nodes and infrastructure.</td></tr>
+                <tr><td><strong>Complexity</strong></td><td>🟢 Simpler. kubeadm handles setup.</td><td>🔴 More complex. Separate etcd cluster to manage.</td></tr>
+                <tr><td><strong>Failure isolation</strong></td><td>🟡 CP failure = etcd failure on that node</td><td>✅ CP failure does NOT affect etcd</td></tr>
+                <tr><td><strong>Performance</strong></td><td>🟡 Shared disk/CPU with API server</td><td>✅ Dedicated resources. Better under load.</td></tr>
+                <tr><td><strong>Backup/Restore</strong></td><td>🟢 Simpler. etcdctl on CP node.</td><td>🟡 Separate access to etcd nodes needed.</td></tr>
+                <tr><td><strong>kubeadm default</strong></td><td>✅ Default topology</td><td>Requires <code>--config</code> with external etcd endpoints</td></tr>
+                <tr><td><strong>When to use</strong></td><td>Most clusters. Start here.</td><td>Very large clusters (500+ nodes). Strict isolation required.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 CNPE Recommendation: Start With Stacked</h5>
+            <p>For the CNPE exam and most production deployments: <strong>use stacked etcd</strong>. It's simpler, well-tested, and the default. Only consider external etcd for very large clusters (500+ nodes) or when regulatory requirements demand strict separation of the data store from the control plane. <strong>The exam tests stacked etcd — know it well.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.3 ETCD QUORUM -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-3" class="section-block"><h4>31.3 etcd Quorum — The N/2+1 Rule</h4>
+        <p>etcd uses the <strong>Raft consensus algorithm</strong>. For the cluster to be operational (read + write), a <strong>majority (quorum)</strong> of etcd members must be healthy and able to communicate. This is the <strong>N/2+1</strong> rule (floor division).</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Total etcd Nodes (N)</th><th>Quorum Needed</th><th>Can Lose (Failures Tolerated)</th><th>Notes</th></tr></thead>
+            <tbody>
+                <tr><td><strong>1</strong></td><td>1 (N/2+1 = 1)</td><td>0</td><td>❌ No HA. Never use in production.</td></tr>
+                <tr><td><strong>3</strong></td><td>2 (N/2+1 = 2)</td><td>1</td><td>✅ Minimum production. Survives 1 failure.</td></tr>
+                <tr><td><strong>5</strong></td><td>3 (N/2+1 = 3)</td><td>2</td><td>✅ Good. Survives 2 failures. More write overhead.</td></tr>
+                <tr><td><strong>7</strong></td><td>4 (N/2+1 = 4)</td><td>3</td><td>⚠️ Rarely needed. Writes get slower (Raft requires majority ACK).</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="scenario-box" style="margin-top:1.5rem;">
+            <h5>🧪 etcd Failure Scenarios — 3-Node Cluster</h5>
+            <div style="margin-top:0.5rem;font-size:0.82rem;">
+                <p><strong>Scenario A: 1 node fails</strong> → 2 remain → quorum = 2 → ✅ Cluster operational (READ + WRITE). Survives.</p>
+                <p><strong>Scenario B: 2 nodes fail</strong> → 1 remains → quorum = 2 → ❌ Cluster loses quorum. <strong>READ-ONLY</strong> (no writes). New leader cannot be elected.</p>
+                <p><strong>Scenario C: Network partition</strong> → 2 nodes isolated, 1 node isolated → 2-node group has quorum ✅. 1-node group is read-only ❌. <strong>Raft ensures split-brain can't happen.</strong></p>
+            </div>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ etcd Quorum Loss = Cluster Unavailable</h5>
+            <p>When etcd loses quorum, the Kubernetes API server cannot write anything — no new pods, no config changes, no deployments. Existing pods continue running (they're on worker nodes), but the control plane is <strong>frozen</strong>. <strong>You cannot recover from quorum loss by adding new members.</strong> You must restore from backup (etcd snapshot).</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.4 LOAD BALANCER FOR API SERVER -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-4" class="section-block"><h4>31.4 Load Balancer for API Server — Single Endpoint, Multiple Backends</h4>
+        <p>With multiple API servers, clients (kubectl, kubelet, controllers) need a <strong>single endpoint</strong>. A load balancer distributes traffic across all healthy API servers. The LB must be highly available itself — otherwise it becomes the single point of failure.</p>
+
+        <div class="code-block-wrapper" style="margin-top:1rem;">
+            <div class="code-block-header"><span class="code-lang">📋 HAProxy Config — TCP Load Balancer for API Server</span></div>
+<pre><span class="code-cmt"># /etc/haproxy/haproxy.cfg</span>
+<span class="code-kw">frontend</span> kubernetes-api
+    bind *:6443
+    mode tcp
+    option tcplog
+    default_backend k8s-api-servers
+
+<span class="code-kw">backend</span> k8s-api-servers
+    mode tcp
+    option tcp-check
+    balance roundrobin
+    <span class="code-cmt"># TCP health check: verify port 6443 is reachable</span>
+    default-server inter 10s downinter 5s rise 2 fall 2
+    server cp-node-1 10.0.1.11:6443 check
+    server cp-node-2 10.0.1.12:6443 check
+    server cp-node-3 10.0.1.13:6443 check
+
+<span class="code-cmt"># ── kubeadm init with load balancer ──</span>
+kubeadm init \
+  --control-plane-endpoint "k8s-api.anihpj.internal:6443" \
+  --upload-certs
+<span class="code-cmt"># --control-plane-endpoint = the LB address (DNS or IP)</span>
+<span class="code-cmt"># --upload-certs = share certificates across CP nodes</span>
+
+<span class="code-cmt"># ── Cloud LB (AWS NLB example) ──</span>
+<span class="code-cmt"># aws elbv2 create-load-balancer --name k8s-api-nlb --type network</span>
+<span class="code-cmt"># Target group: TCP:6443 → CP nodes. Health check: TCP:6443.</span></pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ LB Options for API Server</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>On-prem:</strong> HAProxy or keepalived (VRRP-based floating IP).</li>
+                <li><strong>AWS:</strong> NLB (Network Load Balancer) — Layer 4, TCP pass-through, preserves client IP.</li>
+                <li><strong>Azure:</strong> Standard Load Balancer with TCP probe on 6443.</li>
+                <li><strong>GCP:</strong> TCP Load Balancer with health check on 6443.</li>
+                <li><strong>kube-vip:</strong> Layer 2 ARP-based virtual IP. No external LB needed. Popular for on-prem k3s/rke2.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.5 MULTI-ZONE DEPLOYMENTS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-5" class="section-block"><h4>31.5 Multi-Zone Deployments — Surviving Zone Failures</h4>
+        <p>A single availability zone (AZ) is a single failure domain. A multi-zone deployment spreads control plane nodes AND worker nodes across 3 zones. If one zone fails, the cluster continues operating with the remaining 2 zones.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🌍 Multi-Zone Deployment — 3 Control Planes × 3 Zones</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    MULTI-ZONE KUBERNETES DEPLOYMENT                             │
+│                                                                               │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐            │
+│  │   ZONE A (us-east-1a)│  │   ZONE B (us-east-1b)│  │   ZONE C (us-east-1c)│            │
+│  │                    │  │                    │  │                    │            │
+│  │  ┌──────────────┐ │  │  ┌──────────────┐ │  │  ┌──────────────┐ │            │
+│  │  │  CP Node 1    │ │  │  │  CP Node 2    │ │  │  │  CP Node 3    │ │            │
+│  │  │  (etcd member)│ │  │  │  (etcd member)│ │  │  │  (etcd member)│ │            │
+│  │  └──────────────┘ │  │  └──────────────┘ │  │  └──────────────┘ │            │
+│  │                    │  │                    │  │                    │            │
+│  │  ┌──────────────┐ │  │  ┌──────────────┐ │  │  ┌──────────────┐ │            │
+│  │  │  Worker 1    │ │  │  │  Worker 2    │ │  │  │  Worker 3    │ │            │
+│  │  │  anihpj-app  │ │  │  │  anihpj-app  │ │  │  │  anihpj-app  │ │            │
+│  │  │  anihpj-db   │ │  │  │  anihpj-db   │ │  │  │  anihpj-db   │ │            │
+│  │  └──────────────┘ │  │  └──────────────┘ │  │  └──────────────┘ │            │
+│  │                    │  │                    │  │                    │            │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘            │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  ZONE FAILURE SCENARIO: Zone A goes down                                 │ │
+│  │  • CP Node 1 lost → etcd: 2/3 remain → quorum = 2 ✅ → CLUSTER OPERATES  │ │
+│  │  • Worker 1 lost → Pods rescheduled to Zone B & C                         │ │
+│  │  • anihpj-app: 2/3 pods running → service continues (load balancer)       │ │
+│  │  • anihpj-db: 2/3 replicas → Raft leader re-elected in Zone B             │ │
+│  │                                                                           │ │
+│  │  🔑 KEY: Spread pods across zones with topologySpreadConstraints.         │ │
+│  │  🔑 KEY: 3 zones with CP in each → survive 1 zone failure.                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 topologySpreadConstraints — Spread Pods Across Zones</span></div>
+<pre><span class="code-kw">apiVersion:</span> apps/v1
+<span class="code-kw">kind:</span> Deployment
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-jobboard
+<span class="code-kw">spec:</span>
+  <span class="code-kw">replicas:</span> 6                           <span class="code-cmt"># 2 per zone</span>
+  <span class="code-kw">template:</span>
+    <span class="code-kw">spec:</span>
+      <span class="code-kw">topologySpreadConstraints:</span>
+      - <span class="code-kw">maxSkew:</span> 1                    <span class="code-cmt"># Maximum imbalance between zones</span>
+        <span class="code-kw">topologyKey:</span> topology.kubernetes.io/zone
+        <span class="code-kw">whenUnsatisfiable:</span> DoNotSchedule  <span class="code-cmt"># Hard constraint</span>
+        <span class="code-kw">labelSelector:</span>
+          <span class="code-kw">matchLabels:</span>
+            <span class="code-kw">app:</span> anihpj-jobboard</pre>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.6 VELERO -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-6" class="section-block"><h4>31.6 Velero — Backup &amp; Restore for Kubernetes</h4>
+        <p><strong>Velero</strong> (formerly Heptio Ark) backs up Kubernetes <strong>resources</strong> (YAML definitions) and <strong>persistent volumes</strong> (data) to cloud storage (S3, GCS, Azure Blob). It's the CNCF-standard tool for K8s disaster recovery and migration.</p>
+
+        <div class="code-block-wrapper" style="margin-top:1rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Velero — Backup, Schedule, Restore</span></div>
+<pre><span class="code-cmt"># ── INSTALL Velero (AWS S3) ──</span>
+velero install \
+  --provider aws \
+  --bucket velero-anihpj-backups \
+  --backup-location-config region=us-east-1 \
+  --snapshot-location-config region=us-east-1 \
+  --secret-file ./credentials-velero
+
+<span class="code-cmt"># ── ON-DEMAND BACKUP: Entire cluster ──</span>
+velero backup create anihpj-full-backup --include-namespaces '*'
+<span class="code-cmt"># Backs up ALL resources + PV data (via snapshots) to S3</span>
+
+<span class="code-cmt"># ── BACKUP: Specific namespace ──</span>
+velero backup create anihpj-prod-backup \
+  --include-namespaces anihpj-prod \
+  --include-resources deployments,services,configmaps,secrets,pvc
+
+<span class="code-cmt"># ── BACKUP: Exclude specific resources ──</span>
+velero backup create anihpj-no-secrets \
+  --include-namespaces anihpj-prod \
+  --exclude-resources secrets
+
+<span class="code-cmt"># ── SCHEDULED BACKUP: Every 6 hours, retain 30 days ──</span>
+velero schedule create anihpj-daily \
+  --schedule="0 */6 * * *" \
+  --include-namespaces anihpj-prod \
+  --ttl 720h                            <span class="code-cmt"># Retain for 30 days (720 hours)</span>
+
+<span class="code-cmt"># ── LIST BACKUPS ──</span>
+velero backup get
+<span class="code-cmt"># NAME                  STATUS      ERRORS   WARNINGS   CREATED</span>
+<span class="code-cmt"># anihpj-full-backup    Completed   0        0          2025-01-15 10:00:00</span>
+
+<span class="code-cmt"># ── RESTORE: Full namespace restore ──</span>
+velero restore create --from-backup anihpj-full-backup \
+  --include-namespaces anihpj-prod
+
+<span class="code-cmt"># ── RESTORE: Dry-run (see what would be restored) ──</span>
+velero restore create --from-backup anihpj-full-backup --dry-run
+
+<span class="code-cmt"># ── RESTORE: Into a DIFFERENT cluster (DR migration) ──</span>
+<span class="code-cmt"># Point velero at the new cluster (kubectl context) + same S3 bucket</span>
+velero restore create --from-backup anihpj-full-backup</pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: Velero = The DR Tool</h5>
+            <p>Velero is the standard DR tool on the exam. Key commands: <code>backup create</code> (on-demand), <code>schedule create</code> (automated), <code>restore create</code> (recovery). Know the difference between <strong>backup</strong> (resources + PV snapshots to S3) and <strong>etcd snapshot</strong> (raw etcd data). Velero backs up K8s objects; etcd snapshots back up the raw database.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.7 ETCD SNAPSHOT AUTOMATION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-7" class="section-block"><h4>31.7 etcd Snapshot Automation — Raw Data Store Backup</h4>
+        <p>While Velero backs up K8s objects, <strong>etcd snapshots</strong> back up the raw key-value store. This is your LAST line of defense. If everything else fails, an etcd snapshot can restore the entire cluster state to a point in time.</p>
+
+        <div class="code-block-wrapper" style="margin-top:1rem;">
+            <div class="code-block-header"><span class="code-lang">📋 etcd — Snapshot, Verify, Restore</span></div>
+<pre><span class="code-cmt"># ── TAKE ETCD SNAPSHOT ──</span>
+ETCDCTL_API=3 etcdctl snapshot save /backups/etcd-snapshot-$(date +%Y%m%d-%H%M).db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+<span class="code-cmt"># ── VERIFY SNAPSHOT ──</span>
+ETCDCTL_API=3 etcdctl snapshot status /backups/etcd-snapshot.db --write-out=table
+<span class="code-cmt"># Output: hash, revision, total keys, total size</span>
+
+<span class="code-cmt"># ── RESTORE FROM SNAPSHOT ──</span>
+ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
+  --data-dir /var/lib/etcd-restored \
+  --name cp-node-1 \
+  --initial-cluster cp-node-1=https://10.0.1.11:2380,cp-node-2=https://10.0.1.12:2380,cp-node-3=https://10.0.1.13:2380 \
+  --initial-cluster-token etcd-cluster-anihpj \
+  --initial-advertise-peer-urls https://10.0.1.11:2380
+
+<span class="code-cmt"># ── AUTOMATION: CronJob for etcd snapshots ──</span>
+<span class="code-kw">apiVersion:</span> batch/v1
+<span class="code-kw">kind:</span> CronJob
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> etcd-snapshot
+  <span class="code-kw">namespace:</span> kube-system
+<span class="code-kw">spec:</span>
+  <span class="code-kw">schedule:</span> "0 */6 * * *"                 <span class="code-cmt"># Every 6 hours</span>
+  <span class="code-kw">jobTemplate:</span>
+    <span class="code-kw">spec:</span>
+      <span class="code-kw">template:</span>
+        <span class="code-kw">spec:</span>
+          <span class="code-kw">containers:</span>
+          - <span class="code-kw">name:</span> etcd-snapshotter
+            <span class="code-kw">image:</span> bitnami/etcd:latest
+            <span class="code-kw">command:</span> ["/bin/sh", "-c"]
+            <span class="code-kw">args:</span>
+            - |
+              etcdctl snapshot save /backups/etcd-$(date +%Y%m%d-%H%M).db \
+                --endpoints=https://etcd:2379 \
+                --cacert=/certs/ca.crt \
+                --cert=/certs/server.crt \
+                --key=/certs/server.key
+              <span class="code-cmt"># Upload to S3 for off-site storage</span>
+              aws s3 cp /backups/ s3://anihpj-etcd-backups/ --recursive
+          <span class="code-kw">restartPolicy:</span> OnFailure</pre>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ etcd Snapshot ≠ Velero Backup — Use BOTH</h5>
+            <p><strong>etcd snapshot</strong> backs up the raw key-value store. It's a complete cluster state dump. <strong>Velero</strong> backs up individual K8s resources + PV data. Use etcd snapshots as your nuclear option (complete cluster restore). Use Velero for granular namespace-level restores and migrations. <strong>Production platforms use both.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 31.8 GITOPS DR -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s31-8" class="section-block"><h4>31.8 GitOps Disaster Recovery — Redeploy Everything from Git</h4>
+        <p>The ultimate DR strategy: <strong>every Kubernetes resource is defined in Git</strong>. If the cluster is completely destroyed, you redeploy ArgoCD (or Flux), point it at the same Git repos, and the ENTIRE platform is recreated automatically. No manual restore needed.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔄 GitOps DR — Recovery from Complete Cluster Loss</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    GITOPS DISASTER RECOVERY FLOW                                │
+│                                                                               │
+│  SCENARIO: Complete cluster loss (all nodes destroyed)                        │
+│                                                                               │
+│  STEP 1: PROVISION NEW INFRASTRUCTURE                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Terraform / Crossplane provisions:                                      │ │
+│  │  • 3 CP nodes + 3 Worker nodes (or managed K8s)                         │ │
+│  │  • S3 bucket for Velero backups                                          │ │
+│  │  • IAM roles + networking                                                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 2: BOOTSTRAP CLUSTER                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  • Install ArgoCD (single kubectl apply)                                 │ │
+│  │  • Configure App of Apps root application                                │ │
+│  │  • Point ArgoCD at Git repos:                                            │ │
+│  │    - anihpj-infra (cluster config)                                        │ │
+│  │    - anihpj-apps (application manifests)                                   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 3: ARGOCD RECONCILES                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  ArgoCD syncs ALL resources from Git:                                    │ │
+│  │  • Namespaces, RBAC, NetworkPolicies                                     │ │
+│  │  • Deployments, Services, Ingresses                                      │ │
+│  │  • ConfigMaps, Secrets (from External Secrets)                           │ │
+│  │  • Kyverno policies, monitoring stack, logging stack                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                                    ▼                                          │
+│  STEP 4: RESTORE PERSISTENT DATA                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  • Velero restore --from-backup latest (restores PV data from S3)       │ │
+│  │  • OR: etcd snapshot restore (if recovering into same cluster)           │ │
+│  │  • External databases (RDS) — already Terraform-managed, data survived   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  🎯 RTO (Recovery Time Objective): ~15 minutes (automated)                     │
+│  🎯 RPO (Recovery Point Objective): ~1 hour (last Velero snapshot)             │
+│                                                                               │
+│  🔑 Git is the source of truth. Cluster is a cache. Recreate from Git anytime. │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
+            <h5>💪 Practice Drill — anihpj HA &amp; DR</h5>
+            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
+                <li><strong>Design HA architecture:</strong> Draw a 3-CP + 3-worker topology across 3 zones. Identify single points of failure.</li>
+                <li><strong>etcd snapshot:</strong> Take an etcd snapshot with etcdctl. Verify it. Calculate quorum for a 5-node etcd cluster.</li>
+                <li><strong>Velero backup:</strong> Install Velero with Minio (S3-compatible). Create an on-demand backup. Schedule a daily backup.</li>
+                <li><strong>Velero restore:</strong> Delete a namespace. Restore it from backup. Verify all resources are recovered.</li>
+                <li><strong>GitOps DR scenario:</strong> Write the steps to recover anihpj from complete cluster loss. Calculate RTO and RPO.</li>
+            </ol>
+        </div>
+
+        <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
+            <h5>🧠 Knowledge Check — Ch 31: HA &amp; Disaster Recovery</h5>
+            <div class="quiz-question">
+                <p><strong>Q1.</strong> With 3 etcd nodes, how many can fail before the cluster loses quorum?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>1 node</strong> can fail. Quorum = N/2+1 = 2. With 3 nodes, 2 must be healthy. If 2 fail (1 remains), quorum is lost. The cluster becomes read-only — no writes possible.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q2.</strong> In a multi-master setup, which components are active on ALL CP nodes, and which use leader election?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>API Server</strong> is stateless — ALL instances are active and serve requests. <strong>Controller Manager</strong> and <strong>Scheduler</strong> use leader election (<code>--leader-elect=true</code>) — only ONE instance is active at a time. <strong>etcd</strong> uses Raft consensus — one node is the leader (handles all writes), others are followers.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q3.</strong> What's the difference between Velero backup and etcd snapshot?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Velero</strong> backs up K8s resources (YAML) + PersistentVolume data via cloud snapshots. It's namespace-aware and supports selective restore. <strong>etcd snapshot</strong> backs up the raw key-value store — it's a complete cluster state dump. Velero = surgical restore. etcd snapshot = nuclear restore. Use both in production.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q4.</strong> What is GitOps DR and why is it the fastest recovery method?</p>
+                <p class="quiz-answer"><strong>A:</strong> GitOps DR means every resource is defined in Git and deployed via ArgoCD/Flux. After a complete cluster loss: (1) Provision new infra, (2) Install ArgoCD, (3) Point at Git repos — ArgoCD recreates everything automatically. It's fast because you don't manually restore — you just point the GitOps tool at the same Git repos and it reconciles to the desired state.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q5.</strong> You have a 5-node etcd cluster. The network partitions: 3 nodes in partition A, 2 nodes in partition B. Which partition continues to operate?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Partition A (3 nodes)</strong> has quorum (N/2+1 = 3). It elects a leader and continues to accept reads and writes. Partition B (2 nodes) loses quorum, becomes read-only, and cannot accept writes. Raft consensus prevents split-brain: only one partition can have quorum.</p>
+            </div>
+        </div>
+
+        <div class="chapter-summary" id="s31-summary" style="margin-top:1.5rem;">
+            <h5>📝 Ch 31 Chapter Summary</h5>
+            <div class="card-grid" style="margin-top:0.5rem;">
+                <div class="info-card"><h5>🏗️ Multi-Master CP</h5><p>3 or 5 CP nodes. API server: all active (stateless). Controller/Scheduler: leader-elected. etcd: Raft consensus. LB in front of API servers.</p></div>
+                <div class="info-card"><h5>📊 Stacked vs External</h5><p>Stacked: etcd on CP nodes (default, simpler). External: etcd on dedicated nodes (more isolation, more nodes). Start with stacked.</p></div>
+                <div class="info-card"><h5>🧮 etcd Quorum</h5><p>N/2+1 rule. 3 nodes → tolerate 1 failure. 5 nodes → tolerate 2 failures. Quorum loss = cluster frozen (read-only). Recover from snapshot only.</p></div>
+                <div class="info-card"><h5>🌍 Multi-Zone</h5><p>Spread CP + workers across 3 zones. topologySpreadConstraints for pod distribution. 3 zones with CP in each → survive 1 zone failure.</p></div>
+                <div class="info-card"><h5>💾 Velero</h5><p>Backup K8s objects + PV data to S3. <code>backup create</code>, <code>schedule create</code>, <code>restore create</code>. Namespace-aware. Use for DR + migration.</p></div>
+                <div class="info-card"><h5>🗄️ etcd Snapshots</h5><p><code>etcdctl snapshot save</code> + <code>snapshot restore</code>. CronJob automation. Upload to S3 for off-site storage. Nuclear restore option.</p></div>
+                <div class="info-card"><h5>🔄 GitOps DR</h5><p>Git = source of truth. Cluster = cache. ArgoCD recreates everything from Git. RTO: ~15 min. RPO: ~1 hour (last Velero snapshot).</p></div>
+                <div class="info-card"><h5>🏢 anihpj Stack</h5><p>3 zones × 3 CP (stacked etcd). Velero every 6h to S3. etcd snapshots every 6h. GitOps DR via ArgoCD. RTO < 30 min, RPO < 6h.</p></div>
+            </div>
+        </div>
+
+        <div class="visual-summary" id="s31-visual" style="margin-top:1.5rem;">
+            <h5>🖼️ Visual Summary — Ch 31 HA &amp; Disaster Recovery</h5>
+            <div class="evolution-strip" style="margin-top:0.5rem;">
+                <div class="evo-item"><div class="evo-year">CP HA</div><div class="evo-desc"><strong>3 Nodes</strong><br>API: Active<br>C-Mgr: Leader<br>etcd: Raft</div></div>
+                <div class="evo-item"><div class="evo-year">Zones</div><div class="evo-desc"><strong>3 AZs</strong><br>CP per zone<br>Workers spread<br>Topology</div></div>
+                <div class="evo-item"><div class="evo-year">Backup</div><div class="evo-desc"><strong>Velero</strong><br>Every 6h<br>S3 storage<br>PV snapshots</div></div>
+                <div class="evo-item"><div class="evo-year">etcd</div><div class="evo-desc"><strong>Snapshot</strong><br>Every 6h<br>CronJob<br>S3 upload</div></div>
+                <div class="evo-item"><div class="evo-year">DR</div><div class="evo-desc"><strong>GitOps</strong><br>ArgoCD<br>Recreate all<br>RTO ~15min</div></div>
+            </div>
+            <pre style="background:#161b22;font-size:0.75rem;margin-top:0.8rem;">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              HA/DR RECOVERY TIERS — FROM FASTEST TO SLOWEST                   │
+│                                                                              │
+│  TIER 1 — COMPONENT FAILURE (seconds): Leader re-election (C-Mgr, Scheduler)│
+│  TIER 2 — NODE FAILURE (minutes): Pods reschedule to other nodes            │
+│  TIER 3 — ZONE FAILURE (minutes): etcd re-elects leader, pods spread       │
+│  TIER 4 — DATA CORRUPTION (hours): Velero restore specific namespace       │
+│  TIER 5 — COMPLETE LOSS (hours): GitOps DR — provision + ArgoCD + Velero   │
+│                                                                              │
+│  🔑 Design for TIER 1-3 automatically. Practice TIER 4-5 regularly.          │
+│  🔑 RTO/RPO: Measure and improve every quarter.                              │
+└─────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+        </div>
+
+    <hr class="chapter-divider">
+
+    <div id="ch32">
+        <div class="chapter-intro">
+            <h3>Ch 32: Multi-Cluster &amp; Multi-Cloud Architecture</h3>
+            <p><strong>One cluster is never enough for production.</strong> Multi-cluster for blast radius isolation and regional compliance. Multi-cloud for provider resilience. KubeFed, Submariner, and Cilium Cluster Mesh for cross-cluster connectivity. Global DNS for traffic management.</p>
+            <div class="chapter-meta">
+                <span class="meta-tag">🔴 Advanced</span>
+                <span class="meta-tag">⏱️ ~2h</span>
+                <span class="meta-tag">CNPE Domain 6: 10%</span>
+            </div>
+        </div>
+
+        <div class="learning-objectives">
+            <h5>🎯 What You'll Learn</h5>
+            <ul>
+                <li>Understand why multi-cluster is essential (blast radius, compliance, latency, isolation)</li>
+                <li>Use KubeFed to federate resources across multiple clusters</li>
+                <li>Connect clusters with Submariner for cross-cluster pod-to-pod networking</li>
+                <li>Implement Cilium Cluster Mesh for transparent multi-cluster service discovery</li>
+                <li>Design multi-cloud architectures spanning AWS, Azure, and GCP</li>
+                <li>Manage global traffic with DNS-based routing across clusters</li>
+                <li>Plan hybrid cloud bursting strategies for overflow capacity</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <h5>📋 CNPE Exam Relevance — Domain 6 (10%)</h5>
+            <p>Domain 6 tests multi-cluster and multi-cloud architecture. Expect design questions: "How would you deploy anihpj across 3 regions?" "When would you use Submariner vs Cilium Cluster Mesh?" <strong>This chapter is conceptual — understand the tradeoffs, not just the YAML.</strong></p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 32.1 WHY MULTI-CLUSTER -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s32-1" class="section-block"><h4>32.1 Why Multi-Cluster — Blast Radius, Compliance, Latency</h4>
+        <p>A single cluster is a single failure domain. Multi-cluster architectures address four fundamental concerns:</p>
+
+        <div class="card-grid" style="margin-top:1rem;">
+            <div class="info-card"><h5>💥 Blast Radius</h5><p>One misconfigured NetworkPolicy or runaway controller can't take down ALL services. Isolate critical workloads (payment, auth) in dedicated clusters.</p></div>
+            <div class="info-card"><h5>📋 Compliance</h5><p>Data sovereignty laws (GDPR, HIPAA) require data to stay in specific regions. One cluster per region = compliance by architecture.</p></div>
+            <div class="info-card"><h5>⚡ Latency</h5><p>Users in Asia should hit a cluster in Asia. Users in Europe should hit a cluster in Europe. Multi-cluster enables geo-distributed deployments.</p></div>
+            <div class="info-card"><h5>🔒 Isolation</h5><p>Dev, staging, and production should be in SEPARATE clusters, not just separate namespaces. A namespace boundary is not a security boundary.</p></div>
+        </div>
+
+        <div class="compare-table" style="margin-top:1.5rem;"><table>
+            <thead><tr><th>Isolation Level</th><th>Namespaces (Single Cluster)</th><th>Multi-Cluster</th></tr></thead>
+            <tbody>
+                <tr><td>Resource isolation</td><td>✅ ResourceQuota, LimitRange</td><td>✅ Natural — separate clusters, separate resources</td></tr>
+                <tr><td>Network isolation</td><td>⚠️ NetworkPolicy. Misconfig can leak.</td><td>✅ Air-gap between clusters (by default)</td></tr>
+                <tr><td>RBAC isolation</td><td>⚠️ ClusterRoles are cluster-wide</td><td>✅ Each cluster has its own RBAC</td></tr>
+                <tr><td>API server blast radius</td><td>❌ One API server crash = everything down</td><td>✅ Each cluster has its own control plane</td></tr>
+                <tr><td>Kubernetes version upgrade</td><td>⚠️ One cluster, one version. All or nothing.</td><td>✅ Canary upgrade — one cluster at a time</td></tr>
+                <tr><td>Cost</td><td>🟢 One cluster to manage</td><td>🔴 N clusters to manage (automation required)</td></tr>
+            </tbody>
+        </table></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 32.2 KUBEFED -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s32-2" class="section-block"><h4>32.2 KubeFed (Kubernetes Federation) — Multi-Cluster Resource Sync</h4>
+        <p><strong>KubeFed</strong> (Kubernetes Cluster Federation) lets you define resources ONCE and propagate them to multiple clusters. It's ideal for: global ConfigMaps, shared RBAC policies, and replicated Deployments across regions.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🌐 KubeFed Architecture — Federate Resources Across Clusters</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    KUBEFED FEDERATION ARCHITECTURE                               │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                     HOST CLUSTER (KubeFed Control Plane)                   │ │
+│  │                                                                           │ │
+│  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐       │ │
+│  │  │ FederatedDeploy   │  │ FederatedConfigMap│  │ FederatedRBAC     │       │ │
+│  │  │ "anihpj-jobboard" │  │ "shared-config"   │  │ "platform-rbac"   │       │ │
+│  │  │ replicas: 3       │  │                   │  │                   │       │ │
+│  │  │ placement:        │  │ placement:        │  │ placement:        │       │ │
+│  │  │  - us-east        │  │  - all clusters   │  │  - all clusters   │       │ │
+│  │  │  - eu-west        │  │                   │  │                   │       │ │
+│  │  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘       │ │
+│  └───────────┼─────────────────────┼─────────────────────┼──────────────────┘ │
+│              │                     │                     │                     │
+│              ▼                     ▼                     ▼                     │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐            │
+│  │  CLUSTER A        │  │  CLUSTER B        │  │  CLUSTER C        │            │
+│  │  us-east          │  │  eu-west          │  │  ap-southeast     │            │
+│  │  ┌──────────────┐ │  │  ┌──────────────┐ │  │  ┌──────────────┐ │            │
+│  │  │ anihpj-app   │ │  │  │ anihpj-app   │ │  │  │ shared-config│ │            │
+│  │  │ (3 replicas) │ │  │  │ (3 replicas) │ │  │  │ platform-rbac│ │            │
+│  │  │ shared-config│ │  │  │ shared-config│ │  │  │               │ │            │
+│  │  │ platform-rbac│ │  │  │ platform-rbac│ │  │  │               │ │            │
+│  │  └──────────────┘ │  │  └──────────────┘ │  │  └──────────────┘ │            │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘            │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 KubeFed — FederatedDeployment</span></div>
+<pre><span class="code-cmt"># ── FederatedDeployment: Deploy to multiple clusters ──</span>
+<span class="code-kw">apiVersion:</span> types.kubefed.io/v1beta1
+<span class="code-kw">kind:</span> FederatedDeployment
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-jobboard
+  <span class="code-kw">namespace:</span> anihpj-prod
+<span class="code-kw">spec:</span>
+  <span class="code-kw">template:</span>
+    <span class="code-kw">metadata:</span>
+      <span class="code-kw">labels:</span>
+        <span class="code-kw">app:</span> anihpj-jobboard
+    <span class="code-kw">spec:</span>
+      <span class="code-kw">replicas:</span> 3
+      <span class="code-kw">selector:</span>
+        <span class="code-kw">matchLabels:</span>
+          <span class="code-kw">app:</span> anihpj-jobboard
+      <span class="code-kw">template:</span> <span class="code-cmt"># Pod template here...</span>
+  <span class="code-kw">placement:</span>
+    <span class="code-kw">clusters:</span>
+    - <span class="code-kw">name:</span> us-east-cluster
+    - <span class="code-kw">name:</span> eu-west-cluster
+  <span class="code-kw">overrides:</span>
+  - <span class="code-kw">clusterName:</span> eu-west-cluster
+    <span class="code-kw">clusterOverrides:</span>
+    - <span class="code-kw">path:</span> "/spec/replicas"
+      <span class="code-kw">value:</span> 5                       <span class="code-cmt"># EU gets more replicas</span></pre>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 32.3 SUBMARINER -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s32-3" class="section-block"><h4>32.3 Submariner — Cross-Cluster Pod-to-Pod Networking</h4>
+        <p><strong>Submariner</strong> connects Kubernetes clusters so that pods in Cluster A can talk directly to pods in Cluster B — across VPCs, regions, or even clouds. It creates encrypted IPsec tunnels between clusters and synchronizes Service DNS records.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Feature</th><th>Submariner</th><th>Cilium Cluster Mesh</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Networking layer</strong></td><td>L3 (IP routing via IPsec tunnels)</td><td>L3/L4 (eBPF-based, identity-aware)</td></tr>
+                <tr><td><strong>Encryption</strong></td><td>✅ IPsec between gateways</td><td>✅ WireGuard or IPsec (via Cilium)</td></tr>
+                <tr><td><strong>Service Discovery</strong></td><td>✅ Lighthouse (DNS-based)</td><td>✅ Global Services (built-in)</td></tr>
+                <tr><td><strong>CNI dependency</strong></td><td>CNI-agnostic. Works with any CNI.</td><td>❌ Requires Cilium as CNI</td></tr>
+                <tr><td><strong>When to use</strong></td><td>You already have a CNI (Calico, Flannel) and need cross-cluster networking.</td><td>You're standardizing on Cilium. Want identity-based policies across clusters.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ Submariner Quick Reference</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Broker:</strong> Central cluster that stores connection info for all member clusters.</li>
+                <li><strong>Gateway Node:</strong> One node per cluster with a public IP. Terminates IPsec tunnels from other clusters.</li>
+                <li><strong>Lighthouse:</strong> DNS component that enables cross-cluster service discovery (<code>service.namespace.svc.clusterset.local</code>).</li>
+                <li><strong>Use case:</strong> anihpj-jobboard in us-east needs to call anihpj-auth in eu-west. Submariner makes the pod-to-pod connection work.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 32.4 CILIUM CLUSTER MESH -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s32-4" class="section-block"><h4>32.4 Cilium Cluster Mesh — Identity-Aware Multi-Cluster Networking</h4>
+        <p><strong>Cilium Cluster Mesh</strong> extends Cilium's eBPF-based networking across multiple clusters. Pods in different clusters can communicate using <strong>identity-based policies</strong> — not just IP-based. It also provides Global Services for load-balancing across clusters.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔗 Cilium Cluster Mesh — Global Services + Identity</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    CILIUM CLUSTER MESH                                          │
+│                                                                               │
+│  ┌──────────────────────────┐        ┌──────────────────────────┐            │
+│  │  CLUSTER A (us-east)      │        │  CLUSTER B (eu-west)      │            │
+│  │                            │        │                            │            │
+│  │  ┌──────────────────┐     │        │  ┌──────────────────┐     │            │
+│  │  │ Global Service:   │     │        │  │ Global Service:   │     │            │
+│  │  │ anihpj-api        │◄════╪════════╪═►│ anihpj-api        │     │            │
+│  │  │ (local endpoints) │     │  Mesh  │  │ (local endpoints) │     │            │
+│  │  └──────────────────┘     │        │  └──────────────────┘     │            │
+│  │                            │        │                            │            │
+│  │  Pod A (identity: 1234)   │        │  Pod B (identity: 1234)   │            │
+│  │  Pod C (identity: 5678)   │        │  Pod D (identity: 5678)   │            │
+│  └──────────────────────────┘        └──────────────────────────┘            │
+│                                                                               │
+│  🔑 Identity-based policy: "Pod 1234 can talk to Pod 1234 across clusters"    │
+│  🔑 Global Service: DNS resolves to local endpoints (preferred) + remote      │
+│  🔑 WireGuard encryption between clusters (optional but recommended)          │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 Submariner vs Cilium Cluster Mesh — Decision Guide</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Use Submariner</strong> if: You have an existing CNI (Calico, Flannel, Weave) and need cross-cluster networking without changing CNI.</li>
+                <li><strong>Use Cilium Cluster Mesh</strong> if: You're standardizing on Cilium as your CNI. You want identity-based policies that transcend clusters. You need Global Services with automatic failover.</li>
+                <li><strong>CNPE Exam:</strong> Know the tradeoff. Submariner = CNI-agnostic. Cilium Cluster Mesh = Cilium-only but more powerful.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 32.5 MULTI-CLOUD -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s32-5" class="section-block"><h4>32.5 Multi-Cloud — AWS + Azure + GCP</h4>
+        <p>Multi-cloud means running Kubernetes across multiple cloud providers. The goal is NOT to be "cloud agnostic" (that's a myth) but to avoid single-provider lock-in for critical services and to leverage each provider's strengths.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Service</th><th>AWS</th><th>Azure</th><th>GCP</th><th>Multi-Cloud Strategy</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Managed K8s</strong></td><td>EKS</td><td>AKS</td><td>GKE</td><td>Use each provider's managed K8s. Don't self-manage across clouds.</td></tr>
+                <tr><td><strong>Container Registry</strong></td><td>ECR</td><td>ACR</td><td>Artifact Registry</td><td>Replicate images to all providers' registries.</td></tr>
+                <tr><td><strong>Secrets</strong></td><td>Secrets Manager</td><td>Key Vault</td><td>Secret Manager</td><td>External Secrets Operator synced to each cluster.</td></tr>
+                <tr><td><strong>DNS</strong></td><td>Route 53</td><td>Azure DNS</td><td>Cloud DNS</td><td>One primary DNS. Geo-route to nearest cluster.</td></tr>
+                <tr><td><strong>Object Storage</strong></td><td>S3</td><td>Blob Storage</td><td>GCS</td><td>Velero backups to each provider's storage. Cross-cloud restore possible.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ Multi-Cloud ≠ Cloud Agnostic</h5>
+            <p>True cloud agnosticism is expensive and limiting — you miss out on each cloud's differentiated services. Instead, adopt a <strong>pragmatic multi-cloud</strong> approach: standardize on Kubernetes as the abstraction layer, use cloud-specific services where they add value (RDS, BigQuery, CosmosDB), and ensure your APPLICATION layer is portable. Kubernetes IS your portability layer.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 32.6 GLOBAL DNS TRAFFIC MANAGEMENT -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s32-6" class="section-block"><h4>32.6 Global DNS Traffic Management — Route Users to the Nearest Cluster</h4>
+        <p>With clusters in multiple regions, you need to route users to the nearest healthy cluster. <strong>GeoDNS</strong> (latency-based routing) and <strong>failover DNS</strong> (health-check-based) are the standard patterns.</p>
+
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🌍 anihpj Global Traffic Routing</h5>
+            <div style="margin-top:0.5rem;font-size:0.82rem;">
+                <p><strong>User in Tokyo:</strong> DNS resolves api.anihpj.com → anihpj-ap-southeast ELB (lowest latency)</p>
+                <p><strong>User in London:</strong> DNS resolves api.anihpj.com → anihpj-eu-west ALB (lowest latency)</p>
+                <p><strong>User in New York:</strong> DNS resolves api.anihpj.com → anihpj-us-east NLB (lowest latency)</p>
+                <p><strong>Cluster eu-west DOWN:</strong> DNS health check fails → Route 53 removes eu-west from answer → users in London routed to us-east (higher latency but AVAILABLE)</p>
+            </div>
+        </div>
+
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 ExternalDNS + Ingress — Automatic DNS for Multi-Cluster</span></div>
+<pre><span class="code-cmt"># ExternalDNS automatically creates DNS records for Ingresses across clusters</span>
+<span class="code-kw">apiVersion:</span> apps/v1
+<span class="code-kw">kind:</span> Deployment
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> external-dns
+  <span class="code-kw">namespace:</span> kube-system
+<span class="code-kw">spec:</span>
+  <span class="code-kw">template:</span>
+    <span class="code-kw">spec:</span>
+      <span class="code-kw">containers:</span>
+      - <span class="code-kw">name:</span> external-dns
+        <span class="code-kw">args:</span>
+        - --source=ingress
+        - --provider=aws                    <span class="code-cmt"># Route 53</span>
+        - --txt-owner-id=anihpj-us-east    <span class="code-cmt"># Unique per cluster</span>
+        - --aws-zone-type=public
+        <span class="code-cmt"># Each cluster runs ExternalDNS with its own --txt-owner-id</span>
+        <span class="code-cmt"># ExternalDNS creates weighted/geo records for the same hostname</span></pre>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 32.7 HYBRID CLOUD BURSTING -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s32-7" class="section-block"><h4>32.7 Hybrid Cloud Bursting — Overflow to Cloud When On-Prem is Full</h4>
+        <p><strong>Cloud bursting</strong> is the ability to run workloads on-premises normally, but automatically spill over to public cloud when on-prem capacity is exhausted. Kubernetes makes this possible with cluster federation and auto-scaling.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">☁️ Hybrid Cloud Bursting Architecture</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    HYBRID CLOUD BURSTING                                        │
+│                                                                               │
+│  ┌────────────────────────────────┐    ┌────────────────────────────────┐    │
+│  │  ON-PREM CLUSTER (Primary)      │    │  CLOUD CLUSTER (Overflow)       │    │
+│  │  • Runs 90% of anihpj workload │    │  • Activates when on-prem >80%  │    │
+│  │  • 50 worker nodes             │    │  • Scales to 0 when idle        │    │
+│  │  • CAPEX cost model            │    │  • OPEX cost model              │    │
+│  │                                │    │                                │    │
+│  │  ┌──────────────────────────┐ │    │  ┌──────────────────────────┐   │    │
+│  │  │ anihpj-jobboard (40 pods)│ │    │  │ anihpj-jobboard (20 pods)│   │    │
+│  │  │ anihpj-db (on-prem PG)   │ │    │  │ anihpj-cache (Redis)     │   │    │
+│  │  └──────────────────────────┘ │    │  └──────────────────────────┘   │    │
+│  └────────────────────────────────┘    └────────────────────────────────┘    │
+│                                                                               │
+│  BURSTING TRIGGERS:                                                            │
+│  • CPU utilization > 80% on on-prem                                            │
+│  • Pending pods > 10 for > 5 minutes                                           │
+│  • Scheduled events (Black Friday, product launch)                              │
+│                                                                               │
+│  🔑 Submariner/Cilium Cluster Mesh connects on-prem + cloud clusters            │
+│  🔑 KubeFed propagates Deployments to both clusters                             │
+│  🔑 Global DNS routes traffic to available pods in either cluster               │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
+            <h5>💪 Practice Drill — anihpj Multi-Cluster</h5>
+            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
+                <li><strong>Design multi-cluster topology:</strong> Design 3 clusters for anihpj across us-east, eu-west, ap-southeast. Which workloads go where?</li>
+                <li><strong>KubeFed deployment:</strong> Create a FederatedDeployment that places anihpj-jobboard in us-east and eu-west clusters.</li>
+                <li><strong>Submariner connectivity:</strong> Plan how anihpj-api in us-east calls anihpj-auth in eu-west via Submariner.</li>
+                <li><strong>Global DNS:</strong> Configure Route 53 geo-routing for api.anihpj.com across 3 regional clusters.</li>
+                <li><strong>Cloud bursting scenario:</strong> Design a bursting strategy for anihpj's Black Friday traffic spike.</li>
+            </ol>
+        </div>
+
+        <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
+            <h5>🧠 Knowledge Check — Ch 32: Multi-Cluster &amp; Multi-Cloud</h5>
+            <div class="quiz-question">
+                <p><strong>Q1.</strong> Why is multi-cluster better than a single large cluster with namespaces for isolation?</p>
+                <p class="quiz-answer"><strong>A:</strong> Namespaces are NOT security boundaries. A cluster-scoped resource (ClusterRole, CRD, webhook) or API server failure affects ALL namespaces. Multi-cluster provides: (1) API server isolation, (2) independent upgrade cycles, (3) true blast radius containment, (4) regional data sovereignty compliance.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q2.</strong> When would you choose Submariner over Cilium Cluster Mesh?</p>
+                <p class="quiz-answer"><strong>A:</strong> Choose <strong>Submariner</strong> when you already have a CNI (Calico, Flannel) and can't/don't want to migrate to Cilium. Submariner is CNI-agnostic. Choose Cilium Cluster Mesh when standardizing on Cilium and you want identity-based policies and Global Services.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q3.</strong> What is cloud bursting and when is it useful?</p>
+                <p class="quiz-answer"><strong>A:</strong> Cloud bursting runs workloads on-prem normally, then automatically "bursts" to public cloud when on-prem capacity is exhausted (CPU > 80%, pending pods queue, scheduled events). It's useful for: seasonal traffic spikes (Black Friday), cost optimization (pay for cloud only when needed), and avoiding over-provisioning on-prem hardware.</p>
+            </div>
+        </div>
+
+        <div class="chapter-summary" id="s32-summary" style="margin-top:1.5rem;">
+            <h5>📝 Ch 32 Chapter Summary</h5>
+            <div class="card-grid" style="margin-top:0.5rem;">
+                <div class="info-card"><h5>💥 Why Multi-Cluster</h5><p>Blast radius, compliance, latency, isolation. Namespace ≠ security boundary. Multi-cluster for: dev/staging/prod separation, regional deployment, provider diversity.</p></div>
+                <div class="info-card"><h5>🌐 KubeFed</h5><p>Federate resources across clusters. FederatedDeployment, FederatedConfigMap, FederatedRBAC. Host cluster controls propagation. Overrides per cluster.</p></div>
+                <div class="info-card"><h5>🔗 Submariner</h5><p>Cross-cluster pod-to-pod networking. CNI-agnostic. IPsec tunnels. Lighthouse for cross-cluster DNS. Use when you have existing CNI.</p></div>
+                <div class="info-card"><h5>🕸️ Cilium Cluster Mesh</h5><p>Identity-based cross-cluster networking. Requires Cilium CNI. Global Services. WireGuard encryption. More powerful but Cilium-only.</p></div>
+                <div class="info-card"><h5>☁️ Multi-Cloud</h5><p>AWS EKS + Azure AKS + GCP GKE. K8s as portability layer. Cloud-specific services for differentiation. ESO for cross-cloud secrets.</p></div>
+                <div class="info-card"><h5>🌍 Global DNS</h5><p>GeoDNS (latency-based) + failover DNS (health checks). Route 53, Azure Traffic Manager, Cloud DNS. ExternalDNS for automation.</p></div>
+                <div class="info-card"><h5>💨 Cloud Bursting</h5><p>Overflow from on-prem to cloud. Trigger: CPU > 80%, pending pods, scheduled events. Submariner/Cilium connects on-prem + cloud.</p></div>
+                <div class="info-card"><h5>🏢 anihpj Stack</h5><p>3 clusters (us-east, eu-west, ap-southeast). KubeFed for global ConfigMaps. Cilium Cluster Mesh. GeoDNS via Route 53. Cloud bursting for peak events.</p></div>
+            </div>
+        </div>
+
+        <div class="visual-summary" id="s32-visual" style="margin-top:1.5rem;">
+            <h5>🖼️ Visual Summary — Ch 32 Multi-Cluster &amp; Multi-Cloud</h5>
+            <div class="evolution-strip" style="margin-top:0.5rem;">
+                <div class="evo-item"><div class="evo-year">Single Cluster</div><div class="evo-desc"><strong>1 Cluster</strong><br>Namespaces for<br>isolation</div></div>
+                <div class="evo-item"><div class="evo-year">Multi-Cluster</div><div class="evo-desc"><strong>3+ Clusters</strong><br>Blast radius<br>KubeFed sync</div></div>
+                <div class="evo-item"><div class="evo-year">Cross-Cluster</div><div class="evo-desc"><strong>Submariner</strong><br>or Cilium Mesh<br>Pod-to-pod</div></div>
+                <div class="evo-item"><div class="evo-year">Multi-Cloud</div><div class="evo-desc"><strong>AWS+Azure+GCP</strong><br>K8s portability<br>Provider diversity</div></div>
+                <div class="evo-item"><div class="evo-year">Global</div><div class="evo-desc"><strong>GeoDNS</strong><br>Latency routing<br>Failover</div></div>
+                <div class="evo-item"><div class="evo-year">Hybrid</div><div class="evo-desc"><strong>Bursting</strong><br>On-prem→Cloud<br>Overflow</div></div>
+            </div>
+            <pre style="background:#161b22;font-size:0.75rem;margin-top:0.8rem;">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              MULTI-CLUSTER DECISION MATRIX                                     │
+│                                                                              │
+│  SCENARIO: "I have 3 clusters in 3 regions. I need..."                       │
+│                                                                              │
+│  "...shared ConfigMaps/RBAC"          → KubeFed                              │
+│  "...cross-cluster pod communication" → Submariner or Cilium Cluster Mesh    │
+│  "...Global DNS with failover"        → GeoDNS (Route 53 / Traffic Manager)  │
+│  "...overflow to cloud when full"     → Cloud Bursting + KubeFed             │
+│  "...migrate between clusters"        → Velero (backup from A, restore to B) │
+│  "...unified observability"           → Centralized Thanos/Grafana           │
+│                                                                              │
+│  🔑 KubeFed = Resource sync. Submariner/Cilium = Network. DNS = Traffic.     │
+│  🔑 Each tool solves ONE problem. Production platforms use ALL of them.      │
+└─────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+        </div>
+
+    <hr class="chapter-divider">
+
+    <div id="ch33"><div class="chapter-intro"><h3>Ch 33: Platform as a Product</h3><p>Why multi-cluster, KubeFed/Submariner/Cilium Mesh, multi-cloud, global traffic.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🌍</div><p>Coming soon</p></div></div>
+    <div id="ch33">
+        <div class="chapter-intro">
+            <h3>Ch 33: Platform as a Product</h3>
+            <p><strong>Your Internal Developer Platform is a PRODUCT with users, a roadmap, and SLAs.</strong> Platform teams need product managers, not just engineers. Golden paths make the right way the easiest way. Measure NPS. Build culture. Grow your career from engineer to staff+.</p>
+            <div class="chapter-meta">
+                <span class="meta-tag">🟡 Leader</span>
+                <span class="meta-tag">⏱️ ~1.5h</span>
+                <span class="meta-tag">CNPE Domain 7: 10%</span>
+            </div>
+        </div>
+
+        <div class="learning-objectives">
+            <h5>🎯 What You'll Learn</h5>
+            <ul>
+                <li>Adopt an IDP-as-SaaS mindset: treat developers as customers, not users</li>
+                <li>Structure a platform team: Product Manager + Engineers + SRE + UX</li>
+                <li>Build a roadmap driven by developer feedback, not engineering assumptions</li>
+                <li>Assess platform maturity using CNCF and McKinsey models</li>
+                <li>Design golden paths that make the right way the easiest way</li>
+                <li>Measure platform NPS and use it to drive improvements</li>
+                <li>Navigate the career path: Engineer → Architect → Staff → Principal</li>
+                <li>Build a platform engineering culture in your organization</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <h5>📋 CNPE Exam Relevance — Domain 7 (10%)</h5>
+            <p>Domain 7 tests your understanding of <strong>platform strategy, team structure, and product thinking</strong>. These are scenario-based questions: "How would you measure platform success?" "What should a platform team include?" <strong>This is the leadership domain — CKA doesn't cover this at all.</strong></p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.1 IDP AS SAAS MINDSET -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-1" class="section-block"><h4>33.1 IDP as a SaaS Mindset — Developers Are Your Customers</h4>
+        <p>The biggest mindset shift for platform engineers: <strong>your IDP is a product, and developers are your customers.</strong> This means: onboarding experience matters, documentation IS the product, you measure satisfaction (not just uptime), and you prioritize features based on user feedback — not technical curiosity.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Old Mindset (Infrastructure Team)</th><th>New Mindset (Platform Product Team)</th></tr></thead>
+            <tbody>
+                <tr><td>"We provide servers and networks."</td><td>"We provide a self-service platform with golden paths."</td></tr>
+                <tr><td>"Developers file tickets for infrastructure."</td><td>"Developers self-serve via API/CLI/UI. Tickets are failures."</td></tr>
+                <tr><td>"Our job is to keep things running."</td><td>"Our job is to make developers faster and safer."</td></tr>
+                <tr><td>"We know what developers need."</td><td>"We regularly survey developers to learn what they need."</td></tr>
+                <tr><td>"Documentation is a nice-to-have."</td><td>"Documentation IS the product interface."</td></tr>
+                <tr><td>Success = uptime %</td><td>Success = Developer NPS + Time-to-deploy + Uptime</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 SaaS Mindset in Practice</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Onboarding:</strong> A new developer should deploy their first app within 15 minutes. If it takes longer, the platform is broken.</li>
+                <li><strong>Self-service:</strong> Everything available via API/CLI/GitOps. No Jira tickets required to deploy, create a namespace, or get a database.</li>
+                <li><strong>Feedback loops:</strong> Quarterly developer survey. Monthly platform office hours. #platform-feedback Slack channel.</li>
+                <li><strong>SLAs:</strong> Platform SLAs published publicly. "99.9% API availability." "P1 issues acknowledged within 15 minutes."</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.2 PLATFORM TEAM COMPOSITION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-2" class="section-block"><h4>33.2 Platform Team Composition — Not Just Engineers</h4>
+        <p>A platform team is NOT just 5 Kubernetes engineers. It needs diverse skills to build a PRODUCT:</p>
+
+        <div class="card-grid" style="margin-top:1rem;">
+            <div class="info-card"><h5>📋 Product Manager</h5><p>Prioritizes the backlog. Talks to developers weekly. Defines success metrics. Makes roadmap tradeoffs. Platform without PM = engineering playground.</p></div>
+            <div class="info-card"><h5>🔧 Platform Engineers</h5><p>Build the platform (Kubernetes, CI/CD, GitOps, policies, monitoring). Core K8s expertise. Automate everything. Target: 3-5 engineers per 100 developers.</p></div>
+            <div class="info-card"><h5>🛡️ SRE</h5><p>Defines SLOs/SLIs. Manages on-call rotations. Incident response for platform components. Reliability engineering. Target: 1 SRE per 2-3 platform engineers.</p></div>
+            <div class="info-card"><h5>🎨 UX/DX Designer</h5><p>Designs the Developer Experience: CLI ergonomics, portal UI, documentation structure, onboarding flow. Makes the platform delightful, not just functional.</p></div>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: Team Topologies</h5>
+            <p>The exam references <strong>Team Topologies</strong> (Matthew Skelton &amp; Manuel Pais). Know the four fundamental team types: (1) Stream-aligned (product teams), (2) Enabling (help others), (3) Complicated-subsystem (deep specialists), (4) <strong>Platform</strong> (this is you). Platform teams enable stream-aligned teams to deliver faster.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.3 ROADMAP -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-3" class="section-block"><h4>33.3 Roadmap Based on Developer Feedback — Not Engineering Assumptions</h4>
+        <p>Platform roadmaps driven by engineering assumptions lead to beautiful solutions nobody asked for. The right approach: <strong>continuous developer feedback → prioritized backlog → public roadmap.</strong></p>
+
+        <div class="process-steps" style="margin-top:1rem;">
+            <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Collect:</strong> Developer surveys (quarterly), #platform Slack, office hours, GitHub issues in platform repo.</div></div>
+            <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Categorize:</strong> Tag feedback: "onboarding", "CI/CD", "observability", "security", "documentation".</div></div>
+            <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Prioritize:</strong> Impact × Effort matrix. Fix top pain points first. "What do developers complain about most?"</div></div>
+            <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Roadmap:</strong> Public 6-month roadmap. "Now / Next / Later" format. Reviewed quarterly with dev leads.</div></div>
+            <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Communicate:</strong> Monthly platform newsletter. "What we shipped. What we're building. What we learned."</div></div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.4 MATURITY MODELS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-4" class="section-block"><h4>33.4 Maturity Models — CNCF &amp; McKinsey Platform Maturity</h4>
+        <p>Platform maturity models help you assess WHERE you are and WHERE to invest next. Two widely referenced models:</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Level</th><th>CNCF Platform Maturity</th><th>What It Looks Like</th></tr></thead>
+            <tbody>
+                <tr><td><strong>L0: Manual</strong></td><td>No platform. Developers manage everything.</td><td>Tickets for VMs, manual deploys, no CI/CD.</td></tr>
+                <tr><td><strong>L1: Automated</strong></td><td>CI/CD and infrastructure as code exist.</td><td>GitHub Actions, Terraform, Docker builds. Still fragmented.</td></tr>
+                <tr><td><strong>L2: Self-Service</strong></td><td>Developers self-serve via API/CLI/portal.</td><td>Backstage/Port developer portal. Golden paths. Pre-approved templates.</td></tr>
+                <tr><td><strong>L3: Productized</strong></td><td>Platform treated as a product.</td><td>Platform team with PM. Public roadmap. NPS measurement. SLAs.</td></tr>
+                <tr><td><strong>L4: Ecosystem</strong></td><td>Platform enables others to build on top.</td><td>Internal plugin marketplace. Community contributions. Multi-team platform.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ Quick Maturity Check — Where Is Your Org?</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>L0→L1:</strong> Start with CI/CD + IaC. 3 months. Biggest ROI.</li>
+                <li><strong>L1→L2:</strong> Build golden paths + developer portal. 6-12 months.</li>
+                <li><strong>L2→L3:</strong> Hire a PM. Measure NPS. Public roadmap. 6 months.</li>
+                <li><strong>L3→L4:</strong> Enable internal contributions. Plugin marketplace. Ongoing.</li>
+                <li><strong>CNPE target:</strong> Know the levels. Expect: "What level is this org at?" scenario questions.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.5 GOLDEN PATHS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-5" class="section-block"><h4>33.5 Golden Paths Design — Make the Right Way the Easiest Way</h4>
+        <p>A <strong>golden path</strong> is a pre-built, supported, and documented path to production. Developers CAN stray from the path (you don't block them), but the golden path is so much easier that nobody wants to. Golden paths reduce cognitive load and ensure compliance by default.</p>
+
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🛤️ anihpj Golden Paths</h5>
+            <div style="margin-top:0.5rem;font-size:0.82rem;">
+                <p><strong>Golden Path: Web Service</strong> — `anihpj template create web-service` → Creates repo with Dockerfile, K8s manifests, CI/CD pipeline, monitoring dashboard, alert rules, and NetworkPolicy. Developer just writes business logic.</p>
+                <p><strong>Golden Path: CronJob</strong> — `anihpj template create cronjob` → Creates repo with CronJob manifest, Python/Go skeleton, CI/CD, alert on failure. Developer writes the job logic.</p>
+                <p><strong>Golden Path: StatefulSet (DB)</strong> — `anihpj template create stateful-app` → Creates repo with StatefulSet, PVC template, backup CronJob (Velero), monitoring for disk usage. Developer configures the database.</p>
+            </div>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ Golden Path ≠ Mandatory Path</h5>
+            <p>Golden paths are <strong>recommended</strong>, not enforced. If a team has a legitimate reason to deviate (special GPU requirements, custom networking, compliance constraints), they CAN. But they own the consequences: they're responsible for their own security, monitoring, CI/CD, and compliance. Golden paths provide a well-paved road — off-road is available but you're on your own.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.6 PLATFORM NPS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-6" class="section-block"><h4>33.6 Platform NPS — Measuring Developer Satisfaction</h4>
+        <p><strong>Net Promoter Score (NPS)</strong> measures: "How likely are you to recommend our platform to another team?" (0-10). It's the single most important platform health metric — more than uptime, more than deployment frequency.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">📊 Platform NPS Calculation</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+NPS = % Promoters (9-10) — % Detractors (0-6)
+───────────────────────────────────────────────────────
+ 0  1  2  3  4  5  6       7  8       9  10
+├──┴──┴──┴──┴──┴──┴──────┼──┴──────┼──┴──┤
+│     DETRACTORS (0-6)     │ PASSIVE  │ PROMOTERS │
+│     "Would not recommend" │ (7-8)    │ (9-10)    │
+│                          │ Neutral  │ "Would    │
+│                          │          │ recommend"│
+└──────────────────────────┴──────────┴───────────┘
+
+Example: 30 promoters, 10 passives, 60 detractors (100 responses)
+NPS = 30% — 60% = -30 (needs improvement)
+Target: NPS > +30 (good), NPS > +50 (excellent)</pre>
+        </div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 Beyond NPS — Platform Metrics That Matter</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Time to First Deploy (TTFD):</strong> How long from new developer joining to their first production deploy. Target: < 1 day.</li>
+                <li><strong>Deployment Frequency:</strong> How often teams deploy. Target: multiple times per day.</li>
+                <li><strong>Change Failure Rate:</strong> % of deployments causing incidents. Target: < 5%.</li>
+                <li><strong>Mean Time to Recovery (MTTR):</strong> How fast you recover from platform incidents. Target: < 1 hour.</li>
+                <li><strong>Platform Adoption Rate:</strong> % of teams using the platform vs going around it. Target: > 90%.</li>
+            </ul>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.7 CAREER PATH -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-7" class="section-block"><h4>33.7 Career Path — Engineer → Architect → Staff+ Platform Engineer</h4>
+        <p>Platform engineering is one of the fastest-growing career paths in tech. The progression is not just about technical depth — it's about <strong>scope, influence, and leadership</strong>.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Level</th><th>Scope</th><th>Focus</th><th>Example Work</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Junior Platform Engineer</strong></td><td>Single component</td><td>Learning K8s, CI/CD, IaC</td><td>Write Terraform module. Configure a monitoring alert.</td></tr>
+                <tr><td><strong>Platform Engineer</strong></td><td>Single service/domain</td><td>Building and operating</td><td>Design and implement a CI/CD pipeline. Manage a cluster.</td></tr>
+                <tr><td><strong>Senior Platform Engineer</strong></td><td>Multiple services</td><td>Design, mentoring, incident leadership</td><td>Design multi-cluster architecture. Lead incident response. Mentor juniors.</td></tr>
+                <tr><td><strong>Staff Platform Engineer</strong></td><td>Organization-wide</td><td>Strategy, influence, technical direction</td><td>Define platform roadmap. Drive adoption across 20+ teams. Represent platform externally.</td></tr>
+                <tr><td><strong>Principal Platform Engineer</strong></td><td>Company/Industry</td><td>Vision, industry leadership</td><td>Shape open-source projects. Define company-wide technical strategy. Conference talks.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Career Impact</h5>
+            <p>The CNPE certification signals that you operate at the <strong>Senior → Staff level</strong> of platform engineering. It validates: (1) Deep Kubernetes and cloud-native expertise, (2) Platform design and architecture skills, (3) Product thinking and developer experience focus. <strong>CNPE is the most comprehensive platform engineering certification available.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.8 BUILDING PLATFORM CULTURE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-8" class="section-block"><h4>33.8 Building Platform Culture — From "Ops Team" to "Platform Team"</h4>
+        <p>Culture is the hardest part of platform engineering. Moving an organization from "ops as a cost center" to "platform as a product" requires deliberate culture-building:</p>
+
+        <div class="card-grid" style="margin-top:1rem;">
+            <div class="info-card"><h5>🤝 Trust First</h5><p>Developers trust the platform when it's reliable AND when the platform team listens. Ship stability before features. Respond to feedback publicly. Never break the golden path.</p></div>
+            <div class="info-card"><h5>📢 Evangelize Quietly</h5><p>Don't mandate platform adoption. Make it so good that teams WANT to use it. Publish success stories. "Team X reduced deploy time from 2 days to 15 minutes using the platform."</p></div>
+            <div class="info-card"><h5>🔄 Eat Your Own Dog Food</h5><p>The platform team uses the platform for its own services. If the platform is painful for you, it's painful for everyone. Fix your own pain points first.</p></div>
+            <div class="info-card"><h5>📚 Documentation as Product</h5><p>Every golden path has a 5-minute quickstart. Every error message has a troubleshooting guide. Documentation is not an afterthought — it IS how developers interact with your platform.</p></div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 33.9 ANIHPJ PLATFORM EVOLUTION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s33-9" class="section-block"><h4>33.9 anihpj Platform Evolution — From Django App to Internal Developer Platform</h4>
+        <p>The anihpj platform started as a single Django app. Here's its evolution into a full Internal Developer Platform — and the lessons learned along the way:</p>
+
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🏢 anihpj Platform Evolution</h5>
+            <div class="scenario-grid" style="margin-top:0.5rem;">
+                <div class="scenario-item">
+                    <div class="scenario-icon">📅</div>
+                    <div class="scenario-title">Year 1: Containerization</div>
+                    <div class="scenario-desc">Dockerized the Django app. Manual deploy with docker-compose. One server. One developer. No platform — just an app.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">☸️</div>
+                    <div class="scenario-title">Year 2: Kubernetes Migration</div>
+                    <div class="scenario-desc">Migrated to Kubernetes. Learned Deployments, Services, ConfigMaps, Secrets. CI/CD with GitHub Actions. Still one cluster, one team.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🏗️</div>
+                    <div class="scenario-title">Year 3: Platform Foundations</div>
+                    <div class="scenario-desc">Added monitoring (Prometheus/Grafana), logging (Loki), GitOps (ArgoCD), policy engines (Kyverno). Multiple teams onboarded. Platform team formed.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🚀</div>
+                    <div class="scenario-title">Year 4: Productization</div>
+                    <div class="scenario-desc">Golden paths created. Developer portal (Backstage). NPS measured quarterly (target: >+40). Public roadmap. Platform team: PM + 4 engineers + SRE.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🌍</div>
+                    <div class="scenario-title">Year 5: Multi-Cluster &amp; Multi-Cloud</div>
+                    <div class="scenario-desc">3 clusters across 3 regions. Cilium Cluster Mesh. Global DNS. SLSA L2. 50+ developer teams on the platform. NPS: +45. Platform maturity: L3.</div>
+                </div>
+                <div class="scenario-item">
+                    <div class="scenario-icon">🔮</div>
+                    <div class="scenario-title">Future: Ecosystem</div>
+                    <div class="scenario-desc">Internal plugin marketplace. Community contributions. Multi-team platform governance. Platform as the competitive advantage.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
+            <h5>💪 Practice Drill — anihpj Platform as a Product</h5>
+            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
+                <li><strong>Team structure:</strong> Design a platform team for anihpj. What roles? How many people for 100 developers?</li>
+                <li><strong>Golden path:</strong> Design a golden path for a new microservice. What does the developer experience look like from `git init` to production?</li>
+                <li><strong>NPS survey:</strong> Draft 5 NPS survey questions for anihpj platform users.</li>
+                <li><strong>Maturity assessment:</strong> Assess anihpj's current maturity level using the CNCF model. What's needed to reach the next level?</li>
+                <li><strong>Roadmap:</strong> Build a 6-month "Now / Next / Later" roadmap for the anihpj platform based on developer feedback.</li>
+                <li><strong>Career plan:</strong> Write your own career development plan: what skills do you need to reach the next level?</li>
+            </ol>
+        </div>
+
+        <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
+            <h5>🧠 Knowledge Check — Ch 33: Platform as a Product</h5>
+            <div class="quiz-question">
+                <p><strong>Q1.</strong> Why does a platform team need a Product Manager, not just engineers?</p>
+                <p class="quiz-answer"><strong>A:</strong> Without a PM, the platform team builds what THEY find interesting, not what developers NEED. A PM: (1) talks to developers weekly to understand pain points, (2) prioritizes the backlog based on impact, (3) communicates the roadmap, (4) measures success with metrics like NPS and adoption rate. Engineers build the platform; the PM ensures it's the RIGHT platform.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q2.</strong> What's the difference between a golden path and a mandatory standard?</p>
+                <p class="quiz-answer"><strong>A:</strong> A <strong>golden path</strong> is the recommended, well-paved, supported way — but teams CAN deviate if they have a legitimate reason. A <strong>mandatory standard</strong> is enforced (via policy engines, admission controllers). Golden paths make the right way the EASIEST way. Mandatory standards make the wrong way IMPOSSIBLE. Good platforms use both: golden paths for developer experience, mandatory standards for security and compliance.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q3.</strong> How do you calculate Platform NPS and what's a good score?</p>
+                <p class="quiz-answer"><strong>A:</strong> NPS = % Promoters (score 9-10) — % Detractors (score 0-6). Ask: "How likely are you to recommend our platform to another team?" (0-10). <strong>Good:</strong> NPS > +30. <strong>Excellent:</strong> NPS > +50. <strong>World-class:</strong> NPS > +70. Measure quarterly. Always follow up with "What would make it a 10?"</p>
+            </div>
+        </div>
+
+        <div class="chapter-summary" id="s33-summary" style="margin-top:1.5rem;">
+            <h5>📝 Ch 33 Chapter Summary</h5>
+            <div class="card-grid" style="margin-top:0.5rem;">
+                <div class="info-card"><h5>🧠 SaaS Mindset</h5><p>Developers are customers. Self-service is the goal. Tickets are failures. Documentation IS the product. Measure satisfaction, not just uptime.</p></div>
+                <div class="info-card"><h5>👥 Team Composition</h5><p>PM + Platform Engineers + SRE + UX Designer. Team Topologies: Platform teams enable stream-aligned teams. 3-5 platform engineers per 100 developers.</p></div>
+                <div class="info-card"><h5>🗺️ Roadmap</h5><p>Driven by developer feedback, not engineering assumptions. Collect → Categorize → Prioritize → Public Roadmap → Communicate. Quarterly review cycle.</p></div>
+                <div class="info-card"><h5>📊 Maturity Models</h5><p>CNCF: L0 Manual → L1 Automated → L2 Self-Service → L3 Productized → L4 Ecosystem. Most orgs are at L1-L2. CNPE target: L3.</p></div>
+                <div class="info-card"><h5>🛤️ Golden Paths</h5><p>Pre-built, supported paths to production. Recommended but not mandatory. Makes compliance easy. Reduces cognitive load. Template-driven (Backstage, scaffolder).</p></div>
+                <div class="info-card"><h5>📈 NPS & Metrics</h5><p>NPS = Promoters — Detractors. Target: >+30. Also: TTFD (< 1 day), deployment frequency, change failure rate (< 5%), MTTR (< 1 hour), adoption rate (> 90%).</p></div>
+                <div class="info-card"><h5>🚀 Career Path</h5><p>Junior → Engineer → Senior → Staff → Principal. Scope expands: component → service → org → company → industry. CNPE validates Senior→Staff level.</p></div>
+                <div class="info-card"><h5>🏢 anihpj Evolution</h5><p>Year 1: Docker. Year 2: K8s. Year 3: Platform foundations. Year 4: Productization. Year 5: Multi-cluster. Future: Ecosystem. NPS: +45. Maturity: L3.</p></div>
+            </div>
+        </div>
+
+        <div class="visual-summary" id="s33-visual" style="margin-top:1.5rem;">
+            <h5>🖼️ Visual Summary — Ch 33 Platform as a Product</h5>
+            <div class="evolution-strip" style="margin-top:0.5rem;">
+                <div class="evo-item"><div class="evo-year">Mindset</div><div class="evo-desc"><strong>SaaS</strong><br>Developers =<br>Customers</div></div>
+                <div class="evo-item"><div class="evo-year">Team</div><div class="evo-desc"><strong>PM+Eng+SRE+UX</strong><br>Diverse skills<br>Not just K8s</div></div>
+                <div class="evo-item"><div class="evo-year">Roadmap</div><div class="evo-desc"><strong>Feedback-Driven</strong><br>Surveys<br>Prioritized</div></div>
+                <div class="evo-item"><div class="evo-year">Maturity</div><div class="evo-desc"><strong>L0→L4</strong><br>Manual→Ecosystem<br>anihpj: L3</div></div>
+                <div class="evo-item"><div class="evo-year">Golden Paths</div><div class="evo-desc"><strong>Templates</strong><br>Easiest way<br>= Right way</div></div>
+                <div class="evo-item"><div class="evo-year">Success</div><div class="evo-desc"><strong>NPS >+30</strong><br>TTFD < 1 day<br>MTTR < 1 hour</div></div>
+            </div>
+            <pre style="background:#161b22;font-size:0.75rem;margin-top:0.8rem;">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              PLATFORM AS A PRODUCT — THE CNPE MINDSET                         │
+│                                                                              │
+│  BUILD        │  MEASURE      │  IMPROVE       │  LEAD                        │
+│  ─────────────┼───────────────┼────────────────┼────────────────             │
+│  Golden paths │  NPS surveys  │  Roadmap based │  Career growth               │
+│  Self-service │  Adoption rate│  on feedback   │  Team structure              │
+│  GitOps K8s   │  TTFD/MTTR    │  Maturity model│  Platform culture            │
+│  Policy engine│  Failure rate │  Iterate fast  │  Industry influence          │
+│                                                                              │
+│  🔑 A platform is never "done." It evolves with developer needs.              │
+│  🔑 The best platform is the one developers CHOOSE to use — not forced.       │
+│  🔑 Your career: Engineer → Architect → Staff → Principal → Industry Leader   │
+└─────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+        </div>
+
+    <hr class="chapter-divider">
 
     <!-- Appendices -->
     <div class="chapter-section" id="appendix-a"><h2>📋 Appendix A: CNPE Exam Preparation Guide</h2></div><div class="content-placeholder"><div class="placeholder-icon">📋</div><p>Coming soon</p></div>

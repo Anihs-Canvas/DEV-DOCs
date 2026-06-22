@@ -4473,6 +4473,218 @@ kubectl exec anihpj-web-xxx -- ss -tlnp | grep 8000
                         </details>
                     </div>
                 </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 1 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 1 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Encapsulation in Action:</strong> On your Linux machine, run <code>curl -v http://localhost:8000</code> (start a simple HTTP server first with <code>python3 -m http.server 8000</code>). In another terminal, capture the traffic with <code>sudo tcpdump -i lo -nn -X port 8000</code>. Identify in the tcpdump output: (a) the TCP 3-way handshake, (b) the HTTP GET request line, and (c) the HTTP response. Copy the relevant tcpdump lines.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Terminal 1: Start a simple HTTP server</span>
+$ python3 -m http.server 8000
+
+<span class="comment"># Terminal 2: Start capture</span>
+$ sudo tcpdump -i lo -nn -X port 8000
+
+<span class="comment"># Terminal 3: Make the request</span>
+$ curl -v http://localhost:8000
+
+<span class="comment"># TCPDUMP OUTPUT (annotated):</span>
+<span class="comment"># [TCP 3-way handshake]</span>
+IP 127.0.0.1.54321 > 127.0.0.1.8000: Flags [S], seq 1000      <span class="comment">← SYN</span>
+IP 127.0.0.1.8000 > 127.0.0.1.54321: Flags [S.], seq 5000, ack 1001 <span class="comment">← SYN-ACK</span>
+IP 127.0.0.1.54321 > 127.0.0.1.8000: Flags [.], ack 5001     <span class="comment">← ACK (established)</span>
+
+<span class="comment"># [HTTP GET request — look for "GET" in the hex dump]</span>
+IP 127.0.0.1.54321 > 127.0.0.1.8000: Flags [P.], seq 1001:1080
+<span class="comment"># Hex dump shows: 47 45 54 20 2f 20 48 54 54 50  = "GET / HTTP"</span>
+
+<span class="comment"># [HTTP response]</span>
+IP 127.0.0.1.8000 > 127.0.0.1.54321: Flags [P.], seq 5001:5500
+<span class="comment"># Hex dump shows: 48 54 54 50 2f 31 2e 30 20 32 30 30 = "HTTP/1.0 200"</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>Layer-by-Layer Debugging:</strong> Your production Django app on port 8000 is unreachable. Execute the following diagnostic sequence and explain what each command tells you: <code>ip link show eth0</code>, <code>ethtool eth0</code>, <code>ip neigh show</code>, <code>ping -c 2 8.8.8.8</code>, <code>ss -tlnp | grep 8000</code>, <code>curl -v http://localhost:8000/health</code>. What layer does each command test?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Command</th><th>Layer</th><th>What It Tests</th></tr></thead><tbody>
+                                <tr><td><code>ip link show eth0</code></td><td>L1</td><td>Is the interface UP? Link detected?</td></tr>
+                                <tr><td><code>ethtool eth0</code></td><td>L1</td><td>Speed, duplex, driver, error counters (CRC, collisions)</td></tr>
+                                <tr><td><code>ip neigh show</code></td><td>L2</td><td>ARP cache — can we resolve MAC addresses?</td></tr>
+                                <tr><td><code>ping -c 2 8.8.8.8</code></td><td>L3</td><td>Can we reach the internet? ICMP = routing works</td></tr>
+                                <tr><td><code>ss -tlnp \| grep 8000</code></td><td>L4</td><td>Is anything LISTENING on port 8000?</td></tr>
+                                <tr><td><code>curl localhost:8000/health</code></td><td>L7</td><td>Is the application responding with HTTP?</td></tr></tbody></table>
+                            <p><strong>The systematic approach:</strong> If <code>ip link</code> shows DOWN → cable/interface issue (L1). If <code>ss</code> shows nothing on :8000 → app not running (L4). If <code>curl</code> returns 500 → app running but broken (L7). Always bottom-up.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Calculate Protocol Overhead:</strong> An anihpj API response is 4,096 bytes of JSON. Calculate the total frame size on the wire (Ethernet + IPv4 + TCP + HTTP response headers ~200 bytes + JSON payload). What percentage of bytes on the wire is actual application data? Show your work.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Component</th><th>Size</th></tr></thead><tbody>
+                                <tr><td>HTTP response headers</td><td>~200 bytes</td></tr>
+                                <tr><td>JSON payload</td><td>4,096 bytes</td></tr>
+                                <tr><td>TCP header</td><td>20 bytes</td></tr>
+                                <tr><td>IPv4 header</td><td>20 bytes</td></tr>
+                                <tr><td>Ethernet header + FCS</td><td>18 bytes</td></tr>
+                                <tr><td><strong>Total overhead</strong></td><td><strong>258 bytes</strong></td></tr>
+                                <tr><td><strong>Total frame</strong></td><td><strong>4,354 bytes</strong></td></tr>
+                            </tbody></table>
+                            <p><strong>Efficiency:</strong> 4,096 / 4,354 = <strong>94.1%</strong>. Only 5.9% overhead. For larger payloads, overhead becomes negligible. For a 2-byte health check: 2/(2+258) = <strong>0.77% efficiency</strong> — 99.23% overhead!</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>tcpdump Flag Recognition:</strong> Capture any TCP connection with <code>sudo tcpdump -i any -nn port 443</code> while browsing. Identify packets with these flag combinations in the output: <code>[S]</code>, <code>[S.]</code>, <code>[.]</code>, <code>[F.]</code>, <code>[R]</code>, <code>[P.]</code>. What TCP state does each represent?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Flags</th><th>Meaning</th><th>TCP State</th></tr></thead><tbody>
+                                <tr><td><code>[S]</code></td><td>SYN only</td><td>Connection initiation — "I want to connect"</td></tr>
+                                <tr><td><code>[S.]</code></td><td>SYN + ACK</td><td>Server accepts — "I received your SYN, here's mine"</td></tr>
+                                <tr><td><code>[.]</code></td><td>ACK only</td><td>Normal data acknowledgment — connection established</td></tr>
+                                <tr><td><code>[F.]</code></td><td>FIN + ACK</td><td>Connection teardown — "I'm done sending"</td></tr>
+                                <tr><td><code>[R]</code></td><td>RST</td><td>Connection reset — port closed or firewall REJECT</td></tr>
+                                <tr><td><code>[P.]</code></td><td>PSH + ACK</td><td>Data push — "send this to the app immediately"</td></tr></tbody></table>
+                            <p><strong>Hands-on:</strong> Run the capture, then <code>curl https://google.com</code>. You'll see <code>[S] → [S.] → [.]</code> (handshake), then <code>[P.]</code> (TLS ClientHello), then <code>[F.]</code> (teardown).</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Real-World Layer Identification:</strong> For each failure symptom, identify the OSI layer and the most likely root cause: (a) <code>ethtool eth0</code> shows "Link detected: no", (b) <code>ping 8.8.8.8</code> works but <code>curl https://google.com</code> times out, (c) <code>ss -tlnp</code> shows nothing on port 8000, (d) <code>curl</code> returns "SSL certificate problem: certificate has expired", (e) <code>ip neigh show</code> shows "FAILED" for the gateway.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Symptom</th><th>Layer</th><th>Root Cause</th></tr></thead><tbody>
+                                <tr><td>(a) Link detected: no</td><td>L1 — Physical</td><td>Cable unplugged, bad cable, or switch port disabled</td></tr>
+                                <tr><td>(b) ping works, curl times out</td><td>L4 — Transport</td><td>Firewall blocking TCP/443. ICMP allowed but TCP denied. L3 is fine.</td></tr>
+                                <tr><td>(c) Nothing on port 8000</td><td>L4 — Transport</td><td>Application not running or bound to wrong interface. Check <code>systemctl status gunicorn</code>.</td></tr>
+                                <tr><td>(d) SSL cert expired</td><td>L6 — Presentation</td><td>TLS certificate validity period ended. Renew with cert-manager or ACM.</td></tr>
+                                <tr><td>(e) ARP FAILED</td><td>L2 — Data Link</td><td>Gateway is down, wrong IP, or on a different L2 segment. Check <code>arping</code>.</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>Network Namespace Hands-On:</strong> Create two network namespaces, connect them with a veth pair, assign IPs, and verify connectivity with ping. Write the exact sequence of <code>ip netns</code> and <code>ip link</code> commands.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Create two network namespaces</span>
+sudo ip netns add ns1
+sudo ip netns add ns2
+
+<span class="comment"># Create a veth pair (virtual cable)</span>
+sudo ip link add veth-ns1 type veth peer name veth-ns2
+
+<span class="comment"># Assign each end to a namespace</span>
+sudo ip link set veth-ns1 netns ns1
+sudo ip link set veth-ns2 netns ns2
+
+<span class="comment"># Assign IPs</span>
+sudo ip netns exec ns1 ip addr add 10.0.0.1/24 dev veth-ns1
+sudo ip netns exec ns2 ip addr add 10.0.0.2/24 dev veth-ns2
+
+<span class="comment"># Bring interfaces up</span>
+sudo ip netns exec ns1 ip link set veth-ns1 up
+sudo ip netns exec ns2 ip link set veth-ns2 up
+sudo ip netns exec ns1 ip link set lo up
+sudo ip netns exec ns2 ip link set lo up
+
+<span class="comment"># Test connectivity</span>
+sudo ip netns exec ns1 ping -c 2 10.0.0.2
+<span class="comment"># 64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.05 ms ✅</span>
+
+<span class="comment"># Cleanup</span>
+sudo ip netns del ns1
+sudo ip netns del ns2</code></pre>
+                            <p>This is EXACTLY how Docker creates container networking — veth pairs with one end in the container namespace and one end in the host namespace, connected via a bridge.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>TCP Connection States:</strong> Run <code>ss -tan</code> on your machine. You'll see connections in various states. Identify at least one connection in each of these states (or explain when each occurs): LISTEN, ESTABLISHED, TIME_WAIT, CLOSE_WAIT, SYN_SENT. What does each state mean?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>State</th><th>Meaning</th><th>How to See It</th></tr></thead><tbody>
+                                <tr><td>LISTEN</td><td>Server waiting for connections. <code>ss -tlnp</code> shows listening sockets.</td><td>Any server process (nginx, gunicorn, sshd)</td></tr>
+                                <tr><td>ESTABLISHED</td><td>Active connection. Data flowing in both directions.</td><td>Your SSH session, browser connections</td></tr>
+                                <tr><td>TIME_WAIT</td><td>Active closer waiting 2MSL (60s) before port reuse. <code>ss -tan state time-wait</code>.</td><td>After closing a connection you initiated</td></tr>
+                                <tr><td>CLOSE_WAIT</td><td>Remote side sent FIN. Local app hasn't called close() yet. <strong>Leaked if persists.</strong></td><td>App bug — forgot to close connection</td></tr>
+                                <tr><td>SYN_SENT</td><td>Client sent SYN, waiting for SYN-ACK. Brief state. Persistent = firewall drop.</td><td><code>curl</code> to unreachable host</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>Real-World MTU Discovery:</strong> On your machine, find the MTU of your primary interface (<code>ip link show eth0</code> or similar). Then run <code>ping -M do -s 1472 8.8.8.8</code> and <code>ping -M do -s 1473 8.8.8.8</code>. Explain: why does one work and the other fail? What does <code>-M do</code> mean? What does <code>-s 1472</code> represent?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Check MTU</span>
+$ ip link show eth0 | grep mtu
+<span class="comment"># mtu 1500</span>
+
+<span class="comment"># Test with maximum payload for 1500-byte MTU</span>
+$ ping -M do -s 1472 8.8.8.8
+<span class="comment"># 1472 (payload) + 8 (ICMP header) + 20 (IP header) = 1500 bytes ✅</span>
+
+$ ping -M do -s 1473 8.8.8.8
+<span class="comment"># 1473 + 8 + 20 = 1501 bytes > 1500 MTU ❌</span>
+<span class="comment"># Output: "ping: local error: message too long, mtu=1500"</span></code></pre>
+                            <p><strong>Explanation:</strong> <code>-M do</code> sets the DF (Don't Fragment) bit. <code>-s 1472</code> specifies ICMP payload size. Total packet = payload + ICMP header (8B) + IP header (20B) = 1472+28 = 1500. At 1473, total = 1501 > MTU. Router must fragment but DF=1 prevents it → ICMP "Frag Needed" returned → ping reports the MTU.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>DNS Resolution Tracing:</strong> Use <code>dig +trace jobpost.anihpj.com</code> to trace the full DNS resolution chain. Identify each server queried (root, TLD, authoritative). What record type is returned at each step? How many total queries were made?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ dig +trace jobpost.anihpj.com
+
+<span class="comment"># Step 1: Root servers (.) — returns NS records for .com TLD</span>
+.   518400  IN  NS  a.root-servers.net.
+.   518400  IN  NS  b.root-servers.net.
+<span class="comment"># → 13 root server names returned. Query: "." NS?</span>
+
+<span class="comment"># Step 2: .com TLD servers — returns NS records for anihpj.com</span>
+anihpj.com.  172800  IN  NS  ns1.digitalocean.com.
+anihpj.com.  172800  IN  NS  ns2.digitalocean.com.
+<span class="comment"># → Domain's authoritative nameservers identified</span>
+
+<span class="comment"># Step 3: Authoritative — returns the actual A/AAAA/CNAME record</span>
+jobpost.anihpj.com.  300  IN  CNAME  k8s-alb-123.elb.amazonaws.com.
+k8s-alb-123.elb.amazonaws.com.  60  IN  A  34.120.45.67
+<span class="comment"># → Final answer: CNAME chain → A record → IP</span></code></pre>
+                            <p><strong>Total queries:</strong> 3 (root → TLD → authoritative) + potential CNAME follow-up. Each step returns NS records pointing to the next level. The final step returns the actual A/AAAA record.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Build a Mini-Network Lab:</strong> Using ONLY the commands from Chapter 1 (ip, ping, ss, nc, tcpdump), set up a simple client-server TCP connection between two terminals on localhost. In Terminal 1: listen with <code>nc -l 9000</code>. In Terminal 2: capture with <code>tcpdump -i lo port 9000</code>. In Terminal 3: connect with <code>nc localhost 9000</code> and type "hello". Verify: (a) the 3-way handshake is captured, (b) the word "hello" appears in the tcpdump hex output, (c) "hello" appears in Terminal 1.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Terminal 1: Listen</span>
+$ nc -l 9000
+<span class="comment"># (waits for connection)</span>
+
+<span class="comment"># Terminal 2: Capture</span>
+$ sudo tcpdump -i lo -nn -X port 9000
+
+<span class="comment"># Terminal 3: Connect and send data</span>
+$ nc localhost 9000
+hello
+<span class="comment"># (type "hello" and press Enter)</span>
+
+<span class="comment"># Terminal 1 shows: hello ✅</span>
+<span class="comment"># Terminal 2 shows: 3-way handshake [S]→[S.]→[.],</span>
+<span class="comment"># then [P.] with hex: 68 65 6c 6c 6f 0a = "hello\n"</span>
+
+<span class="comment"># This is the simplest possible client-server TCP interaction.</span>
+<span class="comment"># Every production system works the same way — just with TLS,</span>
+<span class="comment"># load balancers, and K8s in between.</span></code></pre>
+                        </div></details>
+                    </div>
+                </div>
             </div>
 
             <!-- ═══════════════════════════════════════════════════════════
@@ -5963,6 +6175,217 @@ docker network create --opt com.docker.network.driver.mtu=<span class="number">1
                         </details>
                     </div>
                 </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 2 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 2 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Interface Diagnostics:</strong> Run <code>ethtool eth0</code> (or your primary interface) and <code>ethtool -S eth0</code>. Identify: speed, duplex, link status, and any non-zero error counters. What does a non-zero <code>rx_crc_errors</code> indicate? What about <code>rx_missed_errors</code>?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Check basic link parameters</span>
+$ ethtool eth0
+Settings for eth0:
+    Speed: 10000Mb/s           <span class="comment">← 10 Gbps</span>
+    Duplex: Full                <span class="comment">← No collisions possible</span>
+    Link detected: yes          <span class="comment">← Physical connection exists</span>
+
+<span class="comment"># Check error counters</span>
+$ ethtool -S eth0 | grep -E "crc|missed|drop"
+rx_crc_errors: 0               <span class="comment">← Frame corruption. >0 = bad cable/connector.</span>
+rx_missed_errors: 0            <span class="comment">← Ring buffer overflow. >0 = increase ring buffer.</span>
+rx_dropped: 0                  <span class="comment">← Kernel dropped. >0 = CPU can't keep up.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>ARP Table Inspection:</strong> Run <code>ip neigh show</code>. Identify the state of each entry (REACHABLE, STALE, DELAY, FAILED). Force a refresh by pinging your gateway. What state does the gateway entry transition to? How long does REACHABLE last before becoming STALE?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ ip neigh show
+10.0.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE  <span class="comment">← confirmed recently</span>
+10.0.1.5 dev eth0 lladdr 11:22:33:44:55:66 STALE      <span class="comment">← not used recently</span>
+
+<span class="comment"># Force refresh</span>
+$ ping -c 1 10.0.1.1
+$ ip neigh show | grep 10.0.1.1
+10.0.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE  <span class="comment">← refreshed!</span></code></pre>
+                            <p>ARP states: REACHABLE (confirmed within <code>base_reachable_time</code> ms, default 30s), STALE (older than reachable time but still usable), DELAY (STALE entry being probed), PROBE (actively sending ARP requests), FAILED (no ARP reply after probes).</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Watch ARP in Real Time:</strong> Open two terminals. In Terminal 1: <code>sudo tcpdump -i eth0 -nn -e arp</code>. In Terminal 2: <code>ping -c 1 &lt;a-host-on-your-network&gt;</code>. What ARP packets do you see? What's the target MAC address in the ARP request? Why is it <code>ff:ff:ff:ff:ff:ff</code>?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo tcpdump -i eth0 -nn -e arp
+<span class="comment"># When you ping a host NOT in ARP cache:</span>
+ARP, Request who-has 10.0.1.5 tell 10.0.1.10, length 28
+    <span class="comment"># Dest MAC: ff:ff:ff:ff:ff:ff (BROADCAST — everyone receives!)</span>
+    <span class="comment"># Src MAC:  your MAC</span>
+ARP, Reply 10.0.1.5 is-at 11:22:33:44:55:66, length 28
+    <span class="comment"># Dest MAC: your MAC (UNICAST reply)</span>
+    <span class="comment"># Src MAC:  11:22:33:44:55:66</span></code></pre>
+                            <p>The ARP request uses broadcast MAC (<code>ff:ff:ff:ff:ff:ff</code>) because the sender doesn't know the target's MAC — it asks EVERYONE on the L2 segment. Only the host with the matching IP responds (unicast). This is why large L2 broadcast domains cause ARP storms.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>VLAN Tag Inspection:</strong> If you have a VLAN-tagged interface, capture traffic with <code>tcpdump -i eth0 -nn -e vlan</code>. Identify the VLAN ID in the captured frames. What does an 802.1Q tag add to an Ethernet frame? How many bits is the VLAN ID field?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo tcpdump -i eth0 -nn -e vlan
+<span class="comment"># Tagged frame output:</span>
+aa:bb:cc:11:22:33 > dd:ee:ff:44:55:66, 802.1Q VLAN 100: 
+    IPv4 10.0.1.5 > 10.0.1.50
+<span class="comment">#                       ↑ VLAN ID = 100</span></code></pre>
+                            <p>The 802.1Q tag adds 4 bytes: TPID (2B, always 0x8100) + PCP (3 bits priority) + DEI (1 bit) + VLAN ID (12 bits = 4094 usable VLANs). The tag is inserted between the Source MAC and EtherType fields.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Ring Buffer Tuning:</strong> Check your NIC's ring buffer size with <code>ethtool -g eth0</code>. If <code>ethtool -S eth0 | grep rx_missed</code> shows non-zero, double the RX ring buffer. What command accomplishes this? Why does increasing the ring buffer help with packet loss?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Check current ring buffer sizes</span>
+$ ethtool -g eth0
+Ring parameters for eth0:
+Pre-set maximums:
+RX:             4096
+TX:             4096
+Current hardware settings:
+RX:             256              <span class="comment">← Only 256 descriptors!</span>
+TX:             256
+
+<span class="comment"># Check for dropped packets due to ring buffer overflow</span>
+$ ethtool -S eth0 | grep rx_missed
+rx_missed_errors: 15234         <span class="comment">← Packets lost! Ring buffer too small.</span>
+
+<span class="comment"># Increase to maximum</span>
+$ sudo ethtool -G eth0 rx 4096 tx 4096</code></pre>
+                            <p>The ring buffer is a circular buffer in NIC RAM. Each slot holds one packet descriptor. If the kernel doesn't process packets fast enough, the buffer fills up and new packets are dropped (rx_missed). Larger buffer = more time before overflow.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>MAC Address Table on a Linux Bridge:</strong> Create a Linux bridge, add two veth interfaces, and observe the MAC learning process. Use <code>bridge fdb show</code> to display the forwarding database. What does "master" mean in the output?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Create bridge and veth pairs</span>
+sudo ip link add br0 type bridge
+sudo ip link add veth1 type veth peer name veth1-br
+sudo ip link add veth2 type veth peer name veth2-br
+sudo ip link set veth1-br master br0
+sudo ip link set veth2-br master br0
+sudo ip link set br0 up
+sudo ip link set veth1-br up && sudo ip link set veth2-br up
+
+<span class="comment"># Generate traffic to populate MAC table</span>
+sudo ip netns exec ns1 ping -c 1 10.0.0.2
+
+<span class="comment"># View the MAC forwarding table</span>
+$ bridge fdb show br0
+aa:bb:cc:11:22:33 dev veth1-br master br0  <span class="comment">← Learned MAC on veth1-br</span>
+dd:ee:ff:44:55:66 dev veth2-br master br0  <span class="comment">← Learned MAC on veth2-br</span></code></pre>
+                            <p>"master br0" means the entry belongs to bridge br0. The bridge learns which MAC addresses are reachable through which port by observing source MAC addresses in incoming frames. This is identical to how physical switches populate their CAM tables.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>Signal-to-Noise Reality Check:</strong> Run <code>cat /proc/net/dev</code> and calculate the error rate for your primary interface: <code>errors / (packets_received + packets_transmitted)</code>. What percentage of packets have errors? If above 0.01%, what physical layer problems could cause this?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ cat /proc/net/dev | grep eth0
+eth0: 152345678 12345 0 0 0 0 0 0 98765432 0 0 0 0 0 0 0
+<span class="comment">       ↑rx_pkts  ↑rx_err                  ↑tx_pkts</span>
+
+<span class="comment"># Error rate = errors / total packets</span>
+<span class="comment"># = 12345 / (152345678 + 98765432)</span>
+<span class="comment"># = 12345 / 251111110</span>
+<span class="comment"># = 0.0049% ≈ acceptable</span>
+
+<span class="comment"># If errors > 0.01%: check cable, connectors, EMI sources,</span>
+<span class="comment"># NIC firmware, switch port errors.</span></code></pre>
+                            <p>Acceptable error rate: < 0.001%. Investigate at 0.01%. Critical at 0.1%+. Common causes: damaged cable (bent/kinked), loose connector, electromagnetic interference (motors, fluorescent lights), faulty NIC, switch port going bad.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>Gratuitous ARP Detection:</strong> Capture all ARP traffic on your network for 60 seconds: <code>sudo tcpdump -i eth0 -nn arp -w /tmp/arp.pcap</code>. Analyze with <code>tcpdump -r /tmp/arp.pcap -nn</code>. Do you see any gratuitous ARPs (unsolicited ARP replies)? What are they used for?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo tcpdump -i eth0 -nn arp -c 50
+<span class="comment"># Normal ARP request-reply:</span>
+ARP, Request who-has 10.0.1.5 tell 10.0.1.1
+ARP, Reply 10.0.1.5 is-at aa:bb:cc:11:22:33
+
+<span class="comment"># Gratuitous ARP (unsolicited reply — no request preceded it):</span>
+ARP, Reply 10.0.1.10 is-at dd:ee:ff:44:55:66
+<span class="comment"># ↑ This is gratuitous! No one asked "who-has 10.0.1.10"</span></code></pre>
+                            <p>Gratuitous ARPs are used for: (1) IP address conflict detection (announcing "I own this IP"), (2) MAC address change notification (VRRP/keepalived failover — new MASTER announces its MAC), (3) updating ARP caches after NIC failover. If you see many per second = possible IP conflict or misconfiguration.</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>Interface Bonding Verification:</strong> If you have bonded interfaces, check <code>cat /proc/net/bonding/bond0</code>. What bonding mode is configured? How many slaves? What does MII Status show? What happens if one slave fails in active-backup mode vs 802.3ad mode?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ cat /proc/net/bonding/bond0
+Ethernet Channel Bonding Driver: v5.15.0
+Bonding Mode: IEEE 802.3ad Dynamic link aggregation  <span class="comment">← LACP mode</span>
+MII Status: up
+MII Polling Interval (ms): 100
+Up Delay (ms): 0
+Down Delay (ms): 0
+
+Slave Interface: eth0
+MII Status: up
+Speed: 10000 Mbps
+Duplex: full
+Link Failure Count: 0
+
+Slave Interface: eth1
+MII Status: up
+Speed: 10000 Mbps
+Duplex: full
+Link Failure Count: 0</code></pre>
+                            <p>Modes: active-backup (1 active, others standby — failover only), 802.3ad/LACP (all active, requires switch support, dynamic negotiation), balance-rr (round-robin, no switch support needed), balance-xor (hash-based distribution).</p>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Full L1/L2 Health Check Script:</strong> Write a bash script that checks: interface link state, speed/duplex, error counters, ARP cache health, and bridge MAC table. The script should output PASS/FAIL for each check and a summary. Run it on your machine.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>#!/bin/bash
+<span class="comment"># L1/L2 Health Check — save as l2-health.sh</span>
+IFACE=${1:-eth0}
+echo "=== L1/L2 Health Check: $IFACE ==="
+
+<span class="comment"># L1: Link state</span>
+LINK=$(ip link show $IFACE | grep -oP 'state \K\w+')
+[[ "$LINK" == "UP" ]] && echo "✅ L1 Link: UP" || echo "❌ L1 Link: $LINK"
+
+<span class="comment"># L1: Speed & Duplex</span>
+SPEED=$(ethtool $IFACE | grep Speed | awk '{print $2}')
+DUPLEX=$(ethtool $IFACE | grep Duplex | awk '{print $2}')
+echo "   Speed: $SPEED, Duplex: $DUPLEX"
+
+<span class="comment"># L1: CRC errors</span>
+CRC=$(ethtool -S $IFACE | grep rx_crc | awk '{print $2}')
+[[ "$CRC" -eq 0 ]] && echo "✅ L1 CRC errors: 0" || echo "❌ L1 CRC errors: $CRC"
+
+<span class="comment"># L2: ARP cache</span>
+ARP_COUNT=$(ip neigh show | wc -l)
+ARP_FAILED=$(ip neigh show | grep FAILED | wc -l)
+[[ "$ARP_FAILED" -eq 0 ]] && echo "✅ L2 ARP: $ARP_COUNT entries, 0 failed" || echo "❌ L2 ARP: $ARP_FAILED FAILED"
+
+<span class="comment"># Summary</span>
+echo "=== Summary: $( [[ "$LINK" == "UP" && "$CRC" -eq 0 && "$ARP_FAILED" -eq 0 ]] && echo '✅ ALL PASS' || echo '❌ ISSUES FOUND' ) ==="</code></pre>
+                        </div></details>
+                    </div>
+                </div>
             </div>
 
             <!-- ═══════════════════════════════════════════════════════════
@@ -7089,6 +7512,195 @@ $ tcpdump -nn -r /tmp/anihpj-debug.pcap</code></pre>
                                 <p>This is a real SRE debugging scenario. The <code>nsenter</code> pattern is the standard way to capture container traffic from the host. By tracing DNS → TCP → TLS in order, you isolate the failing layer in seconds. The tcpdump output is the ground truth — if you see a SYN-ACK from the API server but curl reports "connection refused," the issue is NOT the network (perhaps curl is configured with a proxy you forgot about).</p>
                             </div>
                         </details>
+                    </div>
+                </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 3 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 3 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Write BPF Capture Filters:</strong> Write tcpdump capture filters for: (a) only TCP traffic on port 443, (b) only traffic from host 10.0.1.5, (c) only ICMP echo requests (not replies), (d) all traffic EXCEPT SSH (port 22), (e) only SYN packets. Test each filter.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># (a) TCP/443 only</span>
+sudo tcpdump -i eth0 -nn 'tcp port 443'
+
+<span class="comment"># (b) From host 10.0.1.5</span>
+sudo tcpdump -i eth0 -nn 'host 10.0.1.5'
+
+<span class="comment"># (c) ICMP echo requests only (Type 8)</span>
+sudo tcpdump -i eth0 -nn 'icmp[icmptype] = 8'
+
+<span class="comment"># (d) All except SSH</span>
+sudo tcpdump -i eth0 -nn 'not port 22'
+
+<span class="comment"># (e) SYN packets only (TCP flags: SYN=1, all others=0)</span>
+sudo tcpdump -i eth0 -nn 'tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'</code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>Save and Analyze Captures:</strong> Capture 30 seconds of traffic with <code>tcpdump -i any -nn -w /tmp/capture.pcap</code> while browsing. Then analyze: (a) <code>capinfos /tmp/capture.pcap</code> — what's the packet count and data rate? (b) <code>tcpdump -r /tmp/capture.pcap -nn tcp</code> — how many TCP connections? (c) <code>tcpdump -r /tmp/capture.pcap -nn 'tcp[tcpflags] & tcp-syn != 0' | wc -l</code> — count SYN packets.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ capinfos /tmp/capture.pcap
+Number of packets: 1,234
+File size: 892 KB
+Data size: 845 KB
+Capture duration: 30.5 seconds
+Data rate: 221 kbps
+Average packet size: 684 bytes
+
+$ tcpdump -r /tmp/capture.pcap -nn tcp | wc -l
+987  <span class="comment"># TCP packets</span>
+
+$ tcpdump -r /tmp/capture.pcap -nn 'tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0' | wc -l
+23  <span class="comment"># SYN packets = 23 new connection attempts</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Follow TCP Stream:</strong> Using Wireshark or tshark, find a complete HTTP request-response in your capture. With tshark: <code>tshark -r /tmp/capture.pcap -q -z follow,tcp,ascii,0</code> (try stream 0, 1, 2...). What was the request? What was the response status? Can you see the full HTTP conversation?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -q -z follow,tcp,ascii,0
+===================================================================
+Follow: tcp,ascii
+Filter: tcp.stream eq 0
+Node 0: 10.0.1.5:54321
+Node 1: 93.184.216.34:80
+
+GET / HTTP/1.1
+Host: example.com
+User-Agent: curl/8.0
+Accept: */*
+
+HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: 1256
+...
+===================================================================</code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>Packet Statistics:</strong> Run <code>tshark -r /tmp/capture.pcap -q -z io,stat,1</code> to see packets-per-second. Then run <code>tshark -r /tmp/capture.pcap -q -z conv,tcp</code> to see TCP conversation statistics. Which conversation transferred the most data?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -q -z io,stat,1
+| Interval | Packets |    Bytes |
+| 0-1 sec  |      45 |    32 KB |
+| 1-2 sec  |      78 |    89 KB |
+| 2-3 sec  |      12 |     4 KB |
+
+$ tshark -r /tmp/capture.pcap -q -z conv,tcp
+| Src IP:Port → Dst IP:Port       | Packets | Bytes   |
+| 10.0.1.5:54321 → 93.184.216.34:80 | 156   | 234 KB  |  <span class="comment">← Most data!</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Protocol Hierarchy:</strong> Run <code>tshark -r /tmp/capture.pcap -q -z io,phs</code>. What percentage of packets are TCP? UDP? ICMP? What's the most common application protocol in your capture?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -q -z io,phs
+Protocol Hierarchy Statistics
+eth:  frames:1234 bytes:845000
+  ip:  frames:1200 bytes:840000
+    tcp: frames:1100 bytes:820000    <span class="comment">← 89% TCP</span>
+      http: frames:45 bytes:350000   <span class="comment">← Most common app protocol</span>
+      tls: frames:800 bytes:420000
+    udp: frames:80 bytes:15000       <span class="comment">← 6.5% UDP</span>
+      dns: frames:60 bytes:8000
+    icmp: frames:20 bytes:2000       <span class="comment">← 1.6% ICMP</span>
+  arp: frames:34 bytes:5000          <span class="comment">← 2.7% ARP</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>Identify Retransmissions:</strong> In your capture, find TCP retransmissions: <code>tshark -r /tmp/capture.pcap -Y "tcp.analysis.retransmission"</code>. How many retransmissions? What do they indicate? If none in your capture, browse a site with packet loss simulation.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap -Y "tcp.analysis.retransmission"
+3 packets found:
+
+<span class="comment"># Each retransmission = packet lost + TCP recovered</span>
+<span class="comment"># Multiple retransmissions for same connection = network loss</span>
+<span class="comment"># To simulate: sudo tc qdisc add dev eth0 root netem loss 5%</span>
+<span class="comment"># Then browse. Then: sudo tc qdisc del dev eth0 root</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>Extract HTTP Objects:</strong> From your capture, extract all HTTP-transferred files: <code>tshark -r /tmp/capture.pcap --export-objects http,/tmp/http-files/</code>. List the extracted files. What types of content were transferred?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/capture.pcap --export-objects http,/tmp/http-files/
+$ ls -la /tmp/http-files/
+-rw-r--r--  index.html     12,456 bytes
+-rw-r--r--  style.css       8,234 bytes
+-rw-r--r--  script.js      45,678 bytes
+-rw-r--r--  logo.png      234,567 bytes
+
+<span class="comment"># This extracts actual files transferred over unencrypted HTTP.</span>
+<span class="comment"># HTTPS (TLS) content is encrypted — cannot extract.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>DNS Query Analysis:</strong> Capture DNS traffic: <code>sudo tcpdump -i any -nn port 53 -w /tmp/dns.pcap</code> while running <code>dig google.com</code>. Analyze: <code>tshark -r /tmp/dns.pcap -Y "dns.flags.response == 0" -T fields -e dns.qry.name</code>. What queries were made?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/dns.pcap -Y "dns.flags.response == 0" -T fields -e dns.qry.name
+google.com                  <span class="comment">← Query</span>
+
+$ tshark -r /tmp/dns.pcap -Y "dns.flags.response == 1" -T fields -e dns.a
+142.250.80.46              <span class="comment">← Response: A record</span>
+
+$ tshark -r /tmp/dns.pcap -Y "dns.flags.response == 1" -T fields -e dns.resp.ttl
+300                         <span class="comment">← TTL = 5 minutes</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>TLS Handshake Analysis:</strong> Capture TLS traffic: <code>sudo tcpdump -i any -nn port 443 -w /tmp/tls.pcap</code> while browsing. In Wireshark or tshark, find a TLS ClientHello. What TLS version is negotiated? What cipher suite? What SNI (Server Name Indication)?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tshark -r /tmp/tls.pcap -Y "tls.handshake.type == 1" -T fields \
+    -e tls.handshake.version -e tls.handshake.ciphersuite -e tls.handshake.extensions_server_name
+0x0304  <span class="comment">← TLS 1.3 (0x0304 = TLS 1.3)</span>
+0x1301  <span class="comment">← Cipher: TLS_AES_128_GCM_SHA256</span>
+www.google.com  <span class="comment">← SNI: google.com</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Capture Script for Production:</strong> Write a script that captures 60 seconds of traffic with rotation (new file every 10 seconds) and a BPF filter for only your application port. Include size limits and automatic cleanup. Test it.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>#!/bin/bash
+<span class="comment"># Production-grade rotating capture script</span>
+APP_PORT=${1:-8000}
+DURATION=${2:-60}
+ROTATE=${3:-10}
+OUTDIR="/var/tmp/pcap/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$OUTDIR"
+
+sudo tcpdump -i any -nn \
+    -w "$OUTDIR/capture.pcap" \
+    -G $ROTATE \
+    -W $((DURATION / ROTATE)) \
+    -C 100 <span class="comment"># Max 100MB per file</span> \
+    -z gzip <span class="comment"># Compress rotated files</span> \
+    "tcp port $APP_PORT" &
+PID=$!
+sleep $DURATION
+sudo kill $PID
+
+echo "Capture saved to $OUTDIR"
+ls -lh "$OUTDIR"</code></pre>
+                        </div></details>
                     </div>
                 </div>
             </div>
@@ -8538,6 +9150,149 @@ local_address rx_queue state
                                 <p>/proc/net/ is the ultimate fallback when tools aren't available. It's always there — it's the kernel's API. TIME_WAIT sockets consume memory but don't affect functionality unless they exhaust the ephemeral port range. Growing rx_queue indicates the application is the bottleneck — the kernel has the data but the app won't read it. This is the classic "app is slow, not the network" indicator.</p>
                             </div>
                         </details>
+                    </div>
+                </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 4 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 4 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Network Namespace Lab:</strong> Create two network namespaces connected by a veth pair through a Linux bridge. Configure IPs and verify connectivity. Then add a third namespace and verify all three can communicate through the bridge. Write all commands.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>sudo ip netns add ns1 && sudo ip netns add ns2 && sudo ip netns add ns3
+sudo ip link add br0 type bridge && sudo ip link set br0 up
+sudo ip link add veth1 type veth peer name veth1-br
+sudo ip link add veth2 type veth peer name veth2-br
+sudo ip link add veth3 type veth peer name veth3-br
+sudo ip link set veth1 netns ns1 && sudo ip link set veth1-br master br0 && sudo ip link set veth1-br up
+sudo ip link set veth2 netns ns2 && sudo ip link set veth2-br master br0 && sudo ip link set veth2-br up
+sudo ip link set veth3 netns ns3 && sudo ip link set veth3-br master br0 && sudo ip link set veth3-br up
+sudo ip netns exec ns1 ip addr add 10.0.0.1/24 dev veth1 && sudo ip netns exec ns1 ip link set veth1 up
+sudo ip netns exec ns2 ip addr add 10.0.0.2/24 dev veth2 && sudo ip netns exec ns2 ip link set veth2 up
+sudo ip netns exec ns3 ip addr add 10.0.0.3/24 dev veth3 && sudo ip netns exec ns3 ip link set veth3 up
+sudo ip netns exec ns1 ping -c 2 10.0.0.3  <span class="comment"># ✅ All 3 can communicate!</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>iptables Packet Tracing:</strong> Add iptables LOG rules at each chain (INPUT, OUTPUT, FORWARD) to trace a packet. Then ping through the rules and check <code>dmesg</code> to see which chains the packet traversed. What order do the chains execute for a forwarded packet?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>sudo iptables -A PREROUTING -p icmp -j LOG --log-prefix "PREROUTING: "
+sudo iptables -A FORWARD -p icmp -j LOG --log-prefix "FORWARD: "
+sudo iptables -A POSTROUTING -p icmp -j LOG --log-prefix "POSTROUTING: "
+sudo dmesg -w <span class="comment"># Watch logs in real-time</span>
+<span class="comment"># Forwarded packet: PREROUTING → routing → FORWARD → POSTROUTING</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Conntrack Table Inspection:</strong> Check the connection tracking table with <code>conntrack -L</code> or <code>cat /proc/net/nf_conntrack</code>. Make a curl request and observe the new entry. What states appear? How does conntrack enable stateful firewalling?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo conntrack -L | head -5
+tcp 6 431999 ESTABLISHED src=10.0.1.5 dst=93.184.216.34 sport=54321 dport=80 \
+    src=93.184.216.34 dst=10.0.1.5 sport=80 dport=54321 [ASSURED] mark=0 use=1
+<span class="comment"># States: NEW (first SYN), ESTABLISHED (SYN-ACK seen), RELATED (ICMP/helper)</span>
+<span class="comment"># [ASSURED] = seen traffic in both directions, won't be early-expired</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>SNAT/Masquerade Setup:</strong> Set up NAT masquerading so your network namespace can reach the internet. Use <code>iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE</code>. Verify with <code>tcpdump</code> that the source IP is rewritten.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo ip netns exec ns1 ping -c 1 8.8.8.8  <span class="comment"># Should work now!
+<span class="comment"># tcpdump -i eth0 icmp shows source IP = your host's IP, not 10.0.0.1</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Policy Routing:</strong> Create two routing tables. Add a rule that routes traffic from 10.0.0.1 through table 100 and all other traffic through the main table. Verify with <code>ip route get</code>.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>echo "100 custom" | sudo tee -a /etc/iproute2/rt_tables
+sudo ip route add 10.0.0.0/24 dev br0 table 100
+sudo ip route add default via 192.168.1.1 table 100
+sudo ip rule add from 10.0.0.1 table 100
+ip route get 8.8.8.8 from 10.0.0.1  <span class="comment"># Uses table 100</span>
+ip route get 8.8.8.8 from 192.168.1.10  <span class="comment"># Uses main table</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>/proc/net/ Deep Dive:</strong> Read <code>/proc/net/tcp</code>, <code>/proc/net/udp</code>, and <code>/proc/net/dev</code>. Decode at least one TCP connection entry. What do the fields <code>st</code>, <code>tx_queue:rx_queue</code>, and <code>uid</code> represent?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ cat /proc/net/tcp
+  sl  local_address rem_address   st tx_queue rx_queue uid
+   0: 0A000105:1F40 5DB8D822:0050 01 00000000:00000000 0:0
+<span class="comment"># 0A000105 = 10.0.1.5 (hex), 1F40 = 8000 (hex port)</span>
+<span class="comment"># 5DB8D822 = 93.184.216.34, 0050 = 80</span>
+<span class="comment"># st=01 = ESTABLISHED, uid=0 = root</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>Socket Buffer Tuning:</strong> Check <code>sysctl net.core.rmem_max</code> and <code>net.core.wmem_max</code>. Calculate the Bandwidth-Delay Product for a 10Gbps link with 50ms RTT. What buffer size do you need? Set it.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># BDP = 10 Gbps × 0.05s = 500 Mbit = 62.5 MB</span>
+$ sysctl net.core.rmem_max
+net.core.rmem_max = 212992  <span class="comment"># Only 208 KB! Far too small for 10G.</span>
+$ sudo sysctl -w net.core.rmem_max=67108864  <span class="comment"># 64 MB</span>
+$ sudo sysctl -w net.core.wmem_max=67108864
+<span class="comment"># Now TCP can auto-tune up to 64 MB buffers for high-BDP paths.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>Interface Statistics Script:</strong> Write a script that reads <code>/proc/net/dev</code> every second and calculates throughput in Mbps. Use it to measure your actual network throughput during a download.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>#!/bin/bash
+IFACE=eth0
+rx1=$(cat /proc/net/dev | grep $IFACE | awk '{print $2}')
+sleep 1
+rx2=$(cat /proc/net/dev | grep $IFACE | awk '{print $2}')
+bps=$((($rx2 - $rx1) * 8))
+mbps=$(echo "scale=2; $bps / 1000000" | bc)
+echo "Throughput: $mbps Mbps"</code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>Kernel Bypass Check:</strong> Check if XDP is available: <code>ls /sys/kernel/debug/tracing/events/xdp/</code>. Check if your NIC supports XDP: <code>ethtool -k eth0 | grep xdp</code>. What's the difference between XDP Generic, Native, and Offloaded modes?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ ethtool -k eth0 | grep xdp
+xdp: on [fixed]                <span class="comment"># NIC supports XDP native!</span>
+<span class="comment"># Generic: After sk_buff allocation (slowest, works on any NIC)</span>
+<span class="comment"># Native: Before sk_buff at driver level (10M+ pps/core, needs driver support)</span>
+<span class="comment"># Offloaded: On NIC hardware itself (fastest, needs SmartNIC)</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Full Network Namespace Lab Environment:</strong> Build a complete mini-network with 3 namespaces, a bridge, iptables NAT for internet access, and port forwarding (DNAT) to expose a web server in one namespace on the host's port 8080. Test from your browser.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Setup: 3 NS + bridge (from LAB Q1), then:</span>
+<span class="comment"># Start web server in ns1</span>
+sudo ip netns exec ns1 python3 -m http.server 8000 &
+
+<span class="comment"># Enable forwarding and NAT</span>
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE
+sudo iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.1:8000
+sudo iptables -A FORWARD -p tcp -d 10.0.0.1 --dport 8000 -j ACCEPT
+
+<span class="comment"># Test: curl http://localhost:8080 → serves ns1's web server! ✅</span></code></pre>
+                        </div></details>
                     </div>
                 </div>
             </div>
@@ -10101,6 +10856,150 @@ Each flow pinned to one spine. All paths utilized. No single point of failure.</
    └──────────┴───────────────┴────────┴─────────┴───────────┘</code></pre></div></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>VPC CIDR planning is a cloud architecture fundamental. /16 = 65,536 IPs — the largest AWS VPC CIDR. This question tests whether you can calculate subnet consumption across AZs and understand how much space remains. Key insight: private subnets for app servers typically need more IPs (/22 or /20) because auto-scaling can spin up many instances. Public subnets for load balancers need fewer (/24 is usually sufficient).</p></div></details>
                     </div>
                 </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 5 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 5 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>Subnetting Speed Drills:</strong> Without a calculator, determine: (a) subnet mask for /27, (b) number of usable hosts in /28, (c) network address of 192.168.5.75/26, (d) broadcast of 10.10.10.100/27, (e) is 172.16.5.130/25 a valid host or a network/broadcast address? Time yourself — target under 30 seconds each.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Question</th><th>Answer</th><th>Method</th></tr></thead><tbody>
+                                <tr><td>(a) /27 mask</td><td>255.255.255.224</td><td>/27 = 27 bits = 3 bits into last octet. 128+64+32=224</td></tr>
+                                <tr><td>(b) /28 usable</td><td>14 hosts</td><td>2^(32-28) - 2 = 16 - 2 = 14</td></tr>
+                                <tr><td>(c) 192.168.5.75/26</td><td>Network: 192.168.5.64</td><td>/26 = 64 per subnet. 75/64=1, 1×64=64</td></tr>
+                                <tr><td>(d) 10.10.10.100/27</td><td>Broadcast: 10.10.10.127</td><td>/27 = 32 per subnet. 100/32=3, subnet 96-127, .127=broadcast</td></tr>
+                                <tr><td>(e) 172.16.5.130/25</td><td>VALID HOST</td><td>/25 = 128 per subnet. Subnet .0-.127, .128-.255. .130 is in .128 subnet, not .128 (network) or .255 (broadcast)</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>VLSM Allocation Exercise:</strong> Given 10.0.0.0/24, allocate subnets for: Dept-A (60 hosts), Dept-B (28 hosts), Dept-C (12 hosts), Dept-D (5 hosts), plus a WAN link (2 hosts). Use VLSM. Show network address, mask, and range for each. Minimize wasted addresses.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Dept</th><th>Need</th><th>Subnet</th><th>Mask</th><th>Range</th></tr></thead><tbody>
+                                <tr><td>A</td><td>60</td><td>/26 (64)</td><td>255.255.255.192</td><td>10.0.0.0 - .63</td></tr>
+                                <tr><td>B</td><td>28</td><td>/27 (32)</td><td>255.255.255.224</td><td>10.0.0.64 - .95</td></tr>
+                                <tr><td>C</td><td>12</td><td>/28 (16)</td><td>255.255.255.240</td><td>10.0.0.96 - .111</td></tr>
+                                <tr><td>D</td><td>5</td><td>/29 (8)</td><td>255.255.255.248</td><td>10.0.0.112 - .119</td></tr>
+                                <tr><td>WAN</td><td>2</td><td>/30 (4)</td><td>255.255.255.252</td><td>10.0.0.120 - .123</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>Routing Table Analysis:</strong> On your machine, run <code>ip route show</code> and <code>ip route get 8.8.8.8</code>. Explain each field in the output. Which route is selected? Why? What does the <code>src</code> hint indicate?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ ip route get 8.8.8.8
+8.8.8.8 via 192.168.1.1 dev eth0 src 192.168.1.10 uid 1000
+    cache
+<span class="comment"># via 192.168.1.1 = next-hop gateway</span>
+<span class="comment"># dev eth0 = output interface</span>
+<span class="comment"># src 192.168.1.10 = preferred source IP for this route</span>
+<span class="comment"># cache = cached route lookup (FIB result)</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>Static Route Configuration:</strong> Add a static route to 10.99.0.0/24 via gateway 192.168.1.99. Verify with <code>ip route get 10.99.0.50</code>. Then remove it. What's the difference between <code>ip route add</code> and <code>ip route append</code>?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>sudo ip route add 10.99.0.0/24 via 192.168.1.99
+ip route get 10.99.0.50
+<span class="comment"># 10.99.0.50 via 192.168.1.99 dev eth0</span>
+sudo ip route del 10.99.0.0/24
+<span class="comment"># add = replaces existing route to same prefix</span>
+<span class="comment"># append = adds another route (ECMP — multi-path)</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>Traceroute Path Analysis:</strong> Run <code>traceroute -n 8.8.8.8</code>. How many hops? Why do some hops show <code>* * *</code>? What does each asterisk mean? How does traceroute differ from <code>tracepath</code>?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ traceroute -n 8.8.8.8
+ 1  192.168.1.1  1.2ms
+ 2  10.0.0.1     5.3ms
+ 3  * * *                    <span class="comment">← Router not responding to ICMP TTL Exceeded</span>
+ 4  72.14.237.130  12.4ms
+<span class="comment"># * * * = probe timed out. Router may block ICMP or deprioritize TTL Exceeded.</span>
+<span class="comment"># traceroute = UDP probes by default (ICMP Type 3 Code 3 = Port Unreachable at end)</span>
+<span class="comment"># tracepath = discovers MTU along the path. No root needed.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>ECMP Verification:</strong> If you have multiple routes to the same destination, verify ECMP load balancing: <code>ip route show 10.0.0.0/8</code>. How does Linux distribute packets across equal-cost paths? What algorithm is used?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ ip route show 10.0.0.0/8
+10.0.0.0/8 via 192.168.1.1 dev eth0
+10.0.0.0/8 via 192.168.1.2 dev eth0
+<span class="comment"># ECMP: Kernel hashes (src_ip, dst_ip, src_port, dst_port, proto)</span>
+<span class="comment"># Same 5-tuple = same path. Different connection = different path.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>IP Header Lab:</strong> Capture a ping with <code>sudo tcpdump -i any -nn -v icmp</code>. Identify these IP header fields: TTL, Protocol, Total Length, Identification, and Flags (DF/MF). What does DF=1 mean?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ sudo tcpdump -i any -nn -v icmp
+IP (tos 0x0, ttl 64, id 12345, offset 0, flags [DF], proto ICMP (1), length 84)
+<span class="comment"># ttl 64 = maximum hops remaining (decremented by each router)</span>
+<span class="comment"># id 12345 = fragment identification (all fragments share same ID)</span>
+<span class="comment"># flags [DF] = Don't Fragment (PMTUD enabled)</span>
+<span class="comment"># proto ICMP (1) = upper-layer protocol (1=ICMP, 6=TCP, 17=UDP)</span>
+<span class="comment"># length 84 = total IP packet size including header</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>CIDR Aggregation:</strong> Aggregate these networks into the smallest possible CIDR block: 192.168.8.0/24, 192.168.9.0/24, 192.168.10.0/24, 192.168.11.0/24. What's the supernet? Show your work in binary.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Write in binary:</span>
+192.168.8.0  = 11000000.10101000.00001000.00000000
+192.168.9.0  = 11000000.10101000.00001001.00000000
+192.168.10.0 = 11000000.10101000.00001010.00000000
+192.168.11.0 = 11000000.10101000.00001011.00000000
+<span class="comment"># Common prefix: 11000000.10101000.000010 = 22 bits</span>
+<span class="comment"># Supernet: 192.168.8.0/22 (covers .8.0 through .11.255)</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>ARP and IP Interaction:</strong> Clear your ARP cache: <code>sudo ip neigh flush all</code>. Then ping your gateway. Capture with <code>tcpdump -i eth0 -nn -e arp or icmp</code>. What happens first — ARP or ICMP? Why? Explain the sequence.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Sequence: ARP Request → ARP Reply → ICMP Echo Request → ICMP Echo Reply</span>
+<span class="comment"># Before IP can send the ICMP packet, L2 needs the gateway's MAC address.</span>
+<span class="comment"># Kernel holds the ICMP packet, sends ARP, gets MAC, then sends ICMP.</span>
+<span class="comment"># This is why the first ping has higher latency — ARP resolution delay.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>Complete Subnetting Script:</strong> Write a bash script that takes an IP/CIDR (e.g., 192.168.1.0/24) and prints: network address, broadcast address, subnet mask, first/last usable host, total hosts, and binary representation. Test with multiple /prefix values.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>#!/bin/bash
+ipcalc "$1" 2>/dev/null || {
+  <span class="comment"># Manual calculation if ipcalc not available</span>
+  IFS='/' read -r ip prefix <<< "$1"
+  IFS='.' read -r a b c d <<< "$ip"
+  mask=$(( 0xFFFFFFFF << (32 - prefix) & 0xFFFFFFFF ))
+  network=$(( (a << 24) + (b << 16) + (c << 8) + d & mask ))
+  broadcast=$(( network | (~mask & 0xFFFFFFFF) ))
+  hosts=$(( (1 << (32 - prefix)) - 2 ))
+  echo "Network:   $((network>>24)).$((network>>16&255)).$((network>>8&255)).$((network&255))/$prefix"
+  echo "Broadcast: $((broadcast>>24)).$((broadcast>>16&255)).$((broadcast>>8&255)).$((broadcast&255))"
+  echo "Usable:    $(( (network>>24) + 1 == (broadcast>>24) ? (broadcast>>24) : network>>24 ))...$((broadcast-1)) ($hosts hosts)"
+}</code></pre>
+                        </div></details>
+                    </div>
+                </div>
             </div>
 
             <!-- ════════════════════════════════════════════════════════════════════════
@@ -11649,6 +12548,141 @@ ALLOCATION:
   ...
   USED: 3 DCs × 5 floors × 4 VLANs = 60 /64 subnets
   REMAINING: 65,536 − 60 = 65,476 subnets (99.9% free)</code></pre></div></div><div class="eq-explanation"><div class="eq-exp-label">Explanation</div><p>IPv6 addressing abundance changes how you plan. With IPv4 you carefully conserve every /24. With IPv6 you can allocate a /64 per VLAN — the standard subnet size in IPv6 — without ever worrying about exhaustion. A single /48 from your ISP gives you more subnets than you'll ever use. This is why IPv6 network design focuses on hierarchy and readability, not conservation.</p></div></details>
+                    </div>
+                </div>
+
+                <!-- ═══ HANDS-ON LAB QUESTIONS — Chapter 6 ═══ -->
+                <div class="net-exam-questions">
+                    <h4>🛠️ Chapter 6 — Hands-On Lab Questions (10 Questions)</h4>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q1</span>
+                        <div class="eq-question"><strong>IPv6 Address Compression:</strong> Write these in fully-expanded form: (a) <code>::1</code>, (b) <code>2001:db8::1</code>, (c) <code>fe80::a00:27ff:fe4e:8a3d%eth0</code>. Then compress: (d) <code>2001:0db8:0000:0000:0000:ff00:0042:8329</code>.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Input</th><th>Output</th></tr></thead><tbody>
+                                <tr><td>(a) ::1</td><td>0000:0000:0000:0000:0000:0000:0000:0001</td></tr>
+                                <tr><td>(b) 2001:db8::1</td><td>2001:0db8:0000:0000:0000:0000:0000:0001</td></tr>
+                                <tr><td>(c) fe80::a00:27ff:fe4e:8a3d%eth0</td><td>fe80:0000:0000:0000:0a00:27ff:fe4e:8a3d (zone ID %eth0 = interface)</td></tr>
+                                <tr><td>(d) Compress</td><td>2001:db8::ff00:42:8329</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q2</span>
+                        <div class="eq-question"><strong>IPv6 Address Types Identification:</strong> Classify these addresses: (a) <code>fe80::1</code>, (b) <code>2001:4860:4860::8888</code>, (c) <code>::1</code>, (d) <code>ff02::1</code>, (e) <code>fc00::1</code>, (f) <code>::</code>. What can a link-local address NOT do?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <table class="comparison-table" style="width:100%;"><thead><tr><th>Address</th><th>Type</th><th>Scope</th></tr></thead><tbody>
+                                <tr><td>fe80::1</td><td>Link-Local</td><td>Single L2 segment only. Never routed. Every IPv6 interface has one.</td></tr>
+                                <tr><td>2001:4860:4860::8888</td><td>Global Unicast</td><td>Internet-routable. Google's public DNS.</td></tr>
+                                <tr><td>::1</td><td>Loopback</td><td>Same as 127.0.0.1. Host-local only.</td></tr>
+                                <tr><td>ff02::1</td><td>Multicast (All Nodes)</td><td>Link-local scope. Replaces broadcast.</td></tr>
+                                <tr><td>fc00::1</td><td>Unique Local (ULA)</td><td>Private (like RFC 1918). Not internet-routable.</td></tr>
+                                <tr><td>::</td><td>Unspecified</td><td>"No address" — used during SLAAC/DHCPv6.</td></tr></tbody></table>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q3</span>
+                        <div class="eq-question"><strong>IPv6 on Your Machine:</strong> Run <code>ip -6 addr show</code> and <code>ip -6 route show</code>. Do you have a global unicast address? A link-local? What's your default IPv6 route? Try <code>ping6 google.com</code> or <code>ping -6 google.com</code>.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ ip -6 addr show eth0
+2: eth0: inet6 fe80::a00:27ff:fe4e:8a3d/64 scope link  <span class="comment">← Link-local (always present)</span>
+       inet6 2001:db8:abcd:1234:a00:27ff:fe4e:8a3d/64 scope global  <span class="comment">← Global unicast</span>
+
+$ ip -6 route show
+::/0 via fe80::1 dev eth0  <span class="comment">← Default route via link-local gateway!</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q4</span>
+                        <div class="eq-question"><strong>ICMPv6 NDP Lab:</strong> View your IPv6 neighbor cache: <code>ip -6 neigh show</code>. Force a refresh by pinging your gateway. What states do you see? How does NDP differ from ARP?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ ip -6 neigh show
+fe80::1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE  <span class="comment">← Gateway</span>
+2001:db8::5 dev eth0 lladdr 11:22:33:44:55:66 STALE  <span class="comment">← Another host</span>
+<span class="comment"># NDP uses ICMPv6 (NS/NA) instead of ARP. Multicast instead of broadcast.</span>
+<span class="comment"># NDP also handles: Router Discovery (RS/RA), Prefix Advertisement, DAD, Redirect.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q5</span>
+                        <div class="eq-question"><strong>SLAAC Observation:</strong> If you have IPv6, check how your global address was generated: <code>ip -6 addr show</code>. Does the interface ID end in <code>ff:fe</code>? This indicates EUI-64 (derived from MAC). What's the alternative (RFC 7217)?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># EUI-64 (MAC-based): a00:27ff:fe4e:8a3d</span>
+<span class="comment">#   MAC = 08:00:27:4e:8a:3d → EUI-64 = 0a00:27ff:fe4e:8a3d</span>
+<span class="comment">#   (flip bit 7, insert fffe in middle)</span>
+<span class="comment"># RFC 7217 (Stable Private): random per-network, privacy-preserving</span>
+<span class="comment"># RFC 4941 (Temporary): rotates every few hours for client privacy</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q6</span>
+                        <div class="eq-question"><strong>Dual-Stack Verification:</strong> Check if a service is reachable over both IPv4 and IPv6: <code>ping -4 google.com</code> and <code>ping -6 google.com</code>. For DNS: <code>dig A google.com</code> and <code>dig AAAA google.com</code>. Do you get both record types?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ dig A google.com +short
+142.250.80.46
+$ dig AAAA google.com +short
+2607:f8b0:4006:81b::200e
+<span class="comment"># Both work = dual-stack! Most major services are dual-stack now.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q7</span>
+                        <div class="eq-question"><strong>IPv6 Path MTU:</strong> IPv6 does NOT fragment at routers — only the sender can fragment. Run <code>tracepath -6 google.com</code>. What MTU is discovered? How does IPv6 PMTUD differ from IPv4?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ tracepath -6 google.com
+ 1?: [LOCALHOST]  pmtu 1500
+ 1:  fe80::1  0.5ms
+ 2:  no reply
+     Resume: pmtu 1500
+<span class="comment"># IPv6: minimum MTU = 1280 bytes (vs 68 for IPv4).</span>
+<span class="comment"># Routers NEVER fragment IPv6 — only senders do.</span>
+<span class="comment"># Router sends ICMPv6 Type 2 "Packet Too Big" instead of dropping.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q8</span>
+                        <div class="eq-question"><strong>IPv6 Socket Programming:</strong> Write a simple Python server that listens on <code>::</code> (all IPv6 interfaces) port 8888 and a client that connects to <code>::1</code>. Does it also accept IPv4 connections? (Hint: check IPV6_V6ONLY socket option.)</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code><span class="comment"># Server (python3 -c "...")</span>
+import socket
+s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)  <span class="comment"># Allow IPv4 too</span>
+s.bind(('::', 8888))
+s.listen(1)
+<span class="comment"># Python default: IPV6_V6ONLY=1 (IPv6 only). Set to 0 for dual-stack.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q9</span>
+                        <div class="eq-question"><strong>IPv6 Firewall Rules:</strong> Check your IPv6 firewall: <code>sudo ip6tables -L -n</code>. Is it empty? Most people forget to configure ip6tables, leaving IPv6 completely unfirewalled. Add a basic rule set that allows SSH, HTTP, HTTPS, and ICMPv6.</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>sudo ip6tables -P INPUT DROP
+sudo ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+sudo ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
+sudo ip6tables -A INPUT -p tcp --dport 80 -j ACCEPT
+sudo ip6tables -A INPUT -p tcp --dport 443 -j ACCEPT
+sudo ip6tables -A INPUT -p ipv6-icmp -j ACCEPT  <span class="comment"># CRITICAL for NDP!</span>
+<span class="comment"># Without ICMPv6, NDP breaks and IPv6 stops working.</span></code></pre>
+                        </div></details>
+                    </div>
+
+                    <div class="exam-question-item">
+                        <span class="eq-number">LAB Q10</span>
+                        <div class="eq-question"><strong>IPv6-Only Connectivity Test:</strong> Test if your system can reach IPv6-only services: <code>curl -6 https://ipv6.google.com</code>. Visit <code>https://test-ipv6.com</code> in your browser. What score do you get? If 0/10, investigate: does your ISP support IPv6? Is your router configured?</div>
+                        <details><summary>Show Answer</summary><div class="eq-answer"><div class="eq-answer-label">Answer</div>
+                            <pre><code>$ curl -6 https://ipv6.google.com
+<span class="comment"># If works → IPv6 is functional ✅</span>
+<span class="comment"># If fails → Check: ip -6 route, ip6tables, ISP support.</span>
+<span class="comment"># https://test-ipv6.com gives a 0-10 score:</span>
+<span class="comment">#  10/10 = Full IPv6 + IPv4. 0/10 = No IPv6 connectivity.</span></code></pre>
+                        </div></details>
                     </div>
                 </div>
             </div>
@@ -48763,6 +49797,218 @@ LESSONS LEARNED:
              CHAPTER 40 — Networking Interview Preparation
              ═══════════════════════════════════════════════════════════════════ -->
         <div id="ch40">
+
+            <!-- ══════════════════════════════════════════════════════════
+                 CHAPTER 40 — OVERVIEW & IMPLEMENTATION ROADMAP
+                 ═══════════════════════════════════════════════════════ -->
+            <div class="diagram-container">
+                <div class="diagram-title">📋 CHAPTER 40 AT A GLANCE — Your Interview Preparation Roadmap</div>
+<pre>
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │                    CHAPTER 40 — NETWORKING INTERVIEW MASTERY                   │
+  │                    6 Sections · 20 Questions · 5 Hours                         │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │                                                                               │
+  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+  │   │  s40.1      │    │  s40.2      │    │  s40.3      │    │  s40.4      │  │
+  │   │ LANDSCAPE   │───▶│ 20 QUESTIONS│───▶│PACKET WALK  │───▶│SYSTEM DESIGN│  │
+  │   │ Understand  │    │ Answer      │    │ 80% of      │    │ Architect   │  │
+  │   │ the game    │    │ frameworks  │    │ interviews   │    │ from scratch│  │
+  │   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+  │         │                  │                   │                   │         │
+  │         └──────────────────┴───────────────────┴───────────────────┘         │
+  │                                    │                                          │
+  │                    ┌───────────────┴───────────────┐                          │
+  │                    ▼                               ▼                          │
+  │          ┌─────────────┐                 ┌─────────────┐                     │
+  │          │  s40.5      │                 │  s40.6      │                     │
+  │          │ 8 MISTAKES  │                 │ MOCK LAB    │                     │
+  │          │ Avoid common│                 │ Practice    │                     │
+  │          │ interview   │                 │ under       │                     │
+  │          │ failures    │                 │ pressure    │                     │
+  │          └─────────────┘                 └─────────────┘                     │
+  │                                                                               │
+  │  🎯 OUTCOME: Walk into any networking interview confident, prepared,         │
+  │     and able to demonstrate senior-level thinking in every answer.            │
+  └──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+
+            <!-- ═══ How to Implement This Chapter ═══ -->
+            <div class="info-box tip">
+                <h5>🗓️ How to Use This Chapter — A 5-Day Implementation Plan</h5>
+                <p>Don't read this chapter passively. <strong>Execute it.</strong> Here's a proven 5-day plan that transforms theoretical knowledge into interview-ready answers:</p>
+                <table class="comparison-table" style="width:100%;">
+                    <thead><tr><th>Day</th><th>Focus</th><th>What to Do</th><th>Time</th><th>Success Check</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Day 1</strong></td><td><strong>Understand the Game</strong></td><td>Read s40.1 (Interview Landscape). Study the 5-dimension rubric. Understand what interviewers REALLY evaluate. Read s40.5 (Common Mistakes) — know what NOT to do.</td><td>1 hour</td><td>Can you list the 5 hidden evaluation dimensions and the 8 common mistakes from memory?</td></tr>
+                        <tr><td><strong>Day 2</strong></td><td><strong>Master the 20 Questions</strong></td><td>Read all 20 Q&A frameworks in s40.2. For each question: read the answer, close the details, and answer it OUT LOUD. Grade yourself on the 5-point rubric. Focus on Q1-Q8 (the most common).</td><td>2 hours</td><td>Can you answer Q1-Q8 at a level 4 (Strong) or higher? Record your Q1 answer — is it detailed enough?</td></tr>
+                        <tr><td><strong>Day 3</strong></td><td><strong>Nail the Packet Walk</strong></td><td>Practice s40.3. Set a 5-minute timer. Record yourself answering "What happens when you type https://jobpost.anihpj.com?" Study the timing breakdown — know where the milliseconds go. Repeat 3 times.</td><td>1.5 hours</td><td>Can you complete the entire answer in 5 minutes covering all 14 hops? Is the 3rd recording significantly better than the 1st?</td></tr>
+                        <tr><td><strong>Day 4</strong></td><td><strong>Design Like a Senior</strong></td><td>Read s40.4. On a whiteboard, design the anihpj network for 10K RPS, 99.99% uptime. Use the 6-step framework. Include: subnetting plan, capacity estimates, data flow, failure modes. Justify every decision aloud.</td><td>2 hours</td><td>Does your design cover all 9 must-haves? Can you justify every component choice with a specific reason?</td></tr>
+                        <tr><td><strong>Day 5</strong></td><td><strong>Mock Interview</strong></td><td>Execute s40.6 (LAB). Have a friend fire the 20 questions at you randomly. They ask follow-ups. You answer under time pressure. Record the session. Self-critique: where did you score below 4?</td><td>1.5 hours</td><td>Average score across 5 random questions: 4+? Did you ever say "I don't know" without explaining how you'd find out?</td></tr>
+                    </tbody>
+                </table>
+                <p><strong>Total investment: ~8 hours across 5 days.</strong> The difference between walking into an interview having "read about networking" versus having <em>practiced answering networking questions under pressure</em> is the difference between a rejection and an offer.</p>
+            </div>
+
+            <!-- ═══ What You'll Gain — Skill Progression ═══ -->
+            <div class="process-pipeline">
+                <div class="proc-stage">
+                    <span class="stage-icon">📖</span>
+                    <span class="stage-num">Before</span>
+                    <h5>Knowledge Without Structure</h5>
+                    <p>You know the facts but can't articulate them under pressure</p>
+                </div>
+                <div class="proc-arrow">→</div>
+                <div class="proc-stage">
+                    <span class="stage-icon">🗣️</span>
+                    <span class="stage-num">Day 1-2</span>
+                    <h5>Structured Answers</h5>
+                    <p>20 frameworks give you a template for every common question</p>
+                </div>
+                <div class="proc-arrow">→</div>
+                <div class="proc-stage">
+                    <span class="stage-icon">⏱️</span>
+                    <span class="stage-num">Day 3</span>
+                    <h5>Timed Delivery</h5>
+                    <p>5-minute packet walk becomes second nature through repetition</p>
+                </div>
+                <div class="proc-arrow">→</div>
+                <div class="proc-stage">
+                    <span class="stage-icon">🏗️</span>
+                    <span class="stage-num">Day 4</span>
+                    <h5>Architecture Thinking</h5>
+                    <p>System design with justified tradeoffs — the senior differentiator</p>
+                </div>
+                <div class="proc-arrow">→</div>
+                <div class="proc-stage">
+                    <span class="stage-icon">🎯</span>
+                    <span class="stage-num">Day 5+</span>
+                    <h5>Interview-Ready</h5>
+                    <p>Confident, articulate, systematic. You demonstrate senior-level thinking.</p>
+                </div>
+            </div>
+
+            <!-- ═══ Key Resources in This Chapter ═══ -->
+            <div class="case-study-grid">
+                <div class="case-card">
+                    <div class="case-icon">🧭</div>
+                    <h5>Interview Landscape</h5>
+                    <div class="case-stat">s40.1 · 1 hour</div>
+                    <p>3-stage interview format. Role-specific expectations. The hidden 5-dimension evaluation rubric. What "senior" really means.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">📋</div>
+                    <h5>20 Core Questions</h5>
+                    <div class="case-stat">s40.2 · 2 hours</div>
+                    <p>Every question with full answer framework, follow-up questions, and a 5-point grading rubric for self-assessment.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🚶</div>
+                    <h5>Packet Walkthrough</h5>
+                    <div class="case-stat">s40.3 · 1.5 hours</div>
+                    <p>14-hop journey. 5-minute template. Real timing breakdown (Lagos→us-east-1 in 435-620ms). CDN = 10× faster.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🏗️</div>
+                    <h5>System Design</h5>
+                    <div class="case-stat">s40.4 · 2 hours</div>
+                    <p>6-step framework. Complete architecture for 10K RPS. Subnetting + capacity + failure modes. Design justifications.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">⚠️</div>
+                    <h5>8 Common Mistakes</h5>
+                    <div class="case-stat">s40.5 · 1 hour</div>
+                    <p>Each mistake with root cause, impact, and fix. 8-exercise self-assessment drill with success criteria.</p>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🎙️</div>
+                    <h5>Mock Interview Lab</h5>
+                    <div class="case-stat">s40.6 · 1.5 hours</div>
+                    <p>4 hands-on exercises. Record yourself. Speed round. Whiteboard design. Pressure follow-ups. Final advice.</p>
+                </div>
+            </div>
+
+            <!-- ═══ Chapter 40 by the Numbers ═══ -->
+            <div class="num-callout-strip">
+                <div class="num-callout">
+                    <span class="nc-number">20</span>
+                    <span class="nc-label">Interview Questions</span>
+                    <span class="nc-desc">With full answer frameworks, follow-ups, and 5-point grading rubrics</span>
+                </div>
+                <div class="num-callout">
+                    <span class="nc-number">6</span>
+                    <span class="nc-label">Core Sections</span>
+                    <span class="nc-desc">Landscape → Questions → Packet Walk → Design → Mistakes → Mock Lab</span>
+                </div>
+                <div class="num-callout">
+                    <span class="nc-number">5</span>
+                    <span class="nc-label">Evaluation Dimensions</span>
+                    <span class="nc-desc">What interviewers REALLY measure: systematic thinking, depth, production awareness, tools, honesty</span>
+                </div>
+                <div class="num-callout">
+                    <span class="nc-number">8</span>
+                    <span class="nc-label">Common Mistakes</span>
+                    <span class="nc-desc">Each with root cause analysis, fix strategy, and hands-on practice exercise</span>
+                </div>
+                <div class="num-callout">
+                    <span class="nc-number">~8h</span>
+                    <span class="nc-label">Total Investment</span>
+                    <span class="nc-desc">5-day structured plan. The difference between rejection and offer.</span>
+                </div>
+            </div>
+
+            <!-- ═══ Before vs After — What Changes ═══ -->
+            <div class="split-panel">
+                <div class="split-side split-bad">
+                    <h5>🔴 BEFORE This Chapter</h5>
+                    <ul>
+                        <li>You know networking concepts but can't structure them into coherent interview answers</li>
+                        <li>You panic when asked "walk me through a packet" — unsure where to start, what to include</li>
+                        <li>You answer WHAT ("TCP has a 3-way handshake") without explaining WHY ("because a 2-way handshake leaves the server unsure...")</li>
+                        <li>You forget to mention observability, cost, or tradeoffs in system design questions</li>
+                        <li>You say "I don't know" and stop — missing the opportunity to demonstrate your debugging methodology</li>
+                        <li>You can't read tcpdump output under pressure, even though you understand the concepts</li>
+                    </ul>
+                </div>
+                <div class="split-side split-good">
+                    <h5>🟢 AFTER This Chapter</h5>
+                    <ul>
+                        <li>You have structured answer frameworks for all 20 common questions — you know exactly what to say and in what order</li>
+                        <li>You can deliver a 5-minute packet walkthrough covering all 14 hops with real timing data and CDN optimization insights</li>
+                        <li>You automatically append "because..." to every factual statement, demonstrating senior-level reasoning</li>
+                        <li>Your system designs include: subnetting plan, capacity estimates, data flow, failure modes, observability, and cost analysis</li>
+                        <li>When you don't know something, you say "I'd investigate by..." and explain your methodology — turning a weakness into a strength</li>
+                        <li>You've practiced reading tcpdump output under timed pressure — it's muscle memory now, not theoretical knowledge</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- ═══ What Interviewers Evaluate — At a Glance ═══ -->
+            <div class="diagram-container">
+                <div class="diagram-title">🎯 WHAT INTERVIEWERS EVALUATE — The Complete Assessment Matrix</div>
+<pre>
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  DIMENSION          │  WEIGHT  │  SIGNAL                                       │
+  ├─────────────────────┼──────────┼───────────────────────────────────────────────┤
+  │  Knowledge Depth    │  ████░░  │  Can you explain WHY? Do you know edge cases? │
+  │  Systematic Thinking │  █████░  │  Do you approach problems layer by layer?    │
+  │  Production Sense   │  ███░░░  │  Do you think about failure, scale, cost?    │
+  │  Communication      │  ██████  │  Can you articulate complex ideas clearly?   │
+  │  Tool Proficiency   │  ███░░░  │  Can you actually debug this in production?   │
+  │  Intellectual Honesty│ ████░░  │  Do you admit gaps and explain your approach? │
+  │  Architecture Vision │  ███░░░  │  Can you design systems and justify tradeoffs?│
+  └─────────────────────┴──────────┴───────────────────────────────────────────────┘
+
+  🏆 THE WINNING FORMULA:
+  Knowledge (40%) + Communication (30%) + Production Sense (20%) + Honesty (10%)
+  = INTERVIEW OFFER</pre>
+            </div>
+
+            <div class="sre-callout">
+                <h5>🎯 Remember: The Interview Is a Conversation, Not an Exam</h5>
+                <p>The best interviews feel like a technical discussion between colleagues, not an interrogation. When you've internalized the frameworks in this chapter, you won't be <em>reciting</em> answers — you'll be <em>demonstrating how you think.</em> The frameworks are scaffolding. Once you've practiced enough, the scaffolding falls away and what remains is genuine, confident expertise. <strong>Your goal isn't to memorize 20 answers. It's to understand networking so deeply that any question becomes an opportunity to share what you know.</strong></p>
+            </div>
+
             <div class="chapter-intro">
                 <h3>Chapter 40: Networking Interview Preparation — DevOps, SRE & Platform Engineers</h3>
                 <p>You've mastered the theory. You've debugged the incidents. Now it's time to <strong>prove it in the interview room.</strong> This chapter prepares you for the networking portion of DevOps, SRE, Platform Engineering, and Cloud Engineering interviews — at companies from startups to FAANG. We cover the <strong>top 20 most-asked networking questions</strong> with answer frameworks, the legendary <strong>"walk me through a packet"</strong> question (appears in 80% of interviews), <strong>system design scenarios</strong>, and the <strong>common mistakes that fail interviews.</strong> Every answer framework is designed to demonstrate <em>how you think</em>, not just what you've memorized.</p>
@@ -49167,6 +50413,25 @@ LESSONS LEARNED:
                     <p><strong>Minute 1 (DNS):</strong> Browser → OS cache → resolver → root → TLD → authoritative. Mention record types, caching, TTL. <strong>Minute 2 (TCP + TLS):</strong> SYN/SYN-ACK/ACK with sequence numbers. TLS 1.3 handshake with key exchange. Certificate validation. <strong>Minute 3 (HTTP + LB):</strong> HTTP method, headers, version. Load balancer routing, health checks, TLS termination. <strong>Minute 4 (Backend):</strong> K8s Service → kube-proxy/iptables → pod. App processing, DB query, connection pool. <strong>Minute 5 (Response + Observability):</strong> Response path back. Monitoring at each hop. What breaks where?</p>
                 </div>
 
+                <div class="info-box note">
+                    <h5>🧠 Deep Explanation: Real Timing at Each Hop — Where the Milliseconds Go</h5>
+                    <p>Understanding the ACTUAL latency at each stage separates candidates who've debugged production from those who've only read about it. Here's a realistic timing breakdown for a user in Lagos, Nigeria connecting to us-east-1:</p>
+                    <table class="comparison-table" style="width:100%;">
+                        <thead><tr><th>Hop</th><th>Operation</th><th>Latency</th><th>Cumulative</th><th>Why This Long</th></tr></thead>
+                        <tbody>
+                            <tr><td>1</td><td>Browser DNS cache lookup</td><td>0ms</td><td>0ms</td><td>In-memory hash table. Cache hit = instant.</td></tr>
+                            <tr><td>2</td><td>OS resolver (systemd-resolved)</td><td>0.1ms</td><td>0.1ms</td><td>Local IPC (D-Bus). Almost instant.</td></tr>
+                            <tr><td>3</td><td>DNS recursive resolution (cold)</td><td>50-200ms</td><td>50-200ms</td><td>Root (US/Europe) ~30ms + TLD ~40ms + Auth ~50ms + network RTT per hop. Cached: ~1ms.</td></tr>
+                            <tr><td>4</td><td>TCP SYN → SYN-ACK</td><td>120ms</td><td>170-320ms</td><td>Lagos→us-east-1 RTT ≈ 120ms. SYN travels 120ms, SYN-ACK travels 120ms back — but this is measured as 1.5 RTT for the full handshake (~180ms total).</td></tr>
+                            <tr><td>5</td><td>TLS 1.3 handshake</td><td>120ms</td><td>290-440ms</td><td>One full RTT. ClientHello → ServerHello+Finished travels 1 RTT. Client Finished adds 0 RTT (piggybacked on first data).</td></tr>
+                            <tr><td>6</td><td>HTTP request → first byte</td><td>120ms</td><td>410-560ms</td><td>Request travels 120ms. Server processes. First response byte travels 120ms back. This is TTFB (Time To First Byte).</td></tr>
+                            <tr><td>7</td><td>Server processing (Django + DB)</td><td>15-50ms</td><td>425-610ms</td><td>URL routing 1ms + ORM query 12ms + serialization 5ms + pgBouncer overhead 0.5ms. Dominated by DB query time.</td></tr>
+                            <tr><td>8</td><td>Full response download (50KB)</td><td>10ms</td><td>435-620ms</td><td>50KB at 40 Mbps effective throughput ≈ 10ms. HTTP/2 multiplexing eliminates additional connection overhead.</td></tr>
+                        </tbody>
+                    </table>
+                    <p><strong>The key insight:</strong> For a user in Lagos connecting to us-east-1, <strong>network latency dominates everything.</strong> 120ms RTT × 3 round trips (DNS+TCP+TLS) = 360ms before the first byte of HTTP data even leaves the client. The actual server processing (15-50ms) is dwarfed by network latency. This is why CDNs exist — serving from an edge in Lagos (5ms RTT) would reduce total time from ~500ms to ~50ms: a <strong>10× improvement.</strong>  <strong>When asked "How would you improve performance?", the answer is always: move data closer to users (CDN, edge compute, multi-region deployment).</strong></p>
+                </div>
+
                 <div class="sre-callout">
                     <h5>🎯 Common Follow-Ups Interviewers Will Throw at You</h5>
                     <ul>
@@ -49341,6 +50606,25 @@ LESSONS LEARNED:
                 <div class="info-box warning">
                     <h5>⚠️ GOTCHA: The Most Common Interview Fail — Answering WHAT Without WHY</h5>
                     <p>Don't say: "We use a load balancer." Say: "We use an L7 application load balancer because we need path-based routing to direct /api/* to the backend service and /static/* to the CDN, TLS termination at the edge to offload encryption from application servers, and weighted target groups to support canary deployments where 5% of traffic goes to the new version." <strong>This single habit — justifying every decision — is the #1 differentiator between mid-level and senior candidates.</strong></p>
+                </div>
+
+                <div class="info-box note">
+                    <h5>🧠 Self-Assessment: Practice Fixing Each Mistake — The 8-Exercise Drill</h5>
+                    <p>For each of the 8 mistakes, there's a specific practice exercise. Do one per day for 8 days and you'll eliminate these patterns from your interview responses:</p>
+                    <table class="comparison-table" style="width:100%;">
+                        <thead><tr><th>#</th><th>Mistake</th><th>Practice Exercise</th><th>Success Criteria</th></tr></thead>
+                        <tbody>
+                            <tr><td>1</td><td>"It's just DNS"</td><td>List 6 DNS failure modes and the EXACT command to diagnose each. Time: 3 minutes.</td><td>NXDOMAIN→dig, SERVFAIL→dig+trace, timeout→nc -zv 53, poisoning→dig+dnssec, stale→dig @eachNS, TTL lag→dig+ttl check.</td></tr>
+                            <tr><td>2</td><td>Layer confusion</td><td>Draw the OSI model from memory. For each layer, write: PDU name, 2 protocols, 1 device, and 1 diagnostic tool. Time: 5 minutes.</td><td>L1=bits/Ethernet/hub/ethtool, L2=frames/ARP/switch/ip neigh, L3=packets/IP/router/ping, L4=segments/TCP/firewall/ss, etc.</td></tr>
+                            <tr><td>3</td><td>ECONNREFUSED vs ETIMEDOUT</td><td>Set up 3 scenarios on your local machine: (a) port not listening, (b) firewall DROP, (c) firewall REJECT. Connect with nc. Identify which error each produces. Time: 10 minutes.</td><td>(a) REJECT→ECONNREFUSED, (b) DROP→ETIMEDOUT, (c) REJECT→ECONNREFUSED. Know the TCP flag difference: RST vs silence.</td></tr>
+                            <tr><td>4</td><td>Can't read tcpdump</td><td>Run <code>tcpdump -i lo -nn port 8000</code> while curling localhost:8000. Annotate each line: flags, seq/ack numbers, state changes. Identify the 3-way handshake by line. Time: 10 minutes.</td><td>Line 1=[S] (SYN), Line 2=[S.] (SYN-ACK), Line 3=[.] (ACK). Can trace seq/ack increments.</td></tr>
+                            <tr><td>5</td><td>Forgetting TLS</td><td>Draw a simple web architecture. Now add TLS termination points with justification for each. Answer: "Where does TLS terminate and why?" Time: 5 minutes.</td><td>Edge (CDN/ALB): offload from app. Internal (Istio mTLS): zero-trust. DB connection (TLS): encrypt data at rest in transit.</td></tr>
+                            <tr><td>6</td><td>No observability</td><td>For a Django+K8s+PostgreSQL stack, list 5 metrics, 5 alert thresholds, and the tool you'd use for each. Time: 5 minutes.</td><td>Request latency→p99>500ms→Prometheus, Error rate→5xx>1%→ALB metrics, DB conns→>80%→CloudWatch, Pod restarts→>0→kube-state-metrics, Cert expiry→<30d→cert-manager.</td></tr>
+                            <tr><td>7</td><td>Ignoring cost</td><td>Price out a 3-AZ VPC deployment: 3 NAT Gateways, 1 ALB, Global Accelerator, cross-AZ data transfer (100GB/mo). Use AWS Pricing Calculator. Time: 10 minutes.</td><td>NAT GW: $32×3=$96. ALB: ~$22. GA: $18. Cross-AZ: $0.01×100GB=$1. Total: ~$137/mo minimum. Now add data transfer: $0.09/GB outbound.</td></tr>
+                            <tr><td>8</td><td>WHAT without WHY</td><td>Take your last 5 answers from this chapter. For each factual statement, append "because..." with a specific reason. Rewrite the answers. Time: 15 minutes.</td><td>Before: "We use Kubernetes." After: "We use Kubernetes because it provides declarative infrastructure, self-healing through reconciliation loops, and a unified API for compute+network+storage across any cloud."</td></tr>
+                        </tbody>
+                    </table>
+                    <p><strong>How to use this:</strong> Print the table. Each day, pick one row. Do the exercise. Check the success criteria. If you miss the criteria, repeat the next day. After 8 days, you'll have internalized all 8 fixes. <strong>In the interview, these patterns will emerge naturally — you won't have to think about avoiding them.</strong></p>
                 </div>
             </div>
 
