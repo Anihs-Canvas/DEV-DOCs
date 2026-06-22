@@ -29757,8 +29757,2046 @@ kubectl describe hpa -n <span class="code-kw">$NAMESPACE</span>
 
     <hr class="chapter-divider">
 
-    <div id="ch27"><div class="chapter-intro"><h3>Ch 27: RBAC & Access Control</h3><p>ServiceAccounts, Roles, ClusterRoles, Bindings, least privilege, aggregation, operators.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🔑</div><p>Coming soon</p></div></div>
-    <div id="ch28"><div class="chapter-intro"><h3>Ch 28: Pod Security & Admission</h3><p>PSS (Privileged/Baseline/Restricted), PSA, security contexts, admission controllers.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~1.5h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🛡️</div><p>Coming soon</p></div></div>
+    <div id="ch27">
+        <div class="chapter-intro">
+            <h3>Ch 27: RBAC &amp; Access Control</h3>
+            <p><strong>Who can do what in your cluster — and who CANNOT.</strong> ServiceAccounts give pods an identity. Roles and ClusterRoles define permissions. RoleBindings connect identities to permissions. Least privilege is the principle. Every permission is explicitly granted — nothing is default.</p>
+            <div class="chapter-meta">
+                <span class="meta-tag">🔴 Advanced</span>
+                <span class="meta-tag">⏱️ ~1.5h</span>
+                <span class="meta-tag">CNPE Domain 5: 15%</span>
+            </div>
+        </div>
+
+        <div class="learning-objectives">
+            <h5>🎯 What You'll Learn</h5>
+            <ul>
+                <li>ServiceAccounts — how pods get an identity in Kubernetes (not users — pods)</li>
+                <li>Roles and ClusterRoles — namespace-scoped vs cluster-wide permissions</li>
+                <li>RoleBindings and ClusterRoleBindings — connecting identities to permissions</li>
+                <li><code>kubectl auth can-i</code> — the essential RBAC testing tool</li>
+                <li>RBAC Aggregation — composing ClusterRoles from multiple sources</li>
+                <li>How to design RBAC for anihpj — least privilege for every component</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <h5>📋 CNPE Exam Relevance — Domain 5 (15%)</h5>
+            <p>Domain 5 tests your ability to <strong>apply RBAC and security controls across platform resources</strong>. You will be asked to create Roles, ClusterRoles, and Bindings for specific scenarios. <strong>RBAC is a guaranteed exam topic — expect 1-2 tasks requiring you to create or troubleshoot RBAC configurations.</strong></p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 27.1 SERVICE ACCOUNTS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s27-1" class="section-block"><h4>27.1 Service Accounts — Pod Identity in Kubernetes</h4>
+        <p>A <strong>ServiceAccount</strong> (SA) is an identity for a <strong>pod</strong> — not a human user. When a pod calls the Kubernetes API ("list my pods," "update my deployment"), it authenticates as its ServiceAccount. Every pod ALWAYS has exactly one ServiceAccount.</p>
+
+        <!-- 🔬 The Restaurant Analogy -->
+        <div class="cnpe-strategy" style="margin-top:1rem;">
+            <h5>🍽️ The Restaurant Analogy — Authentication vs Authorization</h5>
+            <p>Think of the Kubernetes API Server as a <strong>restaurant kitchen</strong>:</p>
+            <div class="card-grid cols-3" style="margin-top:0.8rem;">
+                <div class="info-card highlight">
+                    <h5>🪪 1. AUTHENTICATION (Who are you?)</h5>
+                    <p style="font-size:0.82rem;">The <strong>ServiceAccount token</strong> is your <strong>employee ID badge</strong>. When you swipe it at the kitchen door, the system verifies: "This badge is valid. You are Priya from the anihpj team." You're now inside.</p>
+                    <p style="font-size:0.78rem;color:#60a5fa;">SA Token = Employee Badge.<br>API Server validates the token = Security guard checks your badge at the door.</p>
+                </div>
+                <div class="info-card highlight">
+                    <h5>📋 2. AUTHORIZATION (What can you do?)</h5>
+                    <p style="font-size:0.82rem;">Now that you're inside, <strong>RBAC</strong> determines which stations you can access. Priya can use the prep station (GET pods) and the plating station (LIST services). She CANNOT enter the manager's office (delete deployments) or the vault (read secrets).</p>
+                    <p style="font-size:0.78rem;color:#60a5fa;">Role = Station access card.<br>RoleBinding = "Priya gets prep + plating access."</p>
+                </div>
+                <div class="info-card highlight">
+                    <h5>🔑 3. THE SPLIT</h5>
+                    <p style="font-size:0.82rem;"><strong>Authentication says WHO you are.</strong> It happens FIRST. If the badge is fake, you never get in. <strong>Authorization says WHAT you can do.</strong> It happens SECOND. Even with a valid badge, you can only access your assigned stations.</p>
+                    <p style="font-size:0.78rem;color:#60a5fa;">AuthN ≠ AuthZ.<br>Both must pass for ANY API request to succeed.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🆔 ServiceAccount — The Bridge Between Pod and API Server</div>
+            <pre style="background:#161b22;font-size:0.8rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    SERVICE ACCOUNT IDENTITY FLOW                               │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                              POD: anihpj-web                              │ │
+│  │                                                                          │ │
+│  │  ┌──────────────────────┐        ┌──────────────────────────────────┐   │ │
+│  │  │   App Container       │        │  Mounted ServiceAccount Token    │   │ │
+│  │  │   (Django)            │        │  /var/run/secrets/kubernetes.io/ │   │ │
+│  │  │                       │        │    serviceaccount/               │   │ │
+│  │  │   When Django calls   │        │    ├── token      ← JWT token    │   │ │
+│  │  │   the K8s API:        │        │    ├── ca.crt     ← API Server CA│   │ │
+│  │  │   "GET /api/v1/pods"  │        │    └── namespace ← namespace name│   │ │
+│  │  │                       │        │                                   │   │ │
+│  │  │   It uses the mounted │        │  🔑 This token PROVES:            │   │ │
+│  │  │   token to            │        │  "I am ServiceAccount 'anihpj-web'│   │ │
+│  │  │   authenticate        │        │   in namespace 'anihpj'"         │   │ │
+│  │  └──────────────────────┘        └──────────────────────────────────┘   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         API SERVER AUTHENTICATION                         │ │
+│  │                                                                          │ │
+│  │  1. Pod sends request with JWT token in Authorization header             │ │
+│  │  2. API Server validates token signature (signed by K8s control plane)  │ │
+│  │  3. API Server extracts identity:                                        │ │
+│  │     User: system:serviceaccount:anihpj:anihpj-web                        │ │
+│  │     Groups: system:serviceaccounts, system:authenticated                 │ │
+│  │  4. API Server checks RBAC: "Does 'system:serviceaccount:anihpj:        │ │
+│  │     anihpj-web' have permission to GET pods in namespace anihpj?"        │ │
+│  │  5. If YES → returns pod list. If NO → 403 Forbidden.                   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  🔑 SA USERNAME FORMAT: system:serviceaccount:<namespace>:<sa-name>           │
+│     Example: system:serviceaccount:anihpj:anihpj-web                          │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- ServiceAccount YAML -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 ServiceAccount YAML — Creating Pod Identities</span></div>
+<pre><span class="code-cmt"># ── CREATE A SERVICE ACCOUNT ──</span>
+<span class="code-kw">apiVersion:</span> v1
+<span class="code-kw">kind:</span> ServiceAccount
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web
+  <span class="code-kw">namespace:</span> anihpj
+
+<span class="code-cmt"># ── USE SA IN A DEPLOYMENT ──</span>
+<span class="code-kw">apiVersion:</span> apps/v1
+<span class="code-kw">kind:</span> Deployment
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web
+  <span class="code-kw">namespace:</span> anihpj
+<span class="code-kw">spec:</span>
+  <span class="code-kw">template:</span>
+    <span class="code-kw">spec:</span>
+      <span class="code-kw">serviceAccountName:</span> anihpj-web  <span class="code-cmt"># 🔑 This pod uses this SA</span>
+      <span class="code-kw">automountServiceAccountToken:</span> true  <span class="code-cmt"># Default: true. Set false if pod</span>
+      <span class="code-code"># doesn't need K8s API access.</span>
+      <span class="code-kw">containers:</span>
+      - <span class="code-kw">name:</span> django
+        <span class="code-kw">image:</span> anihpj-web:latest
+
+<span class="code-cmt"># ── THE DEFAULT SERVICE ACCOUNT ──</span>
+<span class="code-cmt"># If you don't specify serviceAccountName, Kubernetes uses the</span>
+<span class="code-cmt"># "default" ServiceAccount in the pod's namespace.</span>
+<span class="code-cmt"># ⚠️ SECURITY: NEVER use the "default" SA for production workloads.</span>
+<span class="code-cmt"># Create dedicated SAs per component (web, db, worker, etc.).</span>
+
+<span class="code-cmt"># ── DISABLE AUTO-MOUNT (Best Practice) ──</span>
+<span class="code-cmt"># If your pod doesn't need K8s API access, disable token mounting:</span>
+<span class="code-kw">automountServiceAccountToken:</span> false
+<span class="code-cmt"># This prevents the token from being mounted at all, reducing</span>
+<span class="code-cmt"># the attack surface. If an attacker compromises the pod, they</span>
+<span class="code-cmt"># can't steal the SA token to access the K8s API.</span></pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ ServiceAccount Best Practices</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>One SA per component:</strong> anihpj-web gets its own SA. anihpj-db gets its own. Don't share.</li>
+                <li><strong>Disable automount when not needed:</strong> If the pod doesn't call the K8s API, set <code>automountServiceAccountToken: false</code>. Defense in depth.</li>
+                <li><strong>NEVER use the "default" SA:</strong> It often accumulates permissions over time. Create dedicated SAs with explicit RBAC.</li>
+                <li><strong>SA username format for RBAC:</strong> <code>system:serviceaccount:&lt;namespace&gt;:&lt;sa-name&gt;</code>. Memorize this — you'll need it for RoleBindings.</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 SA Token Types — Legacy vs Bound Tokens -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 SA Token Types — Legacy Tokens vs Bound Tokens (Kubernetes 1.24+)</h5>
+            <p>Kubernetes 1.24 fundamentally changed how SA tokens work. Understanding this difference is critical for security:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Feature</th><th>Legacy Token (Pre-1.24)</th><th>Bound Token (1.24+)</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Storage</strong></td><td>Stored in a Secret (created automatically with SA)</td><td>NOT stored in a Secret. Projected into pod as a file. Exists only while pod runs.</td></tr>
+                    <tr><td><strong>Expiry</strong></td><td>⚠️ NEVER expires. Token lives forever.</td><td>✅ Expires after 1 hour (default). Auto-refreshed by kubelet.</td></tr>
+                    <tr><td><strong>Scope</strong></td><td>Not bound to any specific pod.</td><td>🔑 Bound to a SPECIFIC pod. Token includes pod UID. If pod is deleted, token is invalid.</td></tr>
+                    <tr><td><strong>Revocation</strong></td><td>❌ Delete the Secret (manual). Token could be copied before deletion.</td><td>✅ Delete the pod → token invalid. Auto-expiring → no manual cleanup.</td></tr>
+                    <tr><td><strong>Audience</strong></td><td>Generic — valid for any K8s API server.</td><td>🔑 Audience-bound — token only works for the K8s API (or a specified audience).</td></tr>
+                    <tr><td><strong>CNPE Impact</strong></td><td>You no longer see auto-created "sa-token-*" Secrets. If exam asks "where is the SA token?" — it's in the pod, not a Secret.</td><td>New way: <code>kubectl create token &lt;sa-name&gt; -n &lt;ns&gt;</code> creates a time-limited token for testing.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 CNPE GOTCHA:</strong> If the exam asks you to "create a ServiceAccount token," use <code>kubectl create token anihpj-web -n anihpj</code> — NOT <code>kubectl get secret</code>. The auto-Secret-creation behavior was removed in 1.24. This is a common exam trap for those familiar with older Kubernetes versions.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 27.2 ROLE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s27-2" class="section-block"><h4>27.2 Role — Namespace-Scoped Permissions</h4>
+        <p>A <strong>Role</strong> defines WHAT you can do and TO WHAT — but only within a SINGLE namespace. A Role says: "In namespace <code>anihpj</code>, you can GET, LIST, and WATCH pods." Outside that namespace, the Role has no effect.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>RBAC Concept</th><th>What It Defines</th><th>Scope</th><th>Analogy</th></tr></thead>
+            <tbody>
+                <tr><td><strong>ServiceAccount</strong></td><td>WHO you are (identity)</td><td>Namespace</td><td>Your employee ID badge</td></tr>
+                <tr><td><strong>Role</strong></td><td>WHAT you can do (permissions)</td><td>Namespace</td><td>"Can access the 3rd floor break room"</td></tr>
+                <tr><td><strong>ClusterRole</strong></td><td>WHAT you can do (permissions)</td><td>Cluster-wide</td><td>"Can access ALL floors in ALL buildings"</td></tr>
+                <tr><td><strong>RoleBinding</strong></td><td>WHO gets WHICH Role</td><td>Namespace</td><td>"Priya gets 3rd-floor-break-room access"</td></tr>
+                <tr><td><strong>ClusterRoleBinding</strong></td><td>WHO gets WHICH ClusterRole</td><td>Cluster-wide</td><td>"Priya gets ALL-floors access"</td></tr>
+            </tbody>
+        </table></div>
+
+        <!-- Role YAML -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Role YAML — Defining Namespace-Scoped Permissions</span></div>
+<pre><span class="code-cmt"># ── ROLE: anihpj-developer (namespace: anihpj) ──</span>
+<span class="code-cmt"># Permissions for developers working on the anihpj application</span>
+<span class="code-kw">apiVersion:</span> rbac.authorization.k8s.io/v1
+<span class="code-kw">kind:</span> Role
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-developer
+  <span class="code-kw">namespace:</span> anihpj              <span class="code-cmt"># 🔑 Role is ALWAYS in a namespace</span>
+<span class="code-kw">rules:</span>
+- <span class="code-kw">apiGroups:</span> [""]                <span class="code-cmt"># "" = core API group (pods, services, etc.)</span>
+  <span class="code-kw">resources:</span> ["pods", "pods/log", "services", "configmaps", "secrets"]
+  <span class="code-kw">verbs:</span> ["get", "list", "watch"]  <span class="code-cmt"># Read-only. Can't create/delete.</span>
+
+- <span class="code-kw">apiGroups:</span> ["apps"]             <span class="code-cmt"># apps/v1 API group (deployments)</span>
+  <span class="code-kw">resources:</span> ["deployments"]
+  <span class="code-kw">verbs:</span> ["get", "list", "watch", "update", "patch"]
+  <span class="code-cmt"># Can update deployments (e.g., change image tag) but not create/delete</span>
+
+- <span class="code-kw">apiGroups:</span> ["batch"]            <span class="code-cmt"># batch/v1 API group (jobs, cronjobs)</span>
+  <span class="code-kw">resources:</span> ["jobs", "cronjobs"]
+  <span class="code-kw">verbs:</span> ["get", "list", "create", "delete"]
+  <span class="code-cmt"># Full control over jobs — devs can run database migrations as jobs</span>
+
+<span class="code-cmt"># ── KEY RBAC VERB MEANINGS ──</span>
+<span class="code-cmt"># get     = Read a single resource by name</span>
+<span class="code-cmt"># list    = List all resources of a type</span>
+<span class="code-cmt"># watch   = Stream changes (used by controllers)</span>
+<span class="code-cmt"># create  = Create a new resource</span>
+<span class="code-cmt"># update  = Replace an existing resource</span>
+<span class="code-cmt"># patch   = Partially update a resource</span>
+<span class="code-cmt"># delete  = Delete a resource</span>
+<span class="code-cmt"># deletecollection = Delete multiple resources at once</span>
+<span class="code-cmt"># *       = ALL verbs (use with extreme caution)</span></pre>
+        </div>
+
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ Role Traps — What the CNPE Exam Tests</h5>
+            <div class="card-grid cols-3" style="margin-top:0.8rem;">
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🔑 apiGroups: [""]</h5>
+                    <p>The CORE API group is represented by an EMPTY string <code>""</code> — NOT <code>"core"</code>, NOT <code>"v1"</code>. Writing <code>apiGroups: ["v1"]</code> is WRONG and the Role will grant zero permissions. This is the #1 RBAC mistake.</p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🔑 resources vs resourceNames</h5>
+                    <p><code>resources: ["pods"]</code> grants access to ALL pods. <code>resourceNames: ["anihpj-web-abcde"]</code> restricts to a SPECIFIC pod. Use resourceNames for fine-grained control (e.g., "can only update THIS specific ConfigMap").</p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🔑 Sub-resources need explicit permission</h5>
+                    <p><code>pods/log</code> and <code>pods/exec</code> are SUB-RESOURCES. Permission to "get pods" does NOT grant access to "pods/log." You must explicitly list sub-resources in the Role.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 🔬 How to Discover API Groups & Resources -->
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ How to DISCOVER API Groups & Resources — Never Guess Again</h5>
+            <p>The most common RBAC error is using the wrong <code>apiGroups</code> or <code>resources</code> value. These commands tell you EXACTLY what to write:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>List ALL API resources:</strong> <code>kubectl api-resources</code> — Shows every resource, its API group, and whether it's namespaced. Use this to find the CORRECT apiGroup for any resource.</li>
+                <li><strong>Filter by API group:</strong> <code>kubectl api-resources --api-group=apps</code> — Shows only resources in the apps API group (deployments, statefulsets, daemonsets).</li>
+                <li><strong>List all API groups:</strong> <code>kubectl api-versions</code> — Shows all available API groups. Core group shows as <code>v1</code> — remember, in RBAC YAML, core is <code>""</code>, not <code>"v1"</code>.</li>
+                <li><strong>Check a specific resource:</strong> <code>kubectl api-resources | grep deploy</code> — Find deployments: <code>deployments  deploy  apps/v1  true  Deployment</code>. The API group is <code>apps</code>, resource name is <code>deployments</code>.</li>
+                <li><strong>Check if namespaced:</strong> If <code>true</code> in the NAMESPACED column → can use Role. If <code>false</code> → MUST use ClusterRole (e.g., nodes, namespaces, PVs, storageclasses).</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 How the API Server Evaluates RBAC -->
+        <div class="flow-diagram" style="margin-top:1.5rem;">
+            <div class="diagram-title" style="width:100%;text-align:center;margin-bottom:1rem;">🧠 How the API Server Decides: ALLOW or DENY?</div>
+            <div class="flow-step highlight">
+                <div class="step-icon">📨</div>
+                <span class="step-label">REQUEST</span>
+                <span class="step-detail">Pod sends:<br>GET /api/v1/namespaces/<br>anihpj/pods</span>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step">
+                <div class="step-icon">🪪</div>
+                <span class="step-label">AUTHENTICATE</span>
+                <span class="step-detail">Validate SA token.<br>Extract identity:<br>system:serviceaccount:<br>anihpj:anihpj-web</span>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step highlight">
+                <div class="step-icon">📋</div>
+                <span class="step-label">AUTHORIZE</span>
+                <span class="step-detail">Check ALL Roles<br>bound to this SA.<br>ANY match = ALLOW.<br>NO match = DENY.</span>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step">
+                <div class="step-icon">🔓</div>
+                <span class="step-label">ADMISSION</span>
+                <span class="step-detail">Mutating + Validating<br>webhooks run.<br>(Only for writes —<br>reads skip this.)</span>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step highlight">
+                <div class="step-icon">✅</div>
+                <span class="step-label">RESPONSE</span>
+                <span class="step-detail">200 OK + pod list<br>OR<br>403 Forbidden</span>
+            </div>
+            <p style="width:100%;font-size:0.78rem;color:#8b949e;margin-top:1rem;text-align:center;"><strong>🔑 THE RBAC RULE:</strong> In the AUTHORIZE step, the API Server checks ALL RoleBindings and ClusterRoleBindings for the requesting identity. If <strong>ANY</strong> binding grants the requested verb+resource, access is ALLOWED. If <strong>NO</strong> binding grants it, access is DENIED with 403. There is no "deny" rule — RBAC is allow-only. You can only add allows, never add denials.</p>
+        </div>
+
+        <!-- 🔬 Verb Decision Tree -->
+        <div class="decision-tree" style="margin-top:1.5rem;">
+            <div class="diagram-title" style="text-align:center;margin-bottom:1rem;">🌳 Which RBAC Verb Should I Grant?</div>
+            <div class="decision-node question">🤔 What does the identity NEED to do?</div>
+            <div style="display:flex;justify-content:center;gap:40px;margin:8px 0;">
+                <div style="text-align:center;"><span style="color:#3fb950;font-weight:700;">🔍 READ-ONLY</span></div>
+                <div style="text-align:center;"><span style="color:#facc15;font-weight:700;">✏️ MODIFY</span></div>
+            </div>
+            <div style="display:flex;justify-content:space-around;gap:20px;">
+                <div style="flex:1;">
+                    <div class="decision-node yes">📖 <strong>get, list, watch</strong> — Read existing resources. Can't change anything. Safe for monitoring, debugging, dashboards.</div>
+                    <div class="decision-node question" style="margin-top:0.5rem;">🤔 Need to read pod logs?</div>
+                    <div class="decision-node yes">📋 Add <strong>pods/log</strong> as a resource. "get pods" does NOT include "get pods/log." Sub-resources are separate.</div>
+                </div>
+                <div style="flex:1;">
+                    <div class="decision-node question">🤔 Creating NEW resources?</div>
+                    <div class="decision-node">✏️ <strong>create</strong> — Make something new. Deployments, pods, jobs, configmaps.</div>
+                    <div class="decision-node question" style="margin-top:0.5rem;">🤔 Updating EXISTING resources?</div>
+                    <div class="decision-node">🔧 <strong>update</strong> (full replace) or <strong>patch</strong> (partial update). patch is safer — less risk of overwriting unintended fields.</div>
+                    <div class="decision-node question" style="margin-top:0.5rem;">🤔 Deleting resources?</div>
+                    <div class="decision-node no">🗑️ <strong>delete, deletecollection</strong> — DANGEROUS. Grant only when absolutely necessary. Use resourceNames to limit scope.</div>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 27.3 CLUSTERROLE -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s27-3" class="section-block"><h4>27.3 ClusterRole — Cluster-Wide Permissions</h4>
+        <p>A <strong>ClusterRole</strong> is like a Role, but with CLUSTER-WIDE scope. It can grant access to cluster-scoped resources (nodes, namespaces, PersistentVolumes) AND namespace-scoped resources across ALL namespaces.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>When to Use</th><th>Role</th><th>ClusterRole</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Manage pods in ONE namespace</strong></td><td>✅ Use Role</td><td>❌ Overkill</td></tr>
+                <tr><td><strong>Manage pods in ALL namespaces</strong></td><td>❌ Would need a Role in every ns</td><td>✅ Use ClusterRole</td></tr>
+                <tr><td><strong>Access cluster-scoped resources (nodes, PVs)</strong></td><td>❌ Not possible</td><td>✅ MUST use ClusterRole</td></tr>
+                <tr><td><strong>Access non-resource endpoints (/healthz, /metrics)</strong></td><td>❌ Not possible</td><td>✅ MUST use ClusterRole</td></tr>
+                <tr><td><strong>Platform admin (manage all namespaces)</strong></td><td>❌</td><td>✅ Use ClusterRole + ClusterRoleBinding</td></tr>
+                <tr><td><strong>App developer (manage own namespace)</strong></td><td>✅ Use Role</td><td>⚠️ Use ClusterRole only if needed cross-ns</td></tr>
+            </tbody>
+        </table></div>
+
+        <!-- ClusterRole YAML -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 ClusterRole YAML — Cluster-Wide Permissions</span></div>
+<pre><span class="code-cmt"># ── CLUSTERROLE: platform-admin ──</span>
+<span class="code-cmt"># Full read access across the entire cluster. Cannot modify.</span>
+<span class="code-kw">apiVersion:</span> rbac.authorization.k8s.io/v1
+<span class="code-kw">kind:</span> ClusterRole
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> platform-readonly         <span class="code-cmt"># No namespace — ClusterRole is cluster-scoped</span>
+<span class="code-kw">rules:</span>
+- <span class="code-kw">apiGroups:</span> [""]
+  <span class="code-kw">resources:</span> ["pods", "services", "configmaps", "namespaces", "nodes"]
+  <span class="code-kw">verbs:</span> ["get", "list", "watch"]   <span class="code-cmt"># Read-only across ALL namespaces</span>
+
+- <span class="code-kw">apiGroups:</span> ["apps"]
+  <span class="code-kw">resources:</span> ["deployments", "statefulsets", "daemonsets"]
+  <span class="code-kw">verbs:</span> ["get", "list", "watch"]
+
+- <span class="code-kw">nonResourceURLs:</span> ["/healthz", "/metrics", "/api/*"]
+  <span class="code-kw">verbs:</span> ["get"]                     <span class="code-cmt"># Access API server health/metrics</span>
+
+<span class="code-cmt"># ── CLUSTERROLE: node-reader ──</span>
+<span class="code-cmt"># Nodes are CLUSTER-SCOPED — MUST use ClusterRole</span>
+<span class="code-kw">apiVersion:</span> rbac.authorization.k8s.io/v1
+<span class="code-kw">kind:</span> ClusterRole
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> node-reader
+<span class="code-kw">rules:</span>
+- <span class="code-kw">apiGroups:</span> [""]
+  <span class="code-kw">resources:</span> ["nodes"]             <span class="code-cmt"># Nodes don't belong to any namespace</span>
+  <span class="code-kw">verbs:</span> ["get", "list", "watch"]</pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: Role vs ClusterRole Decision</h5>
+            <p>The exam will test your ability to choose the RIGHT resource type:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Given: "Developer needs to manage pods in namespace 'anihpj'."</strong> → Use Role + RoleBinding. ClusterRole would be incorrect (overly permissive).</li>
+                <li><strong>Given: "Monitoring system needs to read pods in ALL namespaces."</strong> → Use ClusterRole + ClusterRoleBinding. A Role only works in one namespace.</li>
+                <li><strong>Given: "Admin needs to view nodes."</strong> → MUST use ClusterRole. Nodes are cluster-scoped — Role can't grant node access.</li>
+                <li><strong>CRITICAL:</strong> A ClusterRole used with a RoleBinding grants permissions ONLY in that namespace — the ClusterRole becomes namespace-scoped by the binding. This is a common CNPE trick.</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 Built-in ClusterRoles Reference -->
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ Built-in ClusterRoles — Use These Instead of Writing Your Own</h5>
+            <p>Kubernetes ships with powerful built-in ClusterRoles. For the CNPE exam, knowing these saves you from writing YAML from scratch:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>ClusterRole</th><th>Permissions</th><th>Use Case</th><th>CNPE Note</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>cluster-admin</strong></td><td>⭐ EVERYTHING. All resources, all verbs, all namespaces. Bound to <code>system:masters</code> group by default.</td><td>Cluster administrator. USE WITH EXTREME CAUTION.</td><td>⚠️ The "nuclear button." Never bind to app SAs.</td></tr>
+                    <tr><td><strong>admin</strong></td><td>Full control within a namespace (when used with RoleBinding). Can manage Roles and RoleBindings within that ns.</td><td>Namespace admin. Developer team lead.</td><td>✅ Aggregated — includes edit + view + RBAC management.</td></tr>
+                    <tr><td><strong>edit</strong></td><td>Create, update, delete most namespace resources. Cannot manage RBAC.</td><td>Developer who deploys and manages apps.</td><td>✅ Most common for CI/CD SAs. Aggregated from view.</td></tr>
+                    <tr><td><strong>view</strong></td><td>Read-only across all namespace resources. No secrets by default.</td><td>Monitoring, dashboards, read-only access.</td><td>✅ Perfect for Prometheus. Bind with ClusterRoleBinding for cluster-wide.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 EXAM SHORTCUT:</strong> If the task says "grant read-only access to all namespaces" → <code>ClusterRoleBinding</code> with <code>roleRef: {kind: ClusterRole, name: view}</code>. Done in one YAML. No need to write custom rules.</p>
+        </div>
+
+        <!-- 🔬 Operator RBAC Pattern -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Operator RBAC Pattern — What Every Operator Needs</h5>
+            <p>The cnpe.txt mentions "Operator RBAC" as a key topic. Kubernetes Operators (like cert-manager, Argo CD, Prometheus Operator) follow a consistent RBAC pattern:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">🤖 Operator RBAC — The 3-Layer Pattern</div>
+                <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                      OPERATOR RBAC PATTERN                                     │
+│                                                                               │
+│  Layer 1: ServiceAccount                                                      │
+│  ┌─────────────────────────────────┐                                         │
+│  │ kind: ServiceAccount            │  ← Identity the operator runs as        │
+│  │ name: &lt;operator&gt;-controller     │                                         │
+│  └───────────────┬─────────────────┘                                         │
+│                  │                                                            │
+│                  ▼                                                            │
+│  Layer 2: ClusterRole (or Role)                                              │
+│  ┌─────────────────────────────────┐                                         │
+│  │ kind: ClusterRole               │  ← Permissions to watch/manage CRDs     │
+│  │ rules:                          │     AND the resources they control      │
+│  │ - apiGroups: [""]               │     (pods, services, deployments)       │
+│  │   resources: [pods, services]   │                                         │
+│  │   verbs: [get,list,watch,       │                                         │
+│  │           create,update,patch,  │                                         │
+│  │           delete]               │                                         │
+│  │ - apiGroups: [cert-manager.io]  │  ← Permissions for its OWN CRDs         │
+│  │   resources: [certificates,     │                                         │
+│  │               issuers, orders]  │                                         │
+│  │   verbs: ["*"]                 │  ← Full control over own resources      │
+│  └───────────────┬─────────────────┘                                         │
+│                  │                                                            │
+│                  ▼                                                            │
+│  Layer 3: ClusterRoleBinding (or RoleBinding)                                │
+│  ┌─────────────────────────────────┐                                         │
+│  │ kind: ClusterRoleBinding        │  ← Connect SA to ClusterRole            │
+│  │ subjects:                       │                                         │
+│  │ - kind: ServiceAccount          │                                         │
+│  │   name: &lt;operator&gt;-controller   │                                         │
+│  │ roleRef:                        │                                         │
+│  │   kind: ClusterRole             │                                         │
+│  │   name: &lt;operator&gt;-role         │                                         │
+│  └─────────────────────────────────┘                                         │
+│                                                                               │
+│  🔑 THE PATTERN: Every operator needs:                                        │
+│     1. A ServiceAccount to run as                                            │
+│     2. A ClusterRole with permissions for:                                   │
+│        a. The resources it MANAGES (pods, services, etc.) — CRUD             │
+│        b. Its OWN Custom Resources (CRDs) — full control                     │
+│        c. Core resources for leader election (configmaps, leases)            │
+│     3. A Binding connecting the SA to the ClusterRole                        │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+        </div>
+
+        <!-- 🔬 The system:masters Group -->
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ The system:masters Group — RBAC's "God Mode" Backdoor</h5>
+            <p>There's a group in Kubernetes that <strong>completely bypasses RBAC</strong>: <code>system:masters</code>. Any user or certificate belonging to this group has <strong>unrestricted cluster-admin access</strong> — forever. No RoleBinding needed. No ClusterRole needed. It's hardcoded into the API Server.</p>
+            <div class="card-grid cols-2" style="margin-top:0.8rem;">
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🔑 How system:masters Works</h5>
+                    <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:0.5rem;">
+                        <li>The API Server has a built-in check: if the authenticated user's GROUP includes <code>system:masters</code>, skip ALL RBAC checks. Grant everything.</li>
+                        <li>The default <code>cluster-admin</code> ClusterRoleBinding binds to <code>system:masters</code> — but even WITHOUT that binding, system:masters would still work because it's HARDCODED.</li>
+                        <li>How do you get into system:masters? The <code>/etc/kubernetes/admin.conf</code> kubeconfig uses a client certificate with <code>O=system:masters</code> in the Subject. The "O" (Organization) field maps to the group.</li>
+                    </ul>
+                </div>
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🛡️ Security Implications</h5>
+                    <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:0.5rem;">
+                        <li><strong>NEVER share admin.conf:</strong> Anyone with that file is cluster-admin. No RBAC can stop them.</li>
+                        <li><strong>Audit certificate creation:</strong> <code>kubectl get csr</code> — check for suspicious certificate signing requests that include <code>O=system:masters</code>.</li>
+                        <li><strong>Use OIDC instead of certs:</strong> With OIDC, you control group membership through your identity provider — not through certificate attributes.</li>
+                        <li><strong>CNPE exam:</strong> Know that <code>system:masters</code> exists and bypasses RBAC. The exam may ask: "How do you prevent someone from using system:masters?" Answer: Don't give them the certificate/key pair.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 27.4 ROLEBINDING & CLUSTERROLEBINDING -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s27-4" class="section-block"><h4>27.4 RoleBinding &amp; ClusterRoleBinding — Connecting Identity to Permission</h4>
+        <p>A Role or ClusterRole is useless on its own — it just DEFINES permissions. A <strong>Binding</strong> GRANTS those permissions to a specific identity (ServiceAccount, user, or group). Think of it as: <strong>Role = "what you can do." Binding = "YOU get to do it."</strong></p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔗 How RoleBindings Connect Identity to Permissions</div>
+            <pre style="background:#161b22;font-size:0.8rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    RBAC BINDING RELATIONSHIPS                                  │
+│                                                                               │
+│  ┌──────────────────┐     ┌──────────────┐     ┌──────────────────────────┐  │
+│  │   WHO (Subject)   │────►│   BINDING     │────►│   WHAT (Role/ClusterRole) │  │
+│  │                   │     │               │     │                          │  │
+│  │ ServiceAccount    │     │ RoleBinding   │     │ Role                     │  │
+│  │ User              │     │ (namespace)   │     │ (namespace permissions)  │  │
+│  │ Group             │     │               │     │                          │  │
+│  └──────────────────┘     └──────────────┘     └──────────────────────────┘  │
+│                                                                               │
+│  ┌──────────────────┐     ┌──────────────┐     ┌──────────────────────────┐  │
+│  │   WHO (Subject)   │────►│   BINDING     │────►│   WHAT (ClusterRole)      │  │
+│  │                   │     │               │     │                          │  │
+│  │ ServiceAccount    │     │ ClusterRole   │     │ ClusterRole              │  │
+│  │ User              │     │ Binding       │     │ (cluster-wide)           │  │
+│  │ Group             │     │ (cluster)     │     │                          │  │
+│  └──────────────────┘     └──────────────┘     └──────────────────────────┘  │
+│                                                                               │
+│  🔑 SPECIAL CASE: ClusterRole + RoleBinding                                   │
+│     A ClusterRole bound with a RoleBinding grants the ClusterRole's           │
+│     permissions ONLY within the RoleBinding's namespace. This lets you        │
+│     reuse a ClusterRole definition across namespaces without granting         │
+│     cluster-wide access.                                                      │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- Binding YAML Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 RoleBinding & ClusterRoleBinding YAML</span></div>
+<pre><span class="code-cmt"># ── ROLEBINDING: Grant anihpj-developer Role to anihpj-web SA ──</span>
+<span class="code-kw">apiVersion:</span> rbac.authorization.k8s.io/v1
+<span class="code-kw">kind:</span> RoleBinding
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web-developer
+  <span class="code-kw">namespace:</span> anihpj              <span class="code-cmt"># Binding is namespace-scoped</span>
+<span class="code-kw">subjects:</span>                         <span class="code-cmt"># WHO gets the permissions</span>
+- <span class="code-kw">kind:</span> ServiceAccount
+  <span class="code-kw">name:</span> anihpj-web               <span class="code-cmt"># The SA we created earlier</span>
+  <span class="code-kw">namespace:</span> anihpj
+<span class="code-kw">roleRef:</span>                           <span class="code-cmt"># WHAT permissions they get</span>
+  <span class="code-kw">apiGroup:</span> rbac.authorization.k8s.io
+  <span class="code-kw">kind:</span> Role                     <span class="code-cmt"># References a Role (or ClusterRole!)</span>
+  <span class="code-kw">name:</span> anihpj-developer         <span class="code-cmt"># The Role we created in 27.2</span>
+
+<span class="code-cmt"># ── CLUSTERROLEBINDING: Grant platform-readonly to monitoring SA ──</span>
+<span class="code-kw">apiVersion:</span> rbac.authorization.k8s.io/v1
+<span class="code-kw">kind:</span> ClusterRoleBinding
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> monitoring-readonly      <span class="code-cmt"># No namespace — cluster-scoped</span>
+<span class="code-kw">subjects:</span>
+- <span class="code-kw">kind:</span> ServiceAccount
+  <span class="code-kw">name:</span> prometheus
+  <span class="code-kw">namespace:</span> monitoring
+<span class="code-kw">roleRef:</span>
+  <span class="code-kw">apiGroup:</span> rbac.authorization.k8s.io
+  <span class="code-kw">kind:</span> ClusterRole
+  <span class="code-kw">name:</span> view                     <span class="code-cmt"># Built-in ClusterRole: read-only access</span>
+
+<span class="code-cmt"># ── SUBJECT TYPES ──</span>
+<span class="code-cmt"># subjects can be:</span>
+<span class="code-cmt"># - kind: ServiceAccount  (for pods/automation)</span>
+<span class="code-cmt"># - kind: User            (for human users via auth plugin)</span>
+<span class="code-cmt"># - kind: Group           (for groups of users)</span></pre>
+        </div>
+
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🎯 The Binding Decision Matrix — Which Binding When?</h5>
+            <div class="card-grid cols-2" style="margin-top:0.8rem;">
+                <div class="info-card highlight">
+                    <h5>🔷 Use RoleBinding when:</h5>
+                    <ul style="font-size:0.82rem;padding-left:1.2rem;">
+                        <li>Permissions should be limited to ONE namespace</li>
+                        <li>Binding a Role → namespace-scoped permissions</li>
+                        <li>Binding a ClusterRole → ClusterRole's permissions but ONLY in this namespace (the ClusterRole is "scoped down")</li>
+                        <li>Example: "anihpj-web SA can manage pods in anihpj namespace only"</li>
+                    </ul>
+                </div>
+                <div class="info-card">
+                    <h5>🔶 Use ClusterRoleBinding when:</h5>
+                    <ul style="font-size:0.82rem;padding-left:1.2rem;">
+                        <li>Permissions should span ALL namespaces</li>
+                        <li>Access to cluster-scoped resources (nodes, PVs, namespaces)</li>
+                        <li>Access to non-resource endpoints (/healthz, /metrics)</li>
+                        <li>Example: "Prometheus SA can read pods in ALL namespaces"</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- 🔬 Impersonation & Access Revocation -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Impersonation — Testing RBAC as Another Identity</h5>
+            <p>When debugging RBAC, you often need to "become" another identity to test permissions. Kubernetes supports <strong>impersonation</strong> — acting as another user or ServiceAccount:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 Impersonation Commands</span></div>
+<pre><span class="code-cmt"># ── IMPERSONATE A SERVICE ACCOUNT ──</span>
+kubectl get pods -n anihpj --as system:serviceaccount:anihpj:anihpj-web
+
+<span class="code-cmt"># ── IMPERSONATE WITH SPECIFIC GROUPS ──</span>
+kubectl get pods --as system:serviceaccount:anihpj:anihpj-web \
+  --as-group system:serviceaccounts
+
+<span class="code-cmt"># ── FULL IMPERSONATION (user + groups + extra scopes) ──</span>
+kubectl get pods -n anihpj \
+  --as=system:serviceaccount:anihpj:anihpj-web \
+  --as-group=system:serviceaccounts \
+  --as-group=system:authenticated
+
+<span class="code-cmt"># ⚠️ IMPERSONATION REQUIRES PERMISSION:</span>
+<span class="code-cmt"># To impersonate, YOUR identity needs the "impersonate" verb on</span>
+<span class="code-cmt"># the target identity type (users, groups, serviceaccounts).</span>
+<span class="code-cmt"># ClusterRole rule for impersonation:</span>
+<span class="code-cmt"># - apiGroups: [""]</span>
+<span class="code-cmt">#   resources: ["users", "groups", "serviceaccounts"]</span>
+<span class="code-cmt">#   verbs: ["impersonate"]</span>
+
+<span class="code-cmt"># ── REVOKE ACCESS (remove binding) ──</span>
+kubectl delete rolebinding anihpj-web-developer -n anihpj
+<span class="code-cmt"># Access is IMMEDIATELY revoked. No restart needed. No cache to clear.</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 RBAC IS INSTANT:</strong> Creating a RoleBinding grants access IMMEDIATELY. Deleting it revokes access IMMEDIATELY. There's no cache, no propagation delay, no restart required. The API Server evaluates RBAC on EVERY request. This is both powerful (instant fix) and dangerous (instant break if you delete the wrong binding).</p>
+        </div>
+
+        <!-- 🔬 RBAC for Human Users — How OIDC Connects -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 RBAC for Human Users — How OIDC Connects Developers to Roles</h5>
+            <p>ServiceAccounts are for pods. But what about <strong>human developers</strong> using <code>kubectl</code>? They authenticate via <strong>OIDC</strong> (OpenID Connect) — and their identity flows into RBAC just like a ServiceAccount:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">👤 Human User RBAC Flow — OIDC → Identity → Role</div>
+                <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    HUMAN USER RBAC WITH OIDC                                   │
+│                                                                               │
+│  1. Developer Priya runs: kubectl get pods -n anihpj                         │
+│                                                                               │
+│  2. kubeconfig has OIDC configuration:                                        │
+│     users:                                                                    │
+│     - name: priya                                                             │
+│       user:                                                                   │
+│         exec:                                                                 │
+│           command: kubectl oidc-login                                         │
+│           args:                                                               │
+│           - --oidc-issuer-url=https://auth.anihpj.example.com                │
+│           - --oidc-client-id=kubectl                                          │
+│                                                                               │
+│  3. OIDC flow: browser opens → Priya logs in → receives ID token              │
+│     ID Token contains:                                                        │
+│       sub: "priya@anihpj.example.com"          ← User identifier              │
+│       groups: ["anihpj-developers", "platform"]  ← Group membership           │
+│                                                                               │
+│  4. API Server extracts identity:                                             │
+│     User: https://auth.anihpj.example.com#priya@anihpj.example.com           │
+│     Groups: [anihpj-developers, platform, system:authenticated]               │
+│                                                                               │
+│  5. RBAC checks: Does "anihpj-developers" group have a RoleBinding?           │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐     │
+│  │ RoleBinding: anihpj-developers-binding                               │     │
+│  │ subjects:                                                             │     │
+│  │ - kind: Group                     ← 🔑 Bind to GROUP, not User!      │     │
+│  │   name: anihpj-developers         ← Matches OIDC "groups" claim      │     │
+│  │   apiGroup: rbac.authorization.k8s.io                                 │     │
+│  │ roleRef:                                                              │     │
+│  │   kind: Role                                                          │     │
+│  │   name: anihpj-developer                                              │     │
+│  └─────────────────────────────────────────────────────────────────────┘     │
+│                                                                               │
+│  🔑 BEST PRACTICE: Bind to GROUPS, not individual users. When Priya joins     │
+│     the anihpj team, add her to the "anihpj-developers" OIDC group —          │
+│     she instantly gets all the right permissions. When she leaves, remove     │
+│     her from the group — access revoked instantly. No RBAC YAML changes.      │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 27.5 kubectl auth can-i -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s27-5" class="section-block"><h4>27.5 kubectl auth can-i — The RBAC Testing Tool</h4>
+        <p><code>kubectl auth can-i</code> is the single most important RBAC command. It answers: <strong>"Can THIS identity perform THIS action on THIS resource?"</strong> Without it, you're guessing whether your RBAC works.</p>
+
+        <div class="code-block-wrapper" style="margin-top:1rem;">
+            <div class="code-block-header"><span class="code-lang">📋 kubectl auth can-i — Essential Commands</span></div>
+<pre><span class="code-cmt"># ── TEST AS YOURSELF (current kubeconfig user) ──</span>
+kubectl auth can-i get pods -n anihpj           <span class="code-cmt"># Can I get pods?</span>
+kubectl auth can-i create deployments -n anihpj  <span class="code-cmt"># Can I create deployments?</span>
+kubectl auth can-i delete secrets -n anihpj      <span class="code-cmt"># Can I delete secrets?</span>
+kubectl auth can-i '*' '*' -n anihpj             <span class="code-cmt"># Can I do EVERYTHING?</span>
+
+<span class="code-cmt"># ── TEST AS A SERVICE ACCOUNT ──</span>
+kubectl auth can-i get pods -n anihpj \
+  --as system:serviceaccount:anihpj:anihpj-web   <span class="code-cmt"># Test as anihpj-web SA</span>
+
+kubectl auth can-i list deployments -n anihpj \
+  --as system:serviceaccount:anihpj:anihpj-web
+
+<span class="code-cmt"># ── TEST WITH SPECIFIC SUB-RESOURCE ──</span>
+kubectl auth can-i get pods/log -n anihpj \
+  --as system:serviceaccount:anihpj:anihpj-web   <span class="code-cmt"># Can SA read pod logs?</span>
+
+kubectl auth can-i create pods/exec -n anihpj \
+  --as system:serviceaccount:anihpj:anihpj-web   <span class="code-cmt"># Can SA exec into pods?</span>
+
+<span class="code-cmt"># ── LIST ALL PERMISSIONS ──</span>
+kubectl auth can-i --list -n anihpj \
+  --as system:serviceaccount:anihpj:anihpj-web   <span class="code-cmt"># List ALL permissions</span>
+
+<span class="code-cmt"># ── TROUBLESHOOTING: Why is my RBAC not working? ──</span>
+<span class="code-cmt"># Step 1: Test the exact permission that's failing</span>
+kubectl auth can-i &lt;verb&gt; &lt;resource&gt; -n &lt;ns&gt; --as &lt;sa&gt;
+<span class="code-cmt"># Step 2: If "no" → check the Role and RoleBinding</span>
+kubectl describe role &lt;role-name&gt; -n &lt;ns&gt;
+kubectl describe rolebinding &lt;binding-name&gt; -n &lt;ns&gt;
+<span class="code-cmt"># Step 3: Common issues: wrong apiGroup, missing sub-resource, wrong namespace</span></pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ CNPE Exam: kubectl auth can-i Is Your Debugging Tool</h5>
+            <p>If the exam gives you an RBAC task and your configuration isn't working, use <code>kubectl auth can-i</code> to diagnose. It tells you EXACTLY whether the permission is granted. The CNPE exam expects you to use this command to verify your RBAC configurations.</p>
+        </div>
+
+        <!-- 🔬 kubectl auth reconcile -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 kubectl auth reconcile — Declarative RBAC Management</h5>
+            <p>While <code>kubectl apply</code> works for most resources, RBAC has a special command: <code>kubectl auth reconcile</code>. It's designed for managing Roles and ClusterRoles that use <strong>aggregation</strong>:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 kubectl auth reconcile — Declarative RBAC</span></div>
+<pre><span class="code-cmt"># ── RECONCILE A ROLE FROM A FILE ──</span>
+<span class="code-cmt"># Unlike apply, reconcile handles RBAC-specific logic:</span>
+<span class="code-cmt"># 1. Preserves aggregated rules (doesn't overwrite auto-collected rules)</span>
+<span class="code-cmt"># 2. Merges rules from multiple sources correctly</span>
+<span class="code-cmt"># 3. Removes rules that are no longer in the source file</span>
+kubectl auth reconcile -f role.yaml
+
+<span class="code-cmt"># ── RECONCILE ALL RBAC IN A DIRECTORY ──</span>
+kubectl auth reconcile -f rbac/
+
+<span class="code-cmt"># ⚠️ apply vs reconcile for RBAC:</span>
+<span class="code-cmt"># kubectl apply: Overwrites the ENTIRE rules list. If you have aggregated</span>
+<span class="code-cmt">#   rules (from aggregationRule), apply may DELETE them!</span>
+<span class="code-cmt"># kubectl auth reconcile: MERGES rules. Preserves aggregated rules.</span>
+<span class="code-cmt">#   Removes only rules that are in the file AND no longer needed.</span>
+<span class="code-cmt">#</span>
+<span class="code-cmt"># 🔑 RULE: Use kubectl auth reconcile for Roles/ClusterRoles.</span>
+<span class="code-cmt">#   Use kubectl apply for RoleBindings/ClusterRoleBindings.</span></pre>
+            </div>
+        </div>
+
+        <!-- 🔬 Automating RBAC Verification in CI/CD -->
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🔬 Automating RBAC Verification — Testing Permissions in CI/CD Pipelines</h5>
+            <p>RBAC that works today can break tomorrow. Automate permission testing in your CI pipeline to catch regressions BEFORE they hit production:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 RBAC Test Script for CI/CD (GitHub Actions / GitLab CI)</span></div>
+<pre><span class="code-cmt">#!/bin/bash</span>
+<span class="code-cmt"># rbac-test.sh — Run in CI to verify RBAC is correct</span>
+<span class="code-cmt"># Fails the pipeline if ANY permission is wrong.</span>
+<span class="code-kw">set</span> -e  <span class="code-cmt"># Exit on first failure</span>
+
+<span class="code-kw">SA</span>=<span class="code-str">"system:serviceaccount:anihpj:anihpj-cicd"</span>
+<span class="code-kw">NS</span>=<span class="code-str">"anihpj"</span>
+
+<span class="code-cmt"># ── TEST 1: CICD SA CAN update deployments (SHOULD PASS) ──</span>
+<span class="code-kw">if</span> kubectl auth can-i update deployments -n <span class="code-kw">$NS</span> --as <span class="code-kw">$SA</span>; <span class="code-kw">then</span>
+  <span class="code-kw">echo</span> <span class="code-str">"✅ PASS: CI/CD can update deployments"</span>
+<span class="code-kw">else</span>
+  <span class="code-kw">echo</span> <span class="code-str">"❌ FAIL: CI/CD CANNOT update deployments — RBAC is broken!"</span>
+  <span class="code-kw">exit</span> 1
+<span class="code-kw">fi</span>
+
+<span class="code-cmt"># ── TEST 2: CICD SA CANNOT delete deployments (SHOULD FAIL) ──</span>
+<span class="code-kw">if</span> kubectl auth can-i delete deployments -n <span class="code-kw">$NS</span> --as <span class="code-kw">$SA</span>; <span class="code-kw">then</span>
+  <span class="code-kw">echo</span> <span class="code-str">"❌ FAIL: CI/CD CAN delete deployments — RBAC is too permissive!"</span>
+  <span class="code-kw">exit</span> 1
+<span class="code-kw">else</span>
+  <span class="code-kw">echo</span> <span class="code-str">"✅ PASS: CI/CD cannot delete deployments (least privilege enforced)"</span>
+<span class="code-kw">fi</span>
+
+<span class="code-cmt"># ── TEST 3: CICD SA CANNOT read secrets (SHOULD FAIL) ──</span>
+<span class="code-kw">if</span> kubectl auth can-i get secrets -n <span class="code-kw">$NS</span> --as <span class="code-kw">$SA</span>; <span class="code-kw">then</span>
+  <span class="code-kw">echo</span> <span class="code-str">"❌ FAIL: CI/CD CAN read secrets — security violation!"</span>
+  <span class="code-kw">exit</span> 1
+<span class="code-kw">else</span>
+  <span class="code-kw">echo</span> <span class="code-str">"✅ PASS: CI/CD cannot read secrets"</span>
+<span class="code-kw">fi</span>
+
+<span class="code-cmt"># ── TEST 4: Full permission dump (audit trail) ──</span>
+kubectl auth can-i --list -n <span class="code-kw">$NS</span> --as <span class="code-kw">$SA</span> > rbac-audit-<span class="code-kw">$SA</span>.txt
+<span class="code-kw">echo</span> <span class="code-str">"📋 Permission audit saved to rbac-audit-$SA.txt"</span>
+
+<span class="code-kw">echo</span> <span class="code-str">"\n🎉 All RBAC tests passed!"</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 CI/CD RBAC TESTING PATTERN:</strong> For each ServiceAccount, test BOTH: (1) permissions that SHOULD exist (positive tests) and (2) permissions that SHOULD NOT exist (negative tests). The negative tests are MORE important — they catch privilege escalation. Run this script on every PR that changes RBAC YAML files.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 27.6 RBAC AGGREGATION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s27-6" class="section-block"><h4>27.6 RBAC Aggregation — Composing ClusterRoles from Multiple Sources</h4>
+        <p><strong>Aggregation</strong> lets you build a ClusterRole by combining rules from multiple ClusterRoles using label selectors. Instead of copy-pasting the same rules, you label ClusterRoles and aggregate them.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🧩 RBAC Aggregation — Composing Permissions</div>
+            <pre style="background:#161b22;font-size:0.8rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                     RBAC AGGREGATION PATTERN                                   │
+│                                                                               │
+│  ┌─────────────────────┐                                                      │
+│  │ ClusterRole:         │  ← "Aggregate" ClusterRole                          │
+│  │ platform-admin       │    Uses aggregationRule to collect rules            │
+│  │                      │    from all ClusterRoles with matching labels       │
+│  │ aggregationRule:     │                                                      │
+│  │   clusterRoleSelectors:                                                    │
+│  │   - matchLabels:     │                                                      │
+│  │       rbac.anihpj.dev/                                                      │
+│  │       aggregate-to-   │                                                      │
+│  │       admin: "true"   │                                                      │
+│  └─────────┬───────────┘                                                      │
+│            │                                                                   │
+│            │  Collects rules from:                                             │
+│            ▼                                                                   │
+│  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐   │
+│  │ ClusterRole:         │  │ ClusterRole:         │  │ ClusterRole:         │   │
+│  │ pod-reader           │  │ deploy-manager       │  │ secret-reader        │   │
+│  │ labels:              │  │ labels:              │  │ labels:              │   │
+│  │  aggregate-to-admin: │  │  aggregate-to-admin: │  │  aggregate-to-admin: │   │
+│  │    "true"            │  │    "true"            │  │    "true"            │   │
+│  │ rules: [get pods]    │  │ rules: [manage depl] │  │ rules: [get secrets] │   │
+│  └─────────────────────┘  └─────────────────────┘  └─────────────────────┘   │
+│                                                                               │
+│  🔑 RESULT: platform-admin ClusterRole now contains ALL rules from            │
+│     pod-reader + deploy-manager + secret-reader — automatically!              │
+│     Adding a new labeled ClusterRole instantly grants its rules to            │
+│     platform-admin. No manual editing needed.                                 │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- Aggregation YAML -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 RBAC Aggregation YAML</span></div>
+<pre><span class="code-cmt"># ── AGGREGATE CLUSTERROLE (collects rules) ──</span>
+<span class="code-kw">apiVersion:</span> rbac.authorization.k8s.io/v1
+<span class="code-kw">kind:</span> ClusterRole
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-platform-admin
+<span class="code-kw">aggregationRule:</span>
+  <span class="code-kw">clusterRoleSelectors:</span>
+  - <span class="code-kw">matchLabels:</span>
+      <span class="code-kw">rbac.anihpj.dev/aggregate-to-platform-admin:</span> "true"
+<span class="code-code"># rules: []  ← Rules are collected from labeled ClusterRoles</span>
+
+<span class="code-cmt"># ── CONTRIBUTOR CLUSTERROLE (provides rules to aggregates) ──</span>
+<span class="code-kw">apiVersion:</span> rbac.authorization.k8s.io/v1
+<span class="code-kw">kind:</span> ClusterRole
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-pod-admin
+  <span class="code-kw">labels:</span>
+    <span class="code-kw">rbac.anihpj.dev/aggregate-to-platform-admin:</span> "true"  <span class="code-cmt"># 🔑 This label triggers aggregation</span>
+<span class="code-kw">rules:</span>
+- <span class="code-kw">apiGroups:</span> [""]
+  <span class="code-kw">resources:</span> ["pods", "pods/log", "pods/exec"]
+  <span class="code-kw">verbs:</span> ["*"]                     <span class="code-cmt"># Full pod management</span>
+
+<span class="code-cmt"># ── VERIFY AGGREGATION ──</span>
+<span class="code-cmt"># kubectl describe clusterrole anihpj-platform-admin</span>
+<span class="code-cmt"># Look for "Labels: rbac.authorization.k8s.io/aggregate-to-..."</span>
+<span class="code-cmt"># in the Rules section — these are auto-collected.</span></pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: Aggregation Patterns</h5>
+            <p>Kubernetes itself uses aggregation for built-in ClusterRoles! The <code>admin</code>, <code>edit</code>, and <code>view</code> ClusterRoles are all aggregates. Check: <code>kubectl describe clusterrole admin</code> — you'll see aggregation labels. The CNPE exam may ask you to create a custom aggregate ClusterRole or to explain how the built-in roles work.</p>
+        </div>
+
+        <!-- 🔬 RBAC Maturity Journey -->
+        <div class="journey-bar" style="margin-top:1.5rem;">
+            <div class="journey-step">
+                <div class="step-icon">😰</div>
+                <div class="step-label">NO RBAC</div>
+                <div class="step-detail">Everyone is cluster-admin.<br>Default SA used everywhere.<br>One mistake = cluster destroyed.<br><em>Startup phase. Fix immediately.</em></div>
+            </div>
+            <div class="journey-arrow">→</div>
+            <div class="journey-step">
+                <div class="step-icon">🆔</div>
+                <div class="step-label">DEDICATED SAs</div>
+                <div class="step-detail">One SA per component.<br>Dedicated namespaces.<br>Automount disabled where safe.<br><em>Basic hygiene.</em></div>
+            </div>
+            <div class="journey-arrow">→</div>
+            <div class="journey-step">
+                <div class="step-icon">📋</div>
+                <div class="step-label">LEAST PRIVILEGE</div>
+                <div class="step-detail">Roles with minimal verbs.<br>resourceNames for fine-grained.<br>kubectl auth can-i verified.<br><em>CNPE-ready.</em></div>
+            </div>
+            <div class="journey-arrow">→</div>
+            <div class="journey-step">
+                <div class="step-icon">🧩</div>
+                <div class="step-label">AGGREGATED + AUDITED</div>
+                <div class="step-detail">Aggregation for admins.<br>Monthly permission audits.<br>Automated RBAC testing in CI.<br><em>Enterprise-grade.</em></div>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 27.7 ANIHPJ RBAC DESIGN -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s27-7" class="section-block"><h4>27.7 anihpj RBAC Design — Least Privilege for Every Component</h4>
+        <p>Let's design the complete RBAC model for the anihpj platform — ServiceAccounts, Roles, ClusterRoles, and Bindings for every component. The principle: <strong>every component gets EXACTLY the permissions it needs and NOTHING more.</strong></p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Component</th><th>ServiceAccount</th><th>Role/ClusterRole</th><th>Permissions</th><th>Reason</th></tr></thead>
+            <tbody>
+                <tr><td><strong>anihpj-web</strong></td><td>anihpj-web</td><td>anihpj-web-role</td><td>GET/LIST pods, services, configmaps in anihpj ns</td><td>Web app reads its own config. Doesn't need to create/delete.</td></tr>
+                <tr><td><strong>anihpj-worker</strong></td><td>anihpj-worker</td><td>anihpj-worker-role</td><td>GET/LIST pods, CREATE jobs in anihpj ns</td><td>Worker launches migration jobs. Needs job creation.</td></tr>
+                <tr><td><strong>CI/CD Pipeline</strong></td><td>anihpj-cicd</td><td>anihpj-cicd-role</td><td>GET/LIST/UPDATE deployments, CREATE jobs in anihpj ns</td><td>CI/CD updates deployments (new image). Runs DB migrations.</td></tr>
+                <tr><td><strong>Argo CD</strong></td><td>argocd-app-controller</td><td>ClusterRole: argocd</td><td>Full management of apps in assigned namespaces</td><td>Argo CD needs broad permissions — managed by its own RBAC.</td></tr>
+                <tr><td><strong>Prometheus</strong></td><td>prometheus</td><td>ClusterRole: view</td><td>GET/LIST/WATCH pods, services, nodes in ALL namespaces</td><td>Monitoring needs cluster-wide read access.</td></tr>
+                <tr><td><strong>cert-manager</strong></td><td>cert-manager</td><td>ClusterRole: cert-manager</td><td>Manage Certificate CRDs, Secrets, Ingresses</td><td>Installed with cert-manager — cluster-wide by design.</td></tr>
+                <tr><td><strong>Human Developer</strong></td><td>N/A (OIDC user)</td><td>Role: anihpj-developer</td><td>GET/LIST/WATCH pods, deployments, services, configmaps; CREATE jobs in anihpj ns</td><td>Developers debug their app. Can run migration jobs. Can't delete anything critical.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="scenario-box positive" style="margin-top:1.5rem;">
+            <h5>✅ anihpj RBAC Strategy — Production-Ready Least Privilege</h5>
+            <ul>
+                <li><strong>Dedicated SA per component:</strong> web, worker, cicd, monitoring — each has its own identity.</li>
+                <li><strong>Namespace isolation:</strong> Each app gets its own namespace. Web in ns "anihpj" can't touch pods in ns "payments."</li>
+                <li><strong>Read-only by default:</strong> Most SAs get only GET/LIST/WATCH. Write permissions (CREATE/UPDATE/DELETE) are explicitly justified.</li>
+                <li><strong>Secrets are locked down:</strong> Only CI/CD and cert-manager can read Secrets. Web reads config from ConfigMaps, not Secrets directly.</li>
+                <li><strong>Aggregation for platform admins:</strong> Platform admin ClusterRole aggregates from component-specific ClusterRoles via labels.</li>
+                <li><strong>Regular audit:</strong> Monthly <code>kubectl auth can-i --list</code> for each SA. Remove unused permissions.</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 Real Breach Scenario — What Happens When RBAC Fails -->
+        <div class="card-grid cols-2" style="margin-top:1.5rem;">
+            <div class="scenario-box">
+                <h5>💥 RBAC FAILURE — The Compromised CI/CD Pipeline</h5>
+                <p style="font-size:0.82rem;">A developer accidentally commits a GitHub Actions workflow file with overly broad permissions. The CI/CD SA has <code>verbs: ["*"]</code> on <code>resources: ["*"]</code> in ALL namespaces — effectively cluster-admin.</p>
+                <p style="font-size:0.78rem;margin-top:0.5rem;">An attacker compromises a GitHub token and:</p>
+                <ul style="font-size:0.78rem;">
+                    <li>🔍 <strong>Scans all namespaces:</strong> <code>kubectl get pods -A</code> — finds the payments database namespace</li>
+                    <li>📤 <strong>Exfiltrates secrets:</strong> <code>kubectl get secret db-credentials -n payments -o yaml</code> — dumps DB password</li>
+                    <li>💣 <strong>Deletes production:</strong> <code>kubectl delete namespace production</code> — destroys everything</li>
+                    <li>💸 <strong>Impact:</strong> Production outage (4 hours), data breach (exposed credentials), financial loss</li>
+                </ul>
+                <p style="font-size:0.78rem;color:#f85149;margin-top:0.5rem;"><strong>Root cause:</strong> The CI/CD SA was granted <code>"*"</code> verbs on <code>"*"</code> resources instead of specific UPDATE/PATCH on deployments and CREATE on jobs. <strong>One wildcard destroyed the principle of least privilege.</strong></p>
+            </div>
+            <div class="scenario-box positive">
+                <h5>✅ RBAC DONE RIGHT — The Attack Contained</h5>
+                <p style="font-size:0.82rem;">Same scenario, but with proper RBAC from this chapter. The CI/CD SA only has UPDATE/PATCH on deployments and CREATE on jobs — in ONE namespace.</p>
+                <ul style="font-size:0.78rem;">
+                    <li>🚫 <strong>Cannot scan namespaces:</strong> <code>kubectl get pods -A</code> → 403 Forbidden. SA can only see anihpj namespace.</li>
+                    <li>🚫 <strong>Cannot read secrets:</strong> <code>kubectl get secret db-credentials -n payments</code> → 403 Forbidden. SA has no secret access.</li>
+                    <li>🚫 <strong>Cannot delete namespaces:</strong> <code>kubectl delete namespace production</code> → 403 Forbidden. Not even in the Role.</li>
+                    <li>📊 <strong>DETECTED:</strong> API audit logs show 403s from CI/CD SA trying to access secrets — security alert triggered.</li>
+                    <li>✅ <strong>Impact:</strong> Attack contained. Zero data loss. Zero downtime. The attacker's token is useless beyond updating a deployment image.</li>
+                </ul>
+                <p style="font-size:0.78rem;color:#3fb950;margin-top:0.5rem;"><strong>Lesson:</strong> Least privilege RBAC doesn't just limit what legitimate users can do — it limits what an ATTACKER can do when they steal credentials. <strong>Every wildcard verb is an attacker's superpower.</strong></p>
+            </div>
+        </div>
+
+        <!-- 🔬 RBAC Audit Logging -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 RBAC Audit Logging — Detecting Permission Violations</h5>
+            <p>Even with perfect RBAC, you need to KNOW when someone tries to do something they shouldn't. Kubernetes <strong>audit logging</strong> records every API request — including DENIED ones:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 Audit Log Entry — Detecting RBAC Violations</span></div>
+<pre><span class="code-cmt"># Audit log entry for a DENIED request (403 Forbidden)</span>
+{
+  <span class="code-str">"kind"</span>: <span class="code-str">"Event"</span>,
+  <span class="code-str">"level"</span>: <span class="code-str">"RequestResponse"</span>,
+  <span class="code-str">"stage"</span>: <span class="code-str">"ResponseComplete"</span>,
+  <span class="code-str">"user"</span>: {
+    <span class="code-str">"username"</span>: <span class="code-str">"system:serviceaccount:anihpj:anihpj-cicd"</span>,
+    <span class="code-str">"groups"</span>: [<span class="code-str">"system:serviceaccounts"</span>, <span class="code-str">"system:authenticated"</span>]
+  },
+  <span class="code-str">"verb"</span>: <span class="code-str">"delete"</span>,                              <span class="code-cmt">← What they tried to do</span>
+  <span class="code-str">"requestURI"</span>: <span class="code-str">"/api/v1/namespaces/production"</span>,   <span class="code-cmt">← What they targeted</span>
+  <span class="code-str">"responseStatus"</span>: {
+    <span class="code-str">"code"</span>: 403,                               <span class="code-cmt">← FORBIDDEN!</span>
+    <span class="code-str">"reason"</span>: <span class="code-str">"Forbidden"</span>
+  },
+  <span class="code-str">"annotations"</span>: {
+    <span class="code-str">"authorization.k8s.io/decision"</span>: <span class="code-str">"forbid"</span>,
+    <span class="code-str">"authorization.k8s.io/reason"</span>: <span class="code-str">"RBAC: denied"</span>
+  }
+}
+
+<span class="code-cmt"># 🔑 WHAT TO ALERT ON:</span>
+<span class="code-cmt"># 1. Repeated 403s from the same SA → possible attack or misconfiguration</span>
+<span class="code-cmt"># 2. 403s on sensitive resources (secrets, namespaces) → high-priority alert</span>
+<span class="code-cmt"># 3. 403s from SAs that normally don't access those resources → anomaly</span>
+<span class="code-cmt"># 4. Successful access to secrets by unexpected SAs → possible breach</span></pre>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- PRACTICE DRILLS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="cnpe-practice-drill" id="drill27-1">
+            <h5>🛠️ Drill 1: Create RBAC for anihpj Developer</h5>
+            <p><strong>Scenario:</strong> Developer Priya needs read access to pods, services, deployments, and logs in the anihpj namespace. She also needs to create jobs for DB migrations.</p>
+            <p><strong>Task:</strong></p>
+            <ol>
+                <li>Create a ServiceAccount named "priya" in namespace anihpj</li>
+                <li>Create a Role with GET/LIST/WATCH for pods, pods/log, services, deployments</li>
+                <li>Add CREATE permission for jobs (apiGroups: ["batch"])</li>
+                <li>Create a RoleBinding connecting the SA to the Role</li>
+                <li>Verify with: <code>kubectl auth can-i --list -n anihpj --as system:serviceaccount:anihpj:priya</code></li>
+            </ol>
+            <p><strong>Time: 15 min</strong></p>
+            <div class="cnpe-speed-tip" style="margin-top:0.5rem;padding:12px 16px;">
+                <h5 style="font-size:0.85rem;">💡 Hints</h5>
+                <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:4px;">
+                    <li>SA: <code>kubectl create sa priya -n anihpj</code> — simplest way. Or YAML: kind: ServiceAccount, name: priya.</li>
+                    <li>Role apiGroups: pods/services = <code>[""]</code> (core), deployments = <code>["apps"]</code>, jobs = <code>["batch"]</code>.</li>
+                    <li>RoleBinding: <code>subjects: [{kind: ServiceAccount, name: priya, namespace: anihpj}]</code>, <code>roleRef: {kind: Role, name: priya-developer}</code>.</li>
+                    <li>Verify positive: <code>kubectl auth can-i get pods -n anihpj --as system:serviceaccount:anihpj:priya</code> → yes.</li>
+                    <li>Verify negative: <code>kubectl auth can-i delete secrets -n anihpj --as system:serviceaccount:anihpj:priya</code> → no.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill27-2">
+            <h5>🛠️ Drill 2: ClusterRole for Platform Admin</h5>
+            <p><strong>Scenario:</strong> Create a cluster-wide read-only role for the platform monitoring system (Prometheus).</p>
+            <p><strong>Task:</strong></p>
+            <ol>
+                <li>Create a ServiceAccount "prometheus" in namespace "monitoring"</li>
+                <li>Create a ClusterRole allowing GET/LIST/WATCH on pods, services, nodes, namespaces in ALL namespaces</li>
+                <li>Create a ClusterRoleBinding connecting the SA to the ClusterRole</li>
+                <li>Verify Prometheus can read nodes (cluster-scoped resource)</li>
+                <li>Verify Prometheus CANNOT create or delete anything</li>
+            </ol>
+            <p><strong>Time: 15 min</strong></p>
+            <div class="cnpe-speed-tip" style="margin-top:0.5rem;padding:12px 16px;">
+                <h5 style="font-size:0.85rem;">💡 Hints</h5>
+                <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:4px;">
+                    <li>Shortcut: Use built-in <code>view</code> ClusterRole! <code>kubectl create clusterrolebinding prometheus-view --clusterrole=view --serviceaccount=monitoring:prometheus</code> — done in ONE command. No YAML needed.</li>
+                    <li>If writing custom: nodes go in resources list with <code>apiGroups: [""]</code>. Namespaces too.</li>
+                    <li>ClusterRoleBinding has NO namespace field. It's cluster-scoped.</li>
+                    <li>Verify nodes: <code>kubectl auth can-i get nodes --as system:serviceaccount:monitoring:prometheus</code> → yes.</li>
+                    <li>Verify no delete: <code>kubectl auth can-i delete pods --as system:serviceaccount:monitoring:prometheus</code> → no.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill27-3">
+            <h5>🛠️ Drill 3: RBAC for CI/CD Service Account</h5>
+            <p><strong>Scenario:</strong> The CI/CD pipeline (GitHub Actions) needs to update deployments and create jobs in the anihpj namespace.</p>
+            <p><strong>Task:</strong></p>
+            <ol>
+                <li>Create a ServiceAccount "anihpj-cicd" in namespace anihpj</li>
+                <li>Create a Role granting UPDATE/PATCH on deployments and CREATE on jobs</li>
+                <li>Create a RoleBinding. Verify with kubectl auth can-i</li>
+                <li>Test: Can the CI/CD SA delete a deployment? (It should NOT be able to.)</li>
+                <li>Test: Can it create a secret? (It should NOT be able to.)</li>
+            </ol>
+            <p><strong>Time: 15 min</strong></p>
+            <div class="cnpe-speed-tip" style="margin-top:0.5rem;padding:12px 16px;">
+                <h5 style="font-size:0.85rem;">💡 Hints</h5>
+                <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:4px;">
+                    <li>Role verbs: update + patch for deployments (apps group), create for jobs (batch group). Don't grant delete or deletecollection.</li>
+                    <li>CRITICAL: The CI/CD SA also needs GET on deployments to READ the current deployment before updating. Without GET, kubectl can't fetch the resource to patch it.</li>
+                    <li>Verify positive: <code>kubectl auth can-i update deployments -n anihpj --as system:serviceaccount:anihpj:anihpj-cicd</code> → yes.</li>
+                    <li>Verify negative: <code>kubectl auth can-i delete deployments -n anihpj --as system:serviceaccount:anihpj:anihpj-cicd</code> → no.</li>
+                    <li>Verify negative: <code>kubectl auth can-i create secrets -n anihpj --as system:serviceaccount:anihpj:anihpj-cicd</code> → no.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- KNOWLEDGE CHECK -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="cnpe-knowledge-check">
+            <h5>🧠 Knowledge Check — 10 Questions</h5>
+            <div class="cnpe-question"><p><strong>Q1:</strong> What is a ServiceAccount and how does it differ from a user account?</p></div>
+            <div class="cnpe-question"><p><strong>Q2:</strong> What is the difference between a Role and a ClusterRole?</p></div>
+            <div class="cnpe-question"><p><strong>Q3:</strong> What is the format of a ServiceAccount username in RBAC?</p></div>
+            <div class="cnpe-question"><p><strong>Q4:</strong> What does a RoleBinding do? How is it different from a ClusterRoleBinding?</p></div>
+            <div class="cnpe-question"><p><strong>Q5:</strong> What happens when you bind a ClusterRole with a RoleBinding?</p></div>
+            <div class="cnpe-question"><p><strong>Q6:</strong> How do you test if a ServiceAccount has a specific permission?</p></div>
+            <div class="cnpe-question"><p><strong>Q7:</strong> What is the correct apiGroup for core resources like pods and services?</p></div>
+            <div class="cnpe-question"><p><strong>Q8:</strong> What is RBAC aggregation and when would you use it?</p></div>
+            <div class="cnpe-question"><p><strong>Q9:</strong> Why should you set automountServiceAccountToken to false?</p></div>
+            <div class="cnpe-question"><p><strong>Q10:</strong> Design the RBAC for anihpj: what SAs, Roles, and Bindings are needed?</p></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CHAPTER SUMMARY -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="info-box summary">
+            <h5>📋 Chapter 27 Summary — RBAC &amp; Access Control</h5>
+            <div class="card-grid cols-3" style="margin-top:0.8rem;">
+                <div class="info-card"><div class="card-icon-lg">🆔</div><h5>ServiceAccounts</h5><p>Pod identity. Every pod has one SA. Format: <code>system:serviceaccount:&lt;ns&gt;:&lt;name&gt;</code>. Disable automount when not needed.</p></div>
+                <div class="info-card"><div class="card-icon-lg">📋</div><h5>Roles & ClusterRoles</h5><p>Role = namespace-scoped permissions. ClusterRole = cluster-wide. Roles define WHAT you can do — not WHO gets to do it.</p></div>
+                <div class="info-card"><div class="card-icon-lg">🔗</div><h5>Bindings</h5><p>RoleBinding connects SA/User to Role. ClusterRoleBinding connects to ClusterRole. ClusterRole + RoleBinding = namespace-scoped ClusterRole.</p></div>
+            </div>
+        </div>
+
+        <div class="visual-summary">
+            <h4>🎨 Visual Summary — The RBAC Chain</h4>
+            <pre style="background:transparent;font-size:0.82rem;text-align:center;">
+    ┌──────────────────────────────────────────────────────────────┐
+    │                     THE RBAC CHAIN                             │
+    │                                                               │
+    │   ServiceAccount → RoleBinding → Role → Permission           │
+    │   (WHO)            (GRANTS)      (WHAT)  (CAN DO)             │
+    │                                                               │
+    │   🔑 LEAST PRIVILEGE: Every SA gets EXACTLY what it needs     │
+    │   🔍 VERIFY: kubectl auth can-i --as &lt;SA&gt;                    │
+    │   🧩 AGGREGATE: Build complex roles from simple ones          │
+    └──────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam Strategy — Domain 5 RBAC Tasks</h5>
+            <p>Domain 5 (Security &amp; Policy, 15%) includes RBAC configuration. Expect 1-2 RBAC tasks:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Create RBAC from scratch:</strong> Given a scenario ("CI/CD needs to update deployments"), create SA → Role → RoleBinding. Know the exact YAML structure for all three resources. The apiVersion is <code>rbac.authorization.k8s.io/v1</code>.</li>
+                <li><strong>Troubleshoot broken RBAC:</strong> Given a non-working configuration, identify the error. Use <code>kubectl auth can-i --as</code> to test. Common issues: wrong apiGroup (<code>""</code> vs <code>"v1"</code>), missing sub-resource (<code>pods/log</code>), wrong namespace in subject.</li>
+                <li><strong>Built-in ClusterRoles:</strong> Know when to use <code>view</code>, <code>edit</code>, <code>admin</code>, <code>cluster-admin</code>. Using built-in roles is faster and less error-prone than writing custom rules — a common exam time-saver.</li>
+                <li><strong>ClusterRole + RoleBinding trick:</strong> The exam WILL test this: "Grant ClusterRole X to User Y, but only in namespace Z." Answer: ClusterRole + RoleBinding (not ClusterRoleBinding). The RoleBinding scopes the ClusterRole down to one namespace.</li>
+            </ul>
+            <p style="margin-top:0.5rem;"><strong>🔑 EXAM MINDSET:</strong> Every RBAC task follows the same pattern: Identity → Role → Binding → Verify. Create the SA first (WHO), then the Role (WHAT), then the Binding (GRANT), then <code>kubectl auth can-i</code> (VERIFY). Missing any step = no permissions. The exam tests the FULL chain — not just one piece.</p>
+        </div>
+    </div>
+
+    <hr class="chapter-divider">
+
+    <div id="ch28">
+        <div class="chapter-intro">
+            <h3>Ch 28: Pod Security &amp; Admission Control</h3>
+            <p><strong>What pods are ALLOWED to do — enforced BEFORE they run.</strong> Pod Security Standards define three hardening levels. Pod Security Admission enforces them per-namespace. Security contexts lock down individual pods. Admission webhooks validate and mutate resources. Runtime security protects the node after the pod starts.</p>
+            <div class="chapter-meta">
+                <span class="meta-tag">🔴 Advanced</span>
+                <span class="meta-tag">⏱️ ~1.5h</span>
+                <span class="meta-tag">CNPE Domain 5: 15%</span>
+            </div>
+        </div>
+
+        <div class="learning-objectives">
+            <h5>🎯 What You'll Learn</h5>
+            <ul>
+                <li>The 3 Pod Security Standard levels: Privileged, Baseline, and Restricted</li>
+                <li>How Pod Security Admission enforces PSS policies per namespace via labels</li>
+                <li>Security contexts — the pod-level and container-level fields that lock down behavior</li>
+                <li>Admission webhooks — how they validate and mutate resources before persistence</li>
+                <li>Runtime security with seccomp profiles and AppArmor — defense after the pod starts</li>
+                <li>How to design a complete pod security posture for anihpj</li>
+            </ul>
+        </div>
+
+        <div class="cnpe-chapter-relevance">
+            <h5>📋 CNPE Exam Relevance — Domain 5 (15%)</h5>
+            <p>Domain 5 tests your ability to <strong>apply security controls across platform resources</strong>. You will be asked to configure Pod Security Admission labels, write security contexts, and configure admission webhooks. <strong>PSS/PSA is a guaranteed exam topic — know the 3 levels and how to enforce them.</strong></p>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 28.1 PSS LEVELS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s28-1" class="section-block"><h4>28.1 PSS Levels — Privileged, Baseline, and Restricted</h4>
+        <p><strong>Pod Security Standards (PSS)</strong> define three tiers of pod security. They specify what pods are ALLOWED to do — from completely unrestricted (Privileged) to tightly locked down (Restricted). PSS replaces the deprecated <strong>PodSecurityPolicy (PSP)</strong>, which was removed in Kubernetes 1.25.</p>
+
+        <!-- 🔬 PSP → PSS Migration Story -->
+        <div class="cnpe-beyond" style="margin-top:1rem;">
+            <h5>🔬 Why PSP Was REMOVED — The Migration to PSS</h5>
+            <p>PodSecurityPolicy existed since Kubernetes 1.3 but was ALWAYS problematic. Understanding WHY it failed helps you appreciate PSS's design:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Problem with PSP</th><th>How PSS Solves It</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Complex RBAC:</strong> PSP required creating a Policy, a Role to USE the policy, and a RoleBinding to grant access — AND the Pod's SA needed permission. 4 resources to enable 1 pod.</td><td><strong>Namespace labels:</strong> One label on the namespace. Done. No extra RBAC, no extra resources. Simpler = more likely to be used correctly.</td></tr>
+                    <tr><td><strong>Silent failures:</strong> If RBAC was misconfigured, the pod would be created with ZERO policy applied. No warning. No error. The pod just ran unrestricted.</td><td><strong>Fail-closed:</strong> If enforce=restricted is set, ALL pods are checked. No silent bypass. If the label is missing, you know immediately.</td></tr>
+                    <tr><td><strong>Ordering madness:</strong> PSPs were ordered by name. The FIRST matching PSP (alphabetically!) was applied. Changing a PSP name could change security posture. Naming became a security concern.</td><td><strong>Single level:</strong> Each namespace has ONE enforce level. No ordering. No ambiguity. The label IS the policy.</td></tr>
+                    <tr><td><strong>No dry-run:</strong> You couldn't test what a PSP would block without actually deploying. Trial-and-error in production.</td><td><strong>warn + audit modes:</strong> Test enforcement without blocking. See exactly what would fail before you turn on enforce.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE LESSON:</strong> PSP was "powerful but dangerous" — too complex for most teams to use correctly. PSS is "simple and safe" — hard to misconfigure. <strong>For the CNPE exam: know that PSP is GONE (removed in 1.25) and PSS is the ONLY built-in option.</strong> If a question mentions PSP, the answer is "migrate to PSS."</p>
+        </div>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🛡️ The 3 Pod Security Standard Levels — Pyramid of Hardening</div>
+            <pre style="background:#161b22;font-size:0.8rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    POD SECURITY STANDARDS — 3 LEVELS                           │
+│                                                                               │
+│                         ┌─────────────────┐                                   │
+│                         │   RESTRICTED     │  ← MOST SECURE                    │
+│                         │  (Hardened)      │     • MUST run as non-root       │
+│                        ┌┴─────────────────┴┐    • MUST use readOnlyRootFS     │
+│                        │    BASELINE        │  ← RECOMMENDED MINIMUM           │
+│                        │  (Minimal)         │    • No hostPath, hostPort      │
+│                       ┌┴───────────────────┴┐   • No privileged containers    │
+│                       │    PRIVILEGED        │  ← UNRESTRICTED                 │
+│                       │  (Everything allowed)│    • No restrictions at all    │
+│                       └─────────────────────┘    • Only for system workloads  │
+│                                                                               │
+│  📜 PSP → PSS MIGRATION: PodSecurityPolicy was DEPRECATED and REMOVED in      │
+│     Kubernetes 1.25. PSS is the REPLACEMENT — simpler, label-based, built-in. │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- PSS Level Details -->
+        <div class="compare-table" style="margin-top:1.5rem;"><table>
+            <thead><tr><th>PSS Level</th><th>What It Means</th><th>Key Restrictions</th><th>Use For</th></tr></thead>
+            <tbody>
+                <tr><td><strong>🔴 Privileged</strong></td><td>No restrictions. Everything is allowed.</td><td>None. Privileged containers, hostPath, hostNetwork, hostPID — all allowed.</td><td>System pods (kube-proxy, CNI, CSI drivers). NEVER for application pods.</td></tr>
+                <tr><td><strong>🟡 Baseline</strong></td><td>Minimal hardening. Blocks known-dangerous settings.</td><td>❌ No hostPath volumes. ❌ No hostPort. ❌ No hostNetwork/PID/IPC. ❌ No privileged containers. ❌ No CAP_SYS_ADMIN. Allows running as root.</td><td>Minimum bar for ALL application workloads. Start here, then tighten to Restricted.</td></tr>
+                <tr><td><strong>🟢 Restricted</strong></td><td>Hardened. Follows pod hardening best practices.</td><td>All Baseline restrictions PLUS: ❌ MUST run as non-root. ❌ MUST use readOnlyRootFS. ❌ No privilege escalation. ❌ Seccomp profile must be set. ❌ Capabilities dropped to NET_BIND_SERVICE only.</td><td>Production workloads. Security-sensitive apps (payments, auth, customer data).</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: PSS Level Selection</h5>
+            <p>The exam will test your ability to choose the RIGHT PSS level:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>"A CI/CD tool needs hostPath to access the Docker socket."</strong> → Privileged (only way to allow hostPath). But question WHY — can it use a different approach?</li>
+                <li><strong>"A web application that doesn't need root."</strong> → Restricted. Always choose the highest level the workload can support.</li>
+                <li><strong>"A monitoring agent that needs hostNetwork for accurate metrics."</strong> → Privileged (hostNetwork is blocked by Baseline and above).</li>
+                <li><strong>DEFAULT:</strong> Start at Baseline for all namespaces. Exception: production namespaces should be Restricted. System namespaces may need Privileged.</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 Which PSS Level? Decision Tree -->
+        <div class="decision-tree" style="margin-top:1.5rem;">
+            <div class="diagram-title" style="text-align:center;margin-bottom:1rem;">🌳 Which PSS Level Should I Enforce?</div>
+            <div class="decision-node question">🤔 Does the workload need host access (hostPath, hostNetwork, hostPID)?</div>
+            <div style="display:flex;justify-content:center;gap:40px;margin:8px 0;">
+                <div style="text-align:center;"><span style="color:#f85149;font-weight:700;">🔴 YES — Needs host access</span></div>
+                <div style="text-align:center;"><span style="color:#3fb950;font-weight:700;">🟢 NO — Pure container workload</span></div>
+            </div>
+            <div style="display:flex;justify-content:space-around;gap:20px;">
+                <div style="flex:1;">
+                    <div class="decision-node">🔴 <strong>Privileged</strong> — Only for system workloads (CNI, CSI, kube-proxy, monitoring agents). Lock down with RBAC: only cluster-admin can deploy here.</div>
+                </div>
+                <div style="flex:1;">
+                    <div class="decision-node question">🤔 Can the app run as non-root with read-only filesystem?</div>
+                    <div class="decision-node yes">🟢 <strong>Restricted</strong> — Production-ready. Highest security. runAsNonRoot + readOnlyRootFS + drop ALL capabilities.</div>
+                    <div class="decision-node question" style="margin-top:0.5rem;">🤔 Does the app need to run as root OR write to root FS?</div>
+                    <div class="decision-node">🟡 <strong>Baseline</strong> — Minimum hardening. Blocks host access and privileged containers but allows root. Plan migration to Restricted.</div>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 28.2 POD SECURITY ADMISSION -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s28-2" class="section-block"><h4>28.2 Pod Security Admission — Enforcing PSS Per Namespace</h4>
+        <p><strong>Pod Security Admission (PSA)</strong> is a built-in admission controller that ENFORCES PSS levels. You set <strong>namespace labels</strong> to define the security level — and PSA rejects pods that violate it. No external tools needed.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🏷️ PSA Namespace Labels — The 3 Enforcement Modes</div>
+            <pre style="background:#161b22;font-size:0.8rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    POD SECURITY ADMISSION — NAMESPACE LABELS                   │
+│                                                                               │
+│  Namespace: anihpj                                                             │
+│  Labels:                                                                      │
+│    pod-security.kubernetes.io/enforce: restricted    ← ENFORCE mode           │
+│    pod-security.kubernetes.io/audit: baseline        ← AUDIT mode             │
+│    pod-security.kubernetes.io/warn: baseline         ← WARN mode              │
+│                                                                               │
+│  ┌───────────────────────────────────────────────────────────────────────┐   │
+│  │  MODE           │  BEHAVIOR                                             │   │
+│  ├─────────────────────────────────────────────────────────────────────────┤   │
+│  │  enforce        │  🔴 REJECTS pods that violate the policy.             │   │
+│  │                 │  Pod is NOT created. User gets 403 Forbidden.         │   │
+│  │                 │  This is what BLOCKS insecure pods.                   │   │
+│  ├─────────────────────────────────────────────────────────────────────────┤   │
+│  │  audit          │  🟡 LOGS policy violations to the audit log.          │   │
+│  │                 │  Pod IS created (no block). Useful for testing.       │   │
+│  │                 │  "What would break if we enforced this?"              │   │
+│  ├─────────────────────────────────────────────────────────────────────────┤   │
+│  │  warn           │  🟠 SHOWS a WARNING to the user (kubectl output).     │   │
+│  │                 │  Pod IS created. Educates without blocking.           │   │
+│  │                 │  "This pod will be rejected in a future version."     │   │
+│  └───────────────────────────────────────────────────────────────────────┘   │
+│                                                                               │
+│  🔑 ROLLOUT STRATEGY:                                                         │
+│     Step 1: Set warn=restricted → users see warnings, nothing blocked.       │
+│     Step 2: Set audit=restricted → violations logged, nothing blocked.       │
+│     Step 3: Set enforce=restricted → violations REJECTED. Production-ready.  │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- PSA Label Examples -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 PSA Namespace Label Configuration</span></div>
+<pre><span class="code-cmt"># ── ENFORCE RESTRICTED ON PRODUCTION (blocks insecure pods) ──</span>
+kubectl label ns anihpj \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/enforce-version=latest
+
+<span class="code-cmt"># ── WARN + AUDIT FIRST (safe rollout) ──</span>
+kubectl label ns anihpj \
+  pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/warn=restricted \
+  pod-security.kubernetes.io/audit=restricted \
+  pod-security.kubernetes.io/enforce-version=latest
+
+<span class="code-cmt"># ── CHECK CURRENT PSA LABELS ──</span>
+kubectl get ns anihpj --show-labels | grep pod-security
+
+<span class="code-cmt"># ── DRY-RUN: Check if a pod WOULD be rejected ──</span>
+kubectl apply -f pod.yaml --dry-run=server -n anihpj
+<span class="code-cmt"># If rejected, you'll see: "pods 'my-pod' is forbidden: violates PodSecurity"</span>
+
+<span class="code-cmt"># ── REMOVE PSA (no enforcement) ──</span>
+kubectl label ns anihpj \
+  pod-security.kubernetes.io/enforce- \
+  pod-security.kubernetes.io/warn- \
+  pod-security.kubernetes.io/audit-</pre>
+        </div>
+
+        <!-- 🔬 Real PSA Error Messages -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Real PSA Error Messages — What You'll Actually See</h5>
+            <p>When PSA rejects a pod, the error message tells you EXACTLY what to fix. Learning to read these messages saves hours of debugging:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 PSA Rejection Messages — Decoded</span></div>
+<pre><span class="code-cmt"># ── ERROR 1: Pod running as root (most common) ──</span>
+<span class="code-str">Error: pods "nginx" is forbidden: violates PodSecurity "restricted:latest":</span>
+<span class="code-str">  runAsNonRoot != true (container "nginx" must not set securityContext.runAsNonRoot=false)</span>
+<span class="code-cmt"># FIX: Add runAsNonRoot: true AND runAsUser: 1000 to securityContext</span>
+
+<span class="code-cmt"># ── ERROR 2: Writable root filesystem ──</span>
+<span class="code-str">Error: pods "my-app" is forbidden: violates PodSecurity "restricted:latest":</span>
+<span class="code-str">  readOnlyRootFilesystem != true (container "my-app" must set securityContext.readOnlyRootFilesystem=true)</span>
+<span class="code-cmt"># FIX: Add readOnlyRootFilesystem: true + mount emptyDir for writable paths</span>
+
+<span class="code-cmt"># ── ERROR 3: Privilege escalation allowed ──</span>
+<span class="code-str">Error: pods "my-app" is forbidden: violates PodSecurity "restricted:latest":</span>
+<span class="code-str">  allowPrivilegeEscalation != false (container "my-app" must set securityContext.allowPrivilegeEscalation=false)</span>
+<span class="code-cmt"># FIX: Add allowPrivilegeEscalation: false</span>
+
+<span class="code-cmt"># ── ERROR 4: Capabilities not fully dropped ──</span>
+<span class="code-str">Error: pods "my-app" is forbidden: violates PodSecurity "restricted:latest":</span>
+<span class="code-str">  unrestricted capabilities (container "my-app" must set securityContext.capabilities.drop=["ALL"])</span>
+<span class="code-cmt"># FIX: Add capabilities.drop: ["ALL"]</span>
+
+<span class="code-cmt"># ── ERROR 5: Seccomp not set ──</span>
+<span class="code-str">Error: pods "my-app" is forbidden: violates PodSecurity "restricted:latest":</span>
+<span class="code-str">  seccompProfile (container "my-app" must set securityContext.seccompProfile.type to "RuntimeDefault" or "Localhost")</span>
+<span class="code-cmt"># FIX: Add seccompProfile: {type: RuntimeDefault}</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 PATTERN:</strong> Every PSA error follows the format: <code>violates PodSecurity "&lt;level&gt;:&lt;version&gt;": &lt;field&gt; &lt;expected_value&gt;</code>. Read the field name and expected value — that's EXACTLY what you need to add to your securityContext. The error IS the fix.</p>
+        </div>
+
+        <!-- PSA Gotchas -->
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ PSA Gotchas — What Breaks When You Enforce Restricted</h5>
+            <div class="card-grid cols-3" style="margin-top:0.8rem;">
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🔑 Containers running as root</h5>
+                    <p>Restricted requires <code>runAsNonRoot: true</code>. Most default container images run as root (UID 0). You MUST either: (a) set <code>runAsNonRoot: true</code> + <code>runAsUser: 1000</code>, or (b) rebuild the image to use a non-root user.</p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🔑 Writable root filesystem</h5>
+                    <p>Restricted requires <code>readOnlyRootFilesystem: true</code>. Apps that write to /tmp will FAIL. Fix: mount an emptyDir volume at /tmp, or configure the app to write elsewhere.</p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>🔑 Capabilities NOT dropped</h5>
+                    <p>Restricted requires dropping ALL capabilities except NET_BIND_SERVICE. Most containers start with a default set. Fix: <code>securityContext.capabilities.drop: ["ALL"]</code> + add back only what's needed.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 🔬 PSA Exemptions -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 PSA Exemptions — When You Must Run a Privileged Pod in a Restricted Namespace</h5>
+            <p>Sometimes you need ONE pod to bypass PSA enforcement — a migration job that needs to run as root, or an init container that modifies system settings. PSA supports <strong>per-pod exemptions</strong> via a specific username pattern:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 PSA Exemption — Allow a Specific Pod to Bypass Enforcement</span></div>
+<pre><span class="code-cmt"># ── METHOD 1: Exempt by ServiceAccount username ──</span>
+<span class="code-cmt"># Pods running as this SA are exempt from PSA enforcement.</span>
+<span class="code-cmt"># The SA username format is: system:serviceaccount:&lt;ns&gt;:&lt;sa-name&gt;</span>
+<span class="code-cmt"># In the PSA admission configuration (API Server flags or config file):</span>
+<span class="code-kw">exemptions:</span>
+  <span class="code-kw">usernames:</span>
+  - <span class="code-str">"system:serviceaccount:anihpj:db-migration"</span>
+  <span class="code-cmt"># Pods running as SA "db-migration" bypass PSA. Everything else is enforced.</span>
+
+<span class="code-cmt"># ── METHOD 2: Exempt entire namespaces ──</span>
+<span class="code-cmt"># Namespaces matching these labels are EXCLUDED from PSA.</span>
+<span class="code-kw">exemptions:</span>
+  <span class="code-kw">namespaces:</span>
+  - <span class="code-str">"kube-system"</span>
+  - <span class="code-str">"monitoring"</span>
+  <span class="code-cmt"># Use sparingly — only for truly necessary system namespaces.</span>
+
+<span class="code-cmt"># ⚠️ Exemptions are configured at the CLUSTER level</span>
+<span class="code-cmt"># (API Server flags or admission configuration file),</span>
+<span class="code-cmt"># NOT at the namespace level. This requires cluster-admin access.</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE RULE:</strong> Exemptions are a PRESSURE RELEASE VALVE, not a design pattern. Use them temporarily while you fix the pod to comply with PSA. Track exemptions and set a deadline for removal. Every exemption is a potential security gap.</p>
+        </div>
+
+        <!-- 🔬 Pod Security Maturity Evolution -->
+        <div class="evolution-strip" style="margin-top:1.5rem;">
+            <div class="evo-item">
+                <div class="evo-icon">😰</div>
+                <div class="evo-era">LEVEL 1</div>
+                <h5>No Controls</h5>
+                <p>All pods run as root. No PSS. No security contexts. Containers have full host access.</p>
+                <div class="evo-status bad">❌ Vulnerable</div>
+            </div>
+            <div class="evo-item active">
+                <div class="evo-icon">🟡</div>
+                <div class="evo-era">LEVEL 2</div>
+                <h5>Baseline PSS</h5>
+                <p>No hostPath/hostNetwork. No privileged containers. PSA warn+audit mode. Planning Restricted migration.</p>
+                <div class="evo-status ok">⚠️ Minimal Hardening</div>
+            </div>
+            <div class="evo-item active">
+                <div class="evo-icon">🟢</div>
+                <div class="evo-era">LEVEL 3</div>
+                <h5>Restricted PSS</h5>
+                <p>Non-root. Read-only root FS. Capabilities dropped. Seccomp enforced. Webhooks block :latest.</p>
+                <div class="evo-status good">✅ Production Hardened</div>
+            </div>
+            <div class="evo-item">
+                <div class="evo-icon">🛡️</div>
+                <div class="evo-era">LEVEL 4</div>
+                <h5>Zero-Trust Pod Security</h5>
+                <p>Custom seccomp per app. AppArmor profiles. Falco runtime detection. Image signing enforced.</p>
+                <div class="evo-status good">🌟 Defense-in-Depth</div>
+            </div>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 28.3 SECURITY CONTEXTS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s28-3" class="section-block"><h4>28.3 Security Contexts — Locking Down Individual Pods</h4>
+        <p>A <strong>securityContext</strong> defines privilege and access control settings for a pod or container. It's applied at TWO levels: <strong>Pod-level</strong> (applies to all containers) and <strong>Container-level</strong> (overrides pod-level for specific containers).</p>
+
+        <div class="code-block-wrapper" style="margin-top:1rem;">
+            <div class="code-block-header"><span class="code-lang">📋 Complete Security Context — Pod-Level + Container-Level</span></div>
+<pre><span class="code-kw">apiVersion:</span> v1
+<span class="code-kw">kind:</span> Pod
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web
+  <span class="code-kw">namespace:</span> anihpj
+<span class="code-kw">spec:</span>
+  <span class="code-cmt"># ── POD-LEVEL Security Context (applies to ALL containers) ──</span>
+  <span class="code-kw">securityContext:</span>
+    <span class="code-kw">runAsNonRoot:</span> true            <span class="code-cmt"># 🔑 MUST run as non-root (UID != 0)</span>
+    <span class="code-kw">runAsUser:</span> 1000               <span class="code-cmt"># Run as UID 1000 (not root)</span>
+    <span class="code-kw">runAsGroup:</span> 3000              <span class="code-cmt"># Run as GID 3000</span>
+    <span class="code-kw">fsGroup:</span> 2000                 <span class="code-cmt"># Filesystem group for volume mounts</span>
+    <span class="code-kw">seccompProfile:</span>                <span class="code-cmt"># Seccomp profile (syscall filtering)</span>
+      <span class="code-kw">type:</span> RuntimeDefault
+  <span class="code-kw">containers:</span>
+  - <span class="code-kw">name:</span> django
+    <span class="code-kw">image:</span> anihpj-web:v2
+    <span class="code-cmt"># ── CONTAINER-LEVEL Security Context (overrides pod-level) ──</span>
+    <span class="code-kw">securityContext:</span>
+      <span class="code-kw">allowPrivilegeEscalation:</span> false  <span class="code-cmt"># 🔑 Cannot gain MORE privileges</span>
+      <span class="code-kw">readOnlyRootFilesystem:</span> true     <span class="code-cmt"># 🔑 Root filesystem is READ-ONLY</span>
+      <span class="code-kw">privileged:</span> false                <span class="code-cmt"># NOT a privileged container</span>
+      <span class="code-kw">capabilities:</span>
+        <span class="code-kw">drop:</span> ["ALL"]                <span class="code-cmt"># 🔑 Drop ALL Linux capabilities</span>
+        <span class="code-kw">add:</span> ["NET_BIND_SERVICE"]     <span class="code-cmt"># Only add back what's needed</span>
+      <span class="code-kw">volumeMounts:</span>
+      - <span class="code-kw">name:</span> tmp
+        <span class="code-kw">mountPath:</span> /tmp              <span class="code-cmt"># Mount writable volume for /tmp</span>
+  <span class="code-kw">volumes:</span>
+  - <span class="code-kw">name:</span> tmp
+    <span class="code-kw">emptyDir:</span> {}                   <span class="code-cmt"># Writable temp storage</span></pre>
+        </div>
+
+        <!-- Security Context Field Reference -->
+        <div class="compare-table" style="margin-top:1.5rem;"><table>
+            <thead><tr><th>Field</th><th>What It Does</th><th>Required By</th><th>Security Impact</th></tr></thead>
+            <tbody>
+                <tr><td><strong>runAsNonRoot</strong></td><td>Forces container to run as UID != 0</td><td>Restricted PSS</td><td>🔑 Prevents root-level container breakout to host.</td></tr>
+                <tr><td><strong>runAsUser</strong></td><td>Specifies the UID to run as</td><td>Recommended</td><td>🔑 Runs as least-privileged user. Combine with non-root image.</td></tr>
+                <tr><td><strong>readOnlyRootFilesystem</strong></td><td>Makes root filesystem read-only</td><td>Restricted PSS</td><td>🔑 Attackers can't modify binaries or write backdoors.</td></tr>
+                <tr><td><strong>allowPrivilegeEscalation</strong></td><td>Prevents setuid binaries from escalating</td><td>Restricted PSS</td><td>🔑 Stops <code>sudo</code>-like privilege escalation inside container.</td></tr>
+                <tr><td><strong>privileged</strong></td><td>Grants FULL host access (all devices, all capabilities)</td><td>MUST be false</td><td>⚠️ Never set true for app containers. Equivalent to root on the node.</td></tr>
+                <tr><td><strong>capabilities</strong></td><td>Linux capabilities (fine-grained root powers)</td><td>Restricted: drop ALL</td><td>🔑 Instead of full root, grant only specific powers (NET_BIND_SERVICE, SYS_TIME).</td></tr>
+                <tr><td><strong>seccompProfile</strong></td><td>Syscall filter — limits what syscalls the container can make</td><td>Restricted PSS</td><td>🔑 If app is compromised, attacker can only use allowed syscalls.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ Security Context Quick Reference</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Pod-level fields:</strong> <code>runAsNonRoot</code>, <code>runAsUser</code>, <code>runAsGroup</code>, <code>fsGroup</code>, <code>seccompProfile</code> — apply to ALL containers.</li>
+                <li><strong>Container-level fields:</strong> <code>allowPrivilegeEscalation</code>, <code>readOnlyRootFilesystem</code>, <code>privileged</code>, <code>capabilities</code> — per-container overrides.</li>
+                <li><strong>Container-level OVERRIDES pod-level:</strong> If both are set, container-level wins. Useful when one container needs different settings.</li>
+                <li><strong>Minimum for Restricted PSS:</strong> <code>runAsNonRoot: true</code>, <code>readOnlyRootFilesystem: true</code>, <code>allowPrivilegeEscalation: false</code>, <code>capabilities.drop: ["ALL"]</code>, <code>seccompProfile.type: RuntimeDefault</code>.</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 Linux Capabilities Deep-Dive -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Linux Capabilities — What Root ACTUALLY Means (and Why You Must Drop Them)</h5>
+            <p>On Linux, "root" isn't one permission — it's ~40 fine-grained <strong>capabilities</strong>. Dropping capabilities eliminates specific root powers without losing root UID. Here are the most dangerous ones:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Capability</th><th>What It Allows</th><th>Attack Vector If Kept</th><th>Should You Keep It?</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>CAP_SYS_ADMIN</strong></td><td>Mount filesystems, load kernel modules, change namespaces</td><td>⚠️ Mount host filesystem → escape container. Load malicious kernel module → root the node.</td><td>❌ NEVER. This is the "new root" — the most powerful capability.</td></tr>
+                    <tr><td><strong>CAP_NET_RAW</strong></td><td>Raw sockets, packet sniffing</td><td>⚠️ tcpdump other pods' traffic. ARP spoofing. Network-level attacks.</td><td>❌ DROP unless app legitimately needs raw sockets.</td></tr>
+                    <tr><td><strong>CAP_SYS_PTRACE</strong></td><td>Debug OTHER processes</td><td>⚠️ Attach debugger to other containers. Read their memory. Inject code.</td><td>❌ NEVER for app containers.</td></tr>
+                    <tr><td><strong>CAP_SYS_BOOT</strong></td><td>Reboot the node</td><td>⚠️ Reboot the host node. Denial of service.</td><td>❌ NEVER.</td></tr>
+                    <tr><td><strong>CAP_DAC_OVERRIDE</strong></td><td>Bypass file permission checks</td><td>⚠️ Read/write ANY file regardless of ownership. Read /etc/shadow.</td><td>❌ DROP unless absolutely needed.</td></tr>
+                    <tr><td><strong>NET_BIND_SERVICE</strong></td><td>Bind to ports < 1024</td><td>Minimal. Port binding only.</td><td>✅ KEEP — most web servers need this for port 80/443.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE RULE:</strong> Start with <code>drop: ["ALL"]</code>. Then <code>add</code> back ONLY what the app actually needs — discovered by testing. If you don't know which capabilities your app needs, drop ALL and add back based on crash logs. <strong>The default capability set is a security liability, not a feature.</strong></p>
+        </div>
+
+        <!-- 🔬 What Breaks with readOnlyRootFilesystem — Practical Guide -->
+        <div class="cnpe-gotcha" style="margin-top:1.5rem;">
+            <h5>⚠️ What BREAKS with readOnlyRootFilesystem — And How to Fix Each App</h5>
+            <p>The single most common failure when hardening pods: the app crashes because it can't write to the filesystem. Here's exactly what breaks and how to fix it for common frameworks:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>App / Framework</th><th>What Tries to Write</th><th>Where It Writes</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Django (Python)</strong></td><td>.pyc bytecode cache</td><td>Same directory as .py files</td><td>Set <code>PYTHONDONTWRITEBYTECODE=1</code> env var. Mount emptyDir at Django project root.</td></tr>
+                    <tr><td><strong>Node.js / Express</strong></td><td>npm cache, tmp files</td><td><code>/tmp</code>, <code>/home/node/.npm</code></td><td>Mount emptyDir at <code>/tmp</code>. Set <code>npm config set cache /tmp/npm</code>.</td></tr>
+                    <tr><td><strong>Go</strong></td><td>Generally nothing! Go binaries are self-contained.</td><td>—</td><td>✅ Go apps usually work with readOnlyRootFS out of the box. Easiest to harden.</td></tr>
+                    <tr><td><strong>Java / Spring Boot</strong></td><td>JVM temp files, class data sharing</td><td><code>/tmp</code></td><td>Mount emptyDir at <code>/tmp</code>. Set <code>-Djava.io.tmpdir=/tmp</code>.</td></tr>
+                    <tr><td><strong>Nginx</strong></td><td>Client body temp, proxy temp, FastCGI temp</td><td><code>/var/cache/nginx</code>, <code>/var/run</code></td><td>Mount emptyDirs at <code>/var/cache/nginx</code> and <code>/var/run</code>. Or configure nginx to use /tmp for all buffers.</td></tr>
+                    <tr><td><strong>PostgreSQL</strong></td><td>Data directory (MUST be writable)</td><td><code>/var/lib/postgresql/data</code></td><td>⚠️ Databases CANNOT use readOnlyRootFS. Mount a PersistentVolume at the data directory. The root FS can still be read-only.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE PATTERN:</strong> Apps need THREE things to be writable: (1) <code>/tmp</code> — universal temp directory. (2) App-specific cache/log directories. (3) Data directories (for databases). Mount emptyDirs or PVs at these paths. Everything else can be read-only.</p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 28.4 ADMISSION WEBHOOKS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s28-4" class="section-block"><h4>28.4 Admission Webhooks — Custom Validation and Mutation</h4>
+        <p>PSS/PSA handles basic pod security. But what about CUSTOM rules? "Block images with the <code>:latest</code> tag." "Require the <code>team</code> label on every pod." "Automatically add resource limits." These require <strong>admission webhooks</strong> — HTTP callbacks that the API Server calls before persisting a resource.</p>
+
+        <div class="diagram-container" style="margin-top:1rem;">
+            <div class="diagram-title">🔗 Admission Webhook Flow — Validate and Mutate Before Persistence</div>
+            <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    ADMISSION WEBHOOK REQUEST FLOW                              │
+│                                                                               │
+│  User: kubectl apply -f pod.yaml                                             │
+│         │                                                                     │
+│         ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐         │
+│  │                    API SERVER ADMISSION CHAIN                     │         │
+│  │                                                                  │         │
+│  │  1. AUTHENTICATION: Who are you? (SA token, OIDC, cert)          │         │
+│  │  2. AUTHORIZATION:  Are you allowed to create pods? (RBAC)       │         │
+│  │                                                                  │         │
+│  │  3. MUTATING ADMISSION WEBHOOKS:  ← Can MODIFY the resource     │         │
+│  │     ┌────────────────────┐                                       │         │
+│  │     │ MutatingWebhook    │  Example: Add sidecar container,      │         │
+│  │     │ POST /mutate       │  inject labels, set default limits     │         │
+│  │     └────────┬───────────┘                                       │         │
+│  │              │ JSONPatch response                                │         │
+│  │              ▼                                                    │         │
+│  │  4. OBJECT SCHEMA VALIDATION: Does it match the CRD schema?      │         │
+│  │                                                                  │         │
+│  │  5. VALIDATING ADMISSION WEBHOOKS:  ← Can REJECT (not modify)   │         │
+│  │     ┌────────────────────┐                                       │         │
+│  │     │ ValidatingWebhook  │  Example: Block :latest images,       │         │
+│  │     │ POST /validate     │  require labels, enforce policies     │         │
+│  │     └────────┬───────────┘                                       │         │
+│  │              │ Allowed: true/false                               │         │
+│  │              ▼                                                    │         │
+│  │  6. PERSIST to etcd                                             │         │
+│  └─────────────────────────────────────────────────────────────────┘         │
+│                                                                               │
+│  🔑 KEY DISTINCTION:                                                          │
+│     Mutating webhooks run FIRST. They can ADD things (defaults, sidecars).    │
+│     Validating webhooks run SECOND. They can only say YES or NO.              │
+│     Mutating webhooks see the ORIGINAL resource.                              │
+│     Validating webhooks see the MUTATED resource (after all mutations).       │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <!-- Webhook Configuration -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 ValidatingWebhookConfiguration — Block :latest Images</span></div>
+<pre><span class="code-cmt"># ── VALIDATING WEBHOOK: Reject pods using :latest tag ──</span>
+<span class="code-kw">apiVersion:</span> admissionregistration.k8s.io/v1
+<span class="code-kw">kind:</span> ValidatingWebhookConfiguration
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> block-latest-tag
+<span class="code-kw">webhooks:</span>
+- <span class="code-kw">name:</span> block-latest.anihpj.dev        <span class="code-cmt"># Must be a fully qualified domain name</span>
+  <span class="code-kw">clientConfig:</span>
+    <span class="code-kw">service:</span>                            <span class="code-cmt"># Webhook service in the cluster</span>
+      <span class="code-kw">name:</span> admission-webhook
+      <span class="code-kw">namespace:</span> anihpj
+      <span class="code-kw">path:</span> /validate-image-tag
+    <span class="code-kw">caBundle:</span> &lt;base64-encoded-CA-cert&gt;  <span class="code-cmt"># TLS certificate for HTTPS</span>
+  <span class="code-kw">rules:</span>
+  - <span class="code-kw">apiGroups:</span> [""]
+    <span class="code-kw">apiVersions:</span> ["v1"]
+    <span class="code-kw">operations:</span> ["CREATE", "UPDATE"]     <span class="code-cmt"># When to trigger</span>
+    <span class="code-kw">resources:</span> ["pods"]                  <span class="code-cmt"># What resources to intercept</span>
+  <span class="code-kw">failurePolicy:</span> Fail                   <span class="code-cmt"># 🔑 Fail = REJECT if webhook is down!</span>
+  <span class="code-cmt"># Use Ignore for non-critical webhooks to avoid blocking all deploys.</span>
+  <span class="code-kw">sideEffects:</span> None
+  <span class="code-kw">admissionReviewVersions:</span> ["v1"]
+
+<span class="code-cmt"># ⚠️ CRITICAL: failurePolicy: Fail means if YOUR webhook service is down,</span>
+<span class="code-cmt"># ALL matching operations are REJECTED. Use Ignore for non-critical webhooks</span>
+<span class="code-cmt"># or ensure the webhook service is highly available (multiple replicas).</span></pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam: Admission Webhooks</h5>
+            <p>The exam may ask you to configure or troubleshoot admission webhooks:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Mutating vs Validating:</strong> Mutating can MODIFY resources (add labels, inject sidecars). Validating can only ACCEPT or REJECT. Mutating runs FIRST.</li>
+                <li><strong>failurePolicy:</strong> <code>Fail</code> = if webhook is unreachable, REJECT the request. <code>Ignore</code> = if webhook is unreachable, ALLOW the request. Use Fail for security policies, Ignore for non-critical policies.</li>
+                <li><strong>TLS is mandatory:</strong> All webhooks MUST use HTTPS. The <code>caBundle</code> is the CA certificate that signed the webhook server's TLS cert.</li>
+                <li><strong>Timeout:</strong> Default 10 seconds. If your webhook takes longer, the request is rejected (if failurePolicy=Fail).</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 Simple Webhook Server Code -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Building a Simple Admission Webhook Server — Python/Flask Example</h5>
+            <p>You don't need a complex framework for admission webhooks. A simple HTTP server that parses AdmissionReview JSON and returns an AdmissionResponse is all you need:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 Python Webhook Server — Block :latest Images</span></div>
+<pre><span class="code-kw">from</span> flask <span class="code-kw">import</span> Flask, request, jsonify
+<span class="code-kw">import</span> json
+
+app = Flask(__name__)
+
+<span class="code-kw">@app.route</span>(<span class="code-str">'/validate-image-tag'</span>, methods=[<span class="code-str">'POST'</span>])
+<span class="code-kw">def</span> <span class="code-fn">validate</span>():
+    <span class="code-cmt"># Parse the AdmissionReview request</span>
+    admission_review = request.get_json()
+    pod_spec = admission_review[<span class="code-str">'request'</span>][<span class="code-str">'object'</span>][<span class="code-str">'spec'</span>]
+
+    <span class="code-cmt"># Check EVERY container's image for :latest tag</span>
+    <span class="code-kw">for</span> container <span class="code-kw">in</span> pod_spec.get(<span class="code-str">'containers'</span>, []):
+        image = container[<span class="code-str">'image'</span>]
+        <span class="code-kw">if</span> <span class="code-str">':latest'</span> <span class="code-kw">in</span> image <span class="code-kw">or</span> <span class="code-str">':'</span> <span class="code-kw">not</span> <span class="code-kw">in</span> image:
+            <span class="code-cmt"># Reject: :latest tag or no tag at all</span>
+            <span class="code-kw">return</span> jsonify({
+                <span class="code-str">'apiVersion'</span>: <span class="code-str">'admission.k8s.io/v1'</span>,
+                <span class="code-str">'kind'</span>: <span class="code-str">'AdmissionReview'</span>,
+                <span class="code-str">'response'</span>: {
+                    <span class="code-str">'uid'</span>: admission_review[<span class="code-str">'request'</span>][<span class="code-str">'uid'</span>],
+                    <span class="code-str">'allowed'</span>: <span class="code-kw">False</span>,
+                    <span class="code-str">'status'</span>: {
+                        <span class="code-str">'code'</span>: 403,
+                        <span class="code-str">'message'</span>: <span class="code-str">f"Image '{image}' uses :latest tag or no tag. Pinned versions only."</span>
+                    }
+                }
+            })
+
+    <span class="code-cmt"># All containers pass — allow</span>
+    <span class="code-kw">return</span> jsonify({
+        <span class="code-str">'apiVersion'</span>: <span class="code-str">'admission.k8s.io/v1'</span>,
+        <span class="code-str">'kind'</span>: <span class="code-str">'AdmissionReview'</span>,
+        <span class="code-str">'response'</span>: {
+            <span class="code-str">'uid'</span>: admission_review[<span class="code-str">'request'</span>][<span class="code-str">'uid'</span>],
+            <span class="code-str">'allowed'</span>: <span class="code-kw">True</span>
+        }
+    })
+
+<span class="code-kw">if</span> __name__ == <span class="code-str">'__main__'</span>:
+    <span class="code-cmt"># Run with TLS (REQUIRED for admission webhooks)</span>
+    app.run(host=<span class="code-str">'0.0.0.0'</span>, port=8443,
+            ssl_context=(<span class="code-str">'/certs/tls.crt'</span>, <span class="code-str">'/certs/tls.key'</span>))</pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 CRITICAL DETAILS:</strong> (1) The response MUST include the <code>uid</code> from the request — Kubernetes uses it to correlate requests. (2) The webhook MUST use HTTPS — plain HTTP is rejected. (3) The <code>AdmissionReview</code> wraps both request and response — your server receives AdmissionReview and returns AdmissionReview.</p>
+        </div>
+
+        <!-- 🔬 Mutating Webhook Example -->
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🔬 Mutating Webhooks — Automatically Injecting Defaults</h5>
+            <p>While validating webhooks say YES/NO, <strong>mutating webhooks</strong> MODIFY resources. The most common use case: automatically adding resource limits to pods that don't specify them:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 Mutating Webhook — Inject Default Resource Limits</span></div>
+<pre><span class="code-cmt"># If a pod has NO resource limits, add default limits:</span>
+<span class="code-cmt">#   limits.cpu: 500m, limits.memory: 512Mi</span>
+<span class="code-cmt"># The mutation is a JSONPatch operation — adding fields to the pod spec.</span>
+
+<span class="code-cmt"># ── JSONPatch Response from Mutating Webhook ──</span>
+{
+  <span class="code-str">"apiVersion"</span>: <span class="code-str">"admission.k8s.io/v1"</span>,
+  <span class="code-str">"kind"</span>: <span class="code-str">"AdmissionReview"</span>,
+  <span class="code-str">"response"</span>: {
+    <span class="code-str">"uid"</span>: <span class="code-str">"&lt;request-uid&gt;"</span>,
+    <span class="code-str">"allowed"</span>: true,
+    <span class="code-str">"patchType"</span>: <span class="code-str">"JSONPatch"</span>,     <span class="code-cmt"># 🔑 Mutating webhooks return a PATCH</span>
+    <span class="code-str">"patch"</span>: <span class="code-str">"W3sib3AiOiJhZGQiLC..."</span>,  <span class="code-cmt"># Base64-encoded JSONPatch</span>
+    <span class="code-cmt"># Decoded patch (for understanding):</span>
+    <span class="code-cmt"># [</span>
+    <span class="code-cmt">#   {"op": "add", "path": "/spec/containers/0/resources", "value": {</span>
+    <span class="code-cmt">#     "limits": {"cpu": "500m", "memory": "512Mi"},</span>
+    <span class="code-cmt">#     "requests": {"cpu": "100m", "memory": "128Mi"}</span>
+    <span class="code-cmt">#   }},</span>
+    <span class="code-cmt">#   {"op": "add", "path": "/metadata/labels/platform", "value": "anihpj"}</span>
+    <span class="code-cmt"># ]</span>
+  }
+}
+
+<span class="code-cmt"># 🔑 MUTATING WEBHOOK ORDER MATTERS:</span>
+<span class="code-cmt"># Multiple mutating webhooks run in ALPHABETICAL ORDER by name.</span>
+<span class="code-cmt"># Webhook A "add-resource-limits.anihpj.dev" runs BEFORE</span>
+<span class="code-cmt"># Webhook B "inject-sidecar.anihpj.dev".</span>
+<span class="code-cmt"># Use naming to control execution order when it matters.</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🎯 COMMON MUTATIONS:</strong> (1) Add default resource limits. (2) Inject Istio/Linkerd sidecar containers. (3) Add required labels (team, environment, cost-center). (4) Set default securityContext values. (5) Rewrite image registries (docker.io → internal registry). <strong>Mutating webhooks are the "platform defaults" layer — they ensure every pod meets minimum standards without the developer needing to know.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 28.5 RUNTIME SECURITY -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s28-5" class="section-block"><h4>28.5 Runtime Security — seccomp and AppArmor</h4>
+        <p>PSS and PSA protect pods at ADMISSION time (before they start). But what protects the NODE after a container is running? <strong>seccomp</strong> and <strong>AppArmor</strong> provide runtime protection — limiting what a running container can do at the kernel level.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Feature</th><th>seccomp (Secure Computing Mode)</th><th>AppArmor (Application Armor)</th></tr></thead>
+            <tbody>
+                <tr><td><strong>What it does</strong></td><td>Filters SYSTEM CALLS. A container can only use allowed syscalls.</td><td>Restricts FILE and CAPABILITY access. A container can only access allowed paths.</td></tr>
+                <tr><td><strong>Scope</strong></td><td>Per container (via securityContext)</td><td>Per container (via annotation: <code>container.apparmor.security.beta.kubernetes.io/</code>)</td></tr>
+                <tr><td><strong>Example block</strong></td><td>Block <code>ptrace</code> (prevent debugging other processes). Block <code>mount</code> (prevent mounting filesystems).</td><td>Block writes to <code>/etc/passwd</code>. Block access to <code>/proc/sys/</code> (kernel tuning).</td></tr>
+                <tr><td><strong>Default profile</strong></td><td><code>RuntimeDefault</code> — blocks ~300 of 435+ syscalls. Safe default for most apps.</td><td><code>runtime/default</code> — distribution-specific profile. Blocks common dangerous operations.</td></tr>
+                <tr><td><strong>Custom profiles</strong></td><td>JSON file defining allowed syscalls. Path: <code>/var/lib/kubelet/seccomp/</code></td><td>Loaded into kernel. Defined in <code>/etc/apparmor.d/</code>. Per-profile enforcement.</td></tr>
+                <tr><td><strong>Kubernetes support</strong></td><td>✅ Native since 1.19 (GA). <code>securityContext.seccompProfile</code></td><td>✅ Supported via annotations. Not yet a first-class field.</td></tr>
+                <tr><td><strong>Required by</strong></td><td>Restricted PSS</td><td>Not required by PSS (yet). Recommended for defense-in-depth.</td></tr>
+            </tbody>
+        </table></div>
+
+        <!-- seccomp Example -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 seccomp Profile — Restrict Django to Essential Syscalls</span></div>
+<pre><span class="code-cmt"># ── SECCOMP PROFILE: anihpj-web.json ──</span>
+<span class="code-cmt"># Stored at: /var/lib/kubelet/seccomp/anihpj-web.json</span>
+{
+  <span class="code-str">"defaultAction"</span>: <span class="code-str">"SCMP_ACT_ERRNO"</span>,   <span class="code-cmt">← DEFAULT: BLOCK all syscalls</span>
+  <span class="code-str">"architectures"</span>: [<span class="code-str">"SCMP_ARCH_X86_64"</span>],
+  <span class="code-str">"syscalls"</span>: [
+    {
+      <span class="code-str">"names"</span>: [
+        <span class="code-str">"read"</span>, <span class="code-str">"write"</span>, <span class="code-str">"open"</span>, <span class="code-str">"close"</span>,     <span class="code-cmt">← ALLOW: Essential I/O</span>
+        <span class="code-str">"fstat"</span>, <span class="code-str">"lseek"</span>, <span class="code-str">"mmap"</span>,           <span class="code-cmt">← ALLOW: Memory & file ops</span>
+        <span class="code-str">"accept"</span>, <span class="code-str">"bind"</span>, <span class="code-str">"listen"</span>,         <span class="code-cmt">← ALLOW: Network (Django needs this)</span>
+        <span class="code-str">"connect"</span>, <span class="code-str">"sendto"</span>, <span class="code-str">"recvfrom"</span>,  <span class="code-cmt">← ALLOW: Network I/O</span>
+        <span class="code-str">"futex"</span>, <span class="code-str">"nanosleep"</span>, <span class="code-str">"clock_gettime"</span> <span class="code-cmt">← ALLOW: Thread & timing</span>
+      ],
+      <span class="code-str">"action"</span>: <span class="code-str">"SCMP_ACT_ALLOW"</span>
+    }
+  ]
+}
+
+<span class="code-cmt"># In Pod spec:</span>
+<span class="code-kw">securityContext:</span>
+  <span class="code-kw">seccompProfile:</span>
+    <span class="code-kw">type:</span> Localhost
+    <span class="code-kw">localhostProfile:</span> anihpj-web.json  <span class="code-cmt"># References file on the NODE</span>
+
+<span class="code-cmt"># ⚠️ seccomp profiles are node-local files. They must exist on EVERY node</span>
+<span class="code-cmt"># that could run the pod. Use a DaemonSet or node config management</span>
+<span class="code-cmt"># to distribute profiles. Or use RuntimeDefault (built-in, works everywhere).</span></pre>
+        </div>
+
+        <div class="cnpe-speed-tip" style="margin-top:1.5rem;">
+            <h5>⚡ seccomp & AppArmor for CNPE</h5>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>RuntimeDefault is your starting point:</strong> <code>seccompProfile.type: RuntimeDefault</code> — safe, built-in, no custom files needed. Works on all nodes.</li>
+                <li><strong>Custom seccomp for high-security apps:</strong> Start with RuntimeDefault, monitor which syscalls are actually used (<code>strace</code>), then build a minimal allowlist.</li>
+                <li><strong>AppArmor for defense-in-depth:</strong> Even with seccomp, AppArmor adds FILE-level restrictions. Use together.</li>
+                <li><strong>CNPE exam:</strong> Know that seccomp is in the securityContext, AppArmor is via annotation. Both restrict what a running container can do at the kernel level.</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 AppArmor Profile Example -->
+        <div class="code-block-wrapper" style="margin-top:1.5rem;">
+            <div class="code-block-header"><span class="code-lang">📋 AppArmor Profile — Restrict anihpj-web File Access</span></div>
+<pre><span class="code-cmt"># ── APPARMOR PROFILE: /etc/apparmor.d/anihpj-web ──</span>
+<span class="code-cmt"># Loaded on the node: sudo apparmor_parser -r /etc/apparmor.d/anihpj-web</span>
+
+<span class="code-cmt">#include &lt;tunables/global&gt;</span>
+
+profile anihpj-web flags=(attach_disconnected,mediate_deleted) {
+  <span class="code-cmt">#include &lt;abstractions/base&gt;</span>
+  <span class="code-cmt">#include &lt;abstractions/nameservice&gt;</span>    <span class="code-cmt"># DNS resolution</span>
+
+  <span class="code-cmt"># ── ALLOW ──</span>
+  /app/**                          r,              <span class="code-cmt"># Read application code</span>
+  /app/static/**                   rw,             <span class="code-cmt"># Write static files (collectstatic)</span>
+  /tmp/**                          rw,             <span class="code-cmt"># Write temp files</span>
+  /usr/local/lib/python**          r,              <span class="code-cmt"># Read Python libraries</span>
+  /usr/local/bin/python*           rix,            <span class="code-cmt"># Execute Python</span>
+
+  <span class="code-cmt"># ── DENY (explicit blocks — defense in depth) ──</span>
+  deny /etc/passwd                 w,              <span class="code-cmt"># CANNOT modify password file</span>
+  deny /etc/shadow                 rw,             <span class="code-cmt"># CANNOT access shadow passwords</span>
+  deny /proc/sys/**                w,              <span class="code-cmt"># CANNOT modify kernel settings</span>
+  deny /boot/**                    rw,             <span class="code-cmt"># CANNOT access boot files</span>
+  deny /root/**                    rw,             <span class="code-cmt"># CANNOT access root home</span>
+
+  <span class="code-cmt"># ── NETWORK ──</span>
+  network inet  tcp,                              <span class="code-cmt"># Allow TCP (HTTP, DB)</span>
+  network inet  udp,                              <span class="code-cmt"># Allow UDP (DNS)</span>
+
+  <span class="code-cmt"># ── CAPABILITIES ──</span>
+  capability net_bind_service,                    <span class="code-cmt"># Bind to ports &lt; 1024</span>
+}
+
+<span class="code-cmt"># ── APPLY TO POD (via annotation) ──</span>
+<span class="code-kw">apiVersion:</span> v1
+<span class="code-kw">kind:</span> Pod
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web
+  <span class="code-kw">annotations:</span>
+    <span class="code-kw">container.apparmor.security.beta.kubernetes.io/django:</span> localhost/anihpj-web
+    <span class="code-cmt"># Format: container.apparmor.security.beta.kubernetes.io/&lt;container-name&gt;</span>
+    <span class="code-cmt"># Value: localhost/&lt;profile-name&gt; or runtime/default or unconfined</span>
+<span class="code-kw">spec:</span>
+  <span class="code-kw">containers:</span>
+  - <span class="code-kw">name:</span> django
+    <span class="code-kw">image:</span> anihpj-web:v2
+
+<span class="code-cmt"># ⚠️ AppArmor profiles must exist on the NODE before the pod starts.</span>
+<span class="code-cmt"># Use a DaemonSet or node bootstrap script to distribute profiles.</span></pre>
+        </div>
+
+        <!-- 🔬 How to BUILD a Custom seccomp Profile -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 How to BUILD a Custom seccomp Profile — The strace Workflow</h5>
+            <p>You don't guess which syscalls your app needs — you MEASURE them:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>RUN with RuntimeDefault:</strong> Deploy with <code>seccompProfile.type: RuntimeDefault</code>. Verify the app works. RuntimeDefault blocks ~300 dangerous syscalls out of 435+.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>RECORD syscalls:</strong> In a TEST env: <code>strace -c -p $(pgrep python) -o /tmp/syscalls.log</code>. Exercise ALL app features under load for 15 minutes. The app must call every code path.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>EXTRACT allowlist:</strong> <code>cat /tmp/syscalls.log | awk '{print $NF}' | sort -u > allowed-syscalls.txt</code>. Typical Django app: 30-50 syscalls needed. Typical Go app: 15-25. Typical Node: 40-60.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>BUILD profile:</strong> Create JSON file with <code>defaultAction: SCMP_ACT_ERRNO</code> and extracted syscalls. Distribute to <code>/var/lib/kubelet/seccomp/</code> on all nodes via DaemonSet.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>TEST and ITERATE:</strong> Deploy with custom profile. If app crashes → check logs for blocked syscall names → add to allowlist → redeploy. Repeat until stable.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 CNPE NOTE:</strong> For the exam, RuntimeDefault is sufficient — custom profiles are advanced. But understanding the workflow demonstrates platform engineering maturity. The exam may ask: "How would you create a custom seccomp profile?"</p>
+        </div>
+
+        <!-- 🔬 Container Escape Techniques — Why These Protections Matter -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 How Containers Escape — And How PSS + seccomp + AppArmor Stop Them</h5>
+            <p>Every security control in this chapter exists because attackers have exploited its absence. Here are the 3 most common container escape techniques and how our controls block each one:</p>
+            <div class="card-grid cols-3" style="margin-top:0.8rem;">
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>💥 Escape #1: Privileged Container Breakout</h5>
+                    <p style="font-size:0.78rem;"><strong>Attack:</strong> Attacker gets shell in a privileged container. Runs <code>nsenter --mount=/proc/1/ns/mnt -- /bin/bash</code> to enter the HOST namespace. Now has root on the node.</p>
+                    <p style="font-size:0.78rem;color:#3fb950;margin-top:0.5rem;"><strong>Blocked by:</strong><br>• PSS Baseline: <code>privileged: false</code> blocks privileged containers entirely.<br>• <code>allowPrivilegeEscalation: false</code> prevents gaining additional privileges.<br>• seccomp: RuntimeDefault blocks <code>nsenter</code> syscall.</p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>💥 Escape #2: HostPath Volume Mount</h5>
+                    <p style="font-size:0.78rem;"><strong>Attack:</strong> Attacker mounts <code>/var/run/docker.sock</code> via hostPath. Uses Docker socket to launch a privileged container on the host — effectively root on the node.</p>
+                    <p style="font-size:0.78rem;color:#3fb950;margin-top:0.5rem;"><strong>Blocked by:</strong><br>• PSS Baseline: hostPath volumes are FORBIDDEN.<br>• PSS Restricted: Also forbids hostPath.<br>• AppArmor: Can deny access to Docker socket path.</p>
+                </div>
+                <div class="info-card" style="border-left:4px solid #f85149;">
+                    <h5>💥 Escape #3: Kernel Module Loading</h5>
+                    <p style="font-size:0.78rem;"><strong>Attack:</strong> Attacker loads a malicious kernel module via <code>insmod</code>. The module runs in kernel space with full system access — bypassing ALL container isolation.</p>
+                    <p style="font-size:0.78rem;color:#3fb950;margin-top:0.5rem;"><strong>Blocked by:</strong><br>• capabilities.drop: [ALL] removes CAP_SYS_MODULE.<br>• seccomp: RuntimeDefault blocks <code>init_module</code> and <code>finit_module</code> syscalls.<br>• AppArmor: Denies writes to <code>/lib/modules/</code>.</p>
+                </div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 WHY LAYERS MATTER:</strong> Each control blocks DIFFERENT attack paths. Privileged container → PSS stops it. hostPath → PSS stops it. Kernel module → capabilities stop it. syscall attack → seccomp stops it. File access → AppArmor stops it. <strong>No single control is sufficient — defense-in-depth is the only reliable strategy.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- 28.6 ANIHPJ POD SECURITY DESIGN -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="s28-6" class="section-block"><h4>28.6 anihpj Pod Security Design — Complete Defense Strategy</h4>
+        <p>Let's design the complete pod security posture for anihpj — combining PSS enforcement, security contexts, admission webhooks, and runtime security into one coherent strategy.</p>
+
+        <div class="compare-table" style="margin-top:1rem;"><table>
+            <thead><tr><th>Namespace</th><th>PSS Enforce</th><th>PSS Audit</th><th>Key SecurityContext Fields</th><th>Additional Controls</th></tr></thead>
+            <tbody>
+                <tr><td><strong>anihpj-prod</strong></td><td>Restricted</td><td>Restricted</td><td>runAsNonRoot, readOnlyRootFS, allowPrivilegeEscalation=false, capabilities.drop=[ALL], seccomp=RuntimeDefault</td><td>Validating webhook: block :latest. AppArmor: deny /proc/sys writes.</td></tr>
+                <tr><td><strong>anihpj-staging</strong></td><td>Baseline</td><td>Restricted</td><td>Same as prod</td><td>Warning label: "This namespace will be enforced Restricted next month."</td></tr>
+                <tr><td><strong>anihpj-dev</strong></td><td>Baseline</td><td>Restricted</td><td>runAsNonRoot, allowPrivilegeEscalation=false</td><td>Developers can test Restricted compliance before moving to staging.</td></tr>
+                <tr><td><strong>monitoring</strong></td><td>Privileged</td><td>Baseline</td><td>Minimal (Prometheus node-exporter needs hostNetwork)</td><td>RBAC: tightest possible. Only monitoring team can deploy here.</td></tr>
+                <tr><td><strong>kube-system</strong></td><td>Privileged</td><td>—</td><td>System workloads (CNI, kube-proxy) need privileged access</td><td>Never deploy application pods here.</td></tr>
+            </tbody>
+        </table></div>
+
+        <div class="scenario-box positive" style="margin-top:1.5rem;">
+            <h5>✅ anihpj Pod Security Strategy — Production-Ready</h5>
+            <ul>
+                <li><strong>Production: Restricted PSS enforced.</strong> No root containers. Read-only root FS. All capabilities dropped. Seccomp required. This blocks 99% of container escape techniques.</li>
+                <li><strong>Validating webhook: block :latest tags.</strong> Any pod using <code>:latest</code> is REJECTED immediately. No exceptions. This prevents version drift and rollback failures.</li>
+                <li><strong>Mutating webhook: inject defaults.</strong> If a pod doesn't specify resource limits, the webhook adds <code>limits.cpu: 500m, limits.memory: 512Mi</code>. Never allow unbounded resources.</li>
+                <li><strong>seccomp: RuntimeDefault minimum.</strong> Every pod must have seccomp enabled. Custom profiles for high-security components (payments, auth).</li>
+                <li><strong>Regular audit:</strong> Monthly review of PSA audit logs. What pods would fail Restricted? Plan to fix them before enforcement tightens.</li>
+                <li><strong>Images built non-root:</strong> All anihpj images use USER 1000 in Dockerfile. No container starts as root — even without securityContext.</li>
+            </ul>
+        </div>
+
+        <!-- 🔬 Pod Security Deployment Checklist -->
+        <div class="cnpe-strategy" style="margin-top:1.5rem;">
+            <h5>🔬 Pod Security Checklist — Every PR Should Verify These 8 Items</h5>
+            <p>Copy this checklist into your team's PR template. Every pod deployment should pass ALL 8 checks before merging:</p>
+            <div class="card-grid cols-2" style="margin-top:0.8rem;">
+                <div class="info-card highlight">
+                    <h5>☑️ Admission-Time Checks</h5>
+                    <ol style="font-size:0.78rem;padding-left:1.2rem;margin-top:0.5rem;">
+                        <li><strong>PSS level correct?</strong> Production namespaces MUST have enforce=restricted. Check: <code>kubectl get ns -l pod-security.kubernetes.io/enforce!=restricted</code></li>
+                        <li><strong>No :latest tags?</strong> Every container image must have an explicit version tag or digest. Validated by admission webhook.</li>
+                        <li><strong>Resource limits set?</strong> Every container must specify <code>resources.limits</code> and <code>resources.requests</code>. Injected by mutating webhook if missing.</li>
+                        <li><strong>Required labels present?</strong> <code>app</code>, <code>team</code>, <code>environment</code> labels on every pod. Validated by admission webhook.</li>
+                    </ol>
+                </div>
+                <div class="info-card">
+                    <h5>☑️ Runtime-Time Checks</h5>
+                    <ol style="font-size:0.78rem;padding-left:1.2rem;margin-top:0.5rem;">
+                        <li><strong>runAsNonRoot: true?</strong> Every container MUST run as non-root UID. Check: <code>kubectl get pods -o json | jq '.items[].spec.containers[].securityContext.runAsNonRoot'</code></li>
+                        <li><strong>readOnlyRootFilesystem: true?</strong> Root FS read-only with emptyDir mounts for writable paths. Verified in securityContext.</li>
+                        <li><strong>seccomp enabled?</strong> RuntimeDefault minimum. Check: <code>kubectl get pods -o json | jq '.items[].spec.securityContext.seccompProfile.type'</code></li>
+                        <li><strong>capabilities dropped?</strong> <code>drop: ["ALL"]</code> with only necessary capabilities added back. Verified in securityContext.</li>
+                    </ol>
+                </div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 AUTOMATE THIS:</strong> Don't manually check these 8 items — encode them in CI. A script that runs <code>kubectl auth can-i</code> + parses pod YAML for securityContext fields. Fail the PR if any check fails. <strong>Security that relies on human memory is not security.</strong></p>
+        </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- PRACTICE DRILLS -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="cnpe-practice-drill" id="drill28-1">
+            <h5>🛠️ Drill 1: Enforce Restricted PSS on anihpj</h5>
+            <p><strong>Scenario:</strong> The anihpj production namespace currently has no PSS enforcement.</p>
+            <p><strong>Task:</strong></p>
+            <ol>
+                <li>Add warn=restricted and audit=restricted labels to the anihpj namespace</li>
+                <li>Deploy a test pod running as root. Verify you get a WARNING but the pod is created</li>
+                <li>Add enforce=restricted label to the namespace</li>
+                <li>Deploy the same pod again. Verify it is REJECTED</li>
+                <li>Fix the pod by adding a proper securityContext and verify it deploys successfully</li>
+            </ol>
+            <p><strong>Time: 15 min</strong></p>
+            <div class="cnpe-speed-tip" style="margin-top:0.5rem;padding:12px 16px;">
+                <h5 style="font-size:0.85rem;">💡 Hints</h5>
+                <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:4px;">
+                    <li>Warn label: <code>kubectl label ns anihpj pod-security.kubernetes.io/warn=restricted</code>.</li>
+                    <li>Test pod (will trigger warning but deploy): <code>kubectl run test-root --image=nginx -n anihpj</code> — nginx runs as root by default.</li>
+                    <li>Enforce label: <code>kubectl label ns anihpj pod-security.kubernetes.io/enforce=restricted --overwrite</code>.</li>
+                    <li>After enforce, same nginx pod will be REJECTED. Fix: add <code>securityContext: {runAsNonRoot: true, runAsUser: 101}</code> (nginx user is 101).</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill28-2">
+            <h5>🛠️ Drill 2: Security Context for anihpj-web</h5>
+            <p><strong>Scenario:</strong> The anihpj-web deployment currently runs as root with no security restrictions.</p>
+            <p><strong>Task:</strong></p>
+            <ol>
+                <li>Add pod-level securityContext: runAsNonRoot=true, runAsUser=1000, seccompProfile=RuntimeDefault</li>
+                <li>Add container-level: readOnlyRootFilesystem=true, allowPrivilegeEscalation=false, capabilities.drop=[ALL]</li>
+                <li>Mount an emptyDir at /tmp (Django needs writable temp)</li>
+                <li>Verify the pod starts successfully and serves traffic</li>
+            </ol>
+            <p><strong>Time: 15 min</strong></p>
+            <div class="cnpe-speed-tip" style="margin-top:0.5rem;padding:12px 16px;">
+                <h5 style="font-size:0.85rem;">💡 Hints</h5>
+                <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:4px;">
+                    <li>Pod-level: <code>spec.securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 3000, fsGroup: 2000, seccompProfile: {type: RuntimeDefault}}</code>.</li>
+                    <li>Container-level: <code>securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}</code>.</li>
+                    <li>CRITICAL: If the pod crashes with "permission denied" on /tmp, add: <code>volumes: [{name: tmp, emptyDir: {}}]</code> and mount at <code>/tmp</code>.</li>
+                    <li>Django also writes to its project directory for .pyc files — you may need <code>emptyDir</code> at the app directory too, or set <code>PYTHONDONTWRITEBYTECODE=1</code> env var.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill28-3">
+            <h5>🛠️ Drill 3: Admission Webhook to Block :latest</h5>
+            <p><strong>Scenario:</strong> Create an admission webhook that rejects any pod using the <code>:latest</code> image tag.</p>
+            <p><strong>Task:</strong></p>
+            <ol>
+                <li>Deploy a simple webhook server (can use a pre-built image or write a small HTTP server)</li>
+                <li>Configure a ValidatingWebhookConfiguration for pods on CREATE/UPDATE</li>
+                <li>Test: deploy a pod with <code>image: nginx:latest</code> — should be REJECTED</li>
+                <li>Test: deploy a pod with <code>image: nginx:1.25</code> — should be ALLOWED</li>
+            </ol>
+            <p><strong>Time: 15 min</strong></p>
+            <div class="cnpe-speed-tip" style="margin-top:0.5rem;padding:12px 16px;">
+                <h5 style="font-size:0.85rem;">💡 Hints</h5>
+                <ul style="font-size:0.78rem;padding-left:1.2rem;margin-top:4px;">
+                    <li>Webhook server: Write a simple Python/Go HTTP server that parses the <code>AdmissionReview</code> JSON, checks <code>spec.containers[].image</code> for <code>:latest</code> suffix, and returns <code>{"allowed": false, "message": ":latest tag is not allowed"}</code>.</li>
+                    <li>Critical: <code>failurePolicy: Fail</code> means ALL pod creates are blocked if your webhook is down. During testing, use <code>failurePolicy: Ignore</code> instead.</li>
+                    <li>Test: <code>kubectl run test-latest --image=nginx:latest -n anihpj</code> → REJECTED. <code>kubectl run test-pinned --image=nginx:1.25 -n anihpj</code> → ALLOWED.</li>
+                    <li>The webhook server needs a TLS certificate. For testing, use cert-manager to create a self-signed cert, or use <code>openssl</code> to generate one.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- KNOWLEDGE CHECK -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="cnpe-knowledge-check">
+            <h5>🧠 Knowledge Check — 10 Questions</h5>
+            <div class="cnpe-question"><p><strong>Q1:</strong> What are the 3 Pod Security Standard levels and what does each restrict?</p></div>
+            <div class="cnpe-question"><p><strong>Q2:</strong> How does Pod Security Admission enforce PSS? What are the 3 enforcement modes?</p></div>
+            <div class="cnpe-question"><p><strong>Q3:</strong> What's the difference between pod-level and container-level securityContext?</p></div>
+            <div class="cnpe-question"><p><strong>Q4:</strong> What 5 securityContext fields are required for Restricted PSS compliance?</p></div>
+            <div class="cnpe-question"><p><strong>Q5:</strong> What is the difference between a MutatingWebhook and a ValidatingWebhook?</p></div>
+            <div class="cnpe-question"><p><strong>Q6:</strong> What does failurePolicy: Fail mean? When would you use Ignore instead?</p></div>
+            <div class="cnpe-question"><p><strong>Q7:</strong> What is seccomp and how does it differ from AppArmor?</p></div>
+            <div class="cnpe-question"><p><strong>Q8:</strong> What is the RuntimeDefault seccomp profile and why is it recommended?</p></div>
+            <div class="cnpe-question"><p><strong>Q9:</strong> Why does enforcing Restricted PSS break most default container images?</p></div>
+            <div class="cnpe-question"><p><strong>Q10:</strong> Design the pod security posture for anihpj: what PSS levels, security contexts, and admission controls are needed?</p></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CHAPTER SUMMARY -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="info-box summary">
+            <h5>📋 Chapter 28 Summary — Pod Security &amp; Admission Control</h5>
+            <div class="card-grid cols-3" style="margin-top:0.8rem;">
+                <div class="info-card"><div class="card-icon-lg">🛡️</div><h5>PSS + PSA</h5><p>3 levels: Privileged → Baseline → Restricted. Enforced via namespace labels. Roll out with warn→audit→enforce.</p></div>
+                <div class="info-card"><div class="card-icon-lg">🔒</div><h5>Security Contexts</h5><p>Pod-level + container-level. runAsNonRoot, readOnlyRootFS, drop ALL capabilities, seccomp=RuntimeDefault.</p></div>
+                <div class="info-card"><div class="card-icon-lg">🔗</div><h5>Webhooks + Runtime</h5><p>Mutating webhooks (add defaults). Validating webhooks (block :latest). seccomp (syscalls) + AppArmor (files).</p></div>
+            </div>
+        </div>
+
+        <div class="visual-summary">
+            <h4>🎨 Visual Summary — The Pod Security Stack</h4>
+            <pre style="background:transparent;font-size:0.82rem;text-align:center;">
+    ┌──────────────────────────────────────────────────────────────┐
+    │                   THE POD SECURITY STACK                       │
+    │                                                               │
+    │   PSA Labels → PSS Enforcement → Security Context → Runtime  │
+    │   (namespace)   (admission)        (pod spec)       (kernel)  │
+    │                                                               │
+    │   🔑 DEFENSE IN DEPTH: Every layer adds protection            │
+    │   🛡️ PSA blocks → Webhook validates → seccomp restricts      │
+    │   🏢 anihpj: Restricted PSS + block :latest + RuntimeDefault  │
+    └──────────────────────────────────────────────────────────────┘</pre>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam Strategy — Domain 5 Pod Security Tasks</h5>
+            <p>Domain 5 (Security &amp; Policy, 15%) includes pod security. Expect 1-2 pod security tasks:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Apply PSA labels:</strong> Given a scenario ("production namespace needs Restricted enforcement"), set the correct labels. Know the exact label format: <code>pod-security.kubernetes.io/enforce</code>, <code>pod-security.kubernetes.io/warn</code>, <code>pod-security.kubernetes.io/audit</code>.</li>
+                <li><strong>Fix a pod rejected by PSA:</strong> Given an error message like "runAsNonRoot != true," add the correct securityContext fields. Know the 5 Restricted requirements: runAsNonRoot, readOnlyRootFS, allowPrivilegeEscalation=false, capabilities.drop=[ALL], seccompProfile=RuntimeDefault.</li>
+                <li><strong>Write a securityContext:</strong> Given a pod spec, add pod-level AND container-level security contexts. Know which fields go where: pod-level (runAsUser, fsGroup, seccompProfile) vs container-level (readOnlyRootFS, allowPrivilegeEscalation, capabilities).</li>
+                <li><strong>Configure an admission webhook:</strong> Know ValidatingWebhookConfiguration YAML structure. Key fields: clientConfig (service + caBundle), rules (apiGroups, resources, operations), failurePolicy (Fail vs Ignore).</li>
+            </ul>
+            <p style="margin-top:0.5rem;"><strong>🔑 EXAM MINDSET:</strong> Pod security is about LAYERS. PSA = namespace-level gate. SecurityContext = pod-level hardening. Webhooks = custom policies. Runtime = kernel-level protection. A secure pod has ALL layers configured. <strong>The exam tests the full stack — not just one piece.</strong></p>
+        </div>
+    </div>
+
+    <hr class="chapter-divider">
+
     <div id="ch29"><div class="chapter-intro"><h3>Ch 29: Policy Engines</h3><p>OPA/Gatekeeper (Rego), Kyverno (YAML), common policies, CEL, admission webhooks.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">📜</div><p>Coming soon</p></div></div>
     <div id="ch30"><div class="chapter-intro"><h3>Ch 30: Supply Chain Security</h3><p>SBOM, Cosign/Sigstore, SLSA, Trivy/Grype, Falco, Vault, kube-bench, compliance.</p><div class="chapter-meta"><span class="meta-tag">🔴 Advanced</span><span class="meta-tag">⏱️ ~2h</span></div></div><div class="content-placeholder"><div class="placeholder-icon">🔐</div><p>Coming soon</p></div></div>
 
