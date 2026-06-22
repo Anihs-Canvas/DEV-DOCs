@@ -34519,6 +34519,36 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
         <div id="s31-1" class="section-block"><h4>31.1 Multi-Master Control Plane — HA at the Core</h4>
         <p>A <strong>single control plane node is a single point of failure</strong>. Multi-master deployments run 3 or 5 control plane nodes, each with: API server (stateless, load-balanced), controller manager + scheduler (leader-elected, only one active at a time), and etcd (replicated via Raft consensus).</p>
 
+        <!-- 🔬 Why HA Matters — The Cost of Downtime -->
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🔍 Why HA Matters — The Real Cost of Control Plane Downtime</h5>
+            <p style="color:#c9d1d9;font-size:0.9em;margin:10px 0;">When the control plane goes down, it's not just "kubectl stops working." Here's what actually happens — and what it costs:</p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+                <div style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#f87171;font-weight:700;margin-bottom:6px;">❌ Single Control Plane — 1 Hour of Downtime</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• New pods cannot be scheduled (Deployments stuck)</li>
+                        <li>• Liveness probes timeout → pods restarted unnecessarily</li>
+                        <li>• HPA cannot scale → traffic spike = crash</li>
+                        <li>• Node failures cannot be detected → zombie workloads</li>
+                        <li>• ArgoCD cannot sync → drift accumulates</li>
+                        <li style="color:#f87171;margin-top:8px;"><strong>Business impact: anihpj job board unavailable. 2,400 job applications lost. Developer trust eroded.</strong></li>
+                    </ul>
+                </div>
+                <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#4ade80;font-weight:700;margin-bottom:6px;">✅ Multi-Master HA — 1 CP Node Fails</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• etcd leader re-election: <strong>~1 second</strong></li>
+                        <li>• API server: load balancer routes to remaining 2 → no impact</li>
+                        <li>• Controller/Scheduler: new leader elected → <strong>~5 seconds</strong></li>
+                        <li>• Developers don't notice — kubectl works, deployments continue</li>
+                        <li>• Failed node auto-replaced by cluster-autoscaler or cloud ASG</li>
+                        <li style="color:#4ade80;margin-top:8px;"><strong>Business impact: Zero. The platform absorbed the failure transparently. That's what HA means.</strong></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
         <div class="diagram-container" style="margin-top:1rem;">
             <div class="diagram-title">🏗️ Multi-Master HA Architecture (3 Control Plane Nodes)</div>
             <pre style="background:#161b22;font-size:0.78rem;margin-top:0.5rem;">
@@ -34573,6 +34603,44 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
                 <li><strong>Production HA:</strong> 3 nodes across 3 zones. Survives 1 zone failure.</li>
             </ul>
         </div>
+
+        <!-- 🔬 Component Failure Modes — What Happens When Each CP Component Fails -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Component Failure Modes — What Actually Happens When Each Control Plane Component Fails</h5>
+            <p>Not all control plane failures are equal. Understanding what EACH component does when it fails helps you diagnose problems faster and design better HA:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Component</th><th>Failure Impact</th><th>Recovery</th><th>User-Visible Effect</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>API Server</strong><br>(1 of 3 fails)</td><td>LB health check fails → traffic stops going to this instance. Remaining 2 handle all requests. <strong>No loss of functionality.</strong></td><td>Auto-restart (kubelet) or ASG replaces node. New instance joins LB automatically within ~30s.</td><td><strong>None.</strong> kubectl works, deployments work. Developers don't notice.</td></tr>
+                    <tr><td><strong>Controller Manager</strong><br>(Leader fails)</td><td>Leader election begins. New leader elected in ~5s. During election: NO controllers run (no new ReplicaSets, no node lifecycle management). <strong>Brief pause in reconciliation.</strong></td><td>Standby instance becomes leader. <code>--leader-elect-lease-duration=15s</code> controls election speed.</td><td><strong>~5 second delay</strong> in new pod creation. Existing pods unaffected. HPA decisions delayed.</td></tr>
+                    <tr><td><strong>Scheduler</strong><br>(Leader fails)</td><td>New leader elected in ~5s. During election: new pods stuck in Pending state. <strong>No new pods scheduled.</strong> Existing pods unaffected.</td><td>Standby instance becomes leader. Pending pods scheduled immediately after.</td><td><strong>~5 second gap</strong> in pod scheduling. "Pending" pods briefly but auto-resolve.</td></tr>
+                    <tr><td><strong>etcd</strong><br>(1 of 3 fails)</td><td>Raft leader may change if the failed node was leader. Quorum maintained (2/3). <strong>Cluster fully operational.</strong></td><td>New leader elected in ~1s (heartbeat timeout). New member can be added to replace failed one.</td><td><strong>None.</strong> All reads/writes continue. Latency may increase slightly during leader election.</td></tr>
+                    <tr><td><strong>etcd</strong><br>(2 of 3 fail)</td><td><strong>Quorum LOST.</strong> No writes possible. Cluster becomes read-only. API server returns errors for all mutating requests (create/update/delete). Existing pods RUN but cannot be changed.</td><td><strong>ONLY recovery: restore from etcd snapshot.</strong> Cannot elect new leader without majority.</td><td><strong>CLUSTER FROZEN.</strong> kubectl apply fails. Deployments stuck. The platform is effectively down for writes.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY THIS MATTERS:</strong> Most control plane failures are TRANSPARENT (no user impact) — leader election handles them automatically. The ONLY catastrophic failure is etcd quorum loss. <strong>Every etcd design decision (node count, zone placement, backup frequency) traces back to preventing this ONE scenario.</strong></p>
+        </div>
+
+        <!-- 🔬 Leader Election Deep-Dive — How K8s Picks the Active Controller -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Leader Election Deep-Dive — How Kubernetes Picks the Active Controller</h5>
+            <p>When you have 3 controller managers, how does only ONE become active? The answer is <strong>Kubernetes Leader Election</strong> — a lease-based mechanism backed by etcd (or ConfigMaps/Leases):</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Startup:</strong> Each controller manager instance tries to create or acquire a Lease object in kube-system namespace (e.g., <code>kube-controller-manager</code> Lease). The Lease has a holderIdentity field — initially empty.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Acquire:</strong> First instance to create/update the Lease becomes the LEADER. It writes its hostname to <code>holderIdentity</code> and sets <code>acquireTime</code>. Other instances see the Lease is held → become STANDBY.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Renew (Heartbeat):</strong> The leader RENEWS the Lease every <code>--leader-elect-renew-deadline</code> / 2 seconds (typically every 5-10s). This updates <code>renewTime</code>. Standby instances watch the Lease for changes.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Leader Failure:</strong> If the leader stops renewing (crashes, network partition), the <code>renewTime</code> goes stale. After <code>--leader-elect-lease-duration</code> (default 15s), the Lease is considered EXPIRED. Standby instances compete to acquire it — fastest wins.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>New Leader:</strong> The winning standby updates <code>holderIdentity</code> with its hostname + <code>acquireTime</code>. It begins running controllers. Total failover time: ~15-20 seconds. User impact: brief pause in reconciliation (new pods not created, HPA decisions delayed).</div></div>
+            </div>
+            <div class="cnpe-speed-tip" style="margin-top:0.8rem;">
+                <h5>⚡ Leader Election Timing Parameters</h5>
+                <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                    <li><strong>--leader-elect-lease-duration:</strong> 15s (default). How long a Lease is valid without renewal. Shorter = faster failover, higher risk of split-brain from transient issues.</li>
+                    <li><strong>--leader-elect-renew-deadline:</strong> 10s (default). Leader MUST renew within this window. Must be < lease-duration.</li>
+                    <li><strong>--leader-elect-retry-period:</strong> 2s (default). Standby checks "is the Lease still valid?" every 2 seconds.</li>
+                </ul>
+            </div>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -34599,6 +34667,50 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
         <div class="cnpe-strategy" style="margin-top:1.5rem;">
             <h5>🎯 CNPE Recommendation: Start With Stacked</h5>
             <p>For the CNPE exam and most production deployments: <strong>use stacked etcd</strong>. It's simpler, well-tested, and the default. Only consider external etcd for very large clusters (500+ nodes) or when regulatory requirements demand strict separation of the data store from the control plane. <strong>The exam tests stacked etcd — know it well.</strong></p>
+        </div>
+
+        <!-- 🔬 etcd Internals — How etcd Actually Stores Data -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 etcd Internals — How etcd Actually Stores Data (MVCC + BoltDB)</h5>
+            <p>etcd isn't just a "key-value store" — it's a <strong>MVCC (Multi-Version Concurrency Control)</strong> database built on BoltDB. Understanding this explains WHY compaction, defrag, and revision management are essential:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">🧠 etcd MVCC — Every Key Has a History of Revisions</div>
+                <pre style="background:#161b22;font-size:0.75rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    ETCD MVCC — MULTI-VERSION CONCURRENCY CONTROL                 │
+│                                                                               │
+│  When you write to etcd, you're NOT overwriting. You're APPENDING.             │
+│                                                                               │
+│  etcd stores: Key → [Revision 1, Revision 2, Revision 3, ..., Revision N]     │
+│                                                                               │
+│  Example: anihpj-web Deployment over time                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │ /registry/deployments/anihpj/anihpj-web                                   │ │
+│  │                                                                           │ │
+│  │  Rev 147: { "spec": { "replicas": 1, "image": "anihpj:v1.0" } }           │ │
+│  │  Rev 152: { "spec": { "replicas": 3, "image": "anihpj:v1.1" } }  ← HPA   │ │
+│  │  Rev 158: { "spec": { "replicas": 3, "image": "anihpj:v1.2" } }  ← Deploy │ │
+│  │  Rev 163: { "status": { "availableReplicas": 3 } }               ← Update │ │
+│  │  Rev 171: { "spec": { "replicas": 6, "image": "anihpj:v2.0" } }  ← Scale  │ │
+│  │  ...                                                                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  🔑 KEY FACTS:                                                                 │
+│  • EVERY change creates a NEW revision. Old revisions are RETAINED.            │
+│  • This enables: (a) Watch API (clients see changes), (b) History (rollback),  │
+│    (c) Multi-version reads (consistent snapshots).                             │
+│  • The COST: Database grows CONTINUOUSLY. Without compaction, it fills the disk.│
+│  • COMPACTION: Deletes old revisions up to a given revision number.            │
+│    "Delete all revisions before revision 150."                                 │
+│  • DEFRAG: Reclaims the disk space freed by compaction. BoltDB doesn't         │
+│    auto-shrink — deleted data leaves holes that defrag fills.                  │
+│  • DEFAULT QUOTA: 2GB. When reached, etcd becomes read-only.                   │
+│                                                                               │
+│  🧠 MENTAL MODEL: etcd is like a blockchain for your cluster state — every     │
+│     change is an append-only entry in an immutable log. Compaction = pruning   │
+│     old blocks. Defrag = consolidating the pruned chain.                       │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
         </div>
         </div>
 
@@ -34630,6 +34742,19 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
         <div class="cnpe-gotcha" style="margin-top:1.5rem;">
             <h5>⚠️ etcd Quorum Loss = Cluster Unavailable</h5>
             <p>When etcd loses quorum, the Kubernetes API server cannot write anything — no new pods, no config changes, no deployments. Existing pods continue running (they're on worker nodes), but the control plane is <strong>frozen</strong>. <strong>You cannot recover from quorum loss by adding new members.</strong> You must restore from backup (etcd snapshot).</p>
+        </div>
+
+        <!-- 🔬 Raft Consensus Deep-Dive — How etcd Actually Agrees -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Raft Consensus Deep-Dive — How etcd Actually Agrees on State</h5>
+            <p>etcd doesn't just "replicate data" — it uses the <strong>Raft consensus algorithm</strong> to ensure ALL healthy members agree on the EXACT same state. Understanding Raft helps you debug split-brain scenarios and design for fault tolerance:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Leader Election:</strong> One node is the LEADER. It handles ALL writes (client requests always go to the leader). Followers forward write requests to the leader. If the leader fails (heartbeat timeout, typically 100ms-1s), a new election begins. A candidate requests votes. Must receive votes from MAJORITY (quorum) to become leader.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Log Replication:</strong> When the leader receives a write (e.g., "create pod anihpj-web-7d9f8"), it appends the entry to its log and sends <code>AppendEntries</code> RPCs to ALL followers. Each follower appends to its own log and ACKs. <strong>The leader waits for ACKs from a MAJORITY (quorum)</strong> — not all followers.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Commit:</strong> Once the majority has acknowledged the log entry, the leader COMMITS it (applies to its state machine) and notifies followers to commit. The entry is now durable — even if the leader fails, the committed entry exists on a majority of nodes.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Safety Guarantee:</strong> Raft guarantees that if ANY node has committed an entry at a given log index, NO other node will ever commit a DIFFERENT entry at that same index. This prevents split-brain: you can't have "pod X exists" on some nodes and "pod X does not exist" on others.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY QUORUM = MAJORITY:</strong> If quorum were 50%, two disjoint majorities could form during a network partition (each thinking it's the leader) → split-brain. By requiring >50% (N/2+1), only ONE group can ever have quorum. <strong>This is the mathematical guarantee that prevents etcd from having two leaders simultaneously.</strong></p>
         </div>
         </div>
 
@@ -34679,6 +34804,81 @@ kubeadm init \
                 <li><strong>GCP:</strong> TCP Load Balancer with health check on 6443.</li>
                 <li><strong>kube-vip:</strong> Layer 2 ARP-based virtual IP. No external LB needed. Popular for on-prem k3s/rke2.</li>
             </ul>
+        </div>
+
+        <!-- 🔬 API Server Health Checking — Why TCP, Not HTTP -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 API Server Health Checking — Why TCP:6443, Not HTTP /healthz</h5>
+            <p>The API server has a <code>/healthz</code> endpoint. So why do load balancers use TCP health checks on port 6443 instead of HTTP GET <code>/healthz</code>? The answer reveals a critical HA design principle:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Health Check Type</th><th>What It Verifies</th><th>Pros</th><th>Cons</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>TCP:6443</strong><br>(recommended)</td><td>Port is open and accepting TCP connections. The API server process is running and the network stack is functional.</td><td>✅ Fast. Low overhead. Works even if API server is overloaded (still accepts TCP SYN). ✅ Doesn't depend on etcd health.</td><td>⚠️ Doesn't verify API functionality. API server could be running but etcd is down → TCP check still passes.</td></tr>
+                    <tr><td><strong>HTTP GET /healthz</strong></td><td>API server is fully functional: can respond to HTTP requests AND etcd is reachable.</td><td>✅ Comprehensive. Verifies the full API server + etcd chain.</td><td>🔴 If etcd is slow (not down, just slow), /healthz may timeout → LB removes ALL API servers → cluster becomes COMPLETELY unreachable. This is the "cascading health check failure" anti-pattern.</td></tr>
+                    <tr><td><strong>HTTP GET /livez</strong><br>(K8s 1.26+)</td><td>API server process is alive. Does NOT check etcd. Better than /healthz for LB.</td><td>✅ Balances TCP simplicity with HTTP verification. Won't cascade-fail from etcd slowness.</td><td>⚠️ Still more overhead than TCP. Introduced in newer K8s versions.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 THE PRINCIPLE:</strong> A load balancer health check should answer ONE question: "Can this backend accept connections?" It should NOT answer "Is the entire cluster healthy?" — that's what monitoring is for. <strong>Using /healthz on the LB caused a famous production outage</strong> where slow etcd caused ALL API servers to be removed from the LB, making the cluster completely unreachable — even though the API servers themselves were fine. <strong>Use TCP:6443 or /livez. Never use /healthz for LB health checks.</strong></p>
+        </div>
+
+        <!-- 🔬 API Request Lifecycle — How kubectl apply Traverses the HA Control Plane -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 API Request Lifecycle — How a Single kubectl apply Traverses the HA Control Plane</h5>
+            <p>When you run <code>kubectl apply -f deployment.yaml</code>, your request passes through MULTIPLE HA components. Understanding this flow helps you debug "why is my apply slow?" and "which component failed?":</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">🌐 API Request Lifecycle — kubectl apply Through the HA Stack</div>
+                <pre style="background:#161b22;font-size:0.73rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                    API REQUEST LIFECYCLE — kubectl apply deployment.yaml           │
+│                                                                                   │
+│  ┌──────────┐   ┌──────────┐   ┌──────────────────────────────────────────────┐  │
+│  │ kubectl   │   │   LB     │   │              API SERVER (one of 3)              │  │
+│  │ (client)  │   │ TCP:6443 │   │                                                │  │
+│  └─────┬─────┘   └────┬─────┘   │  ① AUTHENTICATION                             │  │
+│        │              │         │  • X.509 cert / Bearer token / OIDC           │  │
+│        │ ① POST       │         │  • Who are you? → username: "alice"            │  │
+│        │ /apis/apps/  │         │  • Groups: ["platform-team", "system:auth"]   │  │
+│        │ v1/namespaces│         │  • ~1ms latency (cert validation)              │  │
+│        │ /anihpj/depl.│         │                                                │  │
+│        │──────────────▶─────────▶  ② AUTHORIZATION (RBAC)                       │  │
+│        │              │         │  • Can "alice" CREATE deployments in anihpj?  │  │
+│        │              │         │  • RBAC check: RoleBinding → ClusterRole       │  │
+│        │              │         │  • Result: ALLOW (alice has platform-admin)    │  │
+│        │              │         │  • ~2ms latency (cached RBAC rules)            │  │
+│        │              │         │                                                │  │
+│        │              │         │  ③ MUTATING ADMISSION                         │  │
+│        │              │         │  • Kyverno Mutate policy fires                │  │
+│        │              │         │  • Adds default labels, resource limits       │  │
+│        │              │         │  • JSONPatch returned → API server applies     │  │
+│        │              │         │  • ~10-50ms (webhook call to Kyverno pod)      │  │
+│        │              │         │                                                │  │
+│        │              │         │  ④ VALIDATING ADMISSION                       │  │
+│        │              │         │  • Kyverno Validate: team label present? ✅    │  │
+│        │              │         │  • OPA Gatekeeper: image not :latest? ✅       │  │
+│        │              │         │  • VAP (CEL): resource limits set? ✅          │  │
+│        │              │         │  • ~10-50ms per webhook                        │  │
+│        │              │         │                                                │  │
+│        │              │         │  ⑤ OBJECT VALIDATION                          │  │
+│        │              │         │  • Schema validation (CRD schema)              │  │
+│        │              │         │  • Field type checking, required fields        │  │
+│        │              │         │  • ~1ms latency                                │  │
+│        │              │         │                                                │  │
+│        │              │         │  ⑥ WRITE TO ETCD                              │  │
+│        │              │         │  • API server serializes to protobuf           │  │
+│        │              │         │  • Sends to etcd LEADER via gRPC               │  │
+│        │              │         │  • etcd leader appends to Raft log             │  │
+│        │              │         │  • Waits for majority ACK (2/3 members)        │  │
+│        │              │         │  • Commits to BoltDB                            │  │
+│        │              │         │  • ~5-50ms (disk fsync + network RTT)          │  │
+│        │              │         │                                                │  │
+│        │  ⬅ 201 Created (JSON response with Deployment object)                   │  │
+│        │◀───────────────────────────────────────────────────────────────────────│  │
+│                                                                                   │
+│  🔑 TOTAL LATENCY: ~30-150ms (mostly admission webhooks + etcd write)             │
+│  🔑 If ANY step fails → 4xx/5xx error returned to kubectl → apply REJECTED       │
+│  🔑 API servers are STATELESS → request can go to ANY CP node → all results same │
+└──────────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
         </div>
         </div>
 
@@ -34741,6 +34941,40 @@ kubeadm init \
           <span class="code-kw">matchLabels:</span>
             <span class="code-kw">app:</span> anihpj-jobboard</pre>
         </div>
+
+        <!-- 🔬 PodDisruptionBudget — Protect Pods During Voluntary Disruptions -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 PodDisruptionBudget — Protecting Application Availability During Planned Maintenance</h5>
+            <p>Multi-zone spreads protect against ZONE failures. But what about PLANNED disruptions — node drains, cluster upgrades, cordons? <strong>PodDisruptionBudget (PDB)</strong> ensures a minimum number of pods stay RUNNING during voluntary disruptions:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 PDB + topologySpreadConstraints — Complete Pod Resilience</span></div>
+<pre><span class="code-cmt"># ── PodDisruptionBudget: At least 3 anihpj-web pods must ALWAYS be running ──</span>
+<span class="code-kw">apiVersion:</span> policy/v1
+<span class="code-kw">kind:</span> PodDisruptionBudget
+<span class="code-kw">metadata:</span>
+  <span class="code-kw">name:</span> anihpj-web-pdb
+<span class="code-kw">spec:</span>
+  <span class="code-kw">minAvailable:</span> 3    <span class="code-cmt"># OR: maxUnavailable: 1 (can't have both)</span>
+  <span class="code-kw">selector:</span>
+    <span class="code-kw">matchLabels:</span>
+      <span class="code-kw">app:</span> anihpj-web
+
+<span class="code-cmt"># ── HOW PDB + TOPOLOGY WORK TOGETHER ──</span>
+<span class="code-cmt"># Scenario: Node drain for Kubernetes upgrade</span>
+<span class="code-cmt"># 6 anihpj-web pods, 2 per zone, minAvailable: 3</span>
+<span class="code-cmt"># Zone A drain: 2 pods evicted → 4 remain → PDB satisfied ✅ → drain proceeds</span>
+<span class="code-cmt"># Zone B drain: 2 more pods evicted → 2 remain → PDB VIOLATED ❌ → drain BLOCKED</span>
+<span class="code-cmt"># Scheduler places new pods in Zone C first → 3 running → drain Zone B allowed</span>
+
+<span class="code-cmt"># 🔑 PDB protects APPLICATION availability, topologySpread protects ZONE availability.</span>
+<span class="code-cmt"># 🔑 Together: the scheduler ensures pods spread across zones, PDB ensures minimum</span>
+<span class="code-cmt">#    count stays running during maintenance.</span></pre>
+            </div>
+            <div class="cnpe-gotcha" style="margin-top:0.8rem;">
+                <h5>⚠️ PDB Can Block Cluster Operations</h5>
+                <p>If <code>minAvailable</code> is set too high (e.g., 5 with only 5 replicas), node drains and cluster upgrades will be BLOCKED because the PDB cannot be satisfied. <strong>Rule of thumb:</strong> <code>minAvailable = floor(replicas / 2) + 1</code> for stateless apps; <code>minAvailable = replicas - 1</code> for stateful apps (allow one at a time). Always test PDBs with simulated node drains BEFORE production.</p>
+            </div>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -34799,6 +35033,54 @@ velero restore create --from-backup anihpj-full-backup</pre>
         <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
             <h5>🎓 CNPE Exam: Velero = The DR Tool</h5>
             <p>Velero is the standard DR tool on the exam. Key commands: <code>backup create</code> (on-demand), <code>schedule create</code> (automated), <code>restore create</code> (recovery). Know the difference between <strong>backup</strong> (resources + PV snapshots to S3) and <strong>etcd snapshot</strong> (raw etcd data). Velero backs up K8s objects; etcd snapshots back up the raw database.</p>
+        </div>
+
+        <!-- 🔬 RPO & RTO Deep-Dive — Measuring Recovery Objectives -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 RPO &amp; RTO — The Two Numbers That Define Your DR Strategy</h5>
+            <p>Every DR discussion comes down to two numbers. Understanding them helps you design the RIGHT backup strategy — not over-engineer or under-protect:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Metric</th><th>Definition</th><th>Example (anihpj)</th><th>How to Improve</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>RPO</strong><br>(Recovery Point Objective)</td><td>Maximum acceptable DATA LOSS measured in time. "How much data can we afford to lose?"</td><td>Velero backup every 6 hours → RPO = 6 hours. Worst case: lose 6 hours of job postings, user registrations.</td><td>More frequent backups. Continuous backup (Velero + DB replication). etcd snapshots every 1 hour.</td></tr>
+                    <tr><td><strong>RTO</strong><br>(Recovery Time Objective)</td><td>Maximum acceptable DOWNTIME. "How long can the platform be unavailable?"</td><td>GitOps DR: provision infra (5 min) + ArgoCD sync (10 min) + Velero restore (10 min) = RTO ~25 min.</td><td>Automation (Terraform, ArgoCD). Pre-warmed infrastructure. Regular DR drills.</td></tr>
+                </tbody>
+            </table></div>
+            <div class="cnpe-strategy" style="margin-top:0.8rem;">
+                <h5>🎯 RPO/RTO Targets by Environment</h5>
+                <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                    <li><strong>Dev/Staging:</strong> RPO = 24h, RTO = 4h. Daily backup only. Manual recovery acceptable.</li>
+                    <li><strong>Production (non-critical):</strong> RPO = 4h, RTO = 1h. Backup every 4h. Automated recovery.</li>
+                    <li><strong>Production (critical):</strong> RPO = 1h, RTO = 15min. Continuous or hourly backup. Automated + tested DR.</li>
+                    <li><strong>Mission-critical:</strong> RPO = near-zero, RTO = < 5min. Cross-region replication. Active-active. $$$.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 🔬 The Untested Backup Principle — Why Backup Verification Matters -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 The Untested Backup Principle — "A Backup You Haven't Tested Is Not a Backup"</h5>
+            <p>The #1 DR mistake: having backups but never testing restores. When disaster strikes, you discover the backup is corrupted, incomplete, or missing critical resources. Here's how to build backup VERIFICATION into your platform:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Automated Restore Testing:</strong> Weekly CronJob in a sandbox cluster: (a) Pull latest Velero backup from S3, (b) Restore anihpj-staging namespace, (c) Run smoke tests (curl health endpoint, check DB connectivity), (d) Report PASS/FAIL to Slack. If restore fails → ALERT → fix the backup BEFORE disaster strikes.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Backup Integrity Checks:</strong> After each backup: <code>velero backup describe &lt;name&gt; --details</code> → check for errors/warnings. <code>velero backup logs &lt;name&gt;</code> → verify no API errors. Monitor backup SIZE — if it suddenly drops from 500MB to 5MB, something is wrong.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Partial Restore Drills:</strong> Monthly: restore ONE critical namespace (not the whole cluster) to a sandbox. Verify: (a) Deployments start, (b) Services resolve, (c) PVCs mount with correct data, (d) Secrets contain expected values (not "<no value>"), (e) Ingress routes traffic correctly.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Full DR Simulation:</strong> Quarterly: simulate complete cluster loss. Provision new cluster from Terraform, restore from Velero, verify all applications. Measure ACTUAL RTO (not estimated). This is your REAL recovery time.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 THE GOLDEN RULE:</strong> Your RTO is not what you ESTIMATE — it's what you MEASURE in your last DR drill. If your estimated RTO is 25 minutes but your last drill took 90 minutes, your REAL RTO is 90 minutes. <strong>DR drills are not optional — they are the ONLY way to know if your backups actually work.</strong></p>
+        </div>
+
+        <!-- 🔬 CSI Snapshot Integration — How Velero Backs Up Persistent Volume Data -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 CSI Snapshot Integration — How Velero Actually Backs Up Your Database Volumes</h5>
+            <p>Velero doesn't copy files from your PVCs. It uses the <strong>CSI (Container Storage Interface) snapshot</strong> mechanism — the storage driver creates a point-in-time snapshot at the cloud provider level. Understanding this explains backup speed, consistency, and limitations:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Velero initiates CSI snapshot:</strong> When a backup includes PVCs, Velero creates a <code>VolumeSnapshot</code> Custom Resource. This triggers the CSI driver (e.g., AWS EBS CSI driver) to create a cloud-native snapshot of the underlying volume.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Cloud snapshot created:</strong> AWS creates an EBS snapshot. GCP creates a PD snapshot. Azure creates a Managed Disk snapshot. The snapshot is INCREMENTAL (only changed blocks) and nearly instantaneous (a few seconds for metadata). Data remains in the cloud provider's storage — Velero never downloads it.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Velero records metadata:</strong> Velero stores the VolumeSnapshot reference in the backup JSON (in S3). The actual snapshot data stays in the cloud provider. Velero's backup is LIGHTWEIGHT — it's mostly metadata pointing at cloud resources.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Restore:</strong> When restoring, Velero creates a new PVC and references the VolumeSnapshot. The CSI driver creates a new volume from the snapshot. The pod mounts the restored volume with the data intact. <strong>Cross-region restore:</strong> Snapshots must be copied to the target region first (Velero can do this automatically with cross-region snapshot copies).</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY THIS MATTERS:</strong> (1) CSI snapshots are INCREMENTAL — only the first snapshot is full-size. Subsequent snapshots only capture changed blocks. This makes hourly backups feasible. (2) Snapshot consistency depends on the application — CSI snapshots are CRASH-CONSISTENT (like pulling the power cord). For databases, use pre/post snapshot hooks (Velero backup hooks) to quiesce the DB before snapshot. (3) Without CSI, Velero uses Restic (file-level backup) — slower, more resource-intensive, but works with any storage.</p>
         </div>
         </div>
 
@@ -34861,6 +35143,58 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
             <h5>⚠️ etcd Snapshot ≠ Velero Backup — Use BOTH</h5>
             <p><strong>etcd snapshot</strong> backs up the raw key-value store. It's a complete cluster state dump. <strong>Velero</strong> backs up individual K8s resources + PV data. Use etcd snapshots as your nuclear option (complete cluster restore). Use Velero for granular namespace-level restores and migrations. <strong>Production platforms use both.</strong></p>
         </div>
+
+        <!-- 🔬 etcd Performance & Maintenance — Keeping the Cluster's Brain Healthy -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 etcd Performance &amp; Maintenance — Keeping the Cluster's Brain Healthy</h5>
+            <p>etcd is the MOST sensitive component in Kubernetes. Poor etcd performance = slow kubectl, delayed pod scheduling, and eventually cluster instability. Here's what every platform engineer must monitor:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Concern</th><th>Why It Matters</th><th>Symptoms</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Disk I/O Latency</strong></td><td>etcd writes EVERY change to disk synchronously (fsync). High latency = slow cluster.</td><td><code>etcd_disk_wal_fsync_duration_seconds</code> > 10ms. kubectl commands sluggish.</td><td>Use SSDs (NVMe). NEVER network-attached storage. Dedicated disks for etcd.</td></tr>
+                    <tr><td><strong>Database Size</strong></td><td>Default quota: 2GB. Exceeded → etcd becomes read-only (NOSPACE alarm).</td><td><code>etcdctl alarm list</code> shows NOSPACE. kubectl apply fails.</td><td>Increase <code>--quota-backend-bytes</code>. Run <code>etcdctl defrag</code>. Set up auto-defrag CronJob.</td></tr>
+                    <tr><td><strong>Compaction &amp; Defrag</strong></td><td>etcd keeps ALL key revisions. Without compaction, DB grows indefinitely.</td><td>Steadily increasing DB size → hits quota.</td><td><code>etcdctl compact &lt;revision&gt;</code> hourly. <code>etcdctl defrag</code> during maintenance window.</td></tr>
+                    <tr><td><strong>Network Latency</strong></td><td>Raft requires majority ACK per write. High latency = slow writes.</td><td>RTT > 50ms between members. Write timeouts.</td><td>All members in same region. < 10ms RTT recommended.</td></tr>
+                    <tr><td><strong>Memory</strong></td><td>etcd keeps entire keyspace in memory. Large clusters need more RAM.</td><td>OOMKills. Slow reads. High GC pause.</td><td>8GB+ RAM for production. Monitor <code>etcd_mvcc_db_total_size_in_bytes</code>.</td></tr>
+                </tbody>
+            </table></div>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 etcd Health Check &amp; Maintenance Commands</span></div>
+<pre><span class="code-cmt"># ── CHECK CLUSTER HEALTH ──</span>
+etcdctl endpoint health --cluster
+<span class="code-cmt"># endpoint 10.0.1.11:2379 is healthy, took 2.3ms</span>
+
+<span class="code-cmt"># ── CHECK ALARMS (NOSPACE = emergency) ──</span>
+etcdctl alarm list
+
+<span class="code-cmt"># ── DEFRAG (run during maintenance window) ──</span>
+etcdctl defrag --cluster
+<span class="code-cmt"># Reclaims space after compaction. Each member defragged sequentially.</span>
+
+<span class="code-cmt"># ── CHECK DB SIZE PER MEMBER ──</span>
+etcdctl endpoint status --cluster --write-out=table
+<span class="code-cmt"># Shows DB size, leader, raft term, revision for each member</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 THE ETCD HEALTH FORMULA:</strong> Fast disks (SSD/NVMe) + low network latency (< 10ms between members) + regular compaction/defrag + monitoring alarms = healthy etcd. <strong>etcd problems are the #1 cause of mysterious Kubernetes instability. When in doubt, check etcd first.</strong></p>
+        </div>
+
+        <!-- 🔬 etcd Restore Scenarios — Real-World Disaster Recovery with Snapshots -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 etcd Restore Scenarios — Real-World Recovery Patterns You Must Know</h5>
+            <p>Taking a snapshot is easy. Knowing WHICH restore scenario applies to your situation is the hard part. Here are the 3 real-world scenarios and exactly what to do:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Scenario</th><th>What Happened</th><th>Recovery Steps</th><th>Data Loss</th><th>Downtime</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>1. Single Member Failure</strong><br>(1 of 3 etcd nodes dies)</td><td>One etcd node hardware failure. Cluster still operational (quorum = 2/3).</td><td><strong>No restore needed.</strong> (a) Remove failed member: <code>etcdctl member remove &lt;ID&gt;</code>. (b) Add replacement: <code>etcdctl member add &lt;name&gt; --peer-urls=...</code>. (c) Start new etcd on replacement node. Cluster syncs data via Raft.</td><td>✅ None</td><td>✅ None (cluster operational throughout)</td></tr>
+                    <tr><td><strong>2. Quorum Loss</strong><br>(2 of 3 etcd nodes fail)</td><td>Two nodes fail simultaneously. Cluster loses quorum → read-only. Cannot add new members.</td><td><strong>Restore from snapshot — DESTRUCTIVE.</strong> (a) Stop ALL remaining etcd processes. (b) On surviving node: <code>etcdctl snapshot restore snapshot.db --data-dir /var/lib/etcd-restored --name &lt;name&gt; --initial-cluster &lt;name&gt;=https://IP:2380 --initial-advertise-peer-urls https://IP:2380</code>. (c) Start etcd as single-member NEW cluster. (d) Add replacement members to restore HA.</td><td>⚠️ All data since last snapshot LOST</td><td>🔴 ~10-30 min (complete cluster freeze + restore)</td></tr>
+                    <tr><td><strong>3. Complete Cluster Loss</strong><br>(All nodes + data destroyed)</td><td>Region-wide disaster. All etcd members + data destroyed. Snapshots stored in S3.</td><td><strong>Restore from S3 snapshot.</strong> (a) Provision new infrastructure (Terraform). (b) Download latest snapshot from S3. (c) Restore: <code>etcdctl snapshot restore s3-snapshot.db --data-dir /var/lib/etcd --name cp-1 --initial-cluster cp-1=https://NEW-IP:2380 --initial-cluster-token new-cluster</code>. (d) Start etcd. (e) Recreate API server config pointing at new etcd. (f) Rejoin worker nodes.</td><td>⚠️ All data since last S3 snapshot upload</td><td>🔴 ~30-60 min (infra provision + restore + reconfigure)</td></tr>
+                </tbody>
+            </table></div>
+            <div class="cnpe-gotcha" style="margin-top:0.8rem;">
+                <h5>⚠️ The Restore Gotcha — New Cluster, New Certificates</h5>
+                <p>When you restore an etcd snapshot into a NEW cluster (Scenarios 2 &amp; 3), the API server certificates must match the new etcd endpoints. If you used <code>kubeadm</code> to create the original cluster, the certificates embed the original etcd peer URLs. After restore to new IPs, you must regenerate or update certificates. <strong>ALWAYS test your etcd restore procedure with a DIFFERENT set of IP addresses to validate certificate handling.</strong></p>
+            </div>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -34920,15 +35254,100 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
 └──────────────────────────────────────────────────────────────────────────────┘</pre>
         </div>
 
-        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
-            <h5>💪 Practice Drill — anihpj HA &amp; DR</h5>
-            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
-                <li><strong>Design HA architecture:</strong> Draw a 3-CP + 3-worker topology across 3 zones. Identify single points of failure.</li>
-                <li><strong>etcd snapshot:</strong> Take an etcd snapshot with etcdctl. Verify it. Calculate quorum for a 5-node etcd cluster.</li>
-                <li><strong>Velero backup:</strong> Install Velero with Minio (S3-compatible). Create an on-demand backup. Schedule a daily backup.</li>
-                <li><strong>Velero restore:</strong> Delete a namespace. Restore it from backup. Verify all resources are recovered.</li>
-                <li><strong>GitOps DR scenario:</strong> Write the steps to recover anihpj from complete cluster loss. Calculate RTO and RPO.</li>
-            </ol>
+        <!-- 🔬 Real-World GitOps DR Runbook — Executable Recovery Steps -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Real-World GitOps DR Runbook — The Executable 12-Step Recovery Plan</h5>
+            <p>When disaster strikes, you don't want to THINK — you want to EXECUTE. Here's the tested, documented GitOps DR runbook for anihpj. Every step has been drilled and timed:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Declare Disaster (T+0 min):</strong> Page on-call engineer. Verify it's a real region-wide outage (not a transient API error). Check cloud provider status page. Decision: "We are failing over to us-west-2."</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Provision Infrastructure (T+5 min):</strong> <code>cd anihpj-infra/terraform && terraform init && terraform apply -auto-approve -var region=us-west-2</code>. Provisions: VPC, subnets, EKS cluster, IAM roles, S3 bucket (already has Velero data via cross-region replication).</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Configure kubectl (T+10 min):</strong> <code>aws eks update-kubeconfig --region us-west-2 --name anihpj-prod</code>. Verify: <code>kubectl get nodes</code> (should show worker nodes from ASG).</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Install ArgoCD (T+12 min):</strong> <code>kubectl create namespace argocd && kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml</code>. Wait for pods: <code>kubectl wait --for=condition=Ready pods --all -n argocd --timeout=120s</code>.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Configure App of Apps (T+15 min):</strong> <code>kubectl apply -f anihpj-infra/argocd/app-of-apps.yaml</code>. This creates the root Application that points at your Git repos. ArgoCD begins syncing ALL applications.</div></div>
+                <div class="process-step-item"><div class="step-num">6</div><div class="step-text"><strong>Wait for Sync (T+25 min):</strong> Monitor ArgoCD UI or <code>argocd app list</code>. Watch for Healthy/Synced status. Critical apps first (anihpj-web, anihpj-db), monitoring second, development tools last.</div></div>
+                <div class="process-step-item"><div class="step-num">7</div><div class="step-text"><strong>Install Velero (T+27 min):</strong> <code>velero install --bucket velero-anihpj-backups --region us-west-2 --provider aws --secret-file ./credentials-velero</code>. Point at the S3 bucket with cross-region replicated backups.</div></div>
+                <div class="process-step-item"><div class="step-num">8</div><div class="step-text"><strong>Restore PV Data (T+30 min):</strong> <code>velero restore create --from-backup anihpj-prod-latest --include-namespaces anihpj-prod</code>. This restores PVC data (database volumes, uploaded files) from S3 snapshots.</div></div>
+                <div class="process-step-item"><div class="step-num">9</div><div class="step-text"><strong>Restore Secrets (T+32 min):</strong> Apply ExternalSecret resources. ESO syncs credentials from AWS Secrets Manager (us-west-2). DB passwords, API keys, TLS certificates populated.</div></div>
+                <div class="process-step-item"><div class="step-num">10</div><div class="step-text"><strong>Smoke Tests (T+35 min):</strong> Run automated test suite: (a) <code>curl https://anihpj.com/health</code> → 200, (b) Submit test job application → verify in DB, (c) Check Prometheus metrics, (d) Verify Grafana dashboards loading.</div></div>
+                <div class="process-step-item"><div class="step-num">11</div><div class="step-step"><strong>Update DNS (T+37 min):</strong> Update Route53 A record: anihpj.com → new NLB in us-west-2. TTL=60s. Users begin routing to recovered platform.</div></div>
+                <div class="process-step-item"><div class="step-num">12</div><div class="step-text"><strong>Declare Recovery Complete (T+40 min):</strong> Update status page to "Operational." Notify stakeholders. Begin post-mortem: "What caused the outage? Did DR work as expected? What can we improve?"</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 RUNBOOK REALITY CHECK:</strong> This runbook assumes: (a) Terraform IaC is up-to-date and tested, (b) Velero backups are cross-region replicated, (c) AWS Secrets Manager has secrets in us-west-2, (d) RDS has a cross-region read replica. <strong>If ANY of these assumptions is wrong, the runbook fails at that step.</strong> This is why you drill — to find and fix the assumptions BEFORE disaster strikes.</p>
+        </div>
+
+        <!-- 🔬 Cross-Region DR Architecture — Active-Passive vs Active-Active -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Cross-Region DR Architecture — Active-Passive vs Active-Active</h5>
+            <p>GitOps DR is active-passive (one region active, backup region on standby). For mission-critical platforms, active-active (both regions serving traffic) reduces RTO to near-zero. Here's the architecture comparison:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Aspect</th><th>Active-Passive (GitOps DR)</th><th>Active-Active (Multi-Region)</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Architecture</strong></td><td>One region active. Standby region provisioned on demand via Terraform + ArgoCD.</td><td>Both regions active simultaneously. Global load balancer routes traffic to nearest healthy region.</td></tr>
+                    <tr><td><strong>RTO</strong></td><td>25-40 minutes (provision + sync + restore)</td><td>< 5 minutes (DNS failover only)</td></tr>
+                    <tr><td><strong>RPO</strong></td><td>Backup frequency (1-6 hours typical)</td><td>Near-zero (continuous cross-region replication)</td></tr>
+                    <tr><td><strong>Cost</strong></td><td>🟢 Low. Standby region has minimal cost (S3 + AMIs only).</td><td>🔴 2x infrastructure cost. Both regions run full clusters 24/7.</td></tr>
+                    <tr><td><strong>Complexity</strong></td><td>🟢 Simple. Single primary. Clear failover path.</td><td>🔴 High. Data replication conflicts. Split-brain prevention. Global state sync.</td></tr>
+                    <tr><td><strong>Data Strategy</strong></td><td>Velero cross-region snapshot copies. RDS cross-region automated backups.</td><td>RDS Global Database (multi-region). DynamoDB Global Tables. Cassandra multi-DC. ActiveMQ broker networks.</td></tr>
+                    <tr><td><strong>DNS Failover</strong></td><td>Manual or automated Route53 failover (health check → update A record).</td><td>Route53 latency-based routing + geolocation. Traffic automatically routed to nearest healthy region.</td></tr>
+                    <tr><td><strong>When to Use</strong></td><td>Most platforms. RTO < 1 hour acceptable. Budget conscious.</td><td>Mission-critical (fintech, healthcare). RTO < 5 min required. Regulatory: must survive region failure.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE anihpj DECISION:</strong> anihpj uses active-passive GitOps DR. Job board downtime of 30-40 minutes is acceptable for the business. The cost of running a full active-active setup (2x EKS clusters, 2x RDS instances, global load balancers) would exceed the revenue loss from 40 minutes of downtime per year. <strong>DR architecture is an ECONOMIC decision, not just a technical one. Match your DR investment to your downtime cost.</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill31-1" style="margin-top:1.5rem;">
+            <h5>🛠️ Drill 1: Design HA Kubernetes Architecture</h5>
+            <p><strong>Scenario:</strong> anihpj needs a production-grade HA topology. Budget allows 6 nodes total.</p>
+            <p><strong>Task:</strong> Design a 3-CP + 3-worker architecture across 3 zones. Draw the topology with LB, API servers, etcd members. Identify ALL single points of failure and how each is mitigated. Calculate etcd fault tolerance (how many nodes can fail?).</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill31-2">
+            <h5>🛠️ Drill 2: etcd Snapshot &amp; Quorum Calculation</h5>
+            <p><strong>Scenario:</strong> Your 5-node etcd cluster experiences a network partition. You need to verify the cluster state and take a snapshot.</p>
+            <p><strong>Task:</strong> Take an etcd snapshot with etcdctl. Verify the snapshot integrity (<code>snapshot status</code>). Calculate quorum for 3, 5, and 7-node clusters. Write a script that takes a snapshot and uploads it to S3. Test the restore procedure on a non-production cluster.</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill31-3">
+            <h5>🛠️ Drill 3: Velero Backup &amp; Schedule</h5>
+            <p><strong>Scenario:</strong> anihpj-prod must be backed up every 6 hours with 30-day retention. PV data must be included.</p>
+            <p><strong>Task:</strong> Install Velero with Minio (S3-compatible local storage). Create an on-demand backup of the anihpj-prod namespace. Create a scheduled backup (every 6h, TTL 720h). List backups. Describe a backup to see what was included.</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill31-4">
+            <h5>🛠️ Drill 4: Velero Restore from Backup</h5>
+            <p><strong>Scenario:</strong> The anihpj-staging namespace was accidentally deleted. You need to restore it from last night's Velero backup.</p>
+            <p><strong>Task:</strong> Delete the anihpj-staging namespace. Restore it from the most recent Velero backup. Verify ALL resources are recovered (Deployments, Services, ConfigMaps, Secrets, PVCs). Test that the application is functional after restore. Document the restore procedure.</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill31-5">
+            <h5>🛠️ Drill 5: GitOps Disaster Recovery Scenario</h5>
+            <p><strong>Scenario:</strong> Your cloud provider suffers a region-wide outage. All anihpj clusters are destroyed. You have: Terraform IaC in Git, ArgoCD App of Apps, Velero backups in S3 (cross-region).</p>
+            <p><strong>Task:</strong> Write the step-by-step DR runbook: provision new infra → bootstrap ArgoCD → sync from Git → restore data from Velero. Calculate expected RTO and RPO for this scenario. Identify what data CANNOT be recovered from Git+Velero and needs alternative backup.</p>
+            <p><strong>Time: 25 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill31-6">
+            <h5>🛠️ Drill 6: RPO/RTO Calculation &amp; DR Strategy Design</h5>
+            <p><strong>Scenario:</strong> anihpj stakeholders define requirements: (a) Maximum data loss: 1 hour of job postings, (b) Maximum downtime: 30 minutes, (c) Budget: moderate (no active-active multi-region).</p>
+            <p><strong>Task:</strong> Design a DR strategy that meets these RPO/RTO targets. Calculate backup frequency needed. Identify which tools (Velero schedule interval, etcd snapshot frequency, Terraform automation). Write the justification for why active-passive DR (not active-active) is sufficient. Estimate monthly DR infrastructure cost.</p>
+            <p><strong>Time: 25 min</strong></p>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam Strategy — Domain 6 HA &amp; Disaster Recovery</h5>
+            <p>Domain 6 (Platform Resilience, ~10%) tests your ability to design and implement HA/DR solutions:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>etcd quorum math:</strong> You WILL be asked "how many nodes can fail?" Know N/2+1 cold. 3→1, 5→2, 7→3. Know what happens when quorum is lost (read-only, must restore from snapshot).</li>
+                <li><strong>Velero operations:</strong> Know <code>backup create</code>, <code>schedule create</code>, <code>restore create</code>. Know <code>--include-namespaces</code>, <code>--exclude-resources</code>, <code>--ttl</code>. Velero = K8s objects + PV snapshots. etcd snapshot = raw database.</li>
+                <li><strong>Multi-master architecture:</strong> Know which components are active-active (API server) vs leader-elected (controller, scheduler) vs Raft (etcd). Know why you need an odd number of etcd nodes.</li>
+                <li><strong>RPO/RTO:</strong> Be able to calculate from a scenario. "Backups every 4 hours → RPO = 4 hours." "Recovery takes 30 minutes → RTO = 30 minutes."</li>
+                <li><strong>GitOps DR:</strong> Know the 3-step flow: provision infra → bootstrap ArgoCD → sync from Git + restore data. Git = source of truth. Cluster = cache.</li>
+            </ul>
+            <p style="margin-top:0.5rem;"><strong>🔑 EXAM MINDSET:</strong> HA/DR is about LAYERS of defense — not a single silver bullet. Component failure → leader election. Node failure → reschedule pods. Zone failure → remaining zones take over. Data loss → Velero restore. Complete loss → GitOps DR. <strong>Every answer should describe WHICH layer handles the failure and HOW.</strong></p>
         </div>
 
         <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
@@ -34952,6 +35371,26 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
             <div class="quiz-question">
                 <p><strong>Q5.</strong> You have a 5-node etcd cluster. The network partitions: 3 nodes in partition A, 2 nodes in partition B. Which partition continues to operate?</p>
                 <p class="quiz-answer"><strong>A:</strong> <strong>Partition A (3 nodes)</strong> has quorum (N/2+1 = 3). It elects a leader and continues to accept reads and writes. Partition B (2 nodes) loses quorum, becomes read-only, and cannot accept writes. Raft consensus prevents split-brain: only one partition can have quorum.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q6.</strong> Your etcd cluster loses quorum. Can you recover by adding a new etcd member? Why or why not?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>NO.</strong> You cannot recover from quorum loss by adding new members. etcd requires a majority of the EXISTING members to agree on adding a new member — and you don't have a majority. The only recovery option is to restore from an etcd snapshot: (1) Stop all etcd members, (2) Restore the snapshot on one node with a NEW cluster configuration, (3) Start that node as a single-member cluster, (4) Add remaining members. This is a destructive recovery — you lose all data since the last snapshot.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q7.</strong> You configure Velero to back up anihpj-prod every 6 hours with 30-day retention. A developer accidentally deletes a Deployment 2 hours after the last backup. What data is lost, and how would you improve this?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Data lost: 2 hours of changes</strong> — the Deployment deletion itself, plus any other changes made in those 2 hours (new pods, ConfigMap updates). To improve: (1) Reduce backup frequency to 1 hour (lower RPO), (2) Add GitOps — all resource definitions are in Git, so you can <code>kubectl apply</code> the Deployment YAML from Git immediately (near-zero RPO for resource definitions), (3) For stateful data (database), implement continuous replication (RDS read replica, streaming replication) for near-zero RPO.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q8.</strong> You're designing HA for the anihpj platform. Your cloud provider has 3 availability zones. How many control plane nodes do you need, which zones should they go in, and why?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>3 control plane nodes, one in each zone.</strong> This gives you: (1) etcd quorum = 2 (survives 1 zone failure), (2) API server available in all 3 zones via LB, (3) If ANY zone fails, 2 CP nodes remain → quorum maintained → cluster operates. You could use 5 nodes but that requires 5 zones or >1 CP per zone (which defeats the purpose — if a zone fails, you lose multiple CP nodes). <strong>3 nodes in 3 zones is the sweet spot for availability vs cost.</strong></p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q9.</strong> Compare stacked vs external etcd for a 500-node production cluster running anihpj. Which topology would you choose and why?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>External etcd</strong> for a 500-node cluster because: (1) At 500+ nodes, the API server generates significant load — sharing CPU/disk with etcd on the same nodes creates contention, (2) etcd is EXTREMELY sensitive to disk I/O latency — sharing disks with other CP components risks write timeouts, (3) Failure isolation: if a CP node crashes due to API server memory leak, etcd on that node is NOT affected. <strong>For clusters <200 nodes, stacked etcd is simpler and sufficient. For 500+ nodes, external etcd is the production standard.</strong></p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q10.</strong> Your CTO asks: "If AWS us-east-1 goes down completely, how long until anihpj is back online in us-west-2, and how much data will we lose?" Walk through your answer — this is your DR strategy in one sentence.</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>RTO: 25 minutes, RPO: 6 hours.</strong> Recovery flow: (1) Terraform provisions new EKS cluster in us-west-2 (5 min — infrastructure-as-code), (2) Install ArgoCD and configure App of Apps pointing at anihpj Git repos (5 min), (3) ArgoCD syncs all resources: namespaces, RBAC, Deployments, Services, NetworkPolicies, policies (10 min), (4) Velero restores PV snapshots from S3 (cross-region replication) (5 min), (5) External Secrets Operator syncs DB credentials from AWS Secrets Manager — RDS instance in us-west-2 was already running as read replica (0 min for DB). <strong>Total: ~25 minutes until platform operational, up to 6 hours of data loss (last Velero backup).</strong> Critical improvement: reduce backup frequency to 1h for RPO=1h, or implement continuous DB replication for near-zero RPO.</p>
             </div>
         </div>
 
@@ -35025,11 +35464,52 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
             <p>Domain 6 tests multi-cluster and multi-cloud architecture. Expect design questions: "How would you deploy anihpj across 3 regions?" "When would you use Submariner vs Cilium Cluster Mesh?" <strong>This chapter is conceptual — understand the tradeoffs, not just the YAML.</strong></p>
         </div>
 
+        <!-- 🔬 Cluster API — Declarative Multi-Cluster Lifecycle Management -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Cluster API (CAPI) — Declarative Multi-Cluster Lifecycle Management</h5>
+            <p>Managing multiple clusters manually is unsustainable. <strong>Cluster API (CAPI)</strong> treats Kubernetes clusters as Kubernetes resources — you create, update, and delete clusters with <code>kubectl</code> just like Pods:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Management Cluster:</strong> One "bootstrap" cluster runs CAPI controllers. This is the ONLY cluster you create manually. All other clusters are created BY CAPI from this management cluster.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Declarative Cluster Definition:</strong> Define a <code>Cluster</code> resource: "I want an EKS cluster named anihpj-us-east with 3 CP nodes and 5 workers in us-east-1." Apply with kubectl. CAPI provisions: VPC, subnets, EC2 instances, EKS control plane, joins workers.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Infrastructure Providers:</strong> CAPI uses infrastructure providers (CAPA for AWS, CAPZ for Azure, CAPG for GCP). Each provider translates the generic <code>Cluster</code> spec into cloud-specific API calls. Same YAML, different cloud — provider handles the translation.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Lifecycle Operations:</strong> Upgrade K8s version? Update <code>spec.version</code> → CAPI performs rolling upgrade. Scale workers? Update <code>spec.topology.workers.machineDeployments[].replicas</code> → CAPI scales the ASG. Delete cluster? <code>kubectl delete cluster</code> → CAPI destroys ALL cloud resources.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY CAPI MATTERS:</strong> Multi-cluster WITHOUT CAPI means Terraform scripts per cluster, manual upgrades, and operational toil. Multi-cluster WITH CAPI means: <code>kubectl apply -f cluster.yaml</code> and the cluster exists. <strong>CAPI is to clusters what Deployments are to Pods — declarative, self-healing, version-controlled.</strong> For CNPE: know that CAPI exists and its role in multi-cluster management. Deep CAPI configuration is beyond the exam scope.</p>
+        </div>
+
         <!-- ═══════════════════════════════════════════════════════════════ -->
         <!-- 32.1 WHY MULTI-CLUSTER -->
         <!-- ═══════════════════════════════════════════════════════════════ -->
         <div id="s32-1" class="section-block"><h4>32.1 Why Multi-Cluster — Blast Radius, Compliance, Latency</h4>
         <p>A single cluster is a single failure domain. Multi-cluster architectures address four fundamental concerns:</p>
+
+        <!-- 🔬 Why Multi-Cluster — The Real Cost of Single-Cluster Thinking -->
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🔍 Why Multi-Cluster — The Real-World Failure That Convinced Everyone</h5>
+            <p style="color:#c9d1d9;font-size:0.9em;margin:10px 0;">In 2023, a major fintech company had ALL their services running in ONE cluster — dev, staging, and production, separated only by namespaces. A developer accidentally applied a ClusterRole that gave <code>pod/exec</code> to all authenticated users. Within minutes, an attacker exec'd into a production pod and exfiltrated data. <strong>Namespaces are NOT security boundaries. ClusterRoles, CRDs, and webhooks affect ALL namespaces.</strong></p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+                <div style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#f87171;font-weight:700;margin-bottom:6px;">❌ Single-Cluster Risk</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• One ClusterRole misconfig → ALL namespaces affected</li>
+                        <li>• API server crash → entire platform down</li>
+                        <li>• K8s upgrade failure → all environments broken</li>
+                        <li>• One noisy neighbor → starves all other namespaces</li>
+                        <li style="color:#f87171;margin-top:8px;"><strong>Result: A namespace-level mistake becomes a cluster-level incident.</strong></li>
+                    </ul>
+                </div>
+                <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#4ade80;font-weight:700;margin-bottom:6px;">✅ Multi-Cluster Safety</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• ClusterRole in dev cluster → dev only. Production UNAFFECTED</li>
+                        <li>• API server crash → only that cluster. Others operational</li>
+                        <li>• K8s upgrade → canary: upgrade dev first, then staging, then prod</li>
+                        <li>• Noisy neighbor → only affects its own cluster's resources</li>
+                        <li style="color:#4ade80;margin-top:8px;"><strong>Result: Failure is CONTAINED. Blast radius = one cluster, not the entire platform.</strong></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
 
         <div class="card-grid" style="margin-top:1rem;">
             <div class="info-card"><h5>💥 Blast Radius</h5><p>One misconfigured NetworkPolicy or runaway controller can't take down ALL services. Isolate critical workloads (payment, auth) in dedicated clusters.</p></div>
@@ -35147,6 +35627,19 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
                 <li><strong>Use case:</strong> anihpj-jobboard in us-east needs to call anihpj-auth in eu-west. Submariner makes the pod-to-pod connection work.</li>
             </ul>
         </div>
+
+        <!-- 🔬 Submariner Architecture — How Cross-Cluster Tunnels Actually Work -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Submariner Architecture — How Cross-Cluster Tunnels Actually Work</h5>
+            <p>Submariner doesn't create a mesh of Pod-to-Pod tunnels (that would be N×M tunnels). Instead, it uses a hub-and-spoke model via gateway nodes:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Gateway Election:</strong> One node per cluster is elected as the Gateway (label: <code>submariner.io/gateway=true</code>). It must have a public IP reachable from other clusters. Active-passive HA with a standby gateway.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Tunnel Establishment:</strong> The Gateway creates an IPsec tunnel (or WireGuard) to every OTHER cluster's Gateway. With 3 clusters, each Gateway has 2 tunnels. All cross-cluster Pod traffic flows through these tunnels.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Route Agent:</strong> Runs on EVERY node. Programs iptables/routes so that Pod traffic destined for a remote cluster is forwarded to the local Gateway node (not the default route). The Gateway then encrypts and sends it through the tunnel.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Lighthouse DNS:</strong> Aggregates Services from all clusters. When Pod A in us-east does <code>dig anihpj-auth.anihpj-prod.svc.clusterset.local</code>, Lighthouse returns the ClusterIP of anihpj-auth in eu-west. The Route Agent ensures traffic reaches the Gateway → tunnel → remote Gateway → remote Pod.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 THE KEY INSIGHT:</strong> Submariner adds latency — every cross-cluster packet traverses: Pod → local Gateway → IPsec encrypt → Internet → remote Gateway → IPsec decrypt → remote Pod. This is why you keep latency-sensitive communication within a cluster when possible. Cross-cluster communication via Submariner is for CONTROL PLANE traffic (API calls, DB replication), not high-throughput data plane traffic.</p>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -35188,6 +35681,52 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
                 <li><strong>CNPE Exam:</strong> Know the tradeoff. Submariner = CNI-agnostic. Cilium Cluster Mesh = Cilium-only but more powerful.</li>
             </ul>
         </div>
+
+        <!-- 🔬 Cilium Identity Model — How eBPF-Based Identity Transcends IP Addresses -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Cilium Identity Model — How eBPF-Based Identity Transcends IP Addresses</h5>
+            <p>Cilium's killer feature for multi-cluster is identity-based security. Unlike IP-based firewalls ("allow 10.0.1.5 → 10.0.2.8"), Cilium policies are written against pod LABELS:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">🧬 Cilium Identity — From Labels to Numeric Security Identity</div>
+                <pre style="background:#161b22;font-size:0.75rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    CILIUM IDENTITY MODEL — LABELS → NUMERIC IDENTITY            │
+│                                                                               │
+│  Pod: anihpj-api-7d9f8                     Pod: anihpj-api-3k2m1              │
+│  Labels: { app: anihpj-api, tier: backend }  Labels: { app: anihpj-api }      │
+│  Cluster: us-east                          Cluster: eu-west                   │
+│  IP: 10.0.1.5                              IP: 10.1.2.8                       │
+│       │                                         │                              │
+│       ▼                                         ▼                              │
+│  ┌────────────────────────────┐           ┌────────────────────────────┐      │
+│  │ Cilium computes:            │           │ Cilium computes:            │      │
+│  │ Identity = hash(labels)     │           │ Identity = hash(labels)     │      │
+│  │ Identity = 1234             │           │ Identity = 4567             │      │
+│  └────────────┬───────────────┘           └────────────┬───────────────┘      │
+│               │                                        │                      │
+│               └────────────┬───────────────────────────┘                      │
+│                            │                                                  │
+│                            ▼                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Cilium Cluster Mesh synchronizes Identity → Label mappings globally:     │ │
+│  │                                                                           │ │
+│  │  Identity 1234 = { app: anihpj-api, tier: backend }  (from us-east)       │ │
+│  │  Identity 4567 = { app: anihpj-api }                   (from eu-west)      │ │
+│  │  Identity 9999 = { app: anihpj-auth }                  (from both)        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  🔑 POLICY EXAMPLE:                                                            │
+│  "Allow Identity {app=anihpj-api} → Identity {app=anihpj-auth} on port 5432"  │
+│  This policy works automatically for:                                          │
+│  • anihpj-api in us-east → anihpj-auth in us-east (same cluster, identity 1234)│
+│  • anihpj-api in eu-west → anihpj-auth in eu-west (same cluster, identity 4567)│
+│  • anihpj-api in us-east → anihpj-auth in eu-west (CROSS-CLUSTER!)             │
+│                                                                               │
+│  🔑 The policy doesn't mention IPs, clusters, or regions. Just identities.     │
+│     Same policy works everywhere because identity is GLOBAL.                   │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -35210,6 +35749,22 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
         <div class="cnpe-gotcha" style="margin-top:1.5rem;">
             <h5>⚠️ Multi-Cloud ≠ Cloud Agnostic</h5>
             <p>True cloud agnosticism is expensive and limiting — you miss out on each cloud's differentiated services. Instead, adopt a <strong>pragmatic multi-cloud</strong> approach: standardize on Kubernetes as the abstraction layer, use cloud-specific services where they add value (RDS, BigQuery, CosmosDB), and ensure your APPLICATION layer is portable. Kubernetes IS your portability layer.</p>
+        </div>
+
+        <!-- 🔬 Multi-Cloud Networking — Connecting Clusters Across Cloud Providers -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Multi-Cloud Networking — How to Connect an EKS Cluster in AWS to a GKE Cluster in GCP</h5>
+            <p>Cross-cloud networking is the hardest multi-cloud problem. Each cloud has its own networking model (VPC, VNet, VPC-native). Here's how to bridge them:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Approach</th><th>How It Works</th><th>Pros</th><th>Cons</th><th>When to Use</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Submariner (IPsec)</strong></td><td>Gateway nodes with public IPs create IPsec tunnels across cloud boundaries. Works anywhere TCP/UDP reachable.</td><td>✅ Cloud-agnostic. No cloud-specific networking config. Encrypted.</td><td>⚠️ Added latency (encrypt/decrypt). Bandwidth limited by gateway node.</td><td>General cross-cloud pod communication. Low-to-medium throughput.</td></tr>
+                    <tr><td><strong>Cloud Interconnect</strong></td><td>AWS Direct Connect + GCP Interconnect + Azure ExpressRoute. Dedicated physical/virtual links between clouds.</td><td>✅ High throughput (10Gbps+). Low latency (<5ms). SLA-backed.</td><td>🔴 Expensive ($$$$/mo). Complex setup (weeks). Requires physical/virtual circuit provisioning.</td><td>High-throughput replication. Production-grade cross-cloud traffic.</td></tr>
+                    <tr><td><strong>VPN Gateway</strong></td><td>Cloud-native VPN gateways (AWS VPN, GCP Cloud VPN). Site-to-site tunnels.</td><td>✅ Managed by cloud provider. Moderate cost. Quick setup (hours).</td><td>⚠️ Lower throughput than Direct Connect. Still encrypted overhead.</td><td>Medium-throughput cross-cloud. Faster setup than Direct Connect.</td></tr>
+                    <tr><td><strong>Service Mesh (Istio)</strong></td><td>Istio multi-cluster with east-west gateways. mTLS between clusters. Istio handles routing + encryption.</td><td>✅ Application-layer routing. mTLS built-in. Cloud-agnostic.</td><td>🔴 High complexity. Requires Istio on all clusters. Gateway HA needed.</td><td>When you already use Istio. Need L7 routing across clouds.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 THE ANIHPJ APPROACH:</strong> For anihpj's cross-cloud needs (moderate traffic: API calls, DB replication), Submariner with IPsec is sufficient. The added latency (~10-30ms for encryption) is acceptable for control-plane traffic. For high-throughput data replication (database backups across clouds), consider Cloud Interconnect. <strong>Match the networking investment to the traffic volume and latency requirements.</strong></p>
         </div>
         </div>
 
@@ -35287,15 +35842,108 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
 └──────────────────────────────────────────────────────────────────────────────┘</pre>
         </div>
 
-        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
-            <h5>💪 Practice Drill — anihpj Multi-Cluster</h5>
-            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
-                <li><strong>Design multi-cluster topology:</strong> Design 3 clusters for anihpj across us-east, eu-west, ap-southeast. Which workloads go where?</li>
-                <li><strong>KubeFed deployment:</strong> Create a FederatedDeployment that places anihpj-jobboard in us-east and eu-west clusters.</li>
-                <li><strong>Submariner connectivity:</strong> Plan how anihpj-api in us-east calls anihpj-auth in eu-west via Submariner.</li>
-                <li><strong>Global DNS:</strong> Configure Route 53 geo-routing for api.anihpj.com across 3 regional clusters.</li>
-                <li><strong>Cloud bursting scenario:</strong> Design a bursting strategy for anihpj's Black Friday traffic spike.</li>
-            </ol>
+        <!-- 🔬 Centralized Observability — Thanos Architecture for Multi-Cluster Metrics -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Centralized Observability — Thanos Architecture for Multi-Cluster Metrics, Logs, and Traces</h5>
+            <p>Running Prometheus in each cluster is easy. Seeing ALL metrics from ALL clusters in ONE Grafana dashboard is the challenge. Here's the Thanos architecture that solves this:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">📊 Thanos — Centralized Multi-Cluster Observability</div>
+                <pre style="background:#161b22;font-size:0.73rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                    THANOS — CENTRALIZED MULTI-CLUSTER OBSERVABILITY                  │
+│                                                                                   │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐                │
+│  │  CLUSTER us-east   │  │  CLUSTER eu-west   │  │  CLUSTER ap-se     │                │
+│  │                    │  │                    │  │                    │                │
+│  │  Prometheus        │  │  Prometheus        │  │  Prometheus        │                │
+│  │  ┌──────────────┐ │  │  ┌──────────────┐ │  │  ┌──────────────┐ │                │
+│  │  │ Thanos Sidecar│ │  │  │ Thanos Sidecar│ │  │  │ Thanos Sidecar│ │                │
+│  │  │ • Uploads     │ │  │  │ • Uploads     │ │  │  │ • Uploads     │ │                │
+│  │  │   TSDB blocks │ │  │  │   TSDB blocks │ │  │  │   TSDB blocks │ │                │
+│  │  │ • Adds cluster │ │  │  │ • Adds cluster │ │  │  │ • Adds cluster │ │                │
+│  │  │   label        │ │  │  │   label        │ │  │  │   label        │ │                │
+│  │  └──────┬───────┘ │  │  └──────┬───────┘ │  │  └──────┬───────┘ │                │
+│  └─────────┼─────────┘  └─────────┼─────────┘  └─────────┼─────────┘                │
+│            │                      │                      │                          │
+│            └──────────────────────┼──────────────────────┘                          │
+│                                   │                                                 │
+│                                   ▼                                                 │
+│                    ┌─────────────────────────────┐                                  │
+│                    │  S3 / GCS / Azure Blob       │                                  │
+│                    │  (Shared Object Storage)      │                                  │
+│                    │  • All TSDB blocks stored here│                                  │
+│                    │  • Cross-region replicated    │                                  │
+│                    └─────────────┬───────────────┘                                  │
+│                                  │                                                 │
+│                    ┌─────────────┼───────────────┐                                  │
+│                    ▼             ▼               ▼                                  │
+│  ┌─────────────────────┐ ┌──────────────┐ ┌──────────────────┐                     │
+│  │  Thanos Querier      │ │ Thanos Store │ │ Thanos Compactor │                     │
+│  │  • Deduplicates      │ │ • Long-term  │ │ • Downsamples    │                     │
+│  │  • Merges across     │ │   storage    │ │   old data       │                     │
+│  │    clusters          │ │   gateway    │ │ • Compacts blocks│                     │
+│  │  • Prometheus API    │ │              │ │                  │                     │
+│  └──────────┬──────────┘ └──────────────┘ └──────────────────┘                     │
+│             │                                                                       │
+│             ▼                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│  │  Grafana (central)                                                           │   │
+│  │  • Points at Thanos Querier as Prometheus data source                        │   │
+│  │  • Query: rate(http_requests_total{cluster="us-east"}[5m])                   │   │
+│  │  • Query: sum(rate(http_requests_total[5m])) by (cluster) — ALL clusters     │   │
+│  └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                   │
+│  🔑 SAME PATTERN FOR LOGS: Loki (per cluster) → S3 → centralized Loki Querier      │
+│  🔑 SAME PATTERN FOR TRACES: Tempo (per cluster) → S3 → centralized Tempo Querier  │
+└──────────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill32-1" style="margin-top:1.5rem;">
+            <h5>🛠️ Drill 1: Multi-Cluster Architecture Design</h5>
+            <p><strong>Scenario:</strong> anihpj is expanding globally. You need clusters in us-east, eu-west, and ap-southeast.</p>
+            <p><strong>Task:</strong> Design the multi-cluster topology: which workloads go where, how clusters communicate, how DNS routes users. Justify your decisions for blast radius, latency, and compliance. Identify what goes in each cluster vs what stays global.</p>
+            <p><strong>Time: 25 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill32-2">
+            <h5>🛠️ Drill 2: Multi-Cluster Argo CD</h5>
+            <p><strong>Scenario:</strong> You manage 3 clusters (dev, staging, prod) and want Argo CD to deploy to all three from a single control plane.</p>
+            <p><strong>Task:</strong> Configure Argo CD to manage multiple clusters. Create an ApplicationSet that deploys anihpj-web to all 3 clusters with cluster-specific overrides (different replica counts, different Ingress hosts). Test canary deployment: deploy to dev → verify → deploy to staging → verify → deploy to prod.</p>
+            <p><strong>Time: 25 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill32-3">
+            <h5>🛠️ Drill 3: Cilium Cluster Mesh Setup</h5>
+            <p><strong>Scenario:</strong> anihpj-api in us-east needs to call anihpj-auth in eu-west with identity-based policies.</p>
+            <p><strong>Task:</strong> Plan the Cilium Cluster Mesh configuration: enable Cluster Mesh on both clusters, define a Global Service for anihpj-auth, create a CiliumNetworkPolicy that allows traffic from anihpj-api (identity 1234) to anihpj-auth (identity 5678) across clusters. Verify cross-cluster pod communication.</p>
+            <p><strong>Time: 25 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill32-4">
+            <h5>🛠️ Drill 4: Global Traffic Routing for anihpj</h5>
+            <p><strong>Scenario:</strong> anihpj.com must route users to the nearest healthy cluster. Users in Asia → ap-southeast, Europe → eu-west, Americas → us-east.</p>
+            <p><strong>Task:</strong> Configure Route 53 latency-based routing with health checks. Set up ExternalDNS in each cluster to automatically register Ingress endpoints. Test failover: simulate eu-west cluster failure → verify traffic redirects to us-east. Measure failover time.</p>
+            <p><strong>Time: 25 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill32-5">
+            <h5>🛠️ Drill 5: Hybrid Cloud Bursting Design</h5>
+            <p><strong>Scenario:</strong> anihpj runs primarily on-prem (50 nodes). During Black Friday, traffic is 5x normal. You need to burst to cloud.</p>
+            <p><strong>Task:</strong> Design the bursting architecture: on-prem cluster + cloud overflow cluster. Define bursting triggers (CPU > 80%, pending pods > 10). Plan how KubeFed propagates Deployments. Plan how Submariner/Cilium connects the clusters. Calculate monthly cloud cost for 48-hour burst. Write the bursting SOP.</p>
+            <p><strong>Time: 30 min</strong></p>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam Strategy — Domain 6 Multi-Cluster Architecture</h5>
+            <p>Domain 6 (Platform Resilience, ~10%) includes multi-cluster architecture. Expect design/scenario questions:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Multi-cluster justification:</strong> Be able to articulate WHY multi-cluster vs single-cluster with namespaces. Key phrase: "Namespaces are not security boundaries."</li>
+                <li><strong>Tool selection:</strong> KubeFed for resource sync, Submariner for CNI-agnostic networking, Cilium Cluster Mesh for identity-based networking. Know when to use each.</li>
+                <li><strong>Global DNS:</strong> Know latency-based routing vs failover routing. GeoDNS routes to NEAREST healthy cluster, not just any healthy cluster.</li>
+                <li><strong>Cloud bursting:</strong> Understand the triggers, the networking requirements, and the cost model. "Pay for cloud only when on-prem is exhausted."</li>
+            </ul>
+            <p style="margin-top:0.5rem;"><strong>🔑 EXAM MINDSET:</strong> Multi-cluster is about TRADEOFFS — not one-size-fits-all. For every decision, articulate: (1) What you gain (blast radius, latency, compliance), (2) What you pay (complexity, cost, operational overhead), (3) How you mitigate the cost (automation, GitOps, centralized observability).</p>
         </div>
 
         <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
@@ -35311,6 +35959,34 @@ ETCDCTL_API=3 etcdctl snapshot restore /backups/etcd-snapshot.db \
             <div class="quiz-question">
                 <p><strong>Q3.</strong> What is cloud bursting and when is it useful?</p>
                 <p class="quiz-answer"><strong>A:</strong> Cloud bursting runs workloads on-prem normally, then automatically "bursts" to public cloud when on-prem capacity is exhausted (CPU > 80%, pending pods queue, scheduled events). It's useful for: seasonal traffic spikes (Black Friday), cost optimization (pay for cloud only when needed), and avoiding over-provisioning on-prem hardware.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q4.</strong> You have 3 clusters (dev, staging, prod) managed by Argo CD. How do you implement a canary deployment that promotes from dev → staging → prod?</p>
+                <p class="quiz-answer"><strong>A:</strong> Use Argo CD <strong>ApplicationSet</strong> with a progressive sync or manual promotion: (a) ApplicationSet targets all 3 clusters, (b) Sync dev cluster first, run smoke tests, (c) If dev passes, sync staging cluster, run integration tests, (d) If staging passes, sync prod cluster. Argo CD's sync waves can order resources within a cluster, but cross-cluster promotion requires external orchestration (GitHub Actions, Argo Workflows, or manual approval gates). The key is: each cluster is an independent sync target — Argo CD won't block staging sync if dev fails unless you orchestrate it externally.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q5.</strong> Submariner uses IPsec tunnels between gateway nodes. What happens if the gateway node in Cluster A fails?</p>
+                <p class="quiz-answer"><strong>A:</strong> Submariner supports <strong>gateway high availability</strong> with active-passive gateways. If the active gateway fails: (a) The passive gateway detects the failure (via health check), (b) It takes over the public/private IP (VIP), (c) IPsec tunnels are re-established from the new gateway, (d) Cross-cluster traffic resumes after tunnel re-establishment (~30-60 seconds). To prevent single points of failure, deploy at least 2 gateway nodes per cluster with anti-affinity (different physical hosts/zones).</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q6.</strong> Cilium Cluster Mesh uses identity-based policies. How is a pod's identity determined and how does it survive pod restarts?</p>
+                <p class="quiz-answer"><strong>A:</strong> Cilium assigns each pod a <strong>numeric security identity</strong> based on its labels (specifically, Kubernetes labels like <code>app: anihpj-api</code>). This identity is: (a) Deterministic — pods with the same labels get the same identity, (b) Persistent — if a pod restarts with the same labels, it gets the same identity, (c) Cross-cluster — Cilium synchronizes identity-to-label mappings across all clusters in the mesh. This means a NetworkPolicy that allows "app=anihpj-api → app=anihpj-auth" works across clusters WITHOUT IP-based rules — the identity is resolved regardless of which cluster the pod is in.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q7.</strong> Your anihpj platform spans 3 regions. How do you implement centralized monitoring — one Grafana dashboard showing metrics from all 3 clusters?</p>
+                <p class="quiz-answer"><strong>A:</strong> Use <strong>Thanos</strong> or <strong>Cortex</strong>/<strong>Mimir</strong> for centralized Prometheus: (a) Each cluster runs its own Prometheus (scrapes local metrics), (b) Thanos Sidecar uploads metric blocks to a shared S3 bucket (cross-region replicated), (c) A centralized Thanos Querier reads from S3 and deduplicates metrics from all clusters, (d) Grafana points at the Thanos Querier — sees ALL clusters' metrics in one dashboard. Add a <code>cluster</code> label to all metrics for filtering. Alternative: Grafana Mimir (Grafana Cloud) or VictoriaMetrics for managed centralized observability.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q8.</strong> You need to deploy a global ConfigMap (feature flags) to all 3 anihpj clusters. Compare KubeFed vs a CI/CD pipeline approach.</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>KubeFed:</strong> Define once as FederatedConfigMap, KubeFed propagates to all member clusters automatically. Changes propagate in near real-time. Single point of management. But: KubeFed adds operational complexity. <strong>CI/CD approach:</strong> Store ConfigMap in Git. CI/CD pipeline applies to each cluster (<code>kubectl apply --context=us-east</code>, then <code>eu-west</code>, then <code>ap-southeast</code>). Simpler, GitOps-compatible, auditable. But: slower propagation (pipeline execution time), more boilerplate. <strong>Recommendation:</strong> For rarely-changing configs (feature flags update weekly), use CI/CD + Git. For frequently-changing dynamic configs, use KubeFed or an external config system (Consul, Vault).</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q9.</strong> Your CTO asks: "Why not just use one BIG cluster with 500 nodes instead of 3 clusters?" Provide the technical and business justification for multi-cluster.</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Technical:</strong> (1) etcd scalability — a single etcd cluster at 500 nodes generates massive write load (every pod status update hits etcd). External etcd required. (2) Blast radius — one misconfigured webhook or ClusterRole affects ALL 500 nodes. (3) Upgrade risk — K8s version upgrade is all-or-nothing. Can't canary. (4) API server bottleneck — one API server cluster handles 500 nodes' worth of kubelet heartbeats. <strong>Business:</strong> (1) Compliance — GDPR requires EU user data in EU. One cluster can't satisfy this. (2) Latency — users in Tokyo hitting a cluster in Virginia get 200ms+ latency. (3) Provider diversity — single cloud provider lock-in. Multi-cluster enables multi-cloud. (4) Cost — different regions have different compute costs. Optimize per region.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q10.</strong> Design the complete multi-cluster architecture for anihpj: 3 regions, with dev/staging in us-east and production across all 3. Include: GitOps, networking, DNS, observability, and DR strategy.</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Clusters:</strong> (a) dev-cluster (us-east, single-AZ, non-HA — cost optimized), (b) staging-cluster (us-east, multi-AZ, HA), (c) prod-us-east, prod-eu-west, prod-ap-southeast (all multi-AZ HA). <strong>GitOps:</strong> Argo CD manages all 5 clusters from a management cluster (us-east). ApplicationSet deploys to all clusters with cluster-specific overlays. <strong>Networking:</strong> Cilium Cluster Mesh connects all 3 prod clusters (identity-based policies). Submariner connects on-prem DC (if applicable). <strong>DNS:</strong> Route 53 latency-based routing → api.anihpj.com resolves to nearest prod cluster. Health checks remove unhealthy clusters. <strong>Observability:</strong> Thanos (Prometheus → S3 → centralized Querier → Grafana). Loki for centralized logging. Tempo for distributed tracing across clusters. <strong>DR:</strong> Velero backups from each cluster to S3 (cross-region). RPO: 6h, RTO: 40 min (Terraform + Argo CD + Velero restore). Active-passive DR: if a region fails, DNS routes to remaining regions.</p>
             </div>
         </div>
 

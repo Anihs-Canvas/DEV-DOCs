@@ -1,0 +1,176 @@
+<!-- ═══════════════ HANDS-ON LAB: CHAPTER 12 ═══════════════ -->
+<div class="cka-practice-drill" id="lab-ch12">
+    <h4>🏋️ CNPA HANDS-ON LAB — Chapter 12: CI Pipelines Deep Dive</h4>
+    <p class="drill-timer">⏱️ Estimated Time: 45-60 minutes | 📋 10 Scenario-Based Exercises</p>
+    <p style="color:#8b949e;font-size:0.88em;margin:8px 0 20px;">Master advanced CI patterns: matrix builds, caching strategies, test optimization, and multi-service pipelines for <strong>anihpj/jobpost</strong>.</p>
+
+    <div class="drill-scenario"><h5>⚡ Lab 1: Implement Matrix Builds for anihpj</h5><p><strong>Scenario:</strong> anihpj-api must be tested against Python 3.10, 3.11, 3.12 and Django 4.0, 4.1, 4.2. Implement a CI matrix to test all 9 combinations in parallel. <strong>Write the GitHub Actions matrix config.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+<pre><code class="language-yaml">jobs:
+  test-matrix:
+    strategy:
+      fail-fast: false    # Don't cancel other jobs if one fails
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+        django: ["4.0", "4.1", "4.2"]
+    runs-on: ubuntu-latest
+    services:
+      postgres: { image: postgres:16, env: { POSTGRES_DB: test } }
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5; with: { python-version: ${{ matrix.python }} }
+    - run: pip install django==${{ matrix.django }}
+    - run: pytest --cov --junitxml=results-${{ matrix.python }}-${{ matrix.django }}.xml</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>Matrix builds test ALL supported version combinations in parallel. This catches compatibility issues like "works on Django 4.2 but breaks on 4.0." `fail-fast: false` means one failing combination doesn't cancel others — you see the FULL picture of what's broken. The platform provides this matrix as a golden path template; developers just specify their supported versions.</p></details></div>
+
+    <div class="drill-scenario"><h5>💾 Lab 2: Implement Advanced CI Caching</h5><p><strong>Scenario:</strong> The anihpj CI spends 3 minutes installing pip dependencies on every run. Implement multi-level caching: pip cache, Docker layer cache, and test cache. <strong>Write the cache configuration and explain cache key strategy.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+<pre><code class="language-yaml"># Level 1: pip cache
+- uses: actions/cache@v4
+  with:
+    path: ~/.cache/pip
+    key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+    restore-keys: pip-${{ runner.os }}-
+
+# Level 2: Docker layer cache (gha cache)
+- uses: docker/setup-buildx-action@v3
+- uses: docker/build-push-action@v5
+  with:
+    cache-from: type=gha
+    cache-to: type=gha,mode=max
+
+# Level 3: pytest cache (.pytest_cache, .coverage)
+- uses: actions/cache@v4
+  with:
+    path: |
+      .pytest_cache
+      .coverage
+    key: pytest-${{ github.sha }}
+    restore-keys: pytest-</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>CI caching is the #1 speed optimization. Cache keys should be specific: hash files that determine cache validity (requirements.txt, Dockerfile). Restore keys are fallbacks: if exact match isn't found, use the most recent matching prefix. Docker GHA cache is automatic — BuildKit stores layers in GitHub's cache. Combined, these 3 caches can reduce CI time from 15 min to 3 min.</p></details></div>
+
+    <div class="drill-scenario"><h5>🧪 Lab 3: Implement Test Impact Analysis</h5><p><strong>Scenario:</strong> Only run tests affected by a PR's changes instead of the full 500-test suite. <strong>Design a test impact analysis system using pytest-testmon or similar.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+<pre><code class="language-bash">pip install pytest-testmon
+pytest --testmon  # First run: runs all tests, records dependencies
+# PR changes api/views.py (2 files) → testmon runs only 12 of 500 tests
+# CI time: 23 min → 45 seconds</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>Test impact analysis is the next evolution beyond parallelization. Instead of running ALL tests faster, run only the AFFECTED tests. pytest-testmon tracks which tests exercise which code paths. When a PR changes only views.py, it runs only tests that touch views.py. This can reduce CI time by 95% for small changes. The platform team should provide this in the golden path.</p></details></div>
+
+    <div class="drill-scenario"><h5>📊 Lab 4: Build a CI Performance Dashboard</h5><p><strong>Scenario:</strong> Track CI performance metrics: build duration (p50/p95), queue time, failure rate, flaky test count per service. <strong>Define the metrics pipeline and Grafana dashboard.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+            <div class="answer-label">✅ CI Dashboard:</div>
+            <div class="metric-row">
+                <div class="metric-card"><div class="metric-value">4.2m</div><div class="metric-label">P50 Duration</div></div>
+                <div class="metric-card metric-orange"><div class="metric-value">12.8m</div><div class="metric-label">P95 Duration</div></div>
+                <div class="metric-card metric-green"><div class="metric-value">96.3%</div><div class="metric-label">Success Rate</div></div>
+                <div class="metric-card metric-red"><div class="metric-value">3</div><div class="metric-label">Flaky Tests</div></div>
+            </div>
+<pre><code class="language-promql">histogram_quantile(0.95, rate(ci_build_duration_seconds_bucket{app="anihpj-api"}[7d]))
+rate(ci_build_failures_total{app="anihpj-api"}[7d]) / rate(ci_builds_total[7d])</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>CI performance is a platform metric. Slow CI = slow feedback = slow delivery. The platform team tracks CI health across ALL services. Alerts: P95 > 15 min, success rate < 90%, flaky test count > 5. These metrics feed into DORA: faster CI → shorter lead time → higher deployment frequency.</p></details></div>
+
+    <div class="drill-scenario"><h5>🔀 Lab 5: Implement Multi-Service CI Orchestration</h5><p><strong>Scenario:</strong> anihpj has 3 services (api, web, worker) in a monorepo. When lib/ changes, all 3 must be rebuilt and tested. When only api/ changes, only api is tested. <strong>Implement path-based triggers and service dependency graph.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+<pre><code class="language-yaml">jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+    - uses: dorny/paths-filter@v3
+      id: filter
+      with:
+        filters: |
+          api: [api/**, lib/**, requirements.txt]
+          web: [web/**, lib/**, package.json]
+          worker: [worker/**, lib/**]
+  test-api:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.api == 'true'
+    # ... runs only if api/ or lib/ changed
+  test-web:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.web == 'true'
+    # ... runs only if web/ or lib/ changed</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>Selective CI is essential for monorepo platforms. Without it, changing a single file in web/ rebuilds ALL services — wasting CI minutes and developer patience. Shared libraries (lib/) trigger ALL services. The platform team provides this as the standard CI template — developers just define their path filters.</p></details></div>
+
+    <div class="drill-scenario"><h5>🏷️ Lab 6: Implement PR Label-Driven CI Behavior</h5><p><strong>Scenario:</strong> Use PR labels to control CI behavior: `skip-ci` skips CI, `full-suite` runs E2E tests, `safe-to-test` allows external contributor CI. <strong>Write the conditional CI logic.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+<pre><code class="language-yaml">jobs:
+  determine-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      run_ci: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-ci') }}
+      run_e2e: ${{ contains(github.event.pull_request.labels.*.name, 'full-suite') }}
+      is_safe: ${{ contains(github.event.pull_request.labels.*.name, 'safe-to-test') || github.event.pull_request.author_association == 'MEMBER' }}
+    steps: [{ run: echo "CI scope determined" }]
+  
+  ci:
+    needs: determine-scope
+    if: needs.determine-scope.outputs.run_ci == 'true' && needs.determine-scope.outputs.is_safe == 'true'
+    # ... runs only for safe PRs without skip-ci
+  
+  e2e:
+    needs: [determine-scope, ci]
+    if: needs.determine-scope.outputs.run_e2e == 'true'
+    # ... runs only when full-suite label is applied</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>PR labels give developers control over CI without changing workflow files. `safe-to-test` is a security gate for forks: external PRs don't get CI access until a maintainer labels them (prevents crypto mining in CI). This is platform governance via convention, not mandate.</p></details></div>
+
+    <div class="drill-scenario"><h5>📦 Lab 7: Implement Canary CI Build Verification</h5><p><strong>Scenario:</strong> Before rolling out a CI workflow change to all services, test it on a single "canary" service. <strong>Design the canary CI strategy.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+            <div class="answer-label">✅ Canary CI Strategy:</div>
+            <div class="process-steps">
+                <div class="process-step-item"><div class="step-number">1</div><h5>Test on Canary</h5><p>Deploy new CI template to 1 service: anihpj-canary-test</p></div>
+                <div class="process-step-item"><div class="step-number">2</div><h5>Monitor 1 Week</h5><p>Watch CI metrics: duration, success rate, flaky tests</p></div>
+                <div class="process-step-item"><div class="step-number">3</div><h5>Roll to 10%</h5><p>10% of services get new CI template</p></div>
+                <div class="process-step-item active"><div class="step-number">4</div><h5>Roll to 100%</h5><p>All services on new template. Old template deprecated.</p></div>
+            </div>
+            <p class="eq-exp-label">Explanation</p><p>CI changes are INFRASTRUCTURE changes — they should be rolled out gradually like any other platform change. A broken CI template deployed to all 50 services simultaneously = 50 teams blocked. Canary CI = deploy to 1 service → validate → roll to 10% → validate → roll to 100%. The CNPA tests progressive delivery patterns applied to platform infrastructure.</p></details></div>
+
+    <div class="drill-scenario"><h5>🔄 Lab 8: Implement CI Pipeline as Code Library</h5><p><strong>Scenario:</strong> Create a reusable CI workflow that all anihpj services inherit. <strong>Write the reusable workflow and explain how services customize it.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+<pre><code class="language-yaml"># .github/workflows/ci-template.yml (reusable)
+name: Reusable CI
+on: { workflow_call: { inputs: { python-version: { type: string, default: '3.12' } } } }
+jobs:
+  lint: { uses: anihpj/platform/.github/workflows/lint.yml@main }
+  test: { uses: anihpj/platform/.github/workflows/test.yml@main, with: { python-version: ${{ inputs.python-version }} } }
+  build: { uses: anihpj/platform/.github/workflows/build.yml@main }
+
+# Service using it:
+# .github/workflows/ci.yml
+jobs:
+  ci:
+    uses: anihpj/platform/.github/workflows/ci-template.yml@main
+    with: { python-version: '3.12' }</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>CI pipeline as code library is the platform engineering approach: define CI ONCE in a central repo, reference it everywhere. When Trivy needs an update, update ONE file, not 50 service repos. Services customize via inputs (python-version, node-version, test-flags) but the core pipeline is centrally managed. This is DRY for CI.</p></details></div>
+
+    <div class="drill-scenario"><h5>🔗 Lab 9: Integrate CI with ArgoCD Notifications</h5><p><strong>Scenario:</strong> After CI builds an image, notify ArgoCD to refresh the application. <strong>Write the CI step that triggers ArgoCD sync.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+<pre><code class="language-yaml">- name: Trigger ArgoCD Sync
+  run: |
+    argocd app sync anihpj-api-staging \
+      --server argocd.anihpj.io \
+      --auth-token ${{ secrets.ARGOCD_TOKEN }} \
+      --insecure
+    argocd app wait anihpj-api-staging \
+      --server argocd.anihpj.io \
+      --auth-token ${{ secrets.ARGOCD_TOKEN }} \
+      --health \
+      --timeout 300</code></pre>
+            <p class="eq-exp-label">Explanation</p><p>CI → ArgoCD integration completes the delivery pipeline: CI builds + tests + pushes → notifies ArgoCD → ArgoCD syncs cluster to Git. This can be push-based (CI triggers ArgoCD) or pull-based (ArgoCD watches registry for new tags). Push-based is simpler; pull-based is more GitOps-pure. The CNPA tests both patterns.</p></details></div>
+
+    <div class="drill-scenario"><h5>🏆 Lab 10: Audit and Optimize an Existing CI Pipeline</h5><p><strong>Scenario:</strong> You inherit a CI pipeline: lint=3min, test=15min (no parallel), build=10min (no cache), total=28min. <strong>Audit the pipeline and propose optimizations to reach < 10min.</strong></p>
+        <details class="drill-solution"><summary>👁️ Show Solution</summary>
+            <div class="answer-label">✅ CI Optimization Audit:</div>
+            <div class="comparison-table"><table><thead><tr><th>Stage</th><th>Current</th><th>Optimization</th><th>After</th></tr></thead>
+                <tbody><tr><td>Lint</td><td>3 min (flake8+mypy)</td><td>Switch to ruff (100x faster)</td><td>15s</td></tr>
+                <tr><td>Test</td><td>15 min (sequential)</td><td>Split into 4 shards, run in parallel</td><td>4 min</td></tr>
+                <tr><td>Build</td><td>10 min (no cache)</td><td>Add Docker layer cache + pip cache</td><td>2 min</td></tr>
+                <tr><td>Scan</td><td>—</td><td>Add Trivy (adds 30s, saves incidents)</td><td>30s</td></tr>
+                <tr><td><strong>TOTAL</strong></td><td><strong>28 min</strong></td><td></td><td><strong>~7 min</strong></td></tr></tbody>
+            </table></div>
+            <p class="eq-exp-label">Explanation</p><p>CI optimization is a continuous process. The platform team should regularly audit CI performance and implement improvements. Key metrics to track: total duration, time-to-feedback (how fast does a dev know if their PR is good?), and cost (CI minutes × runner cost). The CNPA tests CI optimization as part of platform efficiency (Domain 6).</p></details></div>
+</div>
