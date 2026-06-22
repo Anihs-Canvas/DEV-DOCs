@@ -32225,6 +32225,47 @@ violation[{"msg": msg}] {
             <p>Kyverno is the most commonly tested policy engine on the CNPE exam because: (1) It's YAML-based — no new language to learn in an exam setting. (2) It supports validate, mutate, AND generate — the exam can test all three. (3) Its <code>validationFailureAction: Audit</code> mode is perfect for "test the policy first" scenarios. <strong>Expect at least 1 Kyverno task on the exam.</strong></p>
         </div>
 
+        <!-- 🔬 Kyverno Policy Debugging — When Things Go Wrong -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Kyverno Policy Debugging — What to Do When Your Policy Blocks Something Unexpectedly</h5>
+            <p>The most common Kyverno support ticket: "My deployment is stuck! Kyverno blocked it!" Here's your systematic debugging workflow — from first alert to root cause:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Check the Events:</strong> <code>kubectl describe deployment &lt;name&gt; -n &lt;ns&gt;</code> or <code>kubectl get events -n &lt;ns&gt; --sort-by='.lastTimestamp'</code>. Look for "admission webhook denied the request" messages. The event tells you WHICH policy blocked it and WHY.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Check Kyverno Logs:</strong> <code>kubectl logs -n kyverno deployment/kyverno-admission-controller</code>. Look for lines with "admission review" and the resource name. Kyverno logs show the EXACT policy evaluation — which rule matched, which check failed.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Dry-Run Test with kyverno apply:</strong> <code>kyverno apply ./policies/ --resource ./my-pod.yaml</code>. This simulates the admission check locally — no cluster needed. Shows PASS or FAIL for each policy against your resource.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Check Policy Reports:</strong> <code>kubectl get policyreport -A | grep -i fail</code>. Lists all resources that violate policies across all namespaces. Useful for discovering "this policy was always failing but nobody noticed."</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Toggle to Audit Temporarily:</strong> If blocking production, change <code>validationFailureAction: Audit</code> to stop blocking while you fix the policy. The policy still reports violations but doesn't reject requests.</div></div>
+            </div>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 Kyverno Debugging Commands — Your Go-To Toolkit</span></div>
+<pre><span class="code-cmt"># ── FIND WHICH POLICY BLOCKED YOUR DEPLOYMENT ──</span>
+kubectl get events -n anihpj --sort-by='.lastTimestamp' | grep -i "denied"
+<span class="code-cmt"># 5m    Warning   FailedCreate   replicaset/my-app-7d9f8c   admission webhook</span>
+<span class="code-cmt"># "validate.kyverno.svc" denied the request: Every pod must have a 'team' label</span>
+
+<span class="code-cmt"># ── SEE WHICH POLICY AND RULE FAILED ──</span>
+kubectl describe clusterpolicy require-team-label
+<span class="code-cmt"># Status:</span>
+<span class="code-cmt">#   Ready: true</span>
+<span class="code-cmt">#   Rule Count: 1 (1 validate)</span>
+<span class="code-cmt">#   Violations: 3 resources violating in namespace anihpj</span>
+
+<span class="code-cmt"># ── TEST YOUR POD YAML AGAINST ALL POLICIES LOCALLY ──</span>
+kyverno apply ./kyverno-policies/ --resource ./test-pod.yaml
+<span class="code-cmt"># Policy: require-team-label → FAIL: Every pod must have a 'team' label</span>
+<span class="code-cmt"># Policy: add-default-resources → PASS (mutated: added cpu=100m, mem=128Mi)</span>
+<span class="code-cmt"># Policy: block-latest-tag → PASS</span>
+
+<span class="code-cmt"># ── LIST ALL POLICY VIOLATIONS CLUSTER-WIDE ──</span>
+kubectl get policyreport -A -o json | jq '.items[] | select(.summary.fail > 0)'
+<span class="code-cmt"># Shows which namespaces have failing resources. Useful for compliance dashboards.</span>
+
+<span class="code-cmt"># ── CHECK KYVERNO WEBHOOK CONFIGURATION ──</span>
+kubectl get validatingwebhookconfigurations, mutatingwebhookconfigurations | grep kyverno
+<span class="code-cmt"># Shows the webhook registrations. Check failurePolicy (Fail vs Ignore).</span></pre>
+            </div>
+        </div>
+
         <!-- 🔬 Kyverno Background Scan & Audit -->
         <div class="cnpe-beyond" style="margin-top:1.5rem;">
             <h5>🔬 Kyverno Background Scan — Policing EXISTING Resources, Not Just New Ones</h5>
@@ -32310,6 +32351,25 @@ kubectl describe policyreport cpol-require-labels -n anihpj
                 </div>
             </div>
             <p style="font-size:0.78rem;color:#8b949e;margin-top:1rem;text-align:center;"><strong>🎯 THE HEURISTIC:</strong> Need mutation? → Kyverno. Cross-resource validation? → OPA. Simple field check? → VAP (CEL). YAML-based validate-only? → Kyverno or VAP. Rego required? → OPA.</p>
+        </div>
+
+        <!-- 🔬 Policy Impact Analysis — Measuring Blast Radius Before Enforcing -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Policy Impact Analysis — Measuring the Blast Radius BEFORE You Enforce</h5>
+            <p>The #1 mistake in policy enforcement: deploying a new policy in Enforce mode without knowing how many existing resources it would block. The result? Production outage. Here's how to measure impact BEFORE you enforce:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Deploy in Audit Mode:</strong> Set <code>validationFailureAction: Audit</code> (Kyverno) or <code>enforcementAction: dryrun</code> (Gatekeeper). Policy evaluates all resources but never blocks. This is ZERO risk.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Wait for Background Scan:</strong> Kyverno scans all existing resources (~every 1 min). Gatekeeper audits continuously. Wait at least 15-30 minutes for complete scan results.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Check Policy Reports:</strong> <code>kubectl get policyreport -A</code> or <code>kubectl get clusterpolicyreport</code>. Look at PASS/FAIL counts. A policy with 847 FAIL results across production namespaces needs attention BEFORE enforcement.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Analyze FAIL Resources:</strong> <code>kubectl describe policyreport &lt;name&gt; -n &lt;ns&gt;</code>. Review each failing resource. Categorize: (a) Needs fix before enforce — critical, (b) Can be fixed later — non-critical, (c) False positive — policy needs tuning.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Fix or Exclude:</strong> For category (a), fix the resources. For category (c), tune the policy's match/exclude rules. Set up a tracking issue for category (b) with a deadline.</div></div>
+                <div class="process-step-item"><div class="step-num">6</div><div class="step-text"><strong>Promote to Enforce:</strong> Once all critical failures are resolved and false positives eliminated, switch to <code>Enforce</code> mode. Monitor closely for the first 24 hours.</div></div>
+            </div>
+            <div class="cnpe-speed-tip" style="margin-top:0.8rem;">
+                <h5>⚡ Quick Blast Radius Check — One Command</h5>
+                <p>Want to know how many resources a policy would block RIGHT NOW? <code>kubectl get policyreport -A -o json | jq '[.items[] | {ns: .metadata.namespace, policy: .metadata.name, fail: .summary.fail}] | group_by(.policy) | map({policy: .[0].policy, totalFails: map(.fail) | add})'</code> — This aggregates fail counts by policy across all namespaces. If you see a policy with 200+ fails, DO NOT enforce it yet.</p>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE BLAST RADIUS PRINCIPLE:</strong> The time between "deploy policy in Audit" and "promote to Enforce" is your safety margin. The longer you wait, the more confident you are. Minimum: 24 hours for dev, 1 week for staging, 2 weeks for production. <strong>There is NO reason to skip Audit mode. Ever.</strong> It costs you nothing — the policy evaluates but doesn't block. Skipping Audit is gambling with production stability.</p>
         </div>
 
         <!-- 🔬 Policy Engine Ecosystem — Where Everything Fits -->
@@ -32608,6 +32668,30 @@ gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
             </div>
             <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 PATTERN:</strong> Organizations don't pick ONE policy engine — they pick the RIGHT engine for each layer. PSA for baseline security. VAP for simple field checks (fastest path). Kyverno for mutation and generation (platform defaults). OPA for cross-resource and multi-domain governance. <strong>Your platform should follow the same layered approach.</strong></p>
         </div>
+
+        <!-- 🔬 CEL Language Deep Reference — Beyond the Basics -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 CEL Language Deep Reference — The Complete Toolkit for VAP Policies</h5>
+            <p>CEL (Common Expression Language) is a simple but surprisingly powerful expression language. Here's the complete reference for everything you can do in a VAP validation expression — with Kubernetes-specific examples:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Category</th><th>CEL Expression</th><th>What It Does</th><th>K8s Use Case</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Field Access</strong></td><td><code>object.spec.containers</code></td><td>Access nested fields. Null-safe with <code>has()</code>.</td><td>Access any field in the pod/deployment spec.</td></tr>
+                    <tr><td><strong>Existence Check</strong></td><td><code>has(object.spec.securityContext)</code></td><td>Returns true if field EXISTS. Prevents null-pointer errors.</td><td>Check for optional fields before accessing them.</td></tr>
+                    <tr><td><strong>Type Check</strong></td><td><code>object.spec.replicas &gt; 0</code></td><td>Type-safe comparison. VAP catches type errors at compile time.</td><td>Validate Deployment replicas, port numbers, etc.</td></tr>
+                    <tr><td><strong>String Match</strong></td><td><code>c.image.endsWith(':latest')</code></td><td>String ops: endsWith, startsWith, contains, matches (regex).</td><td>Block image tags, validate label formats, check hostnames.</td></tr>
+                    <tr><td><strong>Regex</strong></td><td><code>c.image.matches('^[a-z0-9.-]+:[a-z0-9.-]+$')</code></td><td>RE2 regular expression matching. Full regex support.</td><td>Validate image name format, label value patterns.</td></tr>
+                    <tr><td><strong>Quantifiers</strong></td><td><code>object.spec.containers.all(c, condition)</code></td><td>Check ALL elements. <code>.exists()</code> for "at least one". <code>.filter()</code> for specific items.</td><td>All containers must have limits. At least one container with readiness probe.</td></tr>
+                    <tr><td><strong>List Operations</strong></td><td><code>object.spec.containers.filter(c, has(c.ports)).size() &gt; 0</code></td><td>Filter list, count items, check size, access by index.</td><td>Count containers with ports. Check minimum replicas.</td></tr>
+                    <tr><td><strong>Map/Set Check</strong></td><td><code>['team','app'].all(k, k in object.metadata.labels)</code></td><td>Check if keys exist in a map. <code>k in map</code> for membership.</td><td>All required labels must exist. Check annotations.</td></tr>
+                    <tr><td><strong>Range Check</strong></td><td><code>int(c.resources.requests.cpu) &lt;= int(c.resources.limits.cpu)</code></td><td>Numeric comparison. Convert resource quantities with <code>int()</code>.</td><td>Requests must not exceed limits. Port range validation.</td></tr>
+                    <tr><td><strong>Conditional</strong></td><td><code>!has(c.securityContext) ? true : c.securityContext.runAsNonRoot == true</code></td><td>Ternary: <code>condition ? true : false</code>. <code>?:</code> for defaults.</td><td>"If securityContext exists, runAsNonRoot must be true. If absent, allow."</td></tr>
+                    <tr><td><strong>Size/Count</strong></td><td><code>size(object.spec.containers) &lt; 10</code></td><td>Count elements in list, chars in string, items in map.</td><td>Limit containers per pod. Limit label count.</td></tr>
+                    <tr><td><strong>oldObject</strong></td><td><code>oldObject.spec.replicas != object.spec.replicas</code></td><td>Access previous state during UPDATE. Prevents immutable field changes.</td><td>"Replicas changed from 3 to 1." "Label value was modified."</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 CEL VS REGO — MENTAL SHIFT:</strong> Rego is logic programming ("find everything that violates"). CEL is expression evaluation ("evaluate this boolean"). Rego iterates implicitly (<code>containers[_]</code>). CEL requires explicit quantifiers (<code>.all()</code>, <code>.exists()</code>). Rego is more powerful for complex logic. CEL is faster and type-safe. <strong>For 80% of policies, CEL is sufficient and simpler.</strong></p>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -32681,6 +32765,28 @@ gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
                 <div class="flow-step"><div class="flow-step-num">Q4</div><div class="flow-step-text">Do you need to query external data or cluster state (cross-resource)?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → OPA/Gatekeeper</div></div>
                 <div class="flow-step"><div class="flow-step-num">Q5</div><div class="flow-step-text">Is it a simple field validation (label exists, image not :latest)?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → VAP (CEL) — no webhook overhead</div></div>
                 <div class="flow-step"><div class="flow-step-num">Q6</div><div class="flow-step-text">Do you need YAML-based policies without learning Rego?</div><div class="flow-step-arrow">→</div><div class="flow-step-result yes">YES → Kyverno Validate</div></div>
+            </div>
+        </div>
+
+        <!-- 🔬 Policy Exception Mechanisms — Excluding Specific Resources -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Policy Exceptions — How to Exclude Specific Resources Without Disabling the Policy</h5>
+            <p>Blanket policies are easy. The hard part is carving out exceptions for legitimate cases like system components, infrastructure operators, or emergency break-glass scenarios. Here's how each engine handles exceptions:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Engine</th><th>Exception Mechanism</th><th>How It Works</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Kyverno</strong></td><td><code>exclude:</code> block</td><td>Exclude specific resources, namespaces, or cluster-scoped resources from policy evaluation.</td><td><code>exclude:<br>  any:<br>  - resources:<br>      namespaces: ["kube-system", "kyverno"]</code></td></tr>
+                    <tr><td><strong>OPA/Gatekeeper</strong></td><td><code>excludedNamespaces:</code> in Constraint</td><td>Specify namespaces in the Constraint spec that should NOT be checked.</td><td><code>spec:<br>  match:<br>    excludedNamespaces:<br>    - "kube-system"</code></td></tr>
+                    <tr><td><strong>OPA/Gatekeeper</strong></td><td>Exemption namespace label</td><td>Gatekeeper automatically skips namespaces with <code>admission.gatekeeper.sh/ignore: "true"</code> label.</td><td><code>kubectl label ns emergency admission.gatekeeper.sh/ignore=true</code></td></tr>
+                    <tr><td><strong>VAP (CEL)</strong></td><td><code>namespaceSelector:</code> in Binding</td><td>Use <code>matchLabels</code> or <code>matchExpressions</code> to target specific namespaces. Use <code>NotIn</code> operator to exclude.</td><td><code>namespaceSelector:<br>  matchExpressions:<br>  - key: type<br>    operator: NotIn<br>    values: ["system"]</code></td></tr>
+                    <tr><td><strong>PSA</strong></td><td>Namespace labels</td><td>Each namespace can have its own PSA level. Exclude by setting <code>pod-security.kubernetes.io/enforce: privileged</code>.</td><td><code>kubectl label ns legacy-app pod-security.kubernetes.io/enforce=privileged</code></td></tr>
+                </tbody>
+            </table></div>
+            <div class="cnpe-gotcha" style="margin-top:0.8rem;">
+                <h5>⚠️ The Exception Trap — When "Temporary" Becomes Permanent</h5>
+                <p>Policy exceptions are the most dangerous feature in governance. A "temporary exemption for the database migration" becomes a permanently excluded namespace. A "just for the hackathon" label stays for 3 years. Every exception should be: (1) <strong>Time-limited:</strong> Use automation to remove exemptions after a deadline — Kyverno's <code>validate:
+  manifest:
+    conditions:</code> doesn't natively support TTL on exceptions, so build a controller or cronjob that removes exception labels after N days. (2) <strong>Audited:</strong> Every exception request goes through a PR with justification. (3) <strong>Monitored:</strong> Dashboard showing "exempted resources" — if the number grows, investigate. (4) <strong>Reviewed:</strong> Quarterly exception review — "Do we still need this?"</p>
             </div>
         </div>
         </div>
@@ -32900,6 +33006,35 @@ gator verify ./block-latest-constraint.yaml -f ./test-fixtures/
         <div id="s30-1" class="section-block"><h4>30.1 SBOM — Software Bill of Materials</h4>
         <p>A <strong>Software Bill of Materials (SBOM)</strong> is a machine-readable inventory of EVERY component in your container image — base image, apt packages, pip packages, Go modules, everything. It answers: <strong>"What's inside this image?"</strong> Two formats dominate: <strong>SPDX</strong> (Linux Foundation) and <strong>CycloneDX</strong> (OWASP).</p>
 
+        <!-- 🔬 Why SBOMs Matter — The Log4j Wake-Up Call -->
+        <div class="scenario-box" style="margin-top:1rem;">
+            <h5>🔍 Why SBOMs Matter — The Log4j Wake-Up Call</h5>
+            <p style="color:#c9d1d9;font-size:0.9em;margin:10px 0;">In December 2021, a critical vulnerability (<strong>CVE-2021-44228 — Log4Shell</strong>) was discovered in Log4j, a Java logging library used by MILLIONS of applications. The question every CISO asked: <strong>"Do WE use Log4j? In which applications? Which versions?"</strong></p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+                <div style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#f87171;font-weight:700;margin-bottom:6px;">❌ Without SBOM — The Panic Response</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• "Do we use Log4j?" — Nobody knows for sure</li>
+                        <li>• Security team searches 500+ git repos manually</li>
+                        <li>• Ops team scans 1,200 container images one by one</li>
+                        <li>• Takes WEEKS to answer "are we affected?"</li>
+                        <li style="color:#f87171;margin-top:8px;"><strong>Result: 3 weeks of uncertainty while attackers actively exploit the vulnerability.</strong></li>
+                    </ul>
+                </div>
+                <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);border-radius:8px;padding:14px;">
+                    <div style="color:#4ade80;font-weight:700;margin-bottom:6px;">✅ With SBOM — The Automated Response</div>
+                    <ul style="list-style:none;padding:0;margin:0;color:#c9d1d9;font-size:0.85em;line-height:1.7;">
+                        <li>• Query SBOM database: "images containing log4j-core"</li>
+                        <li>• Result: 12 images affected, exact versions listed</li>
+                        <li>• Cross-reference with CVE: 8 images need patching</li>
+                        <li>• Jira tickets auto-created with specific package + version</li>
+                        <li style="color:#4ade80;margin-top:8px;"><strong>Result: Complete inventory in 5 minutes. Remediation begins same day.</strong></li>
+                    </ul>
+                </div>
+            </div>
+            <p style="color:#8b949e;font-size:0.82em;margin-top:10px;"><strong>🔑 THE LESSON:</strong> You can't protect what you don't know you have. An SBOM is not a "nice to have" compliance artifact — it's the foundation of your vulnerability response capability. Without it, every CVE is a fire drill. With it, every CVE is a database query. <strong>U.S. Executive Order 14028 now requires SBOMs for all federal software.</strong> The industry learned from Log4j — don't repeat the mistake.</p>
+        </div>
+
         <div class="card-grid" style="margin-top:1rem;">
             <div class="info-card"><h5>syft</h5><p>CLI tool by Anchore. Generates SBOM from container images, directories, or filesystems. Supports SPDX, CycloneDX, Syft-json. <strong>CNPE exam tool.</strong></p></div>
             <div class="info-card"><h5>SPDX</h5><p>Software Package Data Exchange. ISO 5962 standard. Linux Foundation project. Tags: name, version, supplier, license, relationship.</p></div>
@@ -32947,6 +33082,86 @@ syft anihpj/jobboard:${TAG} -o spdx-json | \
                 <li><strong>SBOM ≠ Vulnerability scan</strong> — SBOM is the INVENTORY. Trivy/Grype use the inventory to find CVEs.</li>
                 <li><strong>SPDX</strong> = License-focused. <strong>CycloneDX</strong> = Security-focused. Know both for the exam.</li>
             </ul>
+        </div>
+
+        <!-- 🔬 VEX & SBOM Lifecycle — Beyond Just Generating SBOMs -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 VEX &amp; The SBOM Lifecycle — From Generation to Actionable Intelligence</h5>
+            <p>Generating an SBOM is step ONE. The real value comes from what you DO with it. Here's the complete SBOM lifecycle and how <strong>VEX (Vulnerability Exploitability eXchange)</strong> closes the gap between "we have a CVE" and "is it actually exploitable?":</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Generate (syft):</strong> Create SBOM at build time. Attach to image via Cosign attest. This is the INVENTORY phase.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Match (Grype/Trivy):</strong> Cross-reference SBOM packages against CVE databases (NVD, GitHub Advisory, vendor feeds). This produces a list of "package X version Y has CVE Z."</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Filter (VEX):</strong> Not every CVE is exploitable in YOUR context. VEX is a machine-readable statement that says "CVE-2024-XXXX in package django is NOT exploitable because the vulnerable function is never called in our configuration." This ELIMINATES false positives.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Remediate:</strong> For CVEs that ARE exploitable: patch, update, or mitigate. Track fix version, assign owner, set SLA based on severity.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Monitor (Continuous):</strong> New CVEs are published daily. Re-scan SBOMs against updated databases. The SBOM you generated last month may have new CVEs TODAY. Continuous monitoring is essential.</div></div>
+            </div>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Without VEX</th><th>With VEX</th></tr></thead>
+                <tbody>
+                    <tr><td>Scanner reports 147 HIGH CVEs → panic</td><td>VEX filters: 142 are not exploitable, 5 need action → calm</td></tr>
+                    <tr><td>Security team spends days manually verifying each CVE</td><td>Development team provides VEX at build time — automated, trusted</td></tr>
+                    <tr><td>CI/CD pipeline blocks on HIGH CVEs → frustrated developers add <code>.trivyignore</code> without understanding</td><td>CI/CD blocks only on EXPLOITABLE CRITICAL → developers trust the process</td></tr>
+                    <tr><td>Auditor asks "prove CVE-2024-XXXX doesn't affect you" → weeks of email chains</td><td>Auditor receives VEX document → "not exploitable because..." → 5 minutes</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE SBOM MATURITY MODEL:</strong> Level 1: Generate SBOMs. Level 2: Scan SBOMs for CVEs. Level 3: Add VEX to eliminate false positives. Level 4: Continuous monitoring — re-scan old SBOMs against new CVEs. Level 5: Enforce policy — no image runs without passing all gates. <strong>Most organizations are at Level 1. CNPE target: Level 4.</strong></p>
+        </div>
+
+        <!-- 🔬 Container Image Anatomy — Understanding What You're Actually Securing -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Container Image Anatomy — Understanding What You're Actually Securing</h5>
+            <p>Before you can secure an image, you must understand what an image actually IS. A container image is NOT a single file — it's a collection of layers, a manifest, and a configuration, all stored in a content-addressable registry. Understanding this explains WHY we sign digests (not tags) and WHY SBOMs work:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">📦 Container Image Anatomy — Layers, Manifest, Digest</div>
+                <pre style="background:#161b22;font-size:0.75rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    CONTAINER IMAGE ANATOMY — OCI SPECIFICATION                    │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         IMAGE MANIFEST (JSON)                              │ │
+│  │  {                                                                        │ │
+│  │    "schemaVersion": 2,                                                    │ │
+│  │    "mediaType": "application/vnd.oci.image.manifest.v1+json",             │ │
+│  │    "config": {                                                            │ │
+│  │      "mediaType": "application/vnd.oci.image.config.v1+json",             │ │
+│  │      "digest": "sha256:abc123...",  ← Config blob hash                    │ │
+│  │      "size": 7023                                                         │ │
+│  │    },                                                                      │ │
+│  │    "layers": [                          ← ORDERED list of filesystem layers│ │
+│  │      { "digest": "sha256:def456...", "size": 2812345 },  ← Base OS layer  │ │
+│  │      { "digest": "sha256:ghi789...", "size": 45678 },    ← apt packages   │ │
+│  │      { "digest": "sha256:jkl012...", "size": 89234 },    ← pip install    │ │
+│  │      { "digest": "sha256:mno345...", "size": 12345 }     ← app code       │ │
+│  │    ]                                                                       │ │
+│  │  }                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         IMAGE CONFIG (JSON)                                 │ │
+│  │  {                                                                        │ │
+│  │    "created": "2025-06-22T10:00:00Z",                                     │ │
+│  │    "architecture": "amd64",                                                │ │
+│  │    "os": "linux",                                                          │ │
+│  │    "config": {                                                             │ │
+│  │      "Env": ["PATH=/usr/local/bin:...", "DJANGO_SETTINGS_MODULE=..."],   │ │
+│  │      "Cmd": ["gunicorn", "anihpj.wsgi:application"],                      │ │
+│  │      "ExposedPorts": {"8000/tcp": {}},                                    │ │
+│  │      "User": "1001"                                                        │ │
+│  │    },                                                                      │ │
+│  │    "history": [ ... ]    ← Dockerfile build history                        │ │
+│  │  }                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+│  🔑 KEY CONCEPTS:                                                             │
+│  • IMAGE TAG = Human-readable pointer (v1.2.3, latest). MUTABLE — can change. │
+│  • IMAGE DIGEST = sha256 hash of the MANIFEST. IMMUTABLE — unique to content.│
+│  • LAYER = A filesystem diff. Each RUN/COPY/ADD = one layer.                  │
+│  • CONTENT-ADDRESSABLE: Each blob stored by hash. Same content = same hash.   │
+│  • SIGNING THE DIGEST = Signing the manifest hash. All layers are covered.    │
+│  • SBOM = Inventory of packages ACROSS all layers.                            │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY THIS MATTERS FOR SUPPLY CHAIN SECURITY:</strong> (1) <strong>You sign the DIGEST, not the tag.</strong> The tag <code>v1.2.3</code> can be moved to point to a different image. The digest <code>sha256:abc...</code> is cryptographically bound to the exact content. (2) <strong>SBOMs enumerate packages across layers.</strong> syft unpacks all layers and scans the combined filesystem. (3) <strong>Layers are shared.</strong> If two images use the same base layer (e.g., <code>alpine:3.19</code>), they share the same layer blob. A vulnerability in that shared layer affects BOTH images. (4) <strong>Cosign attaches signatures as separate OCI artifacts</strong> referenced by the digest — the signature lives alongside the image in the registry but is not part of the image itself.</p>
         </div>
         </div>
 
@@ -33028,6 +33243,44 @@ cosign verify-attestation --type spdxjson \
             <h5>⚠️ Keyless vs Key-Based — Which Should YOU Use?</h5>
             <p><strong>Keyless (OIDC):</strong> Recommended for CI/CD. No long-lived key to rotate, steal, or lose. But requires trust in OIDC provider. <strong>Key-Based:</strong> Useful for air-gapped environments or when OIDC is unavailable. But you MUST manage key rotation, secure storage, and revocation. <strong>CNPE exam tip:</strong> Know both, expect keyless to be the preferred approach.</p>
         </div>
+
+        <!-- 🔬 Sigstore Trust Model — How Keyless Signing Really Works -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 The Sigstore Trust Model — Why Keyless Signing Is Trustworthy</h5>
+            <p>"Wait — if there's no long-lived key, how do I KNOW the signature is authentic?" This is the most common question about keyless signing. Here's the answer, broken down into the three Sigstore components that create the trust chain:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>OIDC Identity Provider (e.g., GitHub):</strong> Issues a short-lived token that PROVES identity: "This is GitHub Actions workflow <code>release.yml</code> running in repo <code>anihpj/anihpj</code> on branch <code>main</code>." This is the WHO. The token expires in minutes — it cannot be reused.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Fulcio (Certificate Authority):</strong> Receives the OIDC token, validates it, and issues a short-lived X.509 certificate (10 minutes). The certificate binds the identity to a public key. Fulcio NEVER sees the private key — it only certifies the public key belongs to the identity. This is the BINDING.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Rekor (Transparency Log):</strong> Records the signature + certificate in an immutable, append-only log. Anyone can verify that a signature was recorded at a specific time. This is the PROOF. If someone later compromises GitHub Actions, old signatures remain verifiable because Rekor entries cannot be modified.</div></div>
+            </div>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Component</th><th>Role</th><th>Analogy</th><th>Security Property</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>OIDC (GitHub/GitLab/Google)</strong></td><td>Identity verification</td><td>Passport office — "This person is who they claim to be"</td><td>Delegated trust — you trust GitHub to verify its own workflows</td></tr>
+                    <tr><td><strong>Fulcio</strong></td><td>Certificate authority</td><td>Notary public — "I witnessed this signature at this time"</td><td>Ephemeral certs — no long-lived credentials to steal</td></tr>
+                    <tr><td><strong>Rekor</strong></td><td>Transparency log</td><td>Public ledger — "This transaction is permanently recorded"</td><td>Immutable — entries cannot be deleted or modified</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE TRUST ANCHOR:</strong> You don't need to trust Cosign. You trust GitHub (your OIDC provider) to correctly identify its own workflows. If someone can forge a GitHub Actions OIDC token, your supply chain has bigger problems than image signing. The system is designed so that compromising ONE component (Fulcio, Rekor, or the OIDC provider) is NOT enough to forge a valid signature — you'd need to compromise ALL three simultaneously.</p>
+        </div>
+
+        <!-- 🔬 Cosign Verification Patterns — Kyverno vs OPA vs Sigstore Policy Controller -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Cosign Verification Patterns — Kyverno vs OPA vs Sigstore Policy Controller</h5>
+            <p>Signing images is only half the story. You must also VERIFY signatures at deployment time. There are three ways to enforce Cosign signature verification at admission — here's how to choose:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Approach</th><th>How It Works</th><th>Pros</th><th>Cons</th><th>Best For</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Kyverno verifyImages</strong></td><td>Built-in rule type in Kyverno ClusterPolicy. <code>verifyImages:</code> block with attestors, conditions, and image references.</td><td>✅ YAML-native. No Rego. Same tool as other policies. Most CNPE-exam-relevant.</td><td>⚠️ Kyverno must be installed. Only works in K8s admission context.</td><td>Teams already using Kyverno. The "batteries included" option.</td></tr>
+                    <tr><td><strong>OPA/Gatekeeper</strong></td><td>Custom Rego policy that calls <code>cosign verify</code> or checks the Rekor transparency log. More flexible but more complex.</td><td>✅ Cross-resource checks ("does this pod's image have a signature from the SAME repo?"). Multi-domain.</td><td>🔴 Rego complexity. Must write and maintain the verification Rego yourself.</td><td>Teams already using OPA. When you need cross-resource signature context.</td></tr>
+                    <tr><td><strong>Sigstore Policy Controller</strong></td><td>Dedicated admission controller from Sigstore project. Uses <code>ClusterImagePolicy</code> CRD. Purpose-built for signature verification.</td><td>✅ Purpose-built for Cosign. Supports complex policies (CUE/Rego). No dependency on Kyverno/OPA.</td><td>⚠️ Yet ANOTHER controller to manage. Smaller community than Kyverno.</td><td>Teams that ONLY need signature verification and want a focused tool.</td></tr>
+                </tbody>
+            </table></div>
+            <div class="cnpe-strategy" style="margin-top:0.8rem;">
+                <h5>🎯 CNPE Recommendation</h5>
+                <p><strong>Use Kyverno verifyImages.</strong> You already have Kyverno for other policies (labels, limits, mutations). Adding image verification to the SAME policy engine reduces operational complexity. One tool to install, upgrade, monitor, and debug. The <code>verifyImages</code> rule syntax is straightforward and well-documented. Only consider OPA or Policy Controller if you have specific requirements Kyverno cannot satisfy (e.g., complex cross-cluster signature verification).</p>
+            </div>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -33079,6 +33332,170 @@ L4  █████████████████████████�
                 <li>✅ Build scripts are in the repo (Dockerfile, Makefile, CI config).</li>
                 <li>✅ Build runs on a hosted platform (not self-managed with admin access by devs).</li>
             </ul>
+        </div>
+
+        <!-- 🔬 SLSA Adoption Journey — Most Teams Are at L1, Target L2 -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 The SLSA Adoption Journey — Where Your Platform Should Be</h5>
+            <p>SLSA is not all-or-nothing. You climb the ladder one level at a time. Here's the realistic adoption path for a platform team:</p>
+            <div class="journey-bar" style="margin-top:0.8rem;">
+                <div class="journey-segment" style="background:rgba(248,113,113,0.08);">
+                    <div style="font-size:1.4em;margin-bottom:4px;">L0</div>
+                    <div style="color:#f87171;font-weight:700;">No Guarantees</div>
+                    <div style="color:#8b949e;font-size:0.72em;">"docker build && docker push" from any laptop. No provenance. No audit. Most startups begin here.</div>
+                </div>
+                <div class="journey-segment" style="background:rgba(234,179,8,0.08);">
+                    <div style="font-size:1.4em;margin-bottom:4px;">L1</div>
+                    <div style="color:#facc15;font-weight:700;">Scripted Build</div>
+                    <div style="color:#8b949e;font-size:0.72em;">CI/CD pipeline builds the image. Provenance generated (not signed). "At least we know HOW it was built."</div>
+                </div>
+                <div class="journey-segment" style="background:rgba(59,130,246,0.08);">
+                    <div style="font-size:1.4em;margin-bottom:4px;">L2</div>
+                    <div style="color:#60a5fa;font-weight:700;">Signed Provenance</div>
+                    <div style="color:#8b949e;font-size:0.72em;">Hosted CI + Cosign-signed provenance. "We KNOW who built this and can PROVE it." The CNPE target.</div>
+                </div>
+                <div class="journey-segment" style="background:rgba(34,197,94,0.08);">
+                    <div style="font-size:1.4em;margin-bottom:4px;">L3+</div>
+                    <div style="color:#4ade80;font-weight:700;">Hardened</div>
+                    <div style="color:#8b949e;font-size:0.72em;">Isolated/hermetic builds. Two-person review. Epoxied deps. "Even if CI is compromised, the build is trustworthy."</div>
+                </div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 REALITY CHECK:</strong> 90% of organizations are at L0 or L1. Reaching L2 is achievable with GitHub Actions + Cosign (you already have the tools). L3 requires significant investment (isolated build environments, reproducible builds). L4 is for national security / critical infrastructure. <strong>Your CNPE goal: Achieve and MAINTAIN SLSA L2 for all production images.</strong></p>
+        </div>
+
+        <!-- 🔬 SLSA Provenance Deep-Dive — What's Actually IN a Provenance Document -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 SLSA Provenance Deep-Dive — What's Actually INSIDE a Signed Provenance Document</h5>
+            <p>When you run <code>cosign attest --type slsaprovenance</code>, what EXACTLY gets signed? Understanding the provenance structure helps you verify the RIGHT things during admission:</p>
+            <div class="code-block-wrapper" style="margin-top:0.8rem;">
+                <div class="code-block-header"><span class="code-lang">📋 SLSA Provenance — Annotated JSON Structure</span></div>
+<pre><span class="code-cmt">// SLSA v1.0 Provenance Predicate (what Cosign attests)</span>
+{
+  <span class="code-cmt">// ── BUILD DEFINITION: What was built and how ──</span>
+  "buildDefinition": {
+    <span class="code-cmt">// WHAT: The artifact that was built (type + identifier)</span>
+    "buildType": "https://github.com/Attestations/actions@v1",
+    <span class="code-cmt">// The SPECIFIC build process (GHA, Tekton, custom builder...)</span>
+    
+    <span class="code-cmt">// WHERE: The source code that was used</span>
+    "resolvedDependencies": [
+      {
+        <span class="code-kw">"uri"</span>: "git+https://github.com/anihpj/anihpj.git",
+        <span class="code-kw">"digest"</span>: { <span class="code-kw">"sha1"</span>: "abc123def456..." }  <span class="code-cmt">// EXACT commit built</span>
+      }
+    ]
+  },
+  
+  <span class="code-cmt">// ── BUILD EXECUTION: How the build actually ran ──</span>
+  "runDetails": {
+    <span class="code-cmt">// WHO: The builder identity (verified by OIDC)</span>
+    "builder": {
+      <span class="code-kw">"id"</span>: "https://github.com/anihpj/anihpj/.github/workflows/release.yml@refs/heads/main"
+    },
+    <span class="code-cmt">// WHEN: Timestamp + duration</span>
+    "buildMetadata": {
+      <span class="code-kw">"startedOn"</span>: "2025-06-22T10:00:00Z",
+      <span class="code-kw">"finishedOn"</span>: "2025-06-22T10:05:00Z",
+      <span class="code-kw">"invocationId"</span>: "https://github.com/anihpj/anihpj/actions/runs/1234567890"
+    },
+    <span class="code-cmt">// WHAT EXACTLY: The materials consumed by the build</span>
+    "byproducts": [
+      {
+        <span class="code-kw">"uri"</span>: "pkg:oci/jobboard@sha256:def456...",  <span class="code-cmt">// The OUTPUT image</span>
+        <span class="code-kw">"digest"</span>: { <span class="code-kw">"sha256"</span>: "def456..." }
+      }
+    ]
+  }
+}
+
+<span class="code-cmt">// 🔑 WHAT THIS PROVES (what Kyverno/OPA checks):</span>
+<span class="code-cmt">// 1. The image sha256:def456 was built from git commit abc123</span>
+<span class="code-cmt">// 2. The build was executed by workflow release.yml (not a random script)</span>
+<span class="code-cmt">// 3. The build happened on 2025-06-22 at 10:00Z (not 3 months ago)</span>
+<span class="code-cmt">// 4. The provenance ITSELF is signed (Cosign signature on this JSON)</span>
+<span class="code-cmt">// 5. The signature is recorded in Rekor (immutable timestamp)</span></pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY THIS MATTERS:</strong> A SLSA provenance is not just a "we built this" claim — it's a cryptographically verifiable trail from <strong>source code → build process → artifact</strong>. When Kyverno verifies <code>verifyImages</code>, it checks: (1) the image is signed, (2) the provenance exists, (3) the builder ID matches the expected workflow, (4) the materials (source commit) match expected repo/branch. <strong>Each field in the provenance is a verifiable claim that can be enforced by policy.</strong></p>
+        </div>
+
+        <!-- 🔬 Supply Chain Attack Vectors — The Complete Threat Model -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Supply Chain Attack Vectors — Understanding the Complete Threat Model</h5>
+            <p>To secure the supply chain, you must first understand WHAT you're defending against. Here's the complete attack surface — every point where an attacker could compromise your software before it reaches production:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">🎯 Supply Chain Attack Surface — 8 Attack Vectors</div>
+                <pre style="background:#161b22;font-size:0.75rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                    SUPPLY CHAIN ATTACK SURFACE — 8 VECTORS                          │
+│                                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 1: SOURCE CODE                                                       │ │
+│  │  Threat: Attacker pushes malicious commit, compromises developer machine,    │ │
+│  │          or submits malicious PR that passes review.                          │ │
+│  │  Defense: Branch protection, required PR reviews, signed commits (GPG/SSH),  │ │
+│  │           CODEOWNERS, 2FA enforced.                   SLSA mitigates: NONE    │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 2: DEPENDENCIES                                                      │ │
+│  │  Threat: Malicious package published (typosquatting: djangoo vs django).     │ │
+│  │          Compromised upstream library. Dependency confusion attack.          │ │
+│  │  Defense: SBOM (know your deps), lockfiles (pip freeze, go.sum),             │ │
+│  │           dependency pinning, private mirrors, Dependabot/Renovate.          │ │
+│  │           SLSA mitigates: Partially (L3+ requires declared deps)             │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 3: BUILD SYSTEM                                                      │ │
+│  │  Threat: CI/CD pipeline compromised (stolen secrets, injected steps).        │ │
+│  │          Attacker modifies Dockerfile/build script.                          │ │
+│  │  Defense: SLSA L2+ (signed provenance), ephemeral build environments,        │ │
+│  │           GitHub Actions allow-listed actions, OIDC-based secretless auth.   │ │
+│  │           SLSA mitigates: L1 (scripted), L2 (hosted), L3 (isolated)         │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 4: IMAGE REGISTRY                                                    │ │
+│  │  Threat: Attacker pushes malicious image with same tag. Registry compromise. │ │
+│  │          Man-in-the-middle during image pull.                                │ │
+│  │  Defense: Cosign signature + Kyverno verifyImages (check digest, not tag).   │ │
+│  │           Private registry with auth. Immutable tags.                        │ │
+│  │           SLSA mitigates: Indirect (signed provenance ties image to build)   │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 5: DEPLOYMENT (ADMISSION)                                            │ │
+│  │  Threat: Attacker bypasses CI/CD, directly creates pods with malicious image.│ │
+│  │          Compromised ServiceAccount with pod/create permissions.             │ │
+│  │  Defense: Kyverno verifyImages (last gate before run). Kyverno validate.     │ │
+│  │           RBAC: no direct pod creation for non-platform SAs.                 │ │
+│  │           SLSA mitigates: Indirect (verifyImages checks provenance)          │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 6: RUNTIME                                                           │ │
+│  │  Threat: Zero-day exploit in running container. Container escape.            │ │
+│  │          Malicious process started post-deployment. Data exfiltration.       │ │
+│  │  Defense: Falco (syscall monitoring), Tetragon (eBPF), seccomp/AppArmor.    │ │
+│  │           NetworkPolicies, non-root containers.                              │ │
+│  │           SLSA mitigates: NONE (SLSA is build-time, not runtime)            │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 7: SECRETS                                                           │ │
+│  │  Threat: Secrets leaked in source code, CI logs, or image layers.            │ │
+│  │          Stolen credentials used to access production databases.             │ │
+│  │  Defense: Vault/ESO (never store secrets in Git). Trivy secret scanning.     │ │
+│  │           Dynamic secrets (Vault). Short-lived credentials with auto-revoke. │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │  VECTOR 8: INFRASTRUCTURE                                                    │ │
+│  │  Threat: Compromised Kubernetes node. Malicious admission controller.        │ │
+│  │          etcd tampering. Cloud provider credential theft.                    │ │
+│  │  Defense: CIS benchmarks (kube-bench), node hardening, etcd encryption.      │ │
+│  │           IRSA (IAM Roles for Service Accounts). Regular patching.           │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                   │
+│  🔑 KEY INSIGHT: No single tool covers all 8 vectors. You need a LAYERED defense:│
+│     SLSA (build) + Cosign (signature) + Trivy (scan) + Kyverno (gate) +          │
+│     Falco (runtime) + Vault (secrets) + kube-bench (infra).                      │
+└──────────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 THE PLATFORM ENGINEER'S JOB:</strong> You don't need to eliminate all 8 vectors (impossible). You need to make the cost of attack EXCEED the value of the target. Each tool in this chapter closes one or more vectors. <strong>The platform's security posture is the SUM of these defenses — not any single tool.</strong></p>
         </div>
         </div>
 
@@ -33150,6 +33567,66 @@ grype sbom:sbom.json
         <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
             <h5>🎓 CNPE Exam: Trivy = Most Likely Scanner</h5>
             <p>Trivy is the most commonly tested vulnerability scanner because: (1) It scans images, K8s clusters, AND IaC — one tool for many exam tasks. (2) The <code>--exit-code 1</code> flag is the standard CI/CD integration pattern. (3) <code>trivy k8s cluster</code> tests your understanding of runtime scanning. <strong>Expect at least 1 Trivy task (scan + CI integration).</strong></p>
+        </div>
+
+        <!-- 🔬 CVE Severity Deep-Dive — What CRITICAL Actually Means -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 CVE Severity — What CRITICAL Actually Means and How to Prioritize</h5>
+            <p>When Trivy reports "CRITICAL: 3, HIGH: 12, MEDIUM: 47" — what do you actually DO? Understanding CVSS (Common Vulnerability Scoring System) is essential for prioritizing remediation:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Severity</th><th>CVSS Score</th><th>What It Means</th><th>Response Time</th><th>Example</th></tr></thead>
+                <tbody>
+                    <tr><td><strong style="color:#f85149;">CRITICAL</strong></td><td>9.0-10.0</td><td>Exploitable remotely. No user interaction. Full system compromise. Wormable.</td><td>⏰ 24 hours</td><td>Log4Shell (CVSS 10.0), Spring4Shell (CVSS 9.8)</td></tr>
+                    <tr><td><strong style="color:#f0883e;">HIGH</strong></td><td>7.0-8.9</td><td>Exploitable with some conditions. May require authentication. Significant impact.</td><td>⏰ 7 days</td><td>Container escape (CVSS 7.8), privilege escalation (CVSS 7.8)</td></tr>
+                    <tr><td><strong style="color:#d29922;">MEDIUM</strong></td><td>4.0-6.9</td><td>Difficult to exploit. Limited impact. Defense-in-depth concern.</td><td>📅 30 days</td><td>Information disclosure (CVSS 5.3), DoS (CVSS 6.5)</td></tr>
+                    <tr><td><strong style="color:#8b949e;">LOW</strong></td><td>0.1-3.9</td><td>Minimal impact. Requires unlikely conditions. Low priority.</td><td>📅 90 days</td><td>Minor information leak, non-default config issue</td></tr>
+                </tbody>
+            </table></div>
+            <div class="cnpe-strategy" style="margin-top:0.8rem;">
+                <h5>🎯 The Real-World Scanner Policy</h5>
+                <p><strong>Block on CRITICAL only</strong> in CI/CD (fail the build). HIGH goes to a ticket with a 7-day SLA. MEDIUM and LOW go to the backlog. Why? Because blocking on HIGH produces too many false positives — you'll spend more time adding <code>.trivyignore</code> entries than actually fixing vulnerabilities. The goal is SECURITY without BLOCKING VELOCITY: block the truly dangerous stuff, track the rest, fix systematically.</p>
+            </div>
+        </div>
+
+        <!-- 🔬 Trivy Ignore Management at Scale — Preventing "Ignore Creep" -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Trivy Ignore Management at Scale — Preventing "Ignore Creep" Across Teams</h5>
+            <p><code>.trivyignore</code> is necessary — not every CVE is exploitable. But manual <code>.trivyignore</code> files in every repo become unmanageable fast. Here's how to govern ignores at platform scale:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Central Ignore Policy:</strong> Instead of per-repo <code>.trivyignore</code>, use a CENTRAL <code>.trivyignore</code> in your platform-infra repo. All CI pipelines reference it via a shared action. One place to audit.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Require Justification + Expiry:</strong> Every ignore entry MUST have a <code>statement:</code> explaining WHY it's not exploitable AND an <code>expiry:</code> date. No expiry = no ignore. "False positive — alpine base image, vulnerable function not compiled" is valid. "Too busy to fix" is NOT.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Automated Expiry Enforcement:</strong> A CI check that scans the central <code>.trivyignore</code> for expired entries and fails the PR if any are past expiry. Forces the team to re-evaluate or remove the ignore.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Quarterly Ignore Review:</strong> Generate a report of ALL active ignores with age and justification. Review with security team. "This ignore for CVE-2023-XXXX is 18 months old — has it been fixed upstream? Can we remove it?"</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Dashboard Tracking:</strong> Grafana panel showing: total ignores, average age, approaching-expiry count, per-team breakdown. Make ignore hygiene VISIBLE. Teams with 50+ stale ignores get a friendly reminder.</div></div>
+            </div>
+            <div class="cnpe-gotcha" style="margin-top:0.8rem;">
+                <h5>⚠️ The Ignore Creep Anti-Pattern</h5>
+                <p>Without governance, <code>.trivyignore</code> follows a predictable decay curve: Month 1: 5 ignores (all legitimate false positives). Month 6: 30 ignores (some added "because the scanner was annoying"). Month 12: 80 ignores (nobody remembers why half of them exist). Month 18: Pipeline blocks NOTHING — every CVE has an ignore. <strong>Solution: Make ignores as visible as CVEs. Every ignore is a RISK ACCEPTANCE that must be periodically justified.</strong></p>
+            </div>
+        </div>
+
+        <!-- 🔬 CVE Ecosystem & Lifecycle — How Vulnerabilities Flow from Discovery to Your Scanner -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 The CVE Ecosystem — How a Vulnerability Flows from Discovery to Your Scanner</h5>
+            <p>When Trivy reports "CVE-2024-XXXX", where did that CVE come from? Understanding the vulnerability intelligence pipeline helps you evaluate scanner results critically:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Discovery:</strong> A security researcher, vendor, or automated system discovers a vulnerability. They request a CVE ID from a CNA (CVE Numbering Authority). Example: Red Hat is a CNA for Linux kernel CVEs. MITRE is the root CNA.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Assignment &amp; Publication:</strong> CVE is assigned (e.g., CVE-2024-12345) and published in the NVD (National Vulnerability Database). Includes: description, CVSS score, affected products/versions, references.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Enrichment:</strong> Vendors (Red Hat, Debian, SUSE, GitHub) analyze the CVE against THEIR products. Red Hat may say "CVE-2024-12345 affects RHEL 8 but NOT RHEL 9." GitHub Advisory publishes package-specific guidance.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Scanner Database Update:</strong> Trivy/Grype aggregate from NVD + vendor feeds + GitHub Advisory. Trivy's database is updated every 6 hours. Grype's database updates daily. <strong>Scanners are only as current as their database.</strong></div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Matching:</strong> Scanner compares your SBOM (package X version Y) against its database. If package django 3.2.1 matches CVE-2024-12345 (affects django <3.2.5) → CVE reported. <strong>Matching is IMPRECISE:</strong> a CVE affects a version RANGE — you may be flagged even if your specific configuration is not exploitable (hence VEX).</div></div>
+            </div>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Database</th><th>Publisher</th><th>Update Frequency</th><th>Coverage</th><th>Used By</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>NVD (NIST)</strong></td><td>U.S. Government</td><td>~2 hours</td><td>All published CVEs (global)</td><td>Trivy, Grype, Snyk</td></tr>
+                    <tr><td><strong>GitHub Advisory</strong></td><td>GitHub</td><td>Continuous</td><td>Open source packages (npm, pip, Go, etc.)</td><td>Grype, Dependabot</td></tr>
+                    <tr><td><strong>Red Hat VEX</strong></td><td>Red Hat</td><td>Continuous</td><td>RHEL/Fedora packages</td><td>Trivy (RHEL scanning)</td></tr>
+                    <tr><td><strong>Debian Security</strong></td><td>Debian Project</td><td>As needed</td><td>Debian packages</td><td>Trivy (Debian scanning)</td></tr>
+                    <tr><td><strong>Alpine SecDB</strong></td><td>Alpine Linux</td><td>As needed</td><td>Alpine packages</td><td>Trivy (Alpine scanning)</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY THIS MATTERS:</strong> (1) <strong>Scanner results are a LOWER BOUND.</strong> A "clean" scan means "no KNOWN CVEs in our database" — not "no vulnerabilities." Zero-days are invisible. (2) <strong>Database freshness matters.</strong> A CVE published 2 hours ago may not be in your scanner's database yet. (3) <strong>Vendor enrichment is critical.</strong> Red Hat may say "not affected" even though NVD says "affected" — because Red Hat backports security fixes without bumping version numbers. <strong>Trust vendor-specific advisories over generic NVD matches for OS packages.</strong></p>
         </div>
         </div>
 
@@ -33241,6 +33718,24 @@ grype sbom:sbom.json
   <span class="code-kw">tags:</span> [container, privileged, compliance]</pre>
         </div>
 
+        <!-- 🔬 Shift Left vs Shift Right — Trivy + Falco = Complete Security -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Shift Left + Shift Right — Why You Need BOTH Trivy and Falco</h5>
+            <p>Trivy and Falco aren't alternatives — they solve different halves of the security equation. Trivy catches problems BEFORE deployment (shift left). Falco catches problems DURING runtime (shift right). Together they provide defense-in-depth:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Aspect</th><th>Trivy (Shift Left)</th><th>Falco (Shift Right)</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>When</strong></td><td>BEFORE deployment — CI/CD pipeline, image build</td><td>DURING runtime — continuously, 24/7</td></tr>
+                    <tr><td><strong>What it catches</strong></td><td>KNOWN vulnerabilities (CVEs), misconfigurations, hardcoded secrets</td><td>UNKNOWN threats, zero-days, anomalous behavior, insider threats</td></tr>
+                    <tr><td><strong>Data source</strong></td><td>Package databases (NVD, GitHub Advisory, vendor advisories)</td><td>System calls (syscalls), K8s audit events</td></tr>
+                    <tr><td><strong>Example</strong></td><td>"Image contains django 3.2 with CVE-2024-XXXX (CRITICAL)"</td><td>"Container anihpj-web spawned a bash shell — this never happens normally"</td></tr>
+                    <tr><td><strong>Coverage gap</strong></td><td>Unknown CVEs (zero-days), runtime behavior, insider threats</td><td>Vulnerable packages already in the image, misconfigurations</td></tr>
+                    <tr><td><strong>False positives</strong></td><td>CVE present but not exploitable in your config</td><td>Legitimate operations that look suspicious</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE COMPLETE PICTURE:</strong> Trivy says "this image contains a known vulnerability." Falco says "something suspicious is happening RIGHT NOW." Trivy prevents KNOWN threats from entering production. Falco detects UNKNOWN threats that bypassed all other defenses — including zero-days that have no CVE yet. <strong>Neither tool alone is sufficient. Together they form a complete security posture.</strong></p>
+        </div>
+
         <div class="cnpe-gotcha" style="margin-top:1.5rem;">
             <h5>⚠️ Falco Rules: condition vs output vs priority</h5>
             <ul style="margin-top:0.5rem;padding-left:1.2rem;">
@@ -33250,6 +33745,42 @@ grype sbom:sbom.json
                 <li><strong>Macros:</strong> Reusable named conditions. e.g., <code>- macro: anihpj_container\n  condition: container.name startswith "anihpj"</code></li>
                 <li><strong>Lists:</strong> Named lists of values. e.g., <code>- list: shell_binaries\n  items: [bash, sh, ash, zsh]</code></li>
             </ul>
+        </div>
+
+        <!-- 🔬 Falco Rules Language — Complete Field Reference -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Falco Rules Language — The Complete Field Reference for Writing Detection Rules</h5>
+            <p>Falco's rule language is its superpower. You're not limited to predefined alerts — you can detect ANYTHING visible to the kernel. Here are the key field categories you can use in <code>condition</code> expressions:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Category</th><th>Fields</th><th>Example Condition</th><th>What It Detects</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Process</strong></td><td><code>proc.name</code>, <code>proc.cmdline</code>, <code>proc.args</code>, <code>proc.pid</code>, <code>proc.ppid</code>, <code>proc.exe</code></td><td><code>proc.name in (bash, sh, zsh)</code></td><td>Shell spawned, suspicious binary executed, process tree anomalies</td></tr>
+                    <tr><td><strong>Container</strong></td><td><code>container.name</code>, <code>container.image</code>, <code>container.id</code>, <code>container.privileged</code>, <code>container.mounts</code></td><td><code>container.privileged = true</code></td><td>Privileged containers, specific image violations, mount abuse</td></tr>
+                    <tr><td><strong>User</strong></td><td><code>user.name</code>, <code>user.uid</code>, <code>user.loginuid</code>, <code>user.homedir</code></td><td><code>user.uid = 0</code> (root)</td><td>Root execution, user impersonation, privilege escalation</td></tr>
+                    <tr><td><strong>File</strong></td><td><code>fd.name</code>, <code>fd.directory</code>, <code>fd.type</code>, <code>fd.sport</code>, <code>fd.cip</code></td><td><code>fd.name startswith "/etc/shadow"</code></td><td>Sensitive file access, config tampering, credential theft</td></tr>
+                    <tr><td><strong>Network</strong></td><td><code>fd.sip</code>, <code>fd.cip</code>, <code>fd.sport</code>, <code>fd.l4proto</code>, <code>fd.connected</code></td><td><code>fd.cip != 10.0.0.0/8</code> (external)</td><td>Data exfiltration, C2 communication, unexpected outbound</td></tr>
+                    <tr><td><strong>K8s Audit</strong></td><td><code>ka.target.resource</code>, <code>ka.target.name</code>, <code>ka.user.name</code>, <code>ka.verb</code></td><td><code>ka.target.resource = "secrets"</code></td><td>Secret access, RBAC abuse, kubectl exec, pod creation</td></tr>
+                    <tr><td><strong>Syscall</strong></td><td><code>evt.type</code>, <code>evt.dir</code>, <code>evt.rawtime</code>, <code>syscall.type</code></td><td><code>evt.type = connect</code></td><td>Specific syscall patterns, socket creation, ptrace usage</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 RULE WRITING HEURISTIC:</strong> Start with the EVENT (<code>spawned_process</code>, <code>open_write</code>, <code>connect</code>). Narrow with CONTAINER (<code>container.name startswith "anihpj"</code>). Add SPECIFICITY (<code>proc.name in (bash, sh)</code>). Add EXCEPTIONS (<code>and not proc.args startswith healthcheck</code>). <strong>Good Falco rules are SPECIFIC — they fire on the EXACT threat, not on every shell command in the cluster.</strong></p>
+        </div>
+
+        <!-- 🔬 Runtime Security Tools — Falco vs Tetragon vs Tracee vs KubeArmor -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Beyond Falco — The Complete Runtime Security Tools Landscape</h5>
+            <p>Falco is the most well-known runtime security tool, but it's not the only one. Different tools use different approaches — understanding the landscape helps you choose the right tool for each use case:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Tool</th><th>Approach</th><th>Detection Method</th><th>Strengths</th><th>Weaknesses</th><th>Best For</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Falco</strong></td><td>Syscall monitoring + K8s audit</td><td>Kernel module / eBPF probe captures syscalls. Rules written in Falco's DSL.</td><td>Mature (CNCF Graduated). Large rule library. K8s-aware context enrichment.</td><td>Rule-based — only detects what rules describe. Can miss novel attacks with no matching rule.</td><td>General runtime threat detection. K8s-focused organizations. CNPE exam tool.</td></tr>
+                    <tr><td><strong>Tetragon</strong><br>(Cilium/Isovalent)</td><td>eBPF-based observability + enforcement</td><td>eBPF programs attached to kernel hooks (kprobes, tracepoints). TracingPolicy CRD.</td><td>Zero overhead (eBPF). Can ENFORCE policies (block syscalls), not just alert. Network + process + file monitoring.</td><td>Newer, smaller community. Requires eBPF-capable kernel (5.x+).</td><td>Performance-sensitive environments. When you need enforcement (block), not just detection (alert).</td></tr>
+                    <tr><td><strong>Tracee</strong><br>(Aqua Security)</td><td>eBPF-based behavioral analytics</td><td>eBPF captures events. Behavioral signatures detect attack patterns (not just single syscalls).</td><td>Detects attack TECHNIQUES (MITRE ATT&CK mapping). Behavioral, not just signature-based.</td><td>Fewer built-in rules than Falco. Behavioral approach can produce more noise initially.</td><td>Threat hunting. When you need to detect attack patterns, not individual malicious commands.</td></tr>
+                    <tr><td><strong>KubeArmor</strong></td><td>LSM (Linux Security Module) based enforcement</td><td>Uses LSMs (AppArmor, SELinux, BPF-LSM) to restrict container capabilities at kernel level.</td><td>ENFORCEMENT, not just detection. Can block specific binaries, capabilities, network access per pod.</td><td>Doesn't monitor syscalls in the same way. Limited to Linux hosts with LSM support.</td><td>Hard multi-tenant environments. When you need kernel-level enforcement, not just monitoring.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE RUNTIME SECURITY STACK:</strong> <strong>Falco</strong> for detection + alerting ("something suspicious happened"). <strong>Tetragon</strong> for deep observability + enforcement ("block that syscall"). <strong>Tracee</strong> for threat hunting ("find attack patterns across the cluster"). <strong>KubeArmor</strong> for hard enforcement ("this container CANNOT run bash, period"). <strong>For CNPE: Focus on Falco. Know that Tetragon and KubeArmor exist as enforcement options.</strong></p>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -33322,6 +33853,35 @@ grype sbom:sbom.json
                 <li><strong>Supported providers:</strong> AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp Vault, 1Password, and more.</li>
             </ul>
         </div>
+
+        <!-- 🔬 Secret Rotation Patterns — Rotate Without Downtime -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Secret Rotation Patterns — How to Rotate Database Credentials Without Downtime</h5>
+            <p>The hardest problem in secret management: rotating credentials WITHOUT causing application errors. If you just change the password and update the Secret, the old pods still have the old credentials in memory. Here are the production-grade rotation patterns:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Dual Credential Window:</strong> When rotating, the database accepts BOTH old and new credentials for a transition period (e.g., 60 minutes). Create new credential → update Secret → ESO syncs → new pods get new cred → old pods still work with old cred → revoke old cred after window closes.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Rolling Restart (Staggered):</strong> Update the Secret → trigger a rolling restart of Deployments (<code>kubectl rollout restart deployment</code>). New pods start with new credentials. Old pods terminate gracefully. 30% of pods restart at a time. Zero downtime IF you have >1 replica.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Vault Dynamic Secrets:</strong> Vault generates TEMPORARY database credentials with a TTL (e.g., 1 hour). The application requests new credentials from Vault via the CSI driver. When the TTL expires, Vault automatically revokes the old credential. No manual rotation needed — the credential is ephemeral by design. <strong>This is the gold standard.</strong></div></div>
+            </div>
+            <div class="cnpe-gotcha" style="margin-top:0.8rem;">
+                <h5>⚠️ The Restart Problem</h5>
+                <p>Simply updating a Kubernetes Secret does NOT restart pods. Existing pods continue using the old secret value from their in-memory filesystem mount until they restart. <strong>Every secret rotation strategy MUST include a pod restart mechanism.</strong> Options: (a) <code>kubectl rollout restart</code>, (b) Stakater Reloader (watches Secrets and auto-restarts), (c) Vault CSI driver with secret polling, (d) ESO's <code>refreshInterval</code> + Reloader combo.</p>
+            </div>
+        </div>
+
+        <!-- 🔬 Vault Dynamic Secrets — How Ephemeral Credentials Actually Work -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Vault Dynamic Secrets — How Ephemeral Database Credentials Actually Work</h5>
+            <p>Vault's dynamic secrets are the gold standard for credential management. Unlike static secrets (create once, use forever), dynamic secrets are GENERATED on demand and AUTO-REVOKED after a TTL. Here's the exact lifecycle:</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Application Requests Credential:</strong> Pod starts → Vault CSI driver (or sidecar) authenticates to Vault using the Pod's ServiceAccount (Kubernetes auth method). "I am pod anihpj-web-7d9f8 in namespace anihpj-prod."</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Vault Validates + Generates:</strong> Vault verifies the K8s ServiceAccount token with the API server. Checks RBAC (Vault policy). If authorized, Vault connects to PostgreSQL and runs: <code>CREATE ROLE "v-token-anihpj-7d9f8" WITH LOGIN PASSWORD 'xyz' VALID UNTIL '2025-06-22 11:00:00'</code>. The credential has a 1-hour TTL built into the database itself.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Credential Delivered + Mounted:</strong> Vault returns the username + password. CSI driver writes them to a tmpfs volume mounted in the pod at <code>/vault/secrets/db-creds</code>. The application reads from the filesystem. No K8s Secret involved — the credential never touches etcd.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Automatic Renewal:</strong> Before the TTL expires (e.g., at 80% of TTL), the CSI driver requests a NEW credential from Vault. The old credential is still valid during this window. The application can seamlessly switch without restart.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Automatic Revocation:</strong> When the lease expires (pod terminates, TTL exceeded, or manual revocation), Vault runs: <code>DROP ROLE "v-token-anihpj-7d9f8"</code>. The credential is destroyed at the DATABASE level. Even if someone captured the old password, it no longer works.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 WHY THIS IS THE GOLD STANDARD:</strong> (1) Each pod gets UNIQUE credentials — no shared database password. (2) Credentials are SHORT-LIVED — even if stolen, they expire in 1 hour. (3) Revocation is AUTOMATIC — no manual rotation, no forgotten credentials. (4) Audit trail — Vault logs every credential generation and revocation. (5) Zero-trust — the pod never knows the "master" database password. <strong>The CNPE platform goal: All database access uses Vault dynamic secrets. Static credentials are a legacy anti-pattern.</strong></p>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -33364,6 +33924,28 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
         <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
             <h5>🎓 CNPE Exam: kube-bench = CIS Compliance</h5>
             <p>The exam may ask you to run kube-bench and interpret results. Key facts: (1) CIS benchmark sections 1-5 map to cluster components. (2) <code>--targets</code> flag controls which component to scan. (3) Results are PASS/FAIL/WARN. WARN means "needs manual review". (4) kube-bench is READ-ONLY — it never modifies your cluster.</p>
+        </div>
+
+        <!-- 🔬 Top 10 CIS Failures — What kube-bench Catches Most Often -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Top 10 Most Common CIS Kubernetes Benchmark Failures — and How to Fix Them</h5>
+            <p>After scanning hundreds of production clusters, these are the 10 most common CIS failures. If you fix these, you'll pass 80% of the benchmark:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>#</th><th>CIS ID</th><th>Failure</th><th>Why It Matters</th><th>Fix</th></tr></thead>
+                <tbody>
+                    <tr><td>1</td><td>1.2.1</td><td><code>--anonymous-auth</code> not set to false</td><td>Anonymous requests bypass authentication. Any network-accessible kubelet can be queried.</td><td>Set <code>--anonymous-auth=false</code> on API server.</td></tr>
+                    <tr><td>2</td><td>1.2.2</td><td><code>--basic-auth-file</code> not set (or set)</td><td>Basic auth stores passwords in plaintext. Should NEVER be enabled in production.</td><td>Ensure <code>--basic-auth-file</code> is NOT set. Use OIDC/certificates instead.</td></tr>
+                    <tr><td>3</td><td>2.1</td><td>etcd <code>--client-cert-auth</code> not set to true</td><td>Without client certificate auth, anyone with network access to etcd can read/write ALL cluster data.</td><td>Set <code>--client-cert-auth=true</code> on etcd.</td></tr>
+                    <tr><td>4</td><td>4.1.1</td><td>kubelet <code>--anonymous-auth</code> not false</td><td>Kubelet exposes pod specs, logs, and exec access. Anonymous access = total cluster compromise.</td><td>Set <code>--anonymous-auth=false</code> on every kubelet.</td></tr>
+                    <tr><td>5</td><td>4.2.6</td><td>kubelet <code>--protect-kernel-defaults</code> not set</td><td>Kernel parameters can be tuned by pods, potentially destabilizing the node.</td><td>Set <code>--protect-kernel-defaults=true</code> on kubelet.</td></tr>
+                    <tr><td>6</td><td>5.1.5</td><td>Default ServiceAccount not set to <code>automountServiceAccountToken: false</code></td><td>Every pod gets a token by default — even pods that don't need API access. Token theft risk.</td><td>Set <code>automountServiceAccountToken: false</code> on default SA or use Kyverno to enforce.</td></tr>
+                    <tr><td>7</td><td>5.2.1</td><td>PSP/PSS not enforcing <code>privileged: false</code></td><td>Privileged containers have host-level access. A single privileged pod can compromise the NODE.</td><td>Apply PSA Restricted profile to all namespaces.</td></tr>
+                    <tr><td>8</td><td>5.3.2</td><td>NetworkPolicies not applied to all namespaces</td><td>Without NetworkPolicies, all pods can communicate freely. Lateral movement is trivial.</td><td>Apply default-deny NetworkPolicy + explicit allow rules per namespace.</td></tr>
+                    <tr><td>9</td><td>1.1.1</td><td>API server pod spec file permissions not 644 or stricter</td><td>Writable API server manifests = anyone can reconfigure the API server. Cluster takeover.</td><td><code>chmod 644 /etc/kubernetes/manifests/kube-apiserver.yaml</code></td></tr>
+                    <tr><td>10</td><td>5.4.1</td><td>Secrets not encrypted at rest in etcd</td><td>Base64 is NOT encryption. Anyone with etcd access reads all Secrets in plaintext.</td><td>Enable <code>EncryptionConfiguration</code> with <code>aescbc</code> provider on API server.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 CIS PRIORITY:</strong> Fix failures in this order: (1) Authentication (#1, #4) — without this, everything else is moot. (2) Encryption (#10, #3) — protect data at rest. (3) Access Control (#8, #6, #7) — limit blast radius. (4) Hardening (#2, #5, #9) — defense in depth. <strong>A cluster with 100% CIS compliance is rare — aim for >85% and document accepted risks for the rest.</strong></p>
         </div>
         </div>
 
@@ -33423,6 +34005,42 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
                 <li>✅ <strong>Evidence collection:</strong> All scan results, policy violations, and alerts are archived to S3 (immutable, time-stamped).</li>
                 <li>✅ <strong>Dashboard:</strong> Single Grafana dashboard shows CIS score, policy compliance %, vulnerability count, and Falco alerts.</li>
             </ul>
+        </div>
+
+        <!-- 🔬 Compliance Framework Mapping — SOC2, PCI-DSS, HIPAA → K8s Controls -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 Compliance Framework Mapping — How K8s Controls Satisfy SOC2, PCI-DSS, and HIPAA</h5>
+            <p>When an auditor asks "how does your platform meet PCI-DSS requirement 7.2?", you need to map Kubernetes controls to compliance requirements. Here's the mapping every platform engineer should know:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Compliance Requirement</th><th>Framework</th><th>K8s Control</th><th>Tool/Implementation</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Access Control</strong> — Only authorized users can access systems</td><td>SOC2 CC6.1, PCI-DSS 7.2, HIPAA §164.312(a)</td><td>RBAC + OIDC</td><td>K8s RBAC with least privilege. OIDC integration (dex/keycloak). No shared cluster-admin accounts.</td></tr>
+                    <tr><td><strong>Encryption at Rest</strong> — Secrets encrypted in storage</td><td>SOC2 CC6.7, PCI-DSS 3.4, HIPAA §164.312(a)(2)(iv)</td><td>EncryptionConfiguration</td><td>API server <code>--encryption-provider-config</code> with aescbc. External Secrets Operator for cloud KMS.</td></tr>
+                    <tr><td><strong>Encryption in Transit</strong> — Network traffic encrypted</td><td>SOC2 CC6.7, PCI-DSS 4.1, HIPAA §164.312(e)(1)</td><td>mTLS + NetworkPolicy</td><td>Service mesh (Istio/Linkerd) for pod-to-pod mTLS. cert-manager for ingress TLS. Cilium for network encryption.</td></tr>
+                    <tr><td><strong>Vulnerability Management</strong> — Known CVEs identified and remediated</td><td>SOC2 CC7.1, PCI-DSS 6.1, HIPAA §164.308(a)(5)(ii)(B)</td><td>Image scanning + SBOM</td><td>Trivy in CI/CD (block CRITICAL). Grype for SBOM scanning. Weekly cluster-wide scan. VEX for false positives.</td></tr>
+                    <tr><td><strong>Audit Logging</strong> — All access and changes recorded</td><td>SOC2 CC7.2, PCI-DSS 10.2, HIPAA §164.312(b)</td><td>K8s Audit Logs + Falco</td><td>API server audit policy → log all requests. Falco for syscall-level audit. All logs to S3 (immutable) + SIEM.</td></tr>
+                    <tr><td><strong>Configuration Hardening</strong> — Systems configured securely</td><td>SOC2 CC7.1, PCI-DSS 2.2, HIPAA §164.308(a)(5)(ii)(B)</td><td>CIS Benchmark + Kyverno</td><td>kube-bench weekly CIS scan. Kyverno policies enforce Pod Security Standards. Target >85% CIS score.</td></tr>
+                    <tr><td><strong>Change Management</strong> — All changes authorized and tracked</td><td>SOC2 CC8.1, PCI-DSS 6.4.5, HIPAA §164.308(a)(5)(ii)(B)</td><td>GitOps + RBAC</td><td>Argo CD syncs from Git. All changes via PR (reviewed, approved). Git history = audit trail. No kubectl apply directly.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE PLATFORM ENGINEER'S ROLE:</strong> You don't need to BE a compliance expert. You need to BUILD a platform that produces compliance evidence automatically. When the auditor asks for evidence, you point to the Grafana dashboard, the S3 archive, and the Git history. <strong>If you're manually generating compliance reports, your platform is not mature enough.</strong></p>
+        </div>
+
+        <!-- 🔬 Supply Chain Regulatory Landscape — EO 14028, EU CRA, and What They Mean -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 The Supply Chain Regulatory Landscape — EO 14028, EU CRA, and What They Mean for Platform Engineers</h5>
+            <p>Supply chain security isn't just good engineering — it's increasingly the LAW. Understanding the regulatory landscape helps you justify platform investments to leadership and prepare for compliance requirements:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Regulation</th><th>Jurisdiction</th><th>Key Requirements</th><th>Your Platform's Response</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>U.S. Executive Order 14028</strong><br>(2021)</td><td>United States (federal agencies + contractors)</td><td>SBOMs required for ALL software delivered to federal agencies. Attestation of secure development practices. Vulnerability disclosure programs.</td><td>syft SBOM generation in CI/CD → Cosign attest → archived to S3. "We can provide an SBOM for any image in < 5 minutes."</td></tr>
+                    <tr><td><strong>EU Cyber Resilience Act</strong><br>(2024, phased 2027)</td><td>European Union (all software sold in EU)</td><td>SBOMs required. Vulnerability reporting within 24 hours of exploitation. CE marking for secure software. 5-year security update obligation.</td><td>Dependency-Track for continuous monitoring. Trivy CI/CD pipeline. Automated CVE alerting → remediation workflow. "We detect and fix CRITICAL CVEs within 24 hours."</td></tr>
+                    <tr><td><strong>FedRAMP</strong><br>(U.S. Cloud)</td><td>United States (cloud services for federal agencies)</td><td>CIS benchmark compliance. Continuous monitoring. Vulnerability scanning every 30 days. Audit trail for all changes.</td><td>kube-bench weekly CIS scan. Grafana compliance dashboard. Trivy weekly cluster scan. ArgoCD Git history = audit trail. "Our CIS score is 87% with documented exceptions."</td></tr>
+                    <tr><td><strong>PCI-DSS 4.0</strong><br>(Global payments)</td><td>Any organization processing credit cards</td><td>Encryption at rest + in transit. Access control. Vulnerability management. Change management. Audit logging.</td><td>EncryptionConfiguration for etcd. mTLS via Istio/Linkerd. Kyverno RBAC policies. Trivy + Falco for vulnerability + runtime. GitOps for change management.</td></tr>
+                    <tr><td><strong>HIPAA</strong><br>(U.S. Healthcare)</td><td>Healthcare organizations + business associates</td><td>Access controls. Audit controls. Integrity controls. Person/entity authentication. Transmission security.</td><td>RBAC + OIDC for access. K8s audit logs + Falco for audit. Cosign signatures for integrity. mTLS for transmission.</td></tr>
+                </tbody>
+            </table></div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE TREND:</strong> Regulations are converging on a common set of requirements: (1) Know what's in your software (SBOM), (2) Know it's secure (vulnerability scanning), (3) Prove who built it (signing + provenance), (4) Monitor continuously (runtime detection + CIS scanning), (5) Keep records (audit trail). <strong>If your platform implements Chapter 30's tools (syft, Cosign, Trivy, Falco, kube-bench, Vault, Kyverno), you satisfy 90% of regulatory requirements automatically.</strong> The platform IS your compliance program.</p>
         </div>
         </div>
 
@@ -33495,6 +34113,44 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
 
       - <span class="code-kw">name:</span> Push Image
         <span class="code-kw">run:</span> docker push anihpj/jobboard:${{ github.sha }}</pre>
+        </div>
+
+        <!-- 🔬 OWASP Dependency-Track — Continuous SBOM Analysis -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 OWASP Dependency-Track — Continuous SBOM Analysis Beyond the Pipeline</h5>
+            <p>Generating SBOMs in CI/CD is step one. But what about CONTINUOUS monitoring? New CVEs are published daily. An image that was clean last week may have 3 new CRITICAL CVEs today. <strong>OWASP Dependency-Track</strong> solves this by continuously analyzing your SBOMs against updated vulnerability databases:</p>
+            <div class="diagram-container" style="margin-top:0.8rem;">
+                <div class="diagram-title">🔄 OWASP Dependency-Track — Continuous SBOM Analysis Architecture</div>
+                <pre style="background:#161b22;font-size:0.75rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    OWASP DEPENDENCY-TRACK — CONTINUOUS SBOM ANALYSIS            │
+│                                                                               │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────────────────────────────┐│
+│  │  CI/CD    │    │  Dependency- │    │  Vulnerability Sources               ││
+│  │  Pipeline │    │  Track       │    │  ┌────────┐ ┌────────┐ ┌─────────┐  ││
+│  │           │    │  (Server)    │    │  │  NVD    │ │ GitHub │ │ OSS     │  ││
+│  │  syft →   │───▶│              │◀───│  │  Mirror │ │Advisory│ │ Index   │  ││
+│  │  CycloneDX│    │  ┌─────────┐ │    │  └────────┘ └────────┘ └─────────┘  ││
+│  │  SBOM     │    │  │Analyzer │ │    │                                       ││
+│  └──────────┘    │  │ Engine  │ │    │  ┌──────────────────────────────────┐ ││
+│                  │  └────┬────┘ │    │  │  RESULTS                          │ ││
+│                  │       │      │    │  │  • anihpj/jobboard:v1.2.3         │ ││
+│                  │       ▼      │    │  │    CRITICAL: 0 (was 0 last week)   │ ││
+│                  │  ┌─────────┐ │    │  │    HIGH: 2 (was 0 last week!)     │ ││
+│                  │  │Portfolio│ │    │  │  • anihpj/web:v1.0.0              │ ││
+│                  │  │ Access  │ │    │  │    CRITICAL: 1 (NEW — CVE-2025-X) │ ││
+│                  │  │ Control │ │    │  │  → Triggers Slack alert + Jira ticket││
+│                  └─────────────┘    │  └──────────────────────────────────┘ ││
+│                                     └──────────────────────────────────────┘│
+│                                                                               │
+│  🔑 KEY CAPABILITY: Dependency-Track ingests SBOMs ONCE, then continuously     │
+│     re-analyzes them against UPDATED vulnerability databases.                  │
+│  🔑 When a new CVE is published → all affected SBOMs are flagged automatically │
+│  🔑 NOTIFICATIONS: Slack, Teams, Email, Webhook when new vulnerabilities found │
+│  🔑 POLICY ENGINE: Define policies like "notify if CRITICAL CVE in production"  │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🧠 WHY DEPENDENCY-TRACK MATTERS:</strong> CI/CD scanning is point-in-time — it checks the image ONCE at build time. But the vulnerability landscape CHANGES. Dependency-Track closes the gap: you upload the SBOM once, and it continuously monitors for new CVEs. <strong>Without continuous monitoring, your "clean at build time" image can accumulate unknown CRITICAL CVEs over weeks and months — and you'd never know.</strong></p>
         </div>
         </div>
 
@@ -33573,6 +34229,60 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
             <h5>⚠️ Kyverno verifyImages = Gate Before Deploy</h5>
             <p>Kyverno's <code>verifyImages</code> rule runs at admission time — when a Pod is CREATED. If the image signature is missing or invalid, the Pod is rejected. This means: (1) Even if an attacker bypasses CI/CD and pushes a malicious image to the registry, Kyverno will block it at deploy time. (2) The signature check is the LAST line of defense before the image runs.</p>
         </div>
+
+        <!-- 🔬 In-Toto & Attestation Predicate Types — The Complete Attestation Landscape -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 In-Toto &amp; Attestation Predicate Types — Beyond Just Signing Images</h5>
+            <p>Cosign attestations are built on the <strong>in-toto</strong> framework (a CNCF project). In-toto defines a standard format for supply chain metadata. Understanding predicate types helps you know WHAT you can attest:</p>
+            <div class="compare-table" style="margin-top:0.8rem;"><table>
+                <thead><tr><th>Predicate Type</th><th>What It Attests</th><th>Use Case</th><th>Cosign Command</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>SLSA Provenance</strong><br><code>slsaprovenance</code></td><td>HOW the artifact was built: builder ID, source repo, build steps, materials used. The most important attestation.</td><td>"This image was built by GitHub Actions workflow release.yml from commit abc123." SLSA L2+ requires this.</td><td><code>cosign attest --type slsaprovenance --predicate provenance.json IMAGE</code></td></tr>
+                    <tr><td><strong>SBOM (SPDX)</strong><br><code>spdxjson</code></td><td>WHAT is inside the artifact: all packages, versions, licenses. The inventory attestation.</td><td>"This image contains django 4.2, psycopg2 2.9.9, and 245 Go modules." Required by U.S. Executive Order 14028.</td><td><code>cosign attest --type spdxjson --predicate sbom.spdx.json IMAGE</code></td></tr>
+                    <tr><td><strong>SBOM (CycloneDX)</strong><br><code>cyclonedx</code></td><td>Same as SPDX but in CycloneDX format. Security-focused with VEX extension.</td><td>"This image's SBOM in CycloneDX format for OWASP Dependency-Track integration."</td><td><code>cosign attest --type cyclonedx --predicate sbom.cdx.json IMAGE</code></td></tr>
+                    <tr><td><strong>Test Results</strong><br><code>testresult</code></td><td>Test suite results: passed/failed, test names, durations. Proves the artifact was TESTED.</td><td>"This image passed 142 unit tests, 38 integration tests, and linting." Gates deployment on test success.</td><td><code>cosign attest --type testresult --predicate test-results.json IMAGE</code></td></tr>
+                    <tr><td><strong>Vulnerability Scan</strong><br><code>vulnscan</code></td><td>Vulnerability scan results: scanner used, CVEs found, severity. Proves the artifact was SCANNED.</td><td>"This image was scanned by Trivy v0.50.0. 0 CRITICAL, 2 HIGH (both with VEX: not exploitable)."</td><td><code>cosign attest --type vulnscan --predicate scan-results.json IMAGE</code></td></tr>
+                </tbody>
+            </table></div>
+            <div class="diagram-container" style="margin-top:1rem;">
+                <div class="diagram-title">🔗 In-Toto Supply Chain Layout — The Complete Trust Chain</div>
+                <pre style="background:#161b22;font-size:0.75rem;margin-top:0.5rem;">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    IN-TOTO SUPPLY CHAIN — COMPLETE TRUST CHAIN                   │
+│                                                                               │
+│  Source Code ──▶ Build ──▶ Test ──▶ Scan ──▶ Sign ──▶ Registry ──▶ Deploy     │
+│       │            │         │        │        │           │          │       │
+│       ▼            ▼         ▼        ▼        ▼           ▼          ▼       │
+│  ┌─────────┐  ┌────────┐ ┌──────┐ ┌──────┐ ┌───────┐ ┌─────────┐ ┌────────┐ │
+│  │ Git      │  │ SLSA   │ │ Test  │ │ Vuln │ │ Cosign│ │ OCI     │ │Kyverno │ │
+│  │ commit   │  │ Proven │ │ Results│ │ Scan │ │ Sig   │ │ Registry│ │verify  │ │
+│  │ sha      │  │ ance   │ │ Attest│ │Attest│ │ nature│ │ +Attest │ │Images  │ │
+│  └─────────┘  └────────┘ └──────┘ └──────┘ └───────┘ └─────────┘ └────────┘ │
+│                                                                               │
+│  🔑 Each step produces a SIGNED ATTESTATION. The chain is verifiable end-to-end│
+│  🔑 If ANY attestation is missing or invalid → deployment is BLOCKED            │
+│  🔑 In-toto layout defines the EXPECTED supply chain steps                     │
+│  🔑 Verifiers check: (1) all expected attestations exist, (2) all are signed,  │
+│     (3) the signatures are valid, (4) the identities match expected values     │
+└──────────────────────────────────────────────────────────────────────────────┘</pre>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 THE ATTESTATION PYRAMID:</strong> Base layer: Image signature (proves WHO signed). Middle layer: SLSA provenance (proves HOW it was built). Top layer: SBOM + test results + vulnerability scan (proves WHAT's inside and that it was TESTED and SCANNED). <strong>A production-grade platform requires all three layers. A signature alone is not enough — you need to prove the build was secure AND the content is safe.</strong></p>
+        </div>
+
+        <!-- 🔬 SLSA Verification Flow — Step-by-Step: What Kyverno Actually Checks -->
+        <div class="cnpe-beyond" style="margin-top:1.5rem;">
+            <h5>🔬 SLSA Verification Flow — Step-by-Step: What Happens When Kyverno verifyImages Runs</h5>
+            <p>When a Pod referencing <code>anihpj/jobboard:v1.2.3</code> is submitted, Kyverno's <code>verifyImages</code> rule triggers a multi-step verification. Understanding each step helps you debug "why was my pod rejected?"</p>
+            <div class="process-steps" style="margin-top:0.8rem;">
+                <div class="process-step-item"><div class="step-num">1</div><div class="step-text"><strong>Resolve Tag → Digest:</strong> Kyverno queries the registry: "What is the digest for <code>anihpj/jobboard:v1.2.3</code>?" The registry returns <code>sha256:abc123...</code>. Kyverno now works with the IMMUTABLE digest — even if someone changes the tag later.</div></div>
+                <div class="process-step-item"><div class="step-num">2</div><div class="step-text"><strong>Fetch Signatures:</strong> Kyverno queries the registry for any Cosign signatures attached to <code>sha256:abc123...</code>. Signatures are stored as separate OCI artifacts (not inside the image). If no signatures exist → REJECT.</div></div>
+                <div class="process-step-item"><div class="step-num">3</div><div class="step-text"><strong>Verify Cryptographic Signature:</strong> Kyverno validates the signature against the public key/certificate. For keyless: it verifies the Fulcio-issued certificate chains to the trusted root (Sigstore CA). If invalid → REJECT.</div></div>
+                <div class="process-step-item"><div class="step-num">4</div><div class="step-text"><strong>Check Certificate Identity:</strong> Kyverno extracts the SAN (Subject Alternative Name) from the certificate: <code>anihpj/anihpj/.github/workflows/release.yml@refs/heads/main</code>. Compares against the expected <code>subject:</code> in the ClusterPolicy. If mismatch → REJECT.</div></div>
+                <div class="process-step-item"><div class="step-num">5</div><div class="step-text"><strong>Verify Rekor Entry (optional):</strong> If <code>rekor:</code> is configured, Kyverno queries the Rekor transparency log: "Does an entry exist for this signature?" Confirms the signature was publicly recorded. Prevents signed-then-deleted attacks.</div></div>
+                <div class="process-step-item"><div class="step-num">6</div><div class="step-text"><strong>Check Attestations (optional):</strong> If <code>attestations:</code> are required, Kyverno fetches and verifies each. "Does a SLSA provenance exist? Does an SBOM attestation exist?" Each attestation is independently signed and verified.</div></div>
+            </div>
+            <p style="margin-top:0.8rem;font-size:0.82rem;"><strong>🔑 DEBUGGING TIP:</strong> When <code>verifyImages</code> rejects a pod, the error message tells you WHICH step failed. "no signatures found" = Step 2. "certificate identity mismatch" = Step 4. "Rekor entry not found" = Step 5. Use <code>cosign verify --certificate-identity=... IMAGE</code> to reproduce the check locally and see the exact error.</p>
+        </div>
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -33627,16 +34337,59 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
             </div>
         </div>
 
-        <div class="cnpe-practice-drill" style="margin-top:1.5rem;">
-            <h5>💪 Practice Drill — anihpj Supply Chain Security</h5>
-            <ol style="margin-top:0.5rem;padding-left:1.5rem;">
-                <li><strong>Generate SBOM:</strong> Run <code>syft anihpj/jobboard:latest -o spdx-json > sbom.json</code>. Count the packages.</li>
-                <li><strong>Sign image:</strong> Use <code>cosign sign anihpj/jobboard:latest</code> (keyless). Verify with <code>cosign verify</code>.</li>
-                <li><strong>Scan for CVEs:</strong> Run <code>trivy image --severity CRITICAL anihpj/jobboard:latest</code>. Note any findings.</li>
-                <li><strong>Run kube-bench:</strong> Deploy kube-bench Job. Check the CIS score. Identify top 3 failures.</li>
-                <li><strong>Write Falco rule:</strong> Create a rule that detects <code>kubectl exec</code> into any anihpj container.</li>
-                <li><strong>ESO setup:</strong> Create a SecretStore and ExternalSecret to sync a test secret from AWS Secrets Manager.</li>
-            </ol>
+        <div class="cnpe-practice-drill" id="drill30-1" style="margin-top:1.5rem;">
+            <h5>🛠️ Drill 1: Generate SBOM for anihpj</h5>
+            <p><strong>Scenario:</strong> Your security team needs a complete inventory of all packages in the anihpj/jobboard image.</p>
+            <p><strong>Task:</strong> Install syft. Generate SBOMs in BOTH SPDX and CycloneDX formats for the anihpj image. Count total packages. Export the CycloneDX SBOM as JSON. Scan the SBOM with grype to find known vulnerabilities.</p>
+            <p><strong>Time: 15 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill30-2">
+            <h5>🛠️ Drill 2: Sign Image with Cosign</h5>
+            <p><strong>Scenario:</strong> All anihpj production images must be signed and verifiable. You need to set up keyless signing in your CI/CD pipeline.</p>
+            <p><strong>Task:</strong> Sign an image with <code>cosign sign</code> (keyless). Verify the signature with <code>cosign verify</code> using certificate identity. Try to verify with a WRONG identity and confirm it fails. Attach an SBOM with <code>cosign attest</code> and verify the attestation.</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill30-3">
+            <h5>🛠️ Drill 3: SLSA Level Assessment</h5>
+            <p><strong>Scenario:</strong> Your CTO asks: "What SLSA level is our anihpj build pipeline?"</p>
+            <p><strong>Task:</strong> Evaluate the current anihpj build process against SLSA L0-L4 requirements. Identify what's needed to reach L2. Write a 1-page assessment with specific gaps and remediation steps. Implement at least one gap closure (e.g., add Cosign attest to the pipeline).</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill30-4">
+            <h5>🛠️ Drill 4: Trivy in CI/CD Pipeline</h5>
+            <p><strong>Scenario:</strong> No image with CRITICAL or HIGH CVEs should reach production. You must integrate Trivy into the CI/CD pipeline.</p>
+            <p><strong>Task:</strong> Create a GitHub Actions workflow step that runs Trivy on every image build. Configure it to fail (exit code 1) if CRITICAL CVEs are found. Create a <code>.trivyignore</code> file for a known false positive with an expiry date. Test that the pipeline passes for a clean image and fails for a vulnerable image.</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill30-5">
+            <h5>🛠️ Drill 5: Falco Rule for Unexpected Process</h5>
+            <p><strong>Scenario:</strong> The anihpj-web container should NEVER spawn a shell or run <code>curl</code>/<code>wget</code>. If it does, it may indicate a breach.</p>
+            <p><strong>Task:</strong> Write a custom Falco rule that detects: (a) shell (bash/sh) spawned in any anihpj container, (b) curl/wget execution in anihpj-web, (c) outbound network connection from anihpj-db to an external IP. Test each rule by triggering the condition in a dev namespace.</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-practice-drill" id="drill30-6">
+            <h5>🛠️ Drill 6: kube-bench CIS Assessment</h5>
+            <p><strong>Scenario:</strong> Your auditor requires a CIS Kubernetes Benchmark assessment. You need to run kube-bench and produce a compliance report.</p>
+            <p><strong>Task:</strong> Run kube-bench against master and node targets. Export results as JSON. Identify the top 5 FAIL results. For each FAIL, write a brief remediation plan (what config to change). Schedule a weekly CronJob that runs kube-bench and uploads results to S3.</p>
+            <p><strong>Time: 20 min</strong></p>
+        </div>
+
+        <div class="cnpe-exam-tip" style="margin-top:1.5rem;">
+            <h5>🎓 CNPE Exam Strategy — Domain 5 Supply Chain Security</h5>
+            <p>Domain 5 (Security &amp; Policy, 15%) includes supply chain security. Expect 1-2 supply chain tasks:</p>
+            <ul style="margin-top:0.5rem;padding-left:1.2rem;">
+                <li><strong>Generate an SBOM with syft:</strong> Know <code>syft image -o spdx-json</code> and <code>syft image -o cyclonedx-json</code>. The exam may ask for a specific format — know BOTH.</li>
+                <li><strong>Sign/verify with Cosign:</strong> Know keyless signing (<code>cosign sign</code>) and verification with certificate identity. The exam tests the CONCEPT — you won't need to set up Fulcio/Rekor from scratch.</li>
+                <li><strong>Scan with Trivy:</strong> The most common supply chain task. Know <code>trivy image --severity CRITICAL --exit-code 1</code> for CI/CD integration. Know <code>trivy k8s cluster</code> for runtime scanning.</li>
+                <li><strong>SLSA concepts:</strong> Understand the 5 levels (L0-L4) and what each requires. Be able to assess a build pipeline and say "this is SLSA L1 because..."</li>
+                <li><strong>Falco rules:</strong> Know the structure: condition, output, priority, tags. Know that Falco monitors syscalls + K8s audit events.</li>
+            </ul>
+            <p style="margin-top:0.5rem;"><strong>🔑 EXAM MINDSET:</strong> Supply chain security is about PROVING trustworthiness — not just claiming it. Every answer should include: (1) The tool, (2) The evidence it produces (SBOM, signature, scan report), (3) Where in the pipeline it runs (build, CI, admission, runtime). The CNPE exam tests your ability to build an AUTOMATED, AUDITABLE chain of trust — not just run individual commands.</p>
         </div>
 
         <div class="cnpe-knowledge-check" style="margin-top:1.5rem;">
@@ -33660,6 +34413,26 @@ kube-bench run --targets master -o junit > kube-bench-results.xml
             <div class="quiz-question">
                 <p><strong>Q5.</strong> Trivy can scan images, filesystems, git repos, K8s clusters, and IaC. What command scans an entire running Kubernetes cluster?</p>
                 <p class="quiz-answer"><strong>A:</strong> <code>trivy k8s cluster --report summary</code>. This scans ALL images currently running in the cluster, plus misconfigurations in Kubernetes resources. It's a comprehensive "what's running and is it safe?" check.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q6.</strong> Your CI/CD pipeline uses syft to generate an SBOM. Where should the SBOM be stored, and how is it linked to the specific image it describes?</p>
+                <p class="quiz-answer"><strong>A:</strong> The SBOM should be: (1) <strong>Attached to the image</strong> via <code>cosign attest --type spdxjson --predicate sbom.json IMAGE</code> — this stores the SBOM in the OCI registry alongside the image. (2) <strong>Archived externally</strong> to S3/GCS for auditing (immutable, time-stamped). The Cosign attestation links SBOM → image digest cryptographically. The S3 copy provides an audit trail independent of the registry.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q7.</strong> A developer pushes an image to the registry and a Kyverno <code>verifyImages</code> policy blocks the Pod creation. What 3 things could have gone wrong?</p>
+                <p class="quiz-answer"><strong>A:</strong> (1) <strong>Image not signed:</strong> The developer pushed without <code>cosign sign</code>. Fix: run the sign step in CI. (2) <strong>Wrong identity:</strong> The signature exists but the certificate identity doesn't match Kyverno's expected <code>subject</code> (e.g., signed by a different workflow). Fix: update the Kyverno policy's attestor. (3) <strong>Rekor entry missing:</strong> The signature was created but not recorded in Rekor (network issue during signing). Fix: re-sign the image. Check with <code>cosign verify</code> to see the exact error.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q8.</strong> Your cluster has Falco running but you discover a container was compromised 3 hours ago and Falco didn't alert. What are the 4 most likely reasons?</p>
+                <p class="quiz-answer"><strong>A:</strong> (1) <strong>No rule matches:</strong> The attack behavior isn't covered by any Falco rule. Custom rules may be needed for application-specific threats. (2) <strong>Rule priority too low:</strong> The matching rule has priority DEBUG and your alerting pipeline filters out low-priority alerts. (3) <strong>Output not connected:</strong> Falco outputs to stdout but no log collector (Fluentd/Vector) ships the logs to your SIEM/alerting system. (4) <strong>Falco not running on the right node:</strong> If Falco runs as a DaemonSet but the compromised pod is on a tainted node without Falco, there's no coverage.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q9.</strong> You need to store anihpj's Django SECRET_KEY, database password, and Redis password. Compare storing them as Kubernetes Secrets vs External Secrets Operator with AWS Secrets Manager. Which is appropriate for CNPE-level production?</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Kubernetes Secrets alone:</strong> Base64-encoded in etcd. If someone gets etcd access or <code>kubectl get secret -o yaml</code>, all secrets are exposed. No rotation, no audit, no dynamic generation. <strong>ESO + AWS Secrets Manager:</strong> Secrets encrypted at rest in AWS. <code>SecretStore</code> authenticates via IRSA (IAM Role for Service Account). <code>ExternalSecret</code> syncs specific keys to K8s Secrets with <code>refreshInterval</code>. Audit trail in CloudTrail. <strong>CNPE production standard:</strong> ESO + external provider. K8s Secrets alone is NOT sufficient for a platform that handles production workloads. The platform should abstract secret storage from developers — they just reference <code>secretKeyRef</code> and the platform handles the rest.</p>
+            </div>
+            <div class="quiz-question">
+                <p><strong>Q10.</strong> Design the complete supply chain security pipeline for anihpj: what tool runs at each stage, what it produces, and what happens if it fails. Cover build, sign, scan, attest, verify, deploy, and runtime.</p>
+                <p class="quiz-answer"><strong>A:</strong> <strong>Build (Docker):</strong> Produces container image. <strong>SBOM (syft):</strong> Produces SPDX + CycloneDX SBOMs → archived to S3. <strong>Sign (Cosign):</strong> Produces keyless signature + Rekor entry. Fails if OIDC unavailable. <strong>Scan (Trivy):</strong> Produces CVE report. FAILS pipeline if CRITICAL CVEs found. <strong>Scan SBOM (Grype):</strong> Produces vulnerability match report from SBOM. <strong>Attest (Cosign attest):</strong> Attaches SBOM + test results to image. <strong>Push (Docker push):</strong> Pushes to registry. <strong>Verify (Kyverno verifyImages):</strong> At admission, verifies Cosign signature. REJECTS Pod if signature missing/invalid. <strong>Deploy (Argo CD):</strong> Syncs to cluster. <strong>Detect (Falco):</strong> Monitors runtime syscalls + K8s audit. Alerts to PagerDuty. <strong>Audit (kube-bench):</strong> Weekly CIS scan → Grafana dashboard. <strong>Every gate that fails STOPS the pipeline.</strong> No image reaches production without passing all gates.</p>
             </div>
         </div>
 
