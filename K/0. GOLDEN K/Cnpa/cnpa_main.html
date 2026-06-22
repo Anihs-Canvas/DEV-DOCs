@@ -20292,8 +20292,335 @@ argocd cluster list
                 </div>
             </div>
 
-        </div>
-<div id="ch20">
+        </div><div id="ch19">
+            <div class="chapter-intro">
+                <h3>Chapter 19: Infrastructure Provisioning with Kubernetes â€” Crossplane, Terraform & Cluster API</h3>
+                <p>Platform engineers do not just deploy applications â€” they provision the INFRASTRUCTURE those applications run on. Databases, message queues, object storage, DNS records, VPCs, and Kubernetes clusters themselves. This chapter covers the three approaches to infrastructure provisioning that the CNPA exam tests: <strong>Terraform/Tofu</strong> for declarative infrastructure-as-code, <strong>Crossplane</strong> for K8s-native infrastructure provisioning through CRDs, and <strong>Cluster API (CAPI)</strong> for managing Kubernetes clusters themselves. Every example uses the infrastructure needs of our <strong>anihpj/jobpost</strong> application â€” from the RDS PostgreSQL database to the EKS cluster that hosts everything.</p>
+                <div class="chapter-meta"><span class="meta-tag">ðŸŸ¡ Intermediate</span><span class="meta-tag">â±ï¸ ~3 hours</span><span class="meta-tag">ðŸ—ï¸ Infrastructure</span><span class="meta-tag">ðŸŽ¯ Domain 4: 12%</span><span class="meta-tag">âœˆï¸ Crossplane</span></div>
+            </div>
+
+            <div class="learning-objectives"><h4>What You Will Learn</h4><ul>
+                <li>Infrastructure as Code (IaC) with Terraform/Tofu â€” declarative provisioning of cloud resources</li>
+                <li>Crossplane â€” provisioning cloud infrastructure through Kubernetes CRDs (the "K8s-native IaC")</li>
+                <li>Crossplane Providers, Managed Resources, Compositions, and XRD â€” the full Crossplane architecture</li>
+                <li>Cluster API (CAPI) â€” managing the lifecycle of Kubernetes clusters themselves using K8s declarative patterns</li>
+                <li>Infrastructure drift detection and reconciliation â€” how Crossplane continuously ensures infrastructure matches desired state</li>
+                <li>When to use Terraform vs Crossplane vs CAPI â€” decision framework for platform infrastructure</li>
+            </ul></div>
+
+            <!-- YAML Skeleton â€” Crossplane Composition -->
+            <div class="cka-yaml-skeleton">
+                <h4>EXAM YAML SKELETON â€” Crossplane Composition for anihpj PostgreSQL</h4>
+                <p class="skeleton-note">Crossplane Compositions define how to provision multiple resources from a single claim. This pattern is CNPA-tested.</p>
+<pre><code class="language-yaml">apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: anihpj-postgresql
+spec:
+  compositeTypeRef:
+    apiVersion: anihpj.io/v1alpha1
+    kind: XPostgreSQL
+  resources:
+  - name: rds-instance
+    base:
+      apiVersion: rds.aws.upbound.io/v1beta1
+      kind: Instance
+      spec:
+        forProvider:
+          engine: postgres
+          engineVersion: "15"
+          instanceClass: db.t3.medium
+          allocatedStorage: 50
+          region: us-east-1
+  - name: subnet-group
+    base:
+      apiVersion: rds.aws.upbound.io/v1beta1
+      kind: SubnetGroup
+      spec:
+        forProvider:
+          region: us-east-1
+          subnetIds: ["subnet-abc", "subnet-def"]</code></pre>
+            </div>
+
+            <div class="cka-chapter-relevance"><span class="relevance-label">CNPA Relevance</span><div class="relevance-domains">
+                <span class="cka-domain-badge">Platform APIs & Infrastructure <span class="cka-weight">12%</span></span>
+                <span class="cka-domain-badge">Foundation for Operators (Ch 20)</span>
+                <span class="cka-domain-badge">Foundation for IDPs (Ch 21)</span>
+            </div></div>
+
+            <div class="cka-exam-tip"><h5>Infrastructure Provisioning Is a Platform Capability</h5><p>The CNPA exam tests infrastructure provisioning as a PLATFORM concern â€” not an ops concern. Key patterns:</p><ul><li><strong>Declarative infrastructure is non-negotiable.</strong> Everything â€” databases, networks, clusters â€” must be defined as code. ClickOps (AWS console) is NEVER the answer on the CNPA exam.</li><li><strong>Crossplane is the CNPA-preferred K8s-native approach.</strong> It uses the same CRD + controller pattern you learned in Chapters 17-18. Infrastructure is just another K8s resource.</li><li><strong>Drift detection and reconciliation.</strong> Like ArgoCD for apps, Crossplane continuously reconciles infrastructure. If someone changes a security group in the AWS console, Crossplane reverts it. This is the same reconciliation loop you learned in Ch 17.</li><li><strong>Cluster API = K8s managing K8s.</strong> The ultimate expression of the Operator pattern â€” Kubernetes itself manages the lifecycle of Kubernetes clusters.</li></ul></div>
+
+            <!-- 19.1: IaC with Terraform/Tofu -->
+            <div class="section-block" id="s19-1"><h3>19.1 Infrastructure as Code â€” Terraform, Tofu, and the Declarative Approach</h3>
+                <p>Infrastructure as Code (IaC) is the practice of managing infrastructure through machine-readable definition files rather than manual processes. <strong>Terraform</strong> (by HashiCorp) and its open-source fork <strong>Tofu</strong> (by OpenTofu) are the industry standards for declarative cloud infrastructure provisioning. They use HCL (HashiCorp Configuration Language) to declare WHAT infrastructure you want â€” VPCs, subnets, databases, DNS records, load balancers â€” and the tool figures out HOW to create, update, or delete resources to reach that state.</p>
+
+                <h4>Terraform vs Tofu â€” The Fork Explained</h4>
+                <p>In August 2023, HashiCorp changed Terraform's license from MPL to BUSL (Business Source License), restricting commercial use. The community responded by creating <strong>OpenTofu</strong> â€” a truly open-source fork of Terraform, now a CNCF project. For the CNPA exam and platform engineering, Tofu and Terraform are functionally identical. Both use HCL. Both maintain state files. Both plan before applying. The CNPA exam will NOT ask about license differences â€” it focuses on the IaC CONCEPT and PATTERN, not the specific tool.</p>
+
+                <h4>How IaC Works â€” The Plan-Apply Cycle</h4>
+                <div class="diagram-container"><div class="diagram-title">THE IaC PLAN-APPLY CYCLE â€” Terraform/Tofu</div><div class="diagram-body"><pre>
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚  THE IaC WORKFLOW                                                     â”‚
+â”‚                                                                       â”‚
+â”‚  1. WRITE: You write HCL files declaring desired infrastructure       â”‚
+â”‚     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚     â”‚ resource "aws_db_instance" "anihpj" {                       â”‚  â”‚
+â”‚     â”‚   engine         = "postgres"                                â”‚  â”‚
+â”‚     â”‚   engine_version = "15"                                      â”‚  â”‚
+â”‚     â”‚   instance_class = "db.t3.medium"                            â”‚  â”‚
+â”‚     â”‚   allocated_storage = 50                                     â”‚  â”‚
+â”‚     â”‚ }                                                            â”‚  â”‚
+â”‚     â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚                                                                       â”‚
+â”‚  2. PLAN: terraform plan â€” shows what WILL change (diff)              â”‚
+â”‚     + aws_db_instance.anihpj will be created                          â”‚
+â”‚     + aws_security_group.anihpj_db will be created                    â”‚
+â”‚     Plan: 2 to add, 0 to change, 0 to destroy.                        â”‚
+â”‚                                                                       â”‚
+â”‚  3. APPLY: terraform apply â€” makes the changes REAL                   â”‚
+â”‚     aws_db_instance.anihpj: Creating...                               â”‚
+â”‚     aws_db_instance.anihpj: Creation complete after 5m0s              â”‚
+â”‚     Apply complete! Resources: 2 added, 0 changed, 0 destroyed.      â”‚
+â”‚                                                                       â”‚
+â”‚  4. STATE: Terraform records what it created in a state file          â”‚
+â”‚     On next run, it compares desired state (HCL) with actual          â”‚
+â”‚     state (cloud) using the state file as a map.                      â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜</pre></div></div>
+
+                <h4>Terraform State â€” The Heart of IaC</h4>
+                <p>The <strong>state file</strong> (terraform.tfstate) is Terraform's record of what it has created. It maps HCL resources to real cloud resource IDs. Without the state file, Terraform cannot know which cloud resources it owns. This is why state management is CRITICAL:</p>
+                <div class="split-panel">
+                    <div class="split-side split-bad"><h5>BAD: Local State</h5><p>State file stored on a developer's laptop. If the laptop dies, the state is lost. Only one person can run terraform at a time. No team collaboration.</p></div>
+                    <div class="split-side split-good"><h5>GOOD: Remote State (S3 + DynamoDB)</h5><p>State stored in S3 with DynamoDB locking. Multiple people can run terraform (DynamoDB prevents concurrent runs). State is backed up, versioned, and never lost.</p></div>
+                </div>
+
+                <h4>When to Use Terraform/Tofu vs Crossplane</h4>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Criteria</th><th>Terraform/Tofu</th><th>Crossplane</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Paradigm</strong></td><td>Declarative HCL files + plan/apply cycle</td><td>K8s CRDs + continuous reconciliation</td></tr>
+                        <tr><td><strong>State Management</strong></td><td>Explicit state file (local or remote)</td><td>State stored in K8s etcd (no separate state file)</td></tr>
+                        <tr><td><strong>Drift Detection</strong></td><td>Only when you run terraform plan</td><td>CONTINUOUS â€” every reconcile loop checks for drift</td></tr>
+                        <tr><td class="winner"><strong>Best For</strong></td><td>Initial provisioning, complex multi-cloud, teams without K8s</td><td>K8s-native platforms, GitOps integration, self-service infrastructure</td></tr>
+                        <tr><td><strong>Self-Service</strong></td><td>Requires CI pipeline or Terraform Cloud</td><td>Built-in â€” developers create Claims, Crossplane provisions</td></tr>
+                        <tr><td><strong>CNPA Preference</strong></td><td>When K8s is not available or for bootstrap</td><td>PREFERRED for K8s-native platforms (continuous reconciliation)</td></tr>
+                    </tbody>
+                </table></div>
+            </div>
+
+            <!-- 19.2: Crossplane -->
+            <div class="section-block" id="s19-2"><h3>19.2 Crossplane â€” Kubernetes-Native Infrastructure Provisioning</h3>
+                <p><strong>Crossplane</strong> is a CNCF incubating project that extends Kubernetes to manage external infrastructure â€” databases, message queues, object storage, DNS, and more â€” using the SAME CRD + controller pattern you learned in Chapters 17-18. Instead of running terraform from a CI pipeline, you create a K8s custom resource (like a "PostgreSQLInstance" claim), and Crossplane's controllers provision the actual cloud resource and continuously reconcile it. This is infrastructure as K8s resources â€” the ultimate expression of the CNPA philosophy.</p>
+
+                <h4>Crossplane Architecture â€” How It Works</h4>
+                <div class="diagram-container"><div class="diagram-title">CROSSPLANE ARCHITECTURE â€” Provisioning anihpj PostgreSQL</div><div class="diagram-body"><pre>
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚  CROSSPLANE â€” Infrastructure as K8s Resources                         â”‚
+â”‚                                                                       â”‚
+â”‚  STEP 1: Developer creates a CLAIM (simple, self-service)             â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚
+â”‚  â”‚ apiVersion: anihpj.io/v1alpha1                                   â”‚ â”‚
+â”‚  â”‚ kind: PostgreSQL                                                  â”‚ â”‚
+â”‚  â”‚ spec:                                                             â”‚ â”‚
+â”‚  â”‚   engine: postgres                                                â”‚ â”‚
+â”‚  â”‚   version: "15"                                                   â”‚ â”‚
+â”‚  â”‚   storage: 50Gi                                                   â”‚ â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚
+â”‚                              â”‚                                        â”‚
+â”‚  STEP 2: XRD + Composition translates claim to managed resources      â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚
+â”‚  â”‚ XRD defines the API (what fields the claim has)                  â”‚ â”‚
+â”‚  â”‚ Composition defines HOW to provision (which AWS resources)       â”‚ â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚
+â”‚                              â”‚                                        â”‚
+â”‚  STEP 3: Crossplane Provider creates actual cloud resources           â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚
+â”‚  â”‚ provider-aws â†’ AWS API â†’ RDS Instance created                    â”‚ â”‚
+â”‚  â”‚ provider-aws â†’ AWS API â†’ Security Group created                  â”‚ â”‚
+â”‚  â”‚ provider-aws â†’ AWS API â†’ Subnet Group created                    â”‚ â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚
+â”‚                              â”‚                                        â”‚
+â”‚  STEP 4: Crossplane writes connection details to a K8s Secret         â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚
+â”‚  â”‚ Secret: anihpj-db-connection                                      â”‚ â”‚
+â”‚  â”‚   endpoint: anihpj.xyz.us-east-1.rds.amazonaws.com                â”‚ â”‚
+â”‚  â”‚   username: anihpj_admin                                          â”‚ â”‚
+â”‚  â”‚   password: <generated>                                           â”‚ â”‚
+â”‚  â”‚   port: 5432                                                      â”‚ â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚
+â”‚                                                                       â”‚
+â”‚  STEP 5: Application consumes the Secret (just like any K8s Secret)   â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚
+â”‚  â”‚ anihpj-api Deployment references the Secret as env vars          â”‚ â”‚
+â”‚  â”‚ DATABASE_URL is auto-populated. Zero manual configuration.       â”‚ â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜</pre></div></div>
+
+                <div class="info-box tip"><h5>Crossplane = Infrastructure Reconciliation Loop</h5><p>Just like ArgoCD continuously reconciles application state (Ch 15), Crossplane continuously reconciles INFRASTRUCTURE state. If someone manually changes the RDS security group in the AWS console, Crossplane detects the drift and REVERTS it automatically. This is the same Observe->Diff->Act reconciliation loop from Chapter 17, applied to cloud infrastructure. Crossplane IS the infrastructure GitOps controller.</p></div>
+            </div>
+
+            <!-- 19.3: Crossplane Providers, XRD, Composition -->
+            <div class="section-block" id="s19-3"><h3>19.3 Crossplane Architecture â€” Providers, Managed Resources, XRD, and Composition</h3>
+                <p>Crossplane has four key concepts that form a layered architecture. Understanding each layer is essential for the CNPA exam:</p>
+                <div class="layer-stack">
+                    <div class="layer-item l1"><span class="layer-num">1</span><div class="layer-content"><h5>Provider</h5><p>Installs CRDs for a cloud provider's resources (AWS, GCP, Azure). Creates Managed Resources like RDSInstance, S3Bucket. Example: <code>provider-aws</code> gives you CRDs for every AWS service.</p></div></div>
+                    <div class="layer-item l2"><span class="layer-num">2</span><div class="layer-content"><h5>Managed Resource (MR)</h5><p>A low-level CR that maps 1:1 to a cloud resource. Example: an <code>Instance</code> MR maps to an AWS RDS instance. These are detailed and cloud-specific â€” not for developers to use directly.</p></div></div>
+                    <div class="layer-item l3"><span class="layer-num">3</span><div class="layer-content"><h5>Composite Resource Definition (XRD)</h5><p>Defines a CUSTOM API for your platform. Example: <code>XPostgreSQL</code> defines fields like engine, version, storage. This is YOUR platform's API â€” not the cloud provider's.</p></div></div>
+                    <div class="layer-item l4"><span class="layer-num">4</span><div class="layer-content"><h5>Composition</h5><p>Defines HOW an XRD is fulfilled. Maps the simple claim fields to multiple Managed Resources. Example: an XPostgreSQL might create an RDS Instance + SecurityGroup + SubnetGroup.</p></div></div>
+                    <div class="layer-item l5"><span class="layer-num">5</span><div class="layer-content"><h5>Claim</h5><p>What DEVELOPERS create. A simple, namespace-scoped resource. Example: <code>kind: PostgreSQL</code> with just engine, version, storage. The developer never sees the Managed Resources.</p></div></div>
+                </div>
+
+                <div class="key-concept"><h4>The Crossplane Pattern = Platform Abstraction</h4><p>This layered architecture is the CNPA ideal: <strong>Developers create simple Claims. Platform engineers define Compositions. Crossplane provisions cloud resources.</strong> The developer never touches AWS console, never writes Terraform, never knows the database is on RDS. They just create a PostgreSQL Claim and get connection details in a Secret. This is self-service infrastructure â€” the platform engineering holy grail.</p></div>
+            </div>
+
+            <!-- 19.4: Cluster API -->
+            <div class="section-block" id="s19-4"><h3>19.4 Cluster API (CAPI) â€” Kubernetes Managing Kubernetes</h3>
+                <p><strong>Cluster API (CAPI)</strong> is a CNCF project that uses the Operator pattern to manage the lifecycle of Kubernetes clusters themselves. Think of it as "Kubernetes for Kubernetes" â€” you define a Cluster resource, and CAPI controllers provision the control plane, worker nodes, and networking. The anihpj platform runs on EKS clusters managed by CAPI, enabling the platform team to provision, upgrade, scale, and delete clusters through the same GitOps workflow used for applications.</p>
+
+                <h4>CAPI Architecture â€” The Cluster-as-a-Resource Pattern</h4>
+                <div class="card-grid cols-2">
+                    <div class="info-card highlight"><div class="card-icon-lg">ðŸŽ¯</div><h5>Cluster</h5><p>The top-level resource. Defines the desired cluster: control plane version, number of workers, network CIDR, cloud provider. Creating a Cluster CR triggers the full provisioning workflow.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">ðŸ§ </div><h5>ControlPlane</h5><p>Manages the control plane nodes. For EKS, this uses the AWSManagedControlPlane provider. Handles version upgrades, certificate rotation, and etcd management.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">ðŸ’ª</div><h5>MachineDeployment</h5><p>Manages worker nodes. Like a K8s Deployment but for VMs. Defines the machine image, instance type, and scaling parameters. Auto-scales based on workload.</p></div>
+                    <div class="info-card highlight"><div class="card-icon-lg">ðŸ—ï¸</div><h5>Infrastructure Provider</h5><p>Cloud-specific implementation. AWS (CAPA), GCP (CAPG), Azure (CAPZ). Translates the abstract Cluster spec into actual cloud API calls for VMs, networks, and load balancers.</p></div>
+                </div>
+
+                <div class="info-box tip"><h5>CAPI = The Platform Engineer's Multi-Cluster Solution</h5><p>For the anihpj platform, CAPI manages three clusters: dev, staging, and production. Each is defined as a Cluster CR in the platform GitOps repo. ArgoCD syncs the Cluster CRs, and CAPI ensures the actual clusters match. When a new version of Kubernetes is released, the platform team updates the version field in the Cluster CR, and CAPI performs a rolling upgrade with zero application downtime. This is GitOps for infrastructure â€” continuous reconciliation of the entire platform, not just the apps.</p></div>
+            </div>
+
+            <!-- 19.5: Drift Detection -->
+            <div class="section-block" id="s19-5"><h3>19.5 Infrastructure Drift Detection â€” Continuous Reconciliation for Cloud Resources</h3>
+                <p>One of Crossplane's most powerful features is <strong>continuous drift detection.</strong> Unlike Terraform (which only detects drift when you run terraform plan), Crossplane continuously monitors managed resources and automatically corrects any drift from the desired state. If someone manually changes a security group rule in the AWS console, Crossplane detects the change within minutes and REVERTS it back to match the desired state defined in the Composition. This is the same self-healing property you learned about in Chapter 2 (Declarative Management) and Chapter 17 (Reconciliation Loop) â€” applied to cloud infrastructure.</p>
+
+                <h4>Drift Scenarios â€” What Crossplane Protects Against</h4>
+                <div class="scenario-box"><h5>Common Infrastructure Drift Scenarios</h5><ul><li><strong>Manual console changes:</strong> "I just need to open this port temporarily..." Crossplane reverts it.</li><li><strong>Security group modifications:</strong> Someone adds a 0.0.0.0/0 rule. Crossplane removes it within minutes.</li><li><strong>Instance type changes:</strong> Someone "upgrades" the database instance class. Crossplane reverts to the defined size.</li><li><strong>Tag removal:</strong> Cost allocation tags are deleted. Crossplane re-adds them.</li><li><strong>Deletion:</strong> Someone deletes a resource in the console. Crossplane RE-CREATES it.</li></ul></div>
+
+                <div class="info-box warning"><h5>CNPA Exam: Crossplane = Drift Detection. Terraform = Manual Drift Check.</h5><p>The exam will test this distinction: Crossplane provides CONTINUOUS drift detection through its reconciliation loop. Terraform only detects drift when you run terraform plan. For the CNPA exam, Crossplane is always the preferred choice for K8s-native platforms because of this continuous reconciliation capability.</p></div>
+            </div>
+
+            <!-- 19.6: Decision Framework -->
+            <div class="section-block" id="s19-6"><h3>19.6 Decision Framework â€” When to Use What</h3>
+                <div class="comparison-table"><table>
+                    <thead><tr><th>Scenario</th><th>Recommended Tool</th><th>Why</th></tr></thead>
+                    <tbody>
+                        <tr><td>Bootstrapping the FIRST K8s cluster</td><td class="winner">Terraform/Tofu</td><td>Crossplane needs a K8s cluster to run. Use Terraform to create the initial cluster, then CAPI or Crossplane for everything else.</td></tr>
+                        <tr><td>Provisioning databases for apps on K8s</td><td class="winner">Crossplane</td><td>Self-service via Claims. Continuous drift detection. Secret auto-creation. The CNPA-preferred approach.</td></tr>
+                        <tr><td>Managing K8s clusters at scale (3+ clusters)</td><td class="winner">Cluster API</td><td>Declarative cluster lifecycle. GitOps integration. Rolling upgrades. Multi-cloud support.</td></tr>
+                        <tr><td>Complex multi-cloud networking</td><td class="winner">Terraform/Tofu</td><td>Crossplane can do it but Terraform has more mature modules for complex VPC/transit gateway setups.</td></tr>
+                        <tr><td>Self-service infrastructure for developers</td><td class="winner">Crossplane</td><td>XRD + Composition = platform API. Developers create Claims. No Terraform knowledge needed.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>
+
+            <!-- 19.7: Practice Lab â€” 10 CNPA Exam-Style Questions -->
+            <div class="section-block" id="s19-7"><h3>19.7 Practice Lab â€” 10 CNPA Exam-Style Questions</h3>
+                <p>Test your understanding of infrastructure provisioning with these hands-on, scenario-based questions.</p>
+
+                <!-- Q1 -->
+                <div class="mcq-block" id="ch19-q1" data-correct="B">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q1 of 10</div>
+                    <div class="mcq-question">The anihpj platform team wants developers to provision their own PostgreSQL databases without filing tickets. The platform runs on Kubernetes with ArgoCD for GitOps. Which approach best implements this?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) Give developers AWS console access and a wiki page with RDS setup instructions</div><div class="mcq-option">B) Create a Crossplane Composition + XRD that generates RDS instances. Developers create a PostgreSQL Claim. The database connection details are auto-populated in a K8s Secret.</div><div class="mcq-option">C) Run Terraform from a CI pipeline whenever a developer opens a Jira ticket</div><div class="mcq-option">D) Have the platform team manually provision each database when requested via Slack</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a1')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a1"><div class="answer-label">Correct Answer: B â€” Crossplane Composition + XRD for self-service</div><p>Self-service infrastructure is a core CNPA principle. Crossplane with XRD (defines the API) and Composition (defines HOW to provision) creates a self-service experience: developers create a simple Claim, Crossplane provisions the actual RDS instance, and connection details appear in a Secret. Option A violates security (console access) and is not self-service. Option C still requires tickets (not self-service). Option D is ticket-based ops â€” the ANTI-pattern. The CNPA ALWAYS prefers Crossplane for K8s-native self-service infrastructure.</p></div>
+                </div>
+
+                <!-- Q2 -->
+                <div class="mcq-block" id="ch19-q2" data-correct="C">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q2 of 10</div>
+                    <div class="mcq-question">A platform engineer notices that someone manually changed the RDS security group for the anihpj database in the AWS console, opening port 22 to 0.0.0.0/0. The RDS instance is managed by Crossplane. What happens?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) Nothing â€” manual changes in the console always override Crossplane</div><div class="mcq-option">B) Crossplane sends an alert to the platform team but does not revert the change</div><div class="mcq-option">C) Crossplane detects the drift during its next reconciliation loop and REVERTS the security group back to the desired state defined in the Composition</div><div class="mcq-option">D) The RDS instance is deleted and re-created from scratch</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a2')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a2"><div class="answer-label">Correct Answer: C â€” Crossplane auto-reverts drift via reconciliation</div><p>Crossplane continuously reconciles managed resources using the same Observe->Diff->Act loop as K8s controllers (Ch 17). When it detects that the actual state (modified security group) differs from the desired state (defined in the Composition), it automatically reverts the change. This is infrastructure self-healing â€” the same concept as K8s restarting a crashed pod. The port is closed automatically, restoring security. No human intervention needed. This is why Crossplane is preferred over Terraform for K8s-native platforms: continuous drift detection vs. manual drift checking.</p></div>
+                </div>
+
+                <!-- Q3 -->
+                <div class="mcq-block" id="ch19-q3" data-correct="A">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q3 of 10</div>
+                    <div class="mcq-question">What is the correct sequence of Crossplane resources from HIGHEST level (developer-facing) to LOWEST level (cloud-facing)?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) Claim â†’ XRD â†’ Composition â†’ Managed Resource â†’ Cloud Resource</div><div class="mcq-option">B) Managed Resource â†’ Composition â†’ XRD â†’ Claim â†’ Cloud Resource</div><div class="mcq-option">C) Composition â†’ Claim â†’ Managed Resource â†’ XRD â†’ Cloud Resource</div><div class="mcq-option">D) Cloud Resource â†’ Managed Resource â†’ Composition â†’ XRD â†’ Claim</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a3')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a3"><div class="answer-label">Correct Answer: A â€” Claim â†’ XRD â†’ Composition â†’ Managed Resource â†’ Cloud Resource</div><p>The Crossplane resource hierarchy: (1) Developer creates a Claim (simple, like "PostgreSQL"). (2) The XRD defines the API schema for that claim type. (3) The Composition defines HOW to provision â€” which Managed Resources to create. (4) Managed Resources are cloud-specific (e.g., RDS Instance, SecurityGroup). (5) The Provider creates the actual cloud resource via the cloud API. Understanding this layered architecture is essential for the CNPA exam â€” it is the platform abstraction pattern in action.</p></div>
+                </div>
+
+                <!-- Q4 -->
+                <div class="mcq-block" id="ch19-q4" data-correct="D">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q4 of 10</div>
+                    <div class="mcq-question">The anihpj platform needs to manage three EKS clusters (dev, staging, production) using GitOps. Kubernetes version upgrades should be rolling and zero-downtime. Which tool should manage the cluster lifecycle?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) Terraform â€” it can create and update EKS clusters declaratively</div><div class="mcq-option">B) Crossplane â€” it provides continuous reconciliation for all infrastructure</div><div class="mcq-option">C) Manual kubectl commands with a runbook</div><div class="mcq-option">D) Cluster API (CAPI) â€” it manages K8s cluster lifecycles declaratively, supports rolling upgrades, and integrates with GitOps via ArgoCD</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a4')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a4"><div class="answer-label">Correct Answer: D â€” Cluster API (CAPI) for K8s cluster lifecycle management</div><p>While Terraform CAN create clusters, CAPI is purpose-built for K8s cluster lifecycle management. It handles: (1) Rolling control plane upgrades (no downtime), (2) Worker node scaling and replacement, (3) Declarative cluster definitions as CRs (GitOps-native), (4) Certificate rotation, and (5) Multi-cloud abstraction (same API for EKS, GKE, AKS). CAPI treats clusters as K8s resources â€” the same pattern as everything else in the platform. Terraform would require running terraform apply for every upgrade, and would not provide the continuous reconciliation that CAPI offers.</p></div>
+                </div>
+
+                <!-- Q5 -->
+                <div class="mcq-block" id="ch19-q5" data-correct="B">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q5 of 10</div>
+                    <div class="mcq-question">What is the PRIMARY risk of storing Terraform state on a developer's local laptop?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) The state file takes up too much disk space</div><div class="mcq-option">B) If the laptop is lost or the file is corrupted, the mapping between HCL resources and real cloud resources is LOST. Terraform cannot manage or destroy those resources without the state file. Additionally, only one person can run terraform at a time (no team collaboration).</div><div class="mcq-option">C) Local state is slower than remote state</div><div class="mcq-option">D) Local state cannot be encrypted</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a5')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a5"><div class="answer-label">Correct Answer: B â€” Lost state = lost resource mapping + no team collaboration</div><p>The Terraform state file is the CRITICAL link between your HCL code and the actual cloud resources. Without it, Terraform cannot know which resources it created or manage them. If the state is lost: (1) You cannot terraform destroy (resources become orphaned), (2) You cannot update resources (no mapping), (3) You must manually find and manage every resource in the cloud console. The solution: remote state (S3 + DynamoDB) with versioning, encryption, and locking. This is a CNPA best practice: infrastructure state MUST be reliable, backed-up, and team-accessible. Crossplane avoids this problem entirely by storing state in K8s etcd.</p></div>
+                </div>
+
+                <!-- Q6 -->
+                <div class="mcq-block" id="ch19-q6" data-correct="C">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q6 of 10</div>
+                    <div class="mcq-question">A developer creates a PostgreSQL Claim in Crossplane. The database is provisioned but the developer cannot find the connection credentials. Where should they look?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) The AWS console â€” credentials are only available there</div><div class="mcq-option">B) The Crossplane UI dashboard</div><div class="mcq-option">C) A Kubernetes Secret in the same namespace as the Claim. Crossplane automatically creates a Secret containing the endpoint, username, password, and port. The Secret name is typically derived from the Claim name.</div><div class="mcq-option">D) The developer must manually create credentials after provisioning</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a6')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a6"><div class="answer-label">Correct Answer: C â€” Connection details auto-populated in a K8s Secret</div><p>Crossplane automatically writes connection details (endpoint, username, password, port) to a Kubernetes Secret in the same namespace as the Claim. This is one of Crossplane's key advantages: infrastructure provisioning includes credential management. The developer's application Deployment can reference this Secret directly as environment variables â€” no manual credential copying. This is the self-service pattern: the developer creates a Claim, Crossplane provisions the infrastructure AND delivers the credentials, all through standard K8s APIs.</p></div>
+                </div>
+
+                <!-- Q7 -->
+                <div class="mcq-block" id="ch19-q7" data-correct="A">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q7 of 10</div>
+                    <div class="mcq-question">The anihpj platform team is starting from scratch with NO existing Kubernetes cluster. They need to provision an EKS cluster, then use Crossplane and ArgoCD for everything else. What is the correct bootstrap sequence?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) 1. Use Terraform to create the initial EKS cluster (bootstrap). 2. Install Crossplane + ArgoCD on the cluster. 3. Use Crossplane for all subsequent infrastructure (databases, DNS). 4. Use CAPI/Crossplane for additional clusters.</div><div class="mcq-option">B) 1. Install Crossplane first (it does not need a cluster), then provision EKS through Crossplane.</div><div class="mcq-option">C) 1. Use the AWS console to create EKS. 2. Manually install tools. 3. Hope nothing breaks.</div><div class="mcq-option">D) 1. Use CAPI to create the first cluster from nothing (CAPI does not need a management cluster)</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a7')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a7"><div class="answer-label">Correct Answer: A â€” Terraform for bootstrap, then Crossplane for everything else</div><p>The bootstrap problem: Crossplane needs a K8s cluster to run. CAPI needs a management cluster. You cannot use K8s-native tools to create the FIRST cluster. The solution: (1) Use Terraform/Tofu to create the initial ("bootstrap") cluster. (2) Install Crossplane, ArgoCD, and CAPI on that cluster. (3) From that point forward, use Crossplane for infrastructure and CAPI for additional clusters. The bootstrap cluster itself might also be managed by CAPI (self-managed). The CNPA exam tests this bootstrap pattern: Terraform creates the seed; K8s-native tools manage everything after.</p></div>
+                </div>
+
+                <!-- Q8 -->
+                <div class="mcq-block" id="ch19-q8" data-correct="D">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q8 of 10</div>
+                    <div class="mcq-question">What is the key architectural advantage of Crossplane over Terraform for K8s-native platforms?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) Crossplane is faster at provisioning resources</div><div class="mcq-option">B) Crossplane supports more cloud providers than Terraform</div><div class="mcq-option">C) Crossplane does not require any configuration</div><div class="mcq-option">D) Continuous reconciliation â€” Crossplane uses K8s controllers to continuously monitor and correct drift, while Terraform only checks for drift when you explicitly run terraform plan. Crossplane also stores state in etcd (no separate state file), provides self-service via Claims, and auto-creates connection Secrets.</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a8')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a8"><div class="answer-label">Correct Answer: D â€” Continuous reconciliation + no external state + self-service + auto-Secrets</div><p>Crossplane's key advantages: (1) Continuous reconciliation â€” drift is detected and fixed automatically, not just when you run a plan. (2) No external state file â€” state is in etcd, just like every other K8s resource. (3) Self-service via Claims â€” developers provision infrastructure through the same K8s API they already know. (4) Auto-created connection Secrets â€” credentials are automatically delivered. These four advantages make Crossplane the CNPA-preferred choice for infrastructure on K8s-native platforms. Terraform remains valuable for bootstrapping and complex non-K8s scenarios.</p></div>
+                </div>
+
+                <!-- Q9 -->
+                <div class="mcq-block" id="ch19-q9" data-correct="B">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q9 of 10</div>
+                    <div class="mcq-question">The anihpj platform uses Cluster API to manage its EKS clusters. A new Kubernetes version (1.32) is released. How should the platform team upgrade the production cluster?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) Run kubectl on each node to upgrade kubelet manually</div><div class="mcq-option">B) Update the version field in the Cluster CR in Git. ArgoCD syncs the change. CAPI detects the version change and performs a rolling upgrade: control plane first, then worker nodes, with zero application downtime.</div><div class="mcq-option">C) Delete the production cluster and create a new one with the new version</div><div class="mcq-option">D) Use Terraform to destroy and recreate the EKS cluster</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a9')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a9"><div class="answer-label">Correct Answer: B â€” Git-based version update triggers CAPI rolling upgrade</div><p>Cluster API enables GitOps for cluster upgrades. The workflow: (1) Platform engineer updates the version field in the Cluster CR YAML in Git. (2) ArgoCD syncs the change to the management cluster. (3) CAPI detects the version change and begins a rolling upgrade. (4) Control plane nodes are upgraded one at a time (with health checks between each). (5) Worker nodes are upgraded via MachineDeployment rolling update (similar to K8s Deployment). (6) Throughout the process, applications continue running â€” zero downtime. This is the same pattern used for application deployments, applied to the cluster itself. The Git commit provides a complete audit trail.</p></div>
+                </div>
+
+                <!-- Q10 -->
+                <div class="mcq-block" id="ch19-q10" data-correct="C">
+                    <div class="mcq-number"><span class="domain-pill d4">Infrastructure</span> Q10 of 10</div>
+                    <div class="mcq-question">A developer runs terraform apply but gets an error: "Error: Error acquiring the state lock." What is happening and how should it be resolved?</div>
+                    <div class="mcq-options"><div class="mcq-option">A) The state file is corrupted â€” delete it and start over</div><div class="mcq-option">B) Terraform is not installed correctly â€” reinstall it</div><div class="mcq-option">C) Another team member or CI pipeline is currently running terraform apply on the SAME state. The DynamoDB lock prevents concurrent modifications. Wait for the lock to be released, or use terraform force-unlock ONLY if you are CERTAIN the other process has crashed.</div><div class="mcq-option">D) The cloud provider API is down â€” retry later</div></div>
+                    <button class="mcq-toggle-btn" onclick="toggleAnswer('ch19-a10')">Show Answer and Explanation</button>
+                    <div class="mcq-answer" id="ch19-a10"><div class="answer-label">Correct Answer: C â€” DynamoDB state lock prevents concurrent modifications</div><p>The state lock is a SAFETY FEATURE, not an error. When using remote state with DynamoDB locking: (1) The first terraform apply acquires a lock in DynamoDB. (2) Any subsequent terraform apply sees the lock and refuses to proceed (preventing state corruption from concurrent writes). (3) When the first apply completes, it releases the lock. Best practices: (a) Wait for the lock to be released naturally. (b) If the process holding the lock has genuinely crashed (check the CI pipeline or ask the team member), use terraform force-unlock with extreme caution. (c) NEVER force-unlock without confirming the lock holder is truly dead â€” you risk corrupting the state file. This locking mechanism is why remote state with DynamoDB is essential for team collaboration.</p></div>
+                </div>
+            </div>
+
+            <!-- Chapter 19 Visual Summary -->
+            <div class="visual-summary">
+                <h4>Chapter 19 Summary â€” Key Takeaways</h4>
+                <div class="vs-grid">
+                    <div class="vs-item"><span class="vs-icon">ðŸ—ï¸</span><span class="vs-label">IaC = Declarative Infra</span><span class="vs-detail">Terraform/Tofu: HCL files + plan/apply. State file is critical. Always use remote state.</span></div>
+                    <div class="vs-item"><span class="vs-icon">âœˆï¸</span><span class="vs-label">Crossplane = K8s-Native IaC</span><span class="vs-detail">CRDs for cloud resources. Continuous reconciliation. No separate state file. Self-service Claims.</span></div>
+                    <div class="vs-item"><span class="vs-icon">ðŸ”„</span><span class="vs-label">Drift Detection</span><span class="vs-detail">Crossplane continuously reverts manual changes. Terraform only detects drift on plan. Choose Crossplane for K8s platforms.</span></div>
+                    <div class="vs-item"><span class="vs-icon">ðŸ“‹</span><span class="vs-label">Claim â†’ XRD â†’ Composition â†’ MR</span><span class="vs-detail">Developer creates Claim. XRD defines API. Composition defines HOW. MR maps to cloud resource.</span></div>
+                    <div class="vs-item"><span class="vs-icon">â˜¸ï¸</span><span class="vs-label">CAPI = K8s Managing K8s</span><span class="vs-detail">Cluster CR defines desired cluster. CAPI controllers provision and reconcile. Rolling upgrades, zero downtime.</span></div>
+                    <div class="vs-item"><span class="vs-icon">ðŸ”‘</span><span class="vs-label">Terraform Bootstraps</span><span class="vs-detail">Use Terraform for the FIRST cluster. Crossplane and CAPI for everything after. K8s-native tools need a home.</span></div>
+                </div>
+            </div>
+
+        </div><div id="ch20">
             <div class="chapter-intro">
                 <h3>Chapter 20: The Kubernetes Operator Pattern</h3>
                 <p>CRDs (Chapter 18) extend the Kubernetes API with YOUR resource types. The Reconciliation Loop (Chapter 17) watches for changes and takes action. Combine them — and you get an <strong>Operator</strong>: a CRD that defines WHAT you want, plus a custom controller that MAKES IT HAPPEN. Operators are the heart of platform engineering on Kubernetes. They encode human operational knowledge — how to deploy, configure, upgrade, backup, and heal an application — into software that runs 24/7. Instead of a runbook saying "If X happens, run Y," an Operator watches for X and runs Y AUTOMATICALLY. This chapter covers the full Operator pattern: how they work, how to build them with popular SDKs, how to manage their lifecycle with OLM, and the best practices that make operators production-grade.</p>
