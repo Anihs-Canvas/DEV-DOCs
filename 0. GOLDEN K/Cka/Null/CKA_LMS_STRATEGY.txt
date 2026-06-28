@@ -1,0 +1,758 @@
+================================================================================
+  CKA LEARNING PLATFORM — STRATEGIC RECOMMENDATIONS
+================================================================================
+  Author: AI Analysis
+  Date:   2026-06-28
+  Context: cka.html → Monolith v2 → React Components → Django LMS
+================================================================================
+
+═══════════════════════════════════════════════════════════════════════════════
+  EXECUTIVE SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+Your roadmap is:
+
+  Phase 1  ➤  MONOLITHIC HTML v2    (Content Prototype)
+  Phase 2  ➤  REACT FRONTEND        (Interactive Study UI)
+  Phase 3  ➤  DJANGO LMS BACKEND    (Full Learning Management System)
+
+This document gives strategic guidance for each phase AND how they connect.
+
+The key insight: Design Phase 1's data structures to map 1:1 to Phase 3's
+Django models. Every hour you invest in clean content structure now saves
+10 hours of migration pain later.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  PHASE 1: MONOLITHIC HTML v2 — DESIGN FOR EXTRACTABILITY
+═══════════════════════════════════════════════════════════════════════════════
+
+Since this HTML file is "just ordinary data for the next stage," optimize it
+for PARSABILITY, not just human reading.
+
+─── 1A. CONTENT AS STRUCTURED JSON (NOT INLINE HTML) ────────────────────────
+
+Instead of baking content directly into <div> soup, store ALL chapter content
+as a single JavaScript object at the bottom of the HTML:
+
+  <script type="application/json" id="course-data">
+  {
+    "course": {
+      "id": "cka-v2",
+      "title": "CKA Complete Learning Guide",
+      "version": "2.0.0",
+      "totalHours": 50
+    },
+    "parts": [
+      {
+        "id": "part-01",
+        "number": 1,
+        "title": "Foundation",
+        "level": "beginner",
+        "ckaDomains": ["Cluster Architecture"],
+        "ckaWeight": 25,
+        "chapters": [
+          {
+            "id": "ch-01",
+            "number": 1,
+            "title": "What is Kubernetes?",
+            "duration": "~1.5 hours",
+            "level": "beginner",
+            "learningObjectives": [
+              "Understand the problems that existed before Kubernetes",
+              "Define Kubernetes in simple terms",
+              "Differentiate CKA vs CKAD scope"
+            ],
+            "sections": [
+              {
+                "id": "s1-1",
+                "title": "The Problem Before Kubernetes",
+                "type": "concept",
+                "content": "<h4>The Evolution of Deployment</h4><p>Software deployment has evolved...</p>",
+                "components": [
+                  {
+                    "type": "info-box",
+                    "variant": "note",
+                    "title": "Key Term: Container Orchestration",
+                    "body": "<p>Container orchestration is the automated management...</p>"
+                  },
+                  {
+                    "type": "code-block",
+                    "language": "yaml",
+                    "filename": "pod.yaml",
+                    "code": "apiVersion: v1\nkind: Pod\n..."
+                  },
+                  {
+                    "type": "diagram",
+                    "format": "ascii",
+                    "title": "Before vs After",
+                    "content": "┌──────────┐\n│  SERVER  │\n└──────────┘"
+                  }
+                ]
+              }
+            ],
+            "quiz": {
+              "id": "quiz-ch01",
+              "shuffle": true,
+              "questions": [
+                {
+                  "id": "q1",
+                  "text": "What component stores cluster state?",
+                  "options": [
+                    { "id": "a", "text": "kubelet" },
+                    { "id": "b", "text": "etcd", "correct": true },
+                    { "id": "c", "text": "kube-proxy" },
+                    { "id": "d", "text": "scheduler" }
+                  ],
+                  "explanation": "etcd is the distributed key-value store.",
+                  "domain": "Cluster Architecture",
+                  "difficulty": "easy"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "flashcards": [
+      {
+        "id": "fc-001",
+        "deck": "core-concepts",
+        "front": "What is etcd?",
+        "back": "A distributed, reliable key-value store that holds all Kubernetes cluster state.",
+        "chapter": "ch-03"
+      }
+    ]
+  }
+  </script>
+
+WHY THIS MATTERS:
+  ✅ React can consume this JSON directly in Phase 2 — zero HTML parsing
+  ✅ Django can load this via fixtures or management commands in Phase 3
+  ✅ Content is separated from presentation — single source of truth
+  ✅ You can write a validation script against the JSON schema
+  ✅ Easy to generate alternative output formats (PDF, EPUB, API responses)
+
+─── 1B. JAVASCRIPT AS STANDALONE MODULES ──────────────────────────────────────
+
+Write every interactive feature as an independent class/object that takes
+a DOM element as its mount point. This makes React extraction trivial:
+
+  // sidebar.js
+  class Sidebar {
+    constructor(containerEl, courseData) {
+      this.container = containerEl;
+      this.data = courseData;
+      this.render();
+    }
+    render() { /* builds sidebar-tree from courseData */ }
+    expandAll() { /* ... */ }
+    filter(query) { /* fuzzy search */ }
+  }
+
+  // quiz-engine.js
+  class QuizEngine {
+    constructor(containerEl, quizData) {
+      this.container = containerEl;
+      this.questions = quizData.questions;
+      this.score = 0;
+      this.render();
+    }
+    submitAnswer(questionId, answerId) { /* ... */ }
+    getResults() { /* ... */ }
+  }
+
+  // progress-tracker.js
+  class ProgressTracker {
+    constructor(storageKey) {
+      this.storage = new LocalStorageAdapter(storageKey);
+    }
+    markSectionComplete(partId, chapterId, sectionId) { /* ... */ }
+    getOverallProgress() { /* returns { completed, total, percentage } */ }
+    getResumePoint() { /* returns { partId, chapterId, sectionId } */ }
+  }
+
+Every class:
+  ✅ Has ONE responsibility
+  ✅ Takes data as input (doesn't hardcode content)
+  ✅ Exposes a clean public API
+  ✅ Stores state via an abstracted storage adapter
+  ✅ Can be lifted into React with minimal rewrites
+
+─── 1C. CSS AS DESIGN TOKENS ─────────────────────────────────────────────────
+
+Use CSS custom properties as your "design token" layer. When you move to React,
+these same tokens feed your CSS-in-JS or Tailwind config:
+
+  :root {
+    /* These exact values become your React theme object */
+    --color-bg-primary: #0d1117;
+    --color-bg-secondary: #161b22;
+    --color-accent: #326ce5;
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 16px;
+    --spacing-lg: 24px;
+    --spacing-xl: 40px;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 16px;
+    --font-size-code: 14px;
+    --font-size-body: 16px;
+    --font-size-h2: clamp(1.5rem, 4vw, 2.4rem);
+  }
+
+─── 1D. RECOMMENDED FILE STRUCTURE FOR PHASE 1 ───────────────────────────────
+
+  cka-v2/
+    index.html                  ← The monolithic output (loads everything)
+    course-data.json             ← ALL content as structured JSON
+    css/
+      tokens.css                 ← Design tokens (CSS custom properties)
+      base.css                   ← Reset + typography
+      layout.css                 ← Grid, sidebar, responsive
+      components.css             ← Cards, badges, code blocks, callouts
+      themes/
+        dark.css
+        light.css
+      print.css
+    js/
+      core/
+        storage.js               ← localStorage + IndexedDB adapter
+        event-bus.js             ← Simple pub/sub for decoupled modules
+        dom-utils.js             ← createElement, $, $$ helpers
+      modules/
+        sidebar.js               ← Sidebar class
+        search.js                ← Full-text search class
+        progress.js              ← Progress tracking class
+        quiz-engine.js           ← Quiz class
+        flashcards.js            ← Spaced repetition class
+        theme-toggle.js          ← Dark/light mode class
+        code-blocks.js           ← Copy button + syntax highlight class
+        keyboard.js              ← Keyboard shortcuts class
+        toc-renderer.js          ← Renders sidebar from course-data.json
+        content-renderer.js      ← Renders chapters from course-data.json
+      app.js                     ← Bootstrap: initializes all modules
+    build/
+      build.js                   ← Node.js: concatenates + inlines everything
+      validate.js                ← Validates course-data.json schema
+      package.json
+
+This structure gives you:
+  ✅ A working static site TODAY (just open index.html)
+  ✅ Clear separation of concerns
+  ✅ Every JS module is a candidate for React component conversion
+  ✅ course-data.json is the bridge to Django
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  PHASE 2: REACT FRONTEND — COMPONENT EXTRACTION
+═══════════════════════════════════════════════════════════════════════════════
+
+─── 2A. COMPONENT HIERARCHY ──────────────────────────────────────────────────
+
+  <App>
+    <AuthProvider>                          ← Later: JWT auth from Django
+      <ThemeProvider>                       ← Reads/writes localStorage
+        <Layout>
+          <Header>
+            <ThemeToggle />
+            <UserMenu />                    ← Later: login/user dropdown
+            <KeyboardShortcuts />
+          </Header>
+          <Sidebar>
+            <SidebarSearch />               ← Fuzzy filter
+            <SidebarTree />                 ← Hierarchical TOC
+            <ProgressRing />                ← SVG progress circle
+          </Sidebar>
+          <Main>
+            <ProgressBar />                 ← Sticky top bar
+            <Breadcrumbs />
+            <ChapterRenderer>               ← Reads from courseData
+              <ChapterHeader />
+              <LearningObjectives />
+              <SectionBlock>
+                <ContentComponents>
+                  <InfoBox variant="tip" />
+                  <CodeBlock language="yaml" />
+                  <Diagram ascii="..." />
+                  <CkaExamTip />
+                  <ComparisonTable />
+                  <EvolutionStrip />
+                </ContentComponents>
+              </SectionBlock>
+              <QuizEngine chapterId="ch-01" />
+            </ChapterRenderer>
+          </Main>
+        </Layout>
+        <SearchModal />                     ← Ctrl+K overlay
+        <FlashcardModal />                  ← Spaced repetition UI
+        <ExamSimulator />                   ← Timed exam mode
+      </ThemeProvider>
+    </AuthProvider>
+  </App>
+
+─── 2B. REACT PROJECT STRUCTURE ──────────────────────────────────────────────
+
+  cka-lms-frontend/
+    public/
+      course-data.json                     ← Copied from Phase 1 output
+    src/
+      components/
+        layout/
+          Header.tsx
+          Sidebar.tsx
+          Main.tsx
+          Footer.tsx
+        content/
+          ChapterRenderer.tsx
+          SectionBlock.tsx
+          InfoBox.tsx
+          CodeBlock.tsx
+          Diagram.tsx
+          CkaExamTip.tsx
+          ComparisonTable.tsx
+          EvolutionStrip.tsx
+        quiz/
+          QuizEngine.tsx
+          QuestionCard.tsx
+          ResultsSummary.tsx
+        flashcards/
+          FlashcardDeck.tsx
+          FlashcardCard.tsx
+          SRSControls.tsx              ← Again/Hard/Good/Easy buttons
+        search/
+          SearchModal.tsx
+          SearchResult.tsx
+        progress/
+          ProgressBar.tsx
+          ProgressRing.tsx
+        exam/
+          ExamSimulator.tsx
+          CountdownTimer.tsx
+          TaskPanel.tsx
+        common/
+          Badge.tsx
+          Button.tsx
+          Modal.tsx
+          Toast.tsx
+          Tooltip.tsx
+      hooks/
+        useCourseData.ts               ← Loads + caches course-data.json
+        useProgress.ts                 ← localStorage/API progress
+        useQuiz.ts                     ← Quiz state machine
+        useFlashcards.ts               ← SRS algorithm
+        useSearch.ts                   ← Full-text search
+        useTheme.ts                    ← Dark/light mode
+        useKeyboard.ts                 ← Shortcut bindings
+      context/
+        AuthContext.tsx
+        ThemeContext.tsx
+        ProgressContext.tsx
+      lib/
+        storage.ts                     ← Adapter (localStorage now, API later)
+        srs-algorithm.ts               ← SM-2 spaced repetition
+        search-index.ts                ← Builds search index from course data
+        content-renderer.ts            ← Converts JSON content → React elements
+      styles/
+        tokens.css                     ← Same tokens from Phase 1
+        global.css
+      App.tsx
+      main.tsx
+    package.json
+    vite.config.ts
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  PHASE 3: DJANGO LMS BACKEND — FULL PLATFORM
+═══════════════════════════════════════════════════════════════════════════════
+
+─── 3A. DJANGO DATA MODELS ───────────────────────────────────────────────────
+
+These models map DIRECTLY to the course-data.json structure from Phase 1.
+This is why Phase 1's JSON design is so critical.
+
+  # models/course.py
+  class Course(models.Model):
+      """A single course (e.g., 'CKA Complete Guide')"""
+      slug = models.SlugField(unique=True)
+      title = models.CharField(max_length=255)
+      description = models.TextField()
+      version = models.CharField(max_length=20)
+      total_hours = models.DecimalField(max_digits=4, decimal_places=1)
+      is_published = models.BooleanField(default=False)
+      created_at = models.DateTimeField(auto_now_add=True)
+      updated_at = models.DateTimeField(auto_now=True)
+
+
+  class Part(models.Model):
+      """A major section (e.g., 'Part 1: Foundation')"""
+      course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='parts')
+      number = models.PositiveSmallIntegerField()
+      title = models.CharField(max_length=255)
+      level = models.CharField(max_length=20, choices=[('beginner','Beginner'),('intermediate','Intermediate'),('advanced','Advanced')])
+      cka_domains = models.JSONField(default=list)       # ["Cluster Architecture"]
+      cka_weight = models.PositiveSmallIntegerField(default=0)  # 25
+      order = models.PositiveSmallIntegerField()
+
+      class Meta:
+          ordering = ['order']
+
+
+  class Chapter(models.Model):
+      """A single chapter within a part"""
+      part = models.ForeignKey(Part, on_delete=models.CASCADE, related_name='chapters')
+      number = models.PositiveSmallIntegerField()
+      title = models.CharField(max_length=500)
+      duration = models.CharField(max_length=50)          # "~1.5 hours"
+      level = models.CharField(max_length=20)
+      learning_objectives = models.JSONField(default=list)
+      order = models.PositiveSmallIntegerField()
+
+
+  class Section(models.Model):
+      """A content section within a chapter"""
+      chapter = models.ForeignKey(Chapter, on_delete=models.CASCADE, related_name='sections')
+      section_id = models.CharField(max_length=50)        # "s1-1"
+      title = models.CharField(max_length=500)
+      section_type = models.CharField(max_length=50)      # "concept", "comparison", "quiz", "lab"
+      content_html = models.TextField()                   # Rendered HTML
+      content_json = models.JSONField()                   # Structured components array
+      order = models.PositiveSmallIntegerField()
+
+
+  class ContentComponent(models.Model):
+      """A single UI component within a section (code block, diagram, info box, etc.)"""
+      section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='components')
+      component_type = models.CharField(max_length=50)    # "info-box", "code-block", "diagram"
+      variant = models.CharField(max_length=50, blank=True)  # "tip", "note", "warning"
+      title = models.CharField(max_length=500, blank=True)
+      body_html = models.TextField(blank=True)
+      code = models.TextField(blank=True)                 # For code blocks
+      language = models.CharField(max_length=50, blank=True)
+      filename = models.CharField(max_length=255, blank=True)
+      metadata = models.JSONField(default=dict)           # Any extra data
+      order = models.PositiveSmallIntegerField()
+
+
+  class Quiz(models.Model):
+      """A quiz attached to a chapter"""
+      chapter = models.OneToOneField(Chapter, on_delete=models.CASCADE, related_name='quiz')
+      shuffle = models.BooleanField(default=True)
+      passing_score = models.PositiveSmallIntegerField(default=70)
+
+
+  class Question(models.Model):
+      """A single quiz question"""
+      quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
+      text = models.TextField()
+      explanation = models.TextField(blank=True)
+      domain = models.CharField(max_length=100, blank=True)      # CKA domain
+      difficulty = models.CharField(max_length=20, choices=[('easy','Easy'),('medium','Medium'),('hard','Hard')])
+      order = models.PositiveSmallIntegerField(default=0)
+
+
+  class AnswerOption(models.Model):
+      """Multiple choice answer"""
+      question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='options')
+      text = models.TextField()
+      is_correct = models.BooleanField(default=False)
+      order = models.PositiveSmallIntegerField(default=0)
+
+  # models/flashcard.py
+  class FlashcardDeck(models.Model):
+      """A named collection of flashcards"""
+      course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='flashcard_decks')
+      name = models.CharField(max_length=255)              # "Core Concepts"
+      slug = models.SlugField()
+
+
+  class Flashcard(models.Model):
+      """A single flashcard"""
+      deck = models.ForeignKey(FlashcardDeck, on_delete=models.CASCADE, related_name='cards')
+      front = models.TextField()
+      back = models.TextField()
+      chapter = models.ForeignKey(Chapter, null=True, on_delete=models.SET_NULL)
+      order = models.PositiveSmallIntegerField(default=0)
+
+  # models/progress.py
+  class UserProgress(models.Model):
+      """Tracks which sections a user has completed"""
+      user = models.ForeignKey('auth.User', on_delete=models.CASCADE, related_name='progress')
+      section = models.ForeignKey(Section, on_delete=models.CASCADE)
+      completed = models.BooleanField(default=False)
+      completed_at = models.DateTimeField(null=True, blank=True)
+      time_spent_seconds = models.PositiveIntegerField(default=0)
+
+      class Meta:
+          unique_together = ['user', 'section']
+
+
+  class QuizAttempt(models.Model):
+      """Records a quiz attempt"""
+      user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+      quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE)
+      score = models.PositiveSmallIntegerField()            # e.g., 80
+      total = models.PositiveSmallIntegerField()            # e.g., 10
+      passed = models.BooleanField()
+      answers = models.JSONField()                          # {question_id: answer_id}
+      attempted_at = models.DateTimeField(auto_now_add=True)
+
+
+  class FlashcardReview(models.Model):
+      """Spaced repetition review history (SM-2 algorithm)"""
+      user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+      flashcard = models.ForeignKey(Flashcard, on_delete=models.CASCADE)
+      ease_factor = models.FloatField(default=2.5)
+      interval_days = models.PositiveSmallIntegerField(default=0)
+      repetitions = models.PositiveSmallIntegerField(default=0)
+      next_review_at = models.DateTimeField()
+      last_review_at = models.DateTimeField(null=True)
+      last_quality = models.PositiveSmallIntegerField(default=0)  # 0-5
+
+
+  class UserCourseEnrollment(models.Model):
+      """Tracks enrollment + overall course progress"""
+      user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+      course = models.ForeignKey(Course, on_delete=models.CASCADE)
+      enrolled_at = models.DateTimeField(auto_now_add=True)
+      completed_at = models.DateTimeField(null=True, blank=True)
+      last_accessed_at = models.DateTimeField(null=True)
+      last_section = models.ForeignKey(Section, null=True, on_delete=models.SET_NULL)
+
+      class Meta:
+          unique_together = ['user', 'course']
+
+─── 3B. DJANGO PROJECT STRUCTURE ─────────────────────────────────────────────
+
+  cka-lms/
+    manage.py
+    requirements.txt
+    config/
+      settings/
+        base.py
+        development.py
+        production.py
+      urls.py
+      wsgi.py
+      asgi.py
+    apps/
+      courses/                        ← Course, Part, Chapter, Section, ContentComponent
+        models/
+          course.py
+          content.py
+        admin.py
+        serializers.py                ← DRF serializers for REST API
+        views/
+          api_views.py                ← REST endpoints
+          page_views.py               ← Server-rendered pages (optional)
+        management/
+          commands/
+            import_course_data.py     ← Loads course-data.json into DB
+            validate_course_data.py   ← Validates JSON against expected schema
+      quizzes/                        ← Quiz, Question, AnswerOption
+        models.py
+        serializers.py
+        views.py
+      flashcards/                     ← FlashcardDeck, Flashcard, FlashcardReview
+        models.py
+        serializers.py
+        views.py
+        services/
+          srs.py                      ← SM-2 algorithm implementation
+      progress/                       ← UserProgress, QuizAttempt, UserCourseEnrollment
+        models.py
+        serializers.py
+        views.py
+      users/                          ← Custom user model (if needed)
+        models.py
+    api/
+      urls.py                         ← Aggregate all API routes
+    static/                           ← React build output (production)
+    media/                            ← User uploads (if any)
+
+─── 3C. REST API ENDPOINTS ────────────────────────────────────────────────────
+
+  # Content
+  GET    /api/courses/{slug}/                          ← Course detail + metadata
+  GET    /api/courses/{slug}/parts/                    ← All parts with chapters
+  GET    /api/courses/{slug}/chapters/{id}/            ← Chapter with sections + components
+  GET    /api/courses/{slug}/sections/{id}/            ← Single section detail
+
+  # Progress (authenticated)
+  GET    /api/progress/{course_slug}/                  ← User's progress summary
+  POST   /api/progress/sections/{id}/complete/         ← Mark section complete
+  POST   /api/progress/sections/{id}/time-spent/       ← Log time spent
+  GET    /api/progress/resume/                         ← Get resume point
+
+  # Quizzes
+  GET    /api/quizzes/{chapter_id}/                    ← Get quiz questions
+  POST   /api/quizzes/{quiz_id}/submit/                ← Submit answers → get score
+  GET    /api/quizzes/history/                         ← User's quiz history
+
+  # Flashcards
+  GET    /api/flashcards/decks/                        ← List available decks
+  GET    /api/flashcards/decks/{id}/due/               ← Cards due for review
+  POST   /api/flashcards/cards/{id}/review/            ← Submit review (quality 0-5)
+  GET    /api/flashcards/stats/                        ← SRS statistics
+
+  # Search
+  GET    /api/search/?q=etcd&domain=Cluster+Architecture   ← Full-text search
+
+  # Auth
+  POST   /api/auth/register/
+  POST   /api/auth/login/          ← Returns JWT token
+  POST   /api/auth/refresh/
+  POST   /api/auth/logout/
+
+─── 3D. CONTENT IMPORT STRATEGY ───────────────────────────────────────────────
+
+The `import_course_data` management command loads course-data.json directly:
+
+  # management/commands/import_course_data.py
+
+  python manage.py import_course_data course-data.json
+
+This command:
+  1. Reads the JSON file (same one from Phase 1/2)
+  2. Creates/updates Course, Part, Chapter, Section, ContentComponent records
+  3. Creates Quiz, Question, AnswerOption records
+  4. Creates FlashcardDeck, Flashcard records
+  5. Uses `update_or_create` so it's idempotent (safe to re-run)
+  6. Validates data integrity before committing
+  7. Reports: "Imported 11 parts, 40 chapters, 350+ sections, 400+ questions"
+
+This means the EXACT SAME course-data.json powers:
+  ✓ Phase 1: Static HTML (embedded in <script> tag)
+  ✓ Phase 2: React SPA (fetched from /public/ or API)
+  ✓ Phase 3: Django LMS (imported into database)
+
+─── 3E. RECOMMENDED TECH STACK ────────────────────────────────────────────────
+
+  Backend:
+    Django 5.x                        ← Web framework
+    Django REST Framework             ← REST API
+    django-cors-headers               ← CORS for React dev
+    django-filter                     ← API filtering
+    djangorestframework-simplejwt     ← JWT authentication
+    drf-spectacular                   ← OpenAPI/Swagger docs
+    django-allauth                    ← Social auth (Google, GitHub login)
+    PostgreSQL 16                     ← Database
+    Redis                             ← Caching + session store
+    Celery                            ← Background tasks (email, analytics)
+
+  Frontend:
+    React 19 + TypeScript
+    Vite                              ← Build tool
+    TanStack Router                   ← Type-safe routing
+    TanStack Query (React Query)      ← Server state management
+    Zustand                           ← Client state (lightweight)
+    Tailwind CSS v4                   ← Utility-first CSS
+    Radix UI                          ← Accessible primitives (modals, tooltips)
+    Monaco Editor                     ← Code editor (for exam simulator tasks)
+    Framer Motion                     ← Animations
+
+  DevOps:
+    Docker + docker-compose           ← Local dev
+    Nginx                             ← Static files + reverse proxy
+    GitHub Actions                    ← CI/CD
+
+─── 3F. MIGRATION FROM MONOLITH → LMS: STEP-BY-STEP ──────────────────────────
+
+  Week 1-2: Content Extraction
+    └─ Extract all content from cka.html into course-data.json
+    └─ Write validation script to verify completeness
+    └─ Set up Django project skeleton + content models
+
+  Week 3-4: Content Import + API
+    └─ Write import_course_data management command
+    └─ Build DRF serializers + API endpoints for content
+    └─ Set up React project with Vite
+    └─ Build Sidebar + ChapterRenderer components (read-only)
+
+  Week 5-6: Interactive Features
+    └─ Quiz engine (Django model + React component)
+    └─ Progress tracking (UserProgress model + API)
+    └─ Authentication (JWT + React context)
+    └─ Flashcard engine with SM-2 algorithm
+
+  Week 7-8: Advanced Features
+    └─ Full-text search (PostgreSQL trigram or Elasticsearch)
+    └─ Exam simulator with countdown timer
+    └─ User dashboard (progress charts, quiz history)
+    └─ Admin panel customization for content management
+
+  Week 9-10: Polish + Launch
+    └─ Responsive design audit
+    └─ Accessibility (WCAG AA)
+    └─ Performance optimization
+    └─ Documentation + deployment
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  CRITICAL RECOMMENDATIONS (TL;DR)
+═══════════════════════════════════════════════════════════════════════════════
+
+  1. ⭐ INVEST IN COURSE-DATA.JSON NOW
+     This single file is the bridge between all three phases.
+     Get its schema right and everything downstream becomes mechanical.
+     Spend 80% of your Phase 1 effort here, 20% on the HTML wrapper.
+
+  2. ⭐ WRITE EVERY JS MODULE AS A CLASS WITH A MOUNT POINT
+     class Sidebar { constructor(el, data) { ... } }
+     This makes React conversion a 15-minute refactor per module, not a rewrite.
+
+  3. ⭐ USE CSS CUSTOM PROPERTIES AS YOUR DESIGN TOKEN LAYER
+     They carry through unchanged from Phase 1 → Phase 2 → Phase 3.
+
+  4. ⭐ DON'T BUILD THE FULL LMS IN PHASE 1
+     The monolithic HTML is a CONTENT PROTOTYPE. Keep its JS simple.
+     The fancy features (auth, database, API) belong in Phase 3.
+
+  5. ⭐ DESIGN DJANGO MODELS TO MATCH COURSE-DATA.JSON 1:1
+     Every key in the JSON should have a corresponding model field.
+     This makes import/export trivial.
+
+  6. ⭐ USE update_or_create() FOR IDEMPOTENT IMPORTS
+     You'll re-import content many times during development.
+     Make sure it doesn't duplicate data.
+
+  7. ⭐ KEEP THE ORIGINAL cka.html AS CONTENT SOURCE OF TRUTH
+     Until the LMS is live with all features, the monolithic HTML
+     remains the authoritative version. Never delete it.
+
+  8. ⭐ PLAN FOR MULTI-COURSE FROM DAY ONE
+     Don't hardcode "CKA" into your models. Design for:
+     Course → Parts → Chapters. This lets you add CKAD, CKS, KCNA later.
+
+  9. ⭐ THE EXAM SIMULATOR IS YOUR KILLER FEATURE
+     Anyone can write a study guide. A timed, weighted, domain-tagged
+     exam simulator with "Are you ready?" prediction is what gets users
+     to pay for the platform.
+
+  10. ⭐ BUILD IN PUBLIC WITH FEATURE FLAGS
+      Use Django's contribution system or a feature flag library.
+      Ship the content browser first, add quizzes next, flashcards after.
+      Don't wait until everything is perfect.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  APPENDIX: QUICK COMPARISON — MONOLITH vs LMS
+═══════════════════════════════════════════════════════════════════════════════
+
+  FEATURE              MONOLITH (Phase 1)        LMS (Phase 3)
+  ─────────────────────────────────────────────────────────────────
+  Content storage      JSON in <script> tag      PostgreSQL via Django ORM
+  Content editing      Edit .json by hand        Django Admin panel
+  User accounts        None                      JWT auth + profiles
+  Progress tracking    localStorage (per device) Server-side (cross-device)
+  Quiz results         localStorage              Database (analytics)
+  Full-text search     Client-side JS            PostgreSQL FTS / Elasticsearch
+  Spaced repetition    localStorage              Database (persistent)
+  Course updates       Redeploy HTML file        Update DB records
+  Multiple courses     Copy entire HTML file     Add Course row in admin
+  Analytics            None                      Quiz scores, time spent, etc.
+  Collaboration        None                      Study groups, leaderboards
+  Offline use          ✅ Full offline            ⚠️ Needs service worker
+  Deployment           Static file (any CDN)     Docker + database
+  Cost                 Free (GitHub Pages)       Server + DB costs

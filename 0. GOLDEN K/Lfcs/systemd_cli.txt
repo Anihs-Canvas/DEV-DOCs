@@ -1,0 +1,1766 @@
+SYSTEMD CLI — COMPLETE SRE/PE REFERENCE
+================================================================================
+This document is the structural guide for systemd_cli.html.
+It covers systemctl, journalctl, and writing systemd unit files for
+Site Reliability Engineering (SRE) and Platform Engineering (PE) practitioners.
+All examples use production-grade services: kubelet, containerd, nginx,
+prometheus, sshd, and systemd-journald on a real Kubernetes worker node.
+
+SRE/PE DIRECTORY SKELETON
+--------------------------------------------------------------------------------
+This document models a realistic K8s worker node at /sre-platform running
+the full infrastructure stack an SRE/PE engineer manages daily. Every
+systemctl example, journalctl query, and unit file is grounded in real
+operational scenarios — not abstract "hello world" services.
+
+SERVICES IN SCOPE:
+  Tier 1 — K8s Core:     kubelet, containerd, kube-proxy
+  Tier 2 — Infra:         nginx, sshd, haproxy, firewalld, chronyd
+  Tier 3 — Observability: prometheus, node_exporter, grafana, fluent-bit, otelcol
+  Tier 4 — Platform Ops:  systemd-journald, systemd-resolved, systemd-timesyncd
+
+PROJECT ROOT: /sre-platform
+─────────────────────────────────────────────────────────────────
+A realistic SRE/PE (Platform Engineering) node running a Kubernetes
+worker with core infrastructure services. All examples demonstrate
+real-world systemctl/journalctl usage against these services.
+
+INFRASTRUCTURE OVERVIEW
+─────────────────────────────────────────────────────────────────
+This project simulates a production K8s worker node running:
+  ┌──────────────────────────────────────────────────────────┐
+  │                  /sre-platform (Node)                     │
+  │                                                          │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
+  │  │ KUBELET   │  │CONTAINERD│  │  NGINX   │  │PROMETHEUS│ │
+  │  │ K8s agent │  │ Runtime  │  │ Reverse  │  │ Metrics  │ │
+  │  │ :10250    │  │ :grpc    │  │ :80/:443 │  │ :9090    │ │
+  │  └─────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬────┘ │
+  │        │              │             │              │      │
+  │  ┌─────┴──────────────┴─────────────┴──────────────┴────┐ │
+  │  │              SYSTEMD (PID 1) — Unit Manager           │ │
+  │  │         systemctl + journalctl + systemd-analyze      │ │
+  │  └──────────────────────────────────────────────────────┘ │
+  │                                                          │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────────┐│
+  │  │   SSHD   │  │JOURNALD  │  │   Platform Ops Tooling   ││
+  │  │ Remote   │  │ Logging  │  │   scripts, timers, conf  ││
+  │  │ :22      │  │ /run/log │  │   backups, healthchecks  ││
+  │  └──────────┘  └──────────┘  └──────────────────────────┘│
+  └──────────────────────────────────────────────────────────┘
+
+sre-platform/
+│
+├── 📁 k8s-node/                        # Kubernetes node components
+│   ├── 📄 kubelet.env                  # Kubelet environment (--node-ip, --hostname-override)
+│   ├── 📄 kubelet-config.yaml          # KubeletConfiguration (maxPods, evictionHard, etc.)
+│   ├── 📄 containerd-config.toml       # Containerd runtime config (runc, cni, mirrors)
+│   ├── 📄 kube-proxy-config.yaml       # kube-proxy mode (iptables/IPVS), conntrack
+│   ├── 📄 10-cni.conflist              # CNI network configuration
+│   ├── 📄 crictl.yaml                  # crictl runtime endpoint config
+│   └── 📁 static-pods/                 # Static pod manifests (watched by kubelet)
+│       ├── 📄 nginx-static-pod.yaml
+│       └── 📄 etcd-static-pod.yaml
+│
+├── 📁 systemd-units/                   # ⭐ Systemd unit files (THE CORE OF THIS DOC)
+│   │
+│   ├── 📁 core/                        # Tier 1 — MUST run for K8s to function
+│   │   ├── 📄 kubelet.service          # K8s node agent (talks to API server)
+│   │   ├── 📄 kubelet.service.d/       # Drop-in override directory
+│   │   │   └── 📄 10-node-labels.conf  # --node-labels override via drop-in
+│   │   ├── 📄 containerd.service       # Container runtime (runs all pods)
+│   │   ├── 📄 kube-proxy.service       # Network proxy & load balancer
+│   │   └── 📄 node.target              # Target unit: all K8s node services
+│   │
+│   ├── 📁 infra/                       # Tier 2 — Infrastructure services
+│   │   ├── 📄 nginx.service            # Reverse proxy / ingress controller
+│   │   ├── 📄 nginx.service.d/
+│   │   │   └── 📄 20-ulimit.conf       # LimitNOFILE=65536 via drop-in
+│   │   ├── 📄 nginx.socket             # Socket-activated Nginx (lazy start)
+│   │   ├── 📄 sshd.service             # SSH daemon
+│   │   ├── 📄 sshd.socket              # Socket-activated SSH (port 22)
+│   │   ├── 📄 haproxy.service          # Alternative load balancer
+│   │   ├── 📄 firewalld.service        # Dynamic firewall
+│   │   └── 📄 chronyd.service          # NTP time sync (cert validity!)
+│   │
+│   ├── 📁 observability/               # Tier 3 — Monitoring & logging stack
+│   │   ├── 📄 prometheus.service       # Metrics collection & TSDB
+│   │   ├── 📄 prometheus.service.d/
+│   │   │   └── 📄 30-retention.conf    # --storage.tsdb.retention.time=30d
+│   │   ├── 📄 node_exporter.service    # Node-level metrics (CPU/mem/disk/net)
+│   │   ├── 📄 grafana-server.service   # Dashboard server
+│   │   ├── 📄 fluent-bit.service       # Log forwarder (→ Loki/Elastic)
+│   │   ├── 📄 otelcol.service          # OpenTelemetry Collector
+│   │   └── 📄 alertmanager.service     # Alert routing & grouping
+│   │
+│   ├── 📁 timers/                      # Systemd timers (cron replacement)
+│   │   ├── 📄 k8s-snapshot.timer       # Daily etcd/k8s snapshot @ 02:00
+│   │   ├── 📄 k8s-snapshot.service     # ExecStart=/sre-platform/scripts/etcd-snapshot.sh
+│   │   ├── 📄 logrotate.timer          # Hourly log rotation
+│   │   ├── 📄 logrotate.service
+│   │   ├── 📄 cert-check.timer         # Weekly TLS cert expiry check
+│   │   ├── 📄 cert-check.service
+│   │   ├── 📄 disk-cleanup.timer       # Daily prune old images/containers
+│   │   └── 📄 disk-cleanup.service
+│   │
+│   └── 📁 targets/                     # Systemd targets (runlevel groups)
+│       ├── 📄 sre-bootstrap.target      # First-boot provisioning
+│       ├── 📄 sre-production.target    # Full production stack
+│       └── 📄 sre-maintenance.target   # Maintenance mode (kubelet off)
+│
+├── 📁 scripts/                         # SRE operational scripts
+│   ├── 📄 node-health.sh               # Full node health check (all services)
+│   ├── 📄 kubelet-diag.sh              # Kubelet logs, config, static pod check
+│   ├── 📄 containerd-diag.sh           # Containerd: ctr list, image GC, snapshots
+│   ├── 📄 nginx-reload.sh              # Safe nginx config test + reload
+│   ├── 📄 etcd-snapshot.sh             # ETCD snapshot + S3 upload
+│   ├── 📄 disk-prune.sh                # Remove unused images, exited containers
+│   ├── 📄 cert-expiry.sh               # Check all TLS cert expiry dates
+│   ├── 📄 service-recovery.sh          # Auto-restart failed services, notify
+│   ├── 📄 journal-export.sh            # Export journal to remote syslog
+│   └── 📄 incident-response.sh         # INCIDENT: gather state, tarball, ship
+│
+├── 📁 configs/                         # Configuration files
+│   ├── 📄 journald.conf                # /etc/systemd/journald.conf (rate limits, retention)
+│   ├── 📄 resolved.conf                # /etc/systemd/resolved.conf (DNS, DNSSEC)
+│   ├── 📄 timesyncd.conf               # /etc/systemd/timesyncd.conf (NTP servers)
+│   ├── 📄 logind.conf                  # /etc/systemd/logind.conf (lid switch, sessions)
+│   ├── 📄 system.conf                  # /etc/systemd/system.conf (manager tunables)
+│   ├── 📄 nginx.conf                   # Nginx main config
+│   ├── 📁 nginx-conf.d/                # Nginx site configs
+│   │   ├── 📄 sre-api.conf             # API reverse proxy
+│   │   └── 📄 sre-status.conf          # /nginx_status stub
+│   ├── 📄 sshd_config                  # SSH daemon config (port, ciphers, banners)
+│   ├── 📁 prometheus/                  # Prometheus config directory
+│   │   ├── 📄 prometheus.yml           # Scrape configs, rules
+│   │   └── 📁 rules/                   # Alerting & recording rules
+│   │       ├── 📄 node-rules.yml
+│   │       └── 📄 k8s-rules.yml
+│   └── 📁 grafana/                     # Grafana provisioning
+│       ├── 📁 dashboards/
+│       │   ├── 📄 node-overview.json
+│       │   └── 📄 k8s-pod-metrics.json
+│       └── 📁 datasources/
+│           └── 📄 prometheus-ds.yaml
+│
+├── 📁 logs/                            # Local log staging (before forwarding)
+│   ├── 📄 kubelet.log                  # Kubelet logs (journald → file export)
+│   ├── 📄 containerd.log               # Containerd logs
+│   ├── 📄 nginx-access.log             # Nginx access log
+│   ├── 📄 nginx-error.log              # Nginx error log
+│   ├── 📄 prometheus.log               # Prometheus startup log
+│   ├── 📄 sshd.log                     # SSH auth attempts
+│   └── 📁 archived/                    # Rotated & compressed logs
+│       ├── 📄 kubelet-2026-06-01.log.gz
+│       └── 📄 nginx-access-2026-06-01.log.gz
+│
+├── 📁 backups/                         # Backup artifacts
+│   ├── 📄 etcd-snapshot-20260610.db    # ETCD snapshot
+│   ├── 📄 systemd-units-backup.tar.gz  # All unit files backup
+│   └── 📄 configs-backup.tar.gz        # All configs backup
+│
+├── 📁 k8s-manifests/                   # Kubernetes manifests (this node's workloads)
+│   ├── 📁 production/
+│   │   ├── 📄 nginx-deployment.yaml    # Nginx ingress deployment
+│   │   ├── 📄 nginx-configmap.yaml     # Nginx config as ConfigMap
+│   │   ├── 📄 prometheus-deployment.yaml
+│   │   └── 📄 grafana-deployment.yaml
+│   └── 📁 network-policies/
+│       ├── 📄 deny-all-default.yaml
+│       ├── 📄 allow-kubelet-api.yaml
+│       └── 📄 allow-monitoring.yaml
+│
+├── 📁 docker/
+│   ├── 📄 Dockerfile.nginx             # Custom Nginx image
+│   ├── 📄 Dockerfile.prometheus        # Custom Prometheus image
+│   ├── 📄 docker-compose-sre.yml       # Local SRE stack for testing
+│   └── 📄 .dockerignore
+│
+├── 📄 Makefile                         # make {status|restart|logs|diag|backup}
+├── 📄 .gitignore
+└── 📄 README.md                        # Node runbook & onboarding guide
+
+
+================================================================================
+SECTION 1: SYSTEMCTL — SERVICE MANAGEMENT
+================================================================================
+
+systemctl
+---------
+Control the systemd system and service manager.
+
+Synopsis
+systemctl is the central management tool for controlling the systemd system
+and service manager. It is used to introspect and control the state of the
+systemd system, manage system services (both at runtime and persistently),
+manage system states (poweroff, reboot, etc), and inspect the system state.
+
+For the SRE platform, systemctl manages the K8s node stack:
+kubelet (node agent), containerd (runtime), kube-proxy (networking),
+nginx (reverse proxy), prometheus (monitoring), sshd (remote access),
+and periodic timers (etcd snapshots, cert checks, disk cleanup).
+
+SYNTAX:
+  systemctl [OPTIONS...] COMMAND [UNIT...]
+
+COMMANDS OVERVIEW:
+  systemctl start UNIT...          # Start (activate) one or more units
+  systemctl stop UNIT...           # Stop (deactivate) one or more units
+  systemctl restart UNIT...        # Restart one or more units
+  systemctl reload UNIT...         # Reload configuration
+  systemctl status UNIT...         # Show runtime status
+  systemctl enable UNIT...         # Enable unit to start at boot
+  systemctl disable UNIT...        # Disable unit from starting at boot
+  systemctl is-enabled UNIT...     # Check if unit is enabled
+  systemctl is-active UNIT...      # Check if unit is active (running)
+  systemctl is-failed UNIT...      # Check if unit is in failed state
+  systemctl list-units             # List loaded units
+  systemctl list-unit-files        # List installed unit files
+  systemctl daemon-reload          # Reload systemd configuration
+  systemctl show UNIT...           # Show properties of unit(s)
+  systemctl cat UNIT...            # Show unit file(s) and overrides
+  systemctl edit UNIT...           # Edit unit drop-in override
+  systemctl mask UNIT...           # Mask unit (symlink to /dev/null)
+  systemctl unmask UNIT...         # Unmask unit
+  systemctl kill UNIT...           # Send signal to processes
+  systemctl clean UNIT...          # Clean runtime data
+
+STATUS VALUES:
+  active (running)     — Unit is active and running
+  active (exited)      — One-shot service completed successfully
+  active (waiting)     — Unit is running, waiting for an event
+  inactive (dead)      — Unit is not running
+  activating (start)   — Unit is in the process of starting
+  deactivating (stop)  — Unit is in the process of stopping
+  failed               — Unit encountered an error and failed
+
+
+systemctl start
+---------------
+Start (activate) one or more units.
+
+Synopsis
+Start a systemd unit. If the unit is already active, this is a no-op.
+Units can be services (.service), sockets (.socket), timers (.timer),
+or targets (.target). The .service extension is assumed if omitted.
+
+SYNTAX:
+  systemctl start UNIT...
+
+Examples:
+  systemctl start nginx
+  systemctl start kubelet.service containerd.service
+  systemctl start sre-production.target
+
+
+systemctl stop
+--------------
+Stop (deactivate) one or more units.
+
+Synopsis
+Stop a running unit. If the unit is not running, this is a no-op.
+Stopping a service sends the configured kill signal (SIGTERM by default).
+
+SYNTAX:
+  systemctl stop UNIT...
+
+Examples:
+  systemctl stop kubelet
+  systemctl stop containerd kube-proxy
+
+
+systemctl restart
+-----------------
+Stop and then start one or more units.
+
+Synopsis
+Restart a running unit. If the unit is not running, it will be started.
+This is equivalent to "stop" followed by "start" but is handled atomically.
+
+SYNTAX:
+  systemctl restart UNIT...
+
+Examples:
+  systemctl restart nginx
+  systemctl restart kubelet
+
+
+systemctl reload
+----------------
+Reload the configuration of a unit without restarting it.
+
+Synopsis
+Asks the service to reload its configuration. The service must support
+the ExecReload= directive in its unit file. If ExecReload is not defined,
+the reload request is ignored. This is the preferred way to apply config
+changes without dropping connections.
+
+SYNTAX:
+  systemctl reload UNIT...
+
+Examples:
+  systemctl reload nginx          # Graceful config reload
+  systemctl reload nginx          # Graceful config reload (no dropped connections)
+
+
+systemctl reload-or-restart
+----------------------------
+Reload configuration if the unit supports it, otherwise restart.
+
+This is the safest "apply config" command. If ExecReload is defined,
+it reloads; otherwise it falls back to a full restart.
+
+SYNTAX:
+  systemctl reload-or-restart UNIT...
+
+Examples:
+  systemctl reload-or-restart nginx
+
+
+systemctl status
+----------------
+Show the runtime status of one or more units.
+
+Synopsis
+Displays: unit name, description, loaded/enabled state, active state,
+PID, start time, recent log lines, and resource usage. This is the
+primary diagnostic command for any systemd service.
+
+SYNTAX:
+  systemctl status UNIT...
+
+Examples:
+  systemctl status kubelet
+  systemctl status containerd kube-proxy
+
+
+systemctl enable / disable
+---------------------------
+Enable units to start at boot, or disable automatic startup.
+
+SYNTAX:
+  systemctl enable UNIT...
+  systemctl disable UNIT...
+  systemctl enable --now UNIT...    # Enable AND start immediately
+  systemctl disable --now UNIT...   # Disable AND stop immediately
+
+Examples:
+  systemctl enable nginx
+  systemctl enable --now kubelet containerd
+  systemctl disable old-service
+
+
+systemctl list-units
+--------------------
+List all loaded units.
+
+SYNTAX:
+  systemctl list-units [PATTERN...]
+  systemctl list-units --type=service
+  systemctl list-units --state=failed
+  systemctl list-units --all          # Include inactive units
+
+Examples:
+  systemctl list-units --type=service
+  systemctl list-units --state=failed
+  systemctl list-units 'kubelet*'
+
+
+systemctl daemon-reload
+-----------------------
+Reload the systemd manager configuration.
+
+This must be run after creating, modifying, or deleting unit files.
+It makes systemd aware of the changes. Does NOT restart any services.
+
+SYNTAX:
+  systemctl daemon-reload
+
+Examples:
+  cp kubelet.service /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl start kubelet
+
+
+systemctl show / cat / edit
+------------------------------
+Inspect and modify unit configuration.
+
+SYNTAX:
+  systemctl show UNIT             # All properties (key=value)
+  systemctl show UNIT -p Property  # Specific property
+  systemctl cat UNIT               # Show unit file + overrides
+  systemctl edit UNIT              # Create/edit drop-in override
+
+Examples:
+  systemctl show kubelet | grep ExecStart
+  systemctl cat nginx
+  systemctl edit kubelet
+
+
+systemctl mask / unmask
+-----------------------
+Mask a unit (prevent ANY start) or unmask it.
+
+SYNTAX:
+  systemctl mask UNIT
+  systemctl unmask UNIT
+
+Examples:
+  systemctl mask NetworkManager    # Prevent starting
+  systemctl unmask NetworkManager
+
+
+systemctl kill
+--------------
+Send a signal to one or more processes of a unit.
+
+SYNTAX:
+  systemctl kill UNIT...
+  systemctl kill -s SIGNAL UNIT...  # Specific signal (HUP, TERM, KILL, etc.)
+
+Examples:
+  systemctl kill -s HUP nginx       # Graceful config reload
+  systemctl kill -s TERM kubelet     # Force stop (drains before exit)
+
+
+================================================================================
+SECTION 2: JOURNALCTL — LOG VIEWING AND ANALYSIS
+================================================================================
+
+journalctl
+----------
+Query the systemd journal — the centralized logging system.
+
+Synopsis
+journalctl is the primary tool for viewing and filtering logs collected
+by systemd-journald. It provides timestamped, structured log entries from
+the kernel, services, and applications. Supports filtering by service,
+time range, priority, boot session, and more.
+
+For the SRE platform, journalctl is used to:
+- Monitor kubelet and containerd service logs (node health, pod lifecycle)
+- Debug container runtime failures and image pull errors
+- Track timer job execution (etcd snapshots, cert checks, disk cleanup)
+- Analyze kernel OOM events (kubelet killed by memory pressure)
+- Investigate SSH brute-force attempts and firewall blocks
+
+SYNTAX:
+  journalctl [OPTIONS...] [MATCHES...]
+
+
+journalctl — Basic Viewing
+----------------------------
+SYNTAX:
+  journalctl                     # All logs (oldest first)
+  journalctl -r                  # Reverse: newest first
+  journalctl -e                  # Jump to end of journal
+  journalctl -f                  # Follow: live tail
+  journalctl -n 50               # Last 50 lines
+  journalctl -n 50 -f            # Last 50 + follow
+
+Examples:
+  journalctl -f -n 20
+  journalctl -r
+
+
+journalctl — Service Filtering
+-------------------------------
+SYNTAX:
+  journalctl -u UNIT             # Logs for a specific unit
+  journalctl -u UNIT -f          # Follow a unit's logs
+  journalctl -u UNIT1 -u UNIT2   # Multiple units
+  journalctl _SYSTEMD_UNIT=UNIT  # Alternative filter syntax
+
+Examples:
+  journalctl -u kubelet -f
+  journalctl -u kubelet -u containerd -n 100
+  journalctl -u nginx --since today
+
+
+journalctl — Time Filtering
+-----------------------------
+SYNTAX:
+  journalctl --since "DATE"       # Logs since a point in time
+  journalctl --until "DATE"       # Logs until a point in time
+  journalctl --since "1 hour ago"
+  journalctl --since "2026-06-06 09:00:00"
+  journalctl --since today
+  journalctl --since yesterday --until today
+  journalctl -S "2026-06-01" -U "2026-06-06"
+
+Examples:
+  journalctl -u kubelet --since "1 hour ago"
+  journalctl --since today --until "23:59"
+  journalctl -S "2026-06-06 08:00:00" -U "2026-06-06 12:00:00"
+
+
+journalctl — Boot Filtering
+-----------------------------
+SYNTAX:
+  journalctl -b                  # Current boot
+  journalctl -b -1               # Previous boot
+  journalctl -b -2               # Boot before previous
+  journalctl --list-boots        # List all boots
+  journalctl -b 0                # Current boot (boot ID)
+
+Examples:
+  journalctl -b -1               # Why did the last boot fail?
+  journalctl --list-boots
+  journalctl -b -1 -u kubelet   # Kubelet logs from previous boot
+
+
+journalctl — Priority/Error Filtering
+---------------------------------------
+SYNTAX:
+  journalctl -p PRIORITY         # Filter by syslog priority
+  journalctl -p 3                # Priority 3 (err) and above
+  journalctl -p err              # Same as -p 3
+  journalctl -p warning          # -p 4: warning and above
+  journalctl -p emerg..err       # Range: emerg (0) to err (3)
+
+PRIORITY LEVELS:
+  0  emerg     System is unusable
+  1  alert     Action must be taken immediately
+  2  crit      Critical conditions
+  3  err       Error conditions
+  4  warning   Warning conditions
+  5  notice    Normal but significant
+  6  info      Informational
+  7  debug     Debug-level messages
+
+Examples:
+  journalctl -p err              # Errors and worse
+  journalctl -u kubelet -p warning
+  journalctl -b -p crit
+
+
+journalctl — Kernel Messages
+------------------------------
+SYNTAX:
+  journalctl -k                  # Kernel messages (dmesg equivalent)
+  journalctl -k -b               # Kernel messages for current boot
+  journalctl -k -b -1            # Previous boot kernel messages
+  journalctl -k --since today
+  journalctl -k -p err
+
+Examples:
+  journalctl -k --since today
+  journalctl -k -b               # Check OOM events at boot
+
+
+journalctl — Output Formats
+-----------------------------
+SYNTAX:
+  journalctl -o FORMAT
+  journalctl --output=FORMAT
+
+FORMATS:
+  short          Default: syslog-like
+  short-full     Timestamps with full timezone
+  short-iso      ISO 8601 timestamps
+  short-precise  Microsecond timestamps
+  verbose        Full structured fields
+  json           JSON (one object per line)
+  json-pretty    Pretty-printed JSON
+  json-sse       Server-Sent Events format
+  cat            Just the message text (no metadata)
+  export         Binary export for archiving
+
+Examples:
+  journalctl -u kubelet -o json-pretty | head -50
+  journalctl -o short-iso --since "1 hour ago"
+  journalctl -u nginx -o cat
+
+
+journalctl — Advanced Filtering
+---------------------------------
+SYNTAX:
+  journalctl _UID=1000            # By user ID
+  journalctl _PID=1234            # By process ID
+  journalctl _GID=1000            # By group ID
+  journalctl _COMM=nginx          # By command/executable name
+  journalctl _EXE=/usr/sbin/nginx # By executable path
+  journalctl _TRANSPORT=stdout    # By transport (stdout, syslog, kernel, etc.)
+  journalctl --grep=PATTERN       # Grep through message text (Perl regex)
+  journalctl --case-sensitive     # Case-sensitive grep
+
+Examples:
+  journalctl _COMM=kubelet
+  journalctl --grep="OOM killer"
+  journalctl -u kubelet --grep="ERROR|CRITICAL"
+
+
+journalctl — Disk Usage and Maintenance
+-----------------------------------------
+SYNTAX:
+  journalctl --disk-usage         # Show disk space used by journal
+  journalctl --vacuum-size=500M   # Keep only 500MB
+  journalctl --vacuum-time=7d     # Keep 7 days of logs
+  journalctl --vacuum-size=1G --vacuum-time=30d
+  journalctl --rotate             # Rotate journal files
+  journalctl --flush              # Flush journal from /run to /var
+  journalctl --sync               # Sync unwritten entries to disk
+  journalctl --header             # Show journal header info
+
+Examples:
+  journalctl --disk-usage
+  journalctl --vacuum-size=500M
+  journalctl --vacuum-time=7d
+
+
+================================================================================
+SECTION 3: WRITING SYSTEMD UNIT FILES
+================================================================================
+
+Unit File Fundamentals
+-----------------------
+Systemd unit files define how services, sockets, timers, and other
+resources are managed. They are plain-text INI-style configuration
+files placed in specific directories.
+
+UNIT FILE LOCATIONS:
+  /usr/lib/systemd/system/     # Distribution-provided units (DO NOT EDIT)
+  /etc/systemd/system/         # Administrator-managed units (EDIT HERE)
+  /run/systemd/system/         # Runtime units (volatile)
+  /etc/systemd/system/UNIT.d/  # Drop-in overrides
+
+PRIORITY (highest to lowest):
+  /etc/systemd/system/UNIT.d/*.conf  (drop-in overrides)
+  /etc/systemd/system/UNIT
+  /run/systemd/system/UNIT
+  /usr/lib/systemd/system/UNIT
+
+After creating/modifying a unit file, always run:
+  systemctl daemon-reload
+
+
+Unit File Structure — Sections
+--------------------------------
+Every unit file has [Unit], [Service] (or [Socket], [Timer], etc.),
+and [Install] sections.
+
+[Unit] — Unit metadata and dependencies
+  Description=       Human-readable description
+  Documentation=     URLs to documentation
+  Requires=          Hard dependencies (unit fails if these fail)
+  Wants=             Soft dependencies (started alongside)
+  After=             Ordering: start AFTER these units
+  Before=            Ordering: start BEFORE these units
+  BindsTo=           Strong binding (stops if bound unit stops)
+  PartOf=            Part of a larger unit (restart/stop propagates)
+  Conflicts=         Mutually exclusive units
+  Condition*=        Conditions that must be true for unit to start
+  Assert*=           Assertions (fail unit if not true)
+
+[Service] — Service-specific configuration
+  Type=               Service startup type (simple, forking, oneshot, dbus, notify, idle)
+  ExecStart=          Command to start the service
+  ExecStartPre=       Commands run BEFORE ExecStart
+  ExecStartPost=      Commands run AFTER ExecStart
+  ExecReload=         Command to reload configuration
+  ExecStop=           Command to stop the service
+  ExecStopPost=       Commands run AFTER service stops
+  Restart=            Restart policy (no, on-success, on-failure, on-abnormal, always)
+  RestartSec=         Time to wait before restarting
+  TimeoutStartSec=    Timeout for startup
+  TimeoutStopSec=     Timeout for graceful stop
+  User=               Run service as this user
+  Group=              Run service as this group
+  WorkingDirectory=   Working directory for Exec* commands
+  Environment=        Set environment variable
+  EnvironmentFile=    Load environment from file
+  StandardOutput=     Redirect stdout (journal, syslog, file:/path, null)
+  StandardError=      Redirect stderr
+  SyslogIdentifier=   Identifier in syslog/journal
+  PIDFile=            PID file path (for Type=forking)
+  PrivateTmp=         Use private /tmp namespace
+  ProtectSystem=      Mount /usr, /boot read-only (yes, full, strict)
+  ProtectHome=        Protect /home (yes, read-only, tmpfs)
+  NoNewPrivileges=    Prevent privilege escalation
+  ReadOnlyPaths=      Paths mounted read-only
+  ReadWritePaths=     Paths mounted read-write
+  LimitNOFILE=        File descriptor limit
+  LimitNPROC=         Process limit
+  MemoryLimit=        Memory limit (now MemoryMax=)
+  CPUQuota=           CPU quota percentage
+
+[Install] — Installation configuration (enable/disable)
+  WantedBy=           Target(s) that "want" this unit (typically multi-user.target)
+  RequiredBy=         Target(s) that require this unit
+  Alias=              Alternative names for the unit
+  Also=               Additional units to enable/disable together
+
+
+Service Types
+--------------
+Type=simple    (Default) Systemd considers the service started immediately.
+               ExecStart is the main process. Don't fork.
+
+Type=forking   Service forks a child process. Parent exits after startup.
+               Must specify PIDFile=. Used for traditional daemons.
+
+Type=oneshot   Short-lived process. Systemd waits for it to exit before
+               continuing. Use RemainAfterExit=yes to consider active.
+
+Type=notify    Service sends a readiness signal via sd_notify().
+               Most modern services support this.
+
+Type=dbus      Service registers on D-Bus. Systemd waits for the bus name.
+
+Type=idle      Like simple, but delayed until all jobs are dispatched.
+               Useful for avoiding console output interleaving.
+
+
+Restart Policies
+-----------------
+Restart=no              Never restart (default)
+Restart=on-success      Restart only on clean exit (exit code 0)
+Restart=on-failure      Restart on unclean exit, signal, or timeout
+Restart=on-abnormal     Restart on signal or timeout (not clean exit)
+Restart=on-watchdog     Restart on watchdog timeout
+Restart=always          Always restart (even on clean exit)
+
+Use Restart=on-failure with RestartSec=5s for production services.
+
+
+Example 1: Kubelet Service (K8s Node Agent)
+------------------------------------
+# /etc/systemd/system/kubelet.service
+# Kubernetes node agent — registers node, runs pods
+
+[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/
+After=network.target network-online.target
+Wants=network-online.target
+Requires=containerd.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/kubelet \
+    --config=/sre-platform/k8s-node/kubelet-config.yaml \
+    --container-runtime-endpoint=unix:///run/containerd/containerd.sock \
+    --node-ip=192.168.10.10 \
+    --hostname-override=sre-node-01 \
+    --register-node=true \
+    --max-pods=110 \
+    --eviction-hard=memory.available<500Mi,nodefs.available<10%
+Restart=always
+RestartSec=10s
+TimeoutStopSec=60s
+KillMode=process
+OOMScoreAdjust=-999
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/kubelet /var/log/pods /var/log/containers
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target
+
+
+Example 2: Nginx Socket Activation
+---------------------------------------
+# /etc/systemd/system/nginx.socket
+# Socket-activated Nginx — starts on first HTTP connection
+
+[Unit]
+Description=Nginx socket for SRE platform
+
+[Socket]
+ListenStream=80
+ListenStream=443
+Backlog=4096
+NoDelay=true
+ReusePort=true
+
+[Install]
+WantedBy=sockets.target
+
+
+Example 3: Containerd Service (Container Runtime)
+----------------------------------
+# /etc/systemd/system/containerd.service
+# Container runtime for Kubernetes — runs all pods
+
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target
+PartOf=sre-production.target
+
+[Service]
+Type=notify
+ExecStartPre=/sbin/modprobe overlay
+ExecStart=/usr/bin/containerd \
+    --config /sre-platform/k8s-node/containerd-config.toml
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+OOMScoreAdjust=-999
+
+[Install]
+WantedBy=multi-user.target
+
+
+Example 4: Prometheus Service (Metrics Collection)
+--------------------------------
+# /etc/systemd/system/prometheus.service
+# Metrics collection & TSDB for SRE platform observability
+
+[Unit]
+Description=Prometheus monitoring
+Documentation=https://prometheus.io/docs/
+After=network.target
+PartOf=sre-production.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+WorkingDirectory=/var/lib/prometheus
+ExecStart=/usr/bin/prometheus \
+    --config.file=/sre-platform/configs/prometheus/prometheus.yml \
+    --storage.tsdb.path=/var/lib/prometheus \
+    --storage.tsdb.retention.time=30d \
+    --web.listen-address=:9090 \
+    --web.enable-lifecycle
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=10s
+TimeoutStopSec=30s
+
+# Security
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/prometheus
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+
+
+Example 5: Target Unit for All SRE Services
+-----------------------------------------
+# /etc/systemd/system/sre-production.target
+# Groups all SRE platform services together
+
+[Unit]
+Description=SRE Platform production services
+Wants=kubelet.service containerd.service kube-proxy.service nginx.service prometheus.service sshd.service
+After=network.target
+
+[Install]
+WantedBy=multi-user.target
+
+
+Example 6: Systemd Timer + Service (K8s ETCD Snapshot)
+---------------------------------------------
+# /etc/systemd/system/k8s-snapshot.service
+# Kubernetes ETCD snapshot backup (one-shot)
+
+[Unit]
+Description=SRE platform ETCD snapshot backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=sre
+WorkingDirectory=/sre-platform
+ExecStart=/sre-platform/scripts/etcd-snapshot.sh
+StandardOutput=journal
+StandardError=journal
+
+# /etc/systemd/system/k8s-snapshot.timer
+# Runs k8s-snapshot.service daily at 02:00
+
+[Unit]
+Description=Daily ETCD snapshot for SRE platform
+Requires=k8s-snapshot.service
+
+[Timer]
+OnCalendar=daily
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
+
+
+Example 7: Writing Unit Files with Drop-in Overrides
+------------------------------------------------------
+# Full base unit: /etc/systemd/system/kubelet.service
+# Drop-in override: /etc/systemd/system/kubelet.service.d/10-node-labels.conf
+
+[Service]
+# Add node labels and increase max pods for production
+ExecStart=
+ExecStart=/usr/bin/kubelet \
+    --config=/sre-platform/k8s-node/kubelet-config.yaml \
+    --container-runtime-endpoint=unix:///run/containerd/containerd.sock \
+    --node-labels=env=production,team=sre,workload=general \
+    --max-pods=200 \
+    --register-with-taints=production=true:NoSchedule
+MemoryMax=4G
+CPUQuota=300%
+
+# Note: ExecStart= (empty) clears the original ExecStart first.
+# Then the new ExecStart= replaces it with updated values.
+
+
+Unit File Checklist — Production Readiness
+--------------------------------------------
+[ ] Description is clear and meaningful
+[ ] After= lists all required dependencies
+[ ] Type= matches the service behavior
+[ ] Restart=on-failure with RestartSec=
+[ ] User=/Group= set (never run as root)
+[ ] WorkingDirectory= is correct
+[ ] ExecStart uses absolute paths
+[ ] EnvironmentFile for env vars (not hardcoded)
+[ ] Security: NoNewPrivileges=yes
+[ ] Security: PrivateTmp=yes where possible
+[ ] Security: ProtectSystem=strict where possible
+[ ] Resource limits: LimitNOFILE, MemoryMax
+[ ] TimeoutStopSec for graceful shutdown
+[ ] KillMode=mixed or process (not control-group for workers)
+[ ] WantedBy=multi-user.target in [Install]
+[ ] Test: systemd-analyze verify /path/to/unit.service
+[ ] Test: systemctl start, status, stop cycles
+[ ] Test: Check journal logs: journalctl -u unit -b
+
+
+================================================================================
+SECTION 4: SYSTEMD-ANALYZE — SYSTEM ANALYSIS
+================================================================================
+
+systemd-analyze
+----------------
+Analyze and debug the systemd boot process and unit dependencies.
+
+SYNTAX:
+  systemd-analyze [OPTIONS...] COMMAND
+
+Subcommands:
+  systemd-analyze time            # Show boot time
+  systemd-analyze blame           # List units sorted by init time
+  systemd-analyze critical-chain  # Critical path of boot
+  systemd-analyze verify UNIT     # Verify unit file syntax
+  systemd-analyze security UNIT   # Security analysis of unit
+  systemd-analyze plot > boot.svg # Boot sequence visualization
+  systemd-analyze dot UNIT        # Dependency graph (Graphviz)
+  systemd-analyze dump            # Dump full systemd state
+
+Examples:
+  systemd-analyze blame | head -20
+  systemd-analyze critical-chain
+  systemd-analyze verify /etc/systemd/system/kubelet.service
+  systemd-analyze security kubelet.service
+
+
+================================================================================
+SECTION 5: LOGINCTL & HOSTNAMECTL — ADDITIONAL TOOLS
+================================================================================
+
+loginctl
+--------
+Control the systemd login manager. View user sessions and seats.
+
+SYNTAX:
+  loginctl                        # List sessions
+  loginctl list-users             # List users
+  loginctl list-seats             # List seats
+  loginctl session-status SID     # Session details
+  loginctl show-user USER         # User properties
+  loginctl enable-linger USER     # Allow user services after logout
+  loginctl disable-linger USER    # Disable lingering user services
+  loginctl terminate-session SID  # Terminate a session
+  loginctl kill-session SID       # Send signal to session
+
+Examples:
+  loginctl list-users
+  loginctl session-status 3
+  loginctl enable-linger sre
+
+
+hostnamectl
+-----------
+Control the system hostname and related settings.
+
+SYNTAX:
+  hostnamectl                     # Show current hostname info
+  hostnamectl set-hostname NAME   # Set the hostname
+  hostnamectl set-icon-name NAME  # Set chassis icon name
+  hostnamectl set-chassis TYPE    # Set chassis type
+
+Examples:
+  hostnamectl
+  hostnamectl set-hostname sre-node-01.sre-platform.io
+
+
+timedatectl
+-----------
+Control the system time, date, and timezone.
+
+SYNTAX:
+  timedatectl                     # Show current time/date settings
+  timedatectl set-time TIME       # Set system time
+  timedatectl set-timezone ZONE   # Set timezone
+  timedatectl list-timezones      # List available timezones
+  timedatectl set-ntp BOOL        # Enable/disable NTP sync
+
+Examples:
+  timedatectl
+  timedatectl set-timezone UTC
+  timedatectl set-ntp true
+
+
+localectl
+---------
+Control the system locale and keyboard layout.
+
+SYNTAX:
+  localectl                       # Show current locale
+  localectl list-locales          # List available locales
+  localectl set-locale LOCALE     # Set default locale
+
+Examples:
+  localectl
+  localectl set-locale en_US.UTF-8
+
+
+================================================================================
+SECTION 6: SYSTEMD CONFIGURATION FILES
+================================================================================
+
+Key Configuration Files
+-------------------------
+  /etc/systemd/system.conf       # systemd manager configuration
+  /etc/systemd/journald.conf     # Journal daemon configuration
+  /etc/systemd/logind.conf       # Login manager configuration
+  /etc/systemd/resolved.conf     # DNS resolver configuration
+  /etc/systemd/timesyncd.conf    # NTP client configuration
+
+journald.conf Key Options:
+  Storage=            persistent, volatile, auto, none
+  Compress=yes        Compress journal files
+  SystemMaxUse=       Max disk space for journal
+  SystemMaxFileSize=  Max size per journal file
+  MaxRetentionSec=    Max retention time
+  ForwardToSyslog=    Forward to traditional syslog
+  ForwardToConsole=   Forward to console
+
+Example /etc/systemd/journald.conf:
+  [Journal]
+  Storage=persistent
+  Compress=yes
+  SystemMaxUse=1G
+  SystemMaxFileSize=100M
+  MaxRetentionSec=30day
+  ForwardToSyslog=no
+
+
+================================================================================
+SECTION 7: COMMON TROUBLESHOOTING WORKFLOWS
+================================================================================
+
+Workflow 1: Service Won't Start
+--------------------------------
+  1. systemctl status UNIT                    # Current state
+  2. journalctl -u UNIT -b --no-pager -n 50   # Recent logs
+  3. systemctl cat UNIT                       # Inspect unit file
+  4. systemd-analyze verify UNIT.service      # Validate syntax
+  5. journalctl -u UNIT -p err                # Errors only
+  6. systemctl show UNIT -p ExecStart         # Check ExecStart
+
+
+Workflow 2: Service Crashed — Post-Mortem
+-------------------------------------------
+  1. systemctl is-failed UNIT                 # Confirm failure
+  2. journalctl -u UNIT -b -1                 # Previous boot logs
+  3. journalctl -k -b -1 | grep -i oom        # OOM killer?
+  4. coredumpctl list UNIT                    # Core dumps (if any)
+  5. coredumpctl info PID                     # Core dump details
+
+
+Workflow 3: High CPU / Memory Investigation
+---------------------------------------------
+  1. systemctl status UNIT                    # Current resource usage
+  2. systemctl show UNIT -p MemoryCurrent     # Memory usage
+  3. systemctl show UNIT -p CPUUsageNSec      # CPU usage
+  4. journalctl -u UNIT --since "30 min ago"  # Recent activity
+  5. systemctl set-property UNIT MemoryMax=2G # Add resource limit
+
+
+Workflow 4: Boot Performance Analysis
+---------------------------------------
+  1. systemd-analyze time                     # Boot time
+  2. systemd-analyze blame | head -20         # Slowest units
+  3. systemd-analyze critical-chain           # Critical path
+  4. systemd-analyze plot > boot.svg          # Visualization
+  5. systemctl list-units --state=failed      # Failed units
+
+
+Workflow 5: Deploying a New Unit File
+---------------------------------------
+  1. cp myapp.service /etc/systemd/system/
+  2. systemd-analyze verify /etc/systemd/system/myapp.service
+  3. systemctl daemon-reload
+  4. systemctl enable myapp.service
+  5. systemctl start myapp.service
+  6. systemctl status myapp.service
+  7. journalctl -u myapp.service -f          # Monitor logs
+
+
+================================================================================
+END OF SYSTEMD CLI REFERENCE
+================================================================================
+
+
+================================================================================
+SECTION 8: ADDITIONAL SYSTEMCTL COMMANDS
+================================================================================
+
+systemctl try-restart
+-----------------------
+Restart a unit only if it is currently running.
+
+SYNTAX:
+  systemctl try-restart UNIT...
+
+Examples:
+  systemctl try-restart kubelet    # Only restarts if active
+  systemctl try-restart containerd* # Pattern matching
+
+
+systemctl isolate
+------------------
+Start a target and stop all others. Switches the system "runlevel".
+
+SYNTAX:
+  systemctl isolate TARGET
+
+Examples:
+  systemctl isolate multi-user.target
+  systemctl isolate rescue.target
+
+
+systemctl rescue / emergency
+------------------------------
+Rescue mode: single-user with essential services.
+Emergency mode: root shell only, minimal environment.
+
+SYNTAX:
+  systemctl rescue
+  systemctl emergency
+
+Use rescue for maintenance with networking.
+Use emergency only when the system is severely broken.
+
+
+systemctl set-property
+-----------------------
+Set a property on a unit at runtime (temporary, lost on reload).
+
+SYNTAX:
+  systemctl set-property UNIT PROPERTY=VALUE
+
+Examples:
+  systemctl set-property kubelet MemoryMax=4G
+  systemctl set-property containerd CPUQuota=50%
+
+
+systemctl list-dependencies
+-----------------------------
+Show the dependency tree of a unit.
+
+SYNTAX:
+  systemctl list-dependencies UNIT
+  systemctl list-dependencies --reverse UNIT   # What depends on UNIT?
+  systemctl list-dependencies --all UNIT       # Recursive, expanded
+
+Examples:
+  systemctl list-dependencies kubelet
+  systemctl list-dependencies --reverse multi-user.target
+
+
+systemctl list-timers
+-----------------------
+List all systemd timers with next run time and status.
+
+SYNTAX:
+  systemctl list-timers
+  systemctl list-timers --all
+
+Examples:
+  systemctl list-timers
+  systemctl list-timers 'k8s-snapshot*'
+
+
+systemctl list-sockets
+-----------------------
+List all systemd sockets with listening ports/paths.
+
+SYNTAX:
+  systemctl list-sockets
+  systemctl list-sockets --all
+
+Examples:
+  systemctl list-sockets
+  systemctl list-sockets 'kubelet*'
+
+
+systemctl get-default / set-default
+-------------------------------------
+Get or set the default boot target (runlevel).
+
+SYNTAX:
+  systemctl get-default
+  systemctl set-default TARGET
+
+Examples:
+  systemctl get-default
+  systemctl set-default multi-user.target
+
+
+systemctl poweroff / reboot / suspend / hibernate
+--------------------------------------------------
+System power management commands.
+
+SYNTAX:
+  systemctl poweroff
+  systemctl reboot
+  systemctl suspend
+  systemctl hibernate
+  systemctl hybrid-sleep
+
+Examples:
+  systemctl reboot --firmware-setup   # Reboot to UEFI/BIOS
+  systemctl poweroff -i               # Immediate (skip inhibitors)
+
+
+systemctl reset-failed
+-----------------------
+Reset the "failed" state of units. Clears the failure flag so
+the unit can be started again without manually resetting.
+
+SYNTAX:
+  systemctl reset-failed UNIT...
+  systemctl reset-failed              # Reset ALL failed units
+
+Examples:
+  systemctl reset-failed kubelet
+  systemctl reset-failed
+
+
+================================================================================
+SECTION 9: SYSTEMD TIMERS — DEEP DIVE
+================================================================================
+
+Timer Units
+------------
+Systemd timers replace cron jobs. They are more flexible, support
+monotonic and realtime events, and are integrated with journald logging.
+
+TIMER TYPES:
+  OnCalendar=       Real-time (wall clock) — like cron
+  OnActiveSec=      Relative to timer activation
+  OnBootSec=        Relative to system boot
+  OnStartupSec=     Relative to systemd startup
+  OnUnitActiveSec=  Relative to last activation
+  OnUnitInactiveSec= Relative to last deactivation
+  Persistent=true   Catch up on missed runs (system was off)
+
+CALENDAR EVENT SYNTAX (OnCalendar):
+  minutely, hourly, daily, weekly, monthly, yearly
+  *-*-* 02:30:00              # Every day at 02:30
+  Mon..Fri *-*-* 09:00:00     # Weekdays at 9am
+  Sat,Sun *-*-* 00:00:00      # Weekends at midnight
+  *-01,15-* 03:00:00          # 1st and 15th at 3am
+  hourly: 00:00               # At the top of every hour (with second precision)
+
+AccuracySec=       Randomize start time to spread load (default 1min)
+RandomizedDelaySec= Max random delay (for spreading load across machines)
+
+
+Example: SRE Platform ETCD Snapshot Timer
+----------------------------------------
+# /etc/systemd/system/k8s-snapshot.service
+[Unit]
+Description=ETCD snapshot backup for SRE platform
+After=network.target
+
+[Service]
+Type=oneshot
+User=sre
+WorkingDirectory=/sre-platform
+ExecStart=/sre-platform/scripts/etcd-snapshot.sh
+StandardOutput=journal
+StandardError=journal
+
+# /etc/systemd/system/k8s-snapshot.timer
+[Unit]
+Description=Daily ETCD snapshot for SRE platform at 2 AM
+Requires=k8s-snapshot.service
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+
+Management:
+  systemctl enable k8s-snapshot.timer
+  systemctl start k8s-snapshot.timer
+  systemctl list-timers k8s-snapshot.timer
+  journalctl -u k8s-snapshot.service
+
+
+Example: Hourly Cleanup Timer
+-------------------------------
+# /etc/systemd/system/disk-cleanup.timer
+[Unit]
+Description=Hourly disk cleanup for SRE platform
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
+
+Timers vs Cron Comparison
+---------------------------
+  | Feature        | Cron              | Systemd Timer       |
+  |----------------|-------------------|---------------------|
+  | Scheduling     | Fixed minutes     | Calendar + relative |
+  | Logging        | Email/syslog      | Journald (queryable)|
+  | Random delay   | sleep hack        | RandomizedDelaySec  |
+  | Catch-up       | anacron           | Persistent=true     |
+  | Dependencies   | None              | Requires/After/Wants|
+  | Resource limits| None              | CPU/Memory limits   |
+  | Security       | User-based        | Full sandboxing     |
+  | Environment    | Minimal           | EnvironmentFile     |
+
+
+================================================================================
+SECTION 10: SOCKET UNITS — DEEP DIVE
+================================================================================
+
+Socket Units (.socket)
+-----------------------
+Socket units enable on-demand service activation. The service starts
+when the first connection arrives, saving resources when idle.
+
+SOCKET TYPES:
+  ListenStream=       TCP socket (SOCK_STREAM)
+  ListenDatagram=     UDP socket (SOCK_DGRAM)
+  ListenSequentialPacket=  Unix sequential packet
+  ListenFIFO=         Named pipe (FIFO)
+  ListenNetlink=      Netlink socket
+  ListenSpecial=      Special file in /proc, /sys
+  ListenMessageQueue= POSIX message queue
+
+
+Socket Options:
+  Accept=yes|no         yes: spawn one instance per connection
+                        no: all connections to one service
+  Backlog=              Connection backlog (default 4294967295)
+  SocketUser=           Owner of socket file
+  SocketGroup=          Group of socket file
+  SocketMode=           Permissions (e.g., 0660)
+  MaxConnections=       Max simultaneous connections
+  Service=              Which service to activate (default: same-name .service)
+  TriggerLimitBurst=    Rate limiting threshold
+  TriggerLimitIntervalSec= Rate limiting interval
+
+
+Example: Nginx Reverse Proxy with Socket Activation
+-----------------------------------------------------
+# /etc/systemd/system/nginx.socket
+[Unit]
+Description=Nginx proxy socket for SRE platform
+
+[Socket]
+ListenStream=80
+ListenStream=443
+Backlog=4096
+NoDelay=true
+ReusePort=true
+
+[Install]
+WantedBy=sockets.target
+
+# /etc/systemd/system/nginx.service
+[Unit]
+Description=Nginx reverse proxy for SRE platform
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/sbin/nginx -c /sre-platform/configs/nginx.conf
+ExecReload=/usr/sbin/nginx -s reload
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+
+
+================================================================================
+SECTION 11: PATH UNITS
+================================================================================
+
+Path Units (.path)
+-------------------
+Path units monitor files/directories and activate services when changes occur.
+Replacement for inotify-based scripts and some cron-based polling.
+
+PATH TYPES:
+  PathExists=         Trigger when path exists
+  PathExistsGlob=     Trigger when any matching path exists
+  PathChanged=        Trigger when file is modified/created (not on every write)
+  PathModified=       Trigger on every modification (more events)
+  DirectoryNotEmpty=  Trigger when directory has files
+
+  MakeDirectory=yes   Create the directory if missing
+  DirectoryMode=      Permissions for created directory
+  Unit=               Which service to activate (default: same-name .service)
+
+Example: Watch for Deployment Artifacts
+------------------------------------------
+# /etc/systemd/system/deploy-watcher.path
+[Unit]
+Description=Watch for new deployment artifacts
+
+[Path]
+PathChanged=/sre-platform/scripts/
+MakeDirectory=yes
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/deploy-watcher.service
+[Unit]
+Description=Process deployment artifacts
+
+[Service]
+Type=oneshot
+ExecStart=/sre-platform/scripts/process-deploy.sh
+
+
+================================================================================
+SECTION 12: USER-SPECIFIC SYSTEMD UNITS
+================================================================================
+
+User Units (~/.config/systemd/user/)
+---------------------------------------
+Systemd supports per-user service management. User units run as the
+logged-in user, without root privileges, and can persist after logout
+with "lingering" enabled.
+
+LOCATIONS:
+  ~/.config/systemd/user/           # User-managed units
+  /usr/lib/systemd/user/            # Distribution-provided user units
+  /etc/systemd/user/                # Administrator-managed user units
+
+COMMANDS (user mode):
+  systemctl --user start UNIT       # Start user service
+  systemctl --user enable UNIT      # Enable user service
+  systemctl --user status UNIT      # Check user service
+  systemctl --user daemon-reload    # Reload user config
+
+MANAGEMENT:
+  loginctl enable-linger USER       # Allow user services after logout
+  loginctl disable-linger USER      # Disable lingering
+  loginctl show-user USER           # Check linger status
+  export XDG_RUNTIME_DIR=/run/user/$(id -u)  # Must be set
+
+Example: User-Level Development Server
+-----------------------------------------------
+# ~/.config/systemd/user/dev-server.service
+[Unit]
+Description=Development server for SRE platform
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/sre-platform
+ExecStart=/usr/bin/python3 -m http.server 8000
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=default.target
+
+Usage:
+  systemctl --user daemon-reload
+  systemctl --user enable --now django-dev.service
+  systemctl --user status django-dev.service
+  journalctl --user -u django-dev.service -f
+
+
+================================================================================
+SECTION 13: SYSTEMD-DELTA — FIND CHANGED FILES
+================================================================================
+
+systemd-delta
+--------------
+Compare systemd configuration files against defaults. Finds overridden,
+extended, masked, or equivalent unit files.
+
+SYNTAX:
+  systemd-delta [OPTIONS...]
+
+  systemd-delta                     # Show all differences
+  systemd-delta --type=extended     # Only extended (drop-ins)
+  systemd-delta --type=overridden   # Only overridden
+  systemd-delta --type=masked       # Only masked
+  systemd-delta --type=equivalent   # Only redundant units
+  systemd-delta --diff=yes          # Show diffs in output
+  systemd-delta -t extended -t overridden
+
+Examples:
+  systemd-delta
+  systemd-delta --type=overridden --diff=yes
+
+
+================================================================================
+SECTION 14: COREDUMPCTL — CRASH ANALYSIS
+================================================================================
+
+coredumpctl
+-----------
+Retrieve and analyze core dumps from the journal.
+
+SYNTAX:
+  coredumpctl list                 # List all recorded core dumps
+  coredumpctl list UNIT            # Core dumps for a specific unit
+  coredumpctl list --since today
+  coredumpctl info PID             # Show core dump details
+  coredumpctl info COREDUMP_ID     # Show by core dump ID
+  coredumpctl dump PID > core.dump # Extract core dump to file
+  coredumpctl gdb PID              # Open core dump in GDB
+  coredumpctl debug PID            # Open in registered debugger
+
+Examples:
+  coredumpctl list kubelet
+  coredumpctl info $(coredumpctl list kubelet --no-pager -1 | tail -1 | awk '{print $5}')
+  coredumpctl gdb $(coredumpctl list containerd -1 | tail -1 | awk '{print $5}')
+
+
+================================================================================
+SECTION 15: SYSTEMD SECURITY SANDBOXING — DEEP DIVE
+================================================================================
+
+Security Directives Reference
+------------------------------
+Systemd provides 30+ security hardening directives. Apply the principle
+of least privilege to every service.
+
+CORE SECURITY:
+  NoNewPrivileges=yes       # Block privilege escalation via setuid/setgid
+  ProtectSystem=strict      # Mount /usr, /boot read-only
+  ProtectSystem=full        # Mount /usr, /boot, /etc read-only
+  ProtectHome=yes           # Make /home inaccessible
+  ProtectHome=read-only     # Mount /home read-only
+  ProtectHome=tmpfs         # Mount empty tmpfs over /home
+
+PROCESS ISOLATION:
+  PrivateTmp=yes            # Private /tmp and /var/tmp namespace
+  PrivateDevices=yes        # Private /dev with only pseudodevices
+  PrivateNetwork=yes        # No network access (loopback only)
+  PrivateUsers=yes          # Private user namespace
+  PrivateMounts=yes         # Private mount namespace
+  PrivateIPC=yes            # Private IPC namespace
+
+FILESYSTEM RESTRICTIONS:
+  ProtectKernelTunables=yes # /proc/sys, /sys read-only
+  ProtectKernelModules=yes  # Cannot load/unload kernel modules
+  ProtectKernelLogs=yes     # Cannot read kernel log
+  ProtectClock=yes          # Cannot change system clock
+  ProtectControlGroups=yes  # Cannot modify cgroups
+  ProtectProc=invisible     # Hide other users' processes in /proc
+
+READ-ONLY / INACCESSIBLE PATHS:
+  ReadOnlyPaths=/etc /usr   # Paths mounted read-only
+  InaccessiblePaths=/root   # Paths made inaccessible
+  ReadWritePaths=/var/log   # Exceptions within protected areas
+  BindPaths=/src:/dst       # Bind mount into the namespace
+  BindReadOnlyPaths=/src:/dst # Read-only bind mount
+
+CAPABILITY RESTRICTIONS:
+  CapabilityBoundingSet=    # Limit process capabilities
+  AmbientCapabilities=      # Grant ambient capabilities
+
+SYSTEM CALL FILTERS:
+  SystemCallFilter=         # Allow/deny syscalls
+  SystemCallFilter=~@clock  # Deny clock syscalls
+  SystemCallFilter=@default # Allow default safe set
+  SystemCallArchitectures=  # Limit to specific architectures
+
+Predefined Syscall Sets:
+  @default    Safe, essential syscalls
+  @basic-io   read, write, open, close
+  @file-system File operations
+  @network-io Socket operations
+  @process    fork, clone, exec
+  @mount      Mount operations
+  @privileged All privileged syscalls
+  @resources  Set resource limits
+  @clock      Modify system clock
+  @debug      Debug/trace syscalls
+
+
+Security Hardening: Production vs Development
+-----------------------------------------------
+DEVELOPMENT SERVICE (relaxed):
+  PrivateTmp=yes
+  NoNewPrivileges=yes
+  ProtectSystem=full
+
+PRODUCTION SERVICE (hardened):
+  NoNewPrivileges=yes
+  ProtectSystem=strict
+  ProtectHome=yes
+  PrivateTmp=yes
+  PrivateDevices=yes
+  ProtectKernelTunables=yes
+  ProtectKernelModules=yes
+  ProtectKernelLogs=yes
+  ProtectControlGroups=yes
+  ProtectClock=yes
+  RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+  SystemCallFilter=@default
+  RestrictRealtime=yes
+  MemoryDenyWriteExecute=yes
+  LockPersonality=yes
+
+
+Security Audit Commands:
+  systemd-analyze security UNIT                # Score and recommendations
+  systemd-analyze security --json=pretty UNIT  # Detailed JSON output
+  systemd-analyze security --no-pager UNIT     # Full report
+
+
+================================================================================
+SECTION 16: COMMON ERROR PATTERNS & SOLUTIONS
+================================================================================
+
+Error: "Unit is masked"
+  # systemctl unmask UNIT
+  # systemctl start UNIT
+
+Error: "Unit is not running, refusing reload"
+  # systemctl restart UNIT
+  # Or: systemctl reload-or-restart UNIT
+
+Error: "Failed to start UNIT: Unit is not loaded properly"
+  # systemctl daemon-reload
+  # systemd-analyze verify /etc/systemd/system/UNIT.service
+
+Error: "A dependency job for UNIT failed"
+  # systemctl list-dependencies UNIT
+  # Check that all Requires/Wants units are active
+
+Error: "Start request repeated too quickly" (rate-limited restart)
+  # journalctl -u UNIT -b --no-pager -n 50
+  # Check RestartSec= and the underlying error
+  # systemctl reset-failed UNIT
+
+Error: "Connection refused" on socket-activated service
+  # systemctl status UNIT.socket
+  # ss -tlnp | grep PORT
+  # Check SocketUser/SocketGroup/SocketMode permissions
+
+Error: "PID file not readable" (Type=forking)
+  # Ensure the service actually writes the PID file
+  # Check PIDFile= path is writable by User=
+  # Verify the daemon doesn't fork twice (double-fork)
+
+Error: OOM — service killed by Out-Of-Memory killer
+  # journalctl -k | grep -i oom
+  # systemctl show UNIT -p MemoryCurrent
+  # Add MemoryMax= to unit file
+  # Consider MemoryHigh= for soft limit warnings
+
+Error: Service times out on stop (SIGKILL after TimeoutStopSec)
+  # Increase TimeoutStopSec=
+  # Check ExecStop= handles shutdown properly
+  # Use KillMode=mixed for worker processes
+
+Error: User lingering not working
+  # loginctl enable-linger USER
+  # ls /var/lib/systemd/linger/   # Should contain user file
+  # Check XDG_RUNTIME_DIR is set
+
+Error: journalctl "No journal files found"
+  # Check /etc/systemd/journald.conf: Storage=persistent
+  # mkdir -p /var/log/journal
+  # systemctl restart systemd-journald
+
+Error: Timer not firing
+  # systemctl list-timers TIMER
+  # systemctl status TIMER.timer
+  # Check Persistent=true for missed runs
+  # journalctl -u TIMER.service  # Check last execution log
+
+
+================================================================================
+SECTION 17: USEFUL ONE-LINERS & SCRIPTS
+================================================================================
+
+# Show top 10 services by memory usage
+systemctl show '*' --property=Names,MemoryCurrent --value | paste - - | sort -t'=' -k2 -h | tail -10
+
+# Show all failed units across the system
+systemctl list-units --state=failed --no-pager
+
+# Show enabled but not running services
+comm -23 <(systemctl list-unit-files --state=enabled --no-legend | awk '{print $1}' | sort) <(systemctl list-units --state=running --no-legend | awk '{print $1}' | sort)
+
+# Show services started in last 10 minutes
+journalctl _SYSTEMD_UNIT=*.service --since "10 min ago" -o cat | grep "Started" | sort -u
+
+# Find services listening on privileged ports
+systemctl list-sockets --no-pager | grep -E ':80|:443|:22'
+
+# Bulk restart all services matching a pattern
+systemctl restart $(systemctl list-units --type=service --no-legend 'kubelet*' | awk '{print $1}')
+
+# Check journal disk usage and clean if needed
+journalctl --disk-usage && journalctl --vacuum-size=500M
+
+# Compare systemd state before and after a change
+systemd-analyze dump > /tmp/before.dump
+# [make changes]
+systemd-analyze dump > /tmp/after.dump
+diff /tmp/before.dump /tmp/after.dump
+
+# Export all service statuses as CSV
+systemctl list-units --type=service --no-legend --output=json-pretty | \
+  python3 -c "import sys,json; [print(f'{u[\"unit\"]},{u[\"active\"]},{u[\"sub\"]}') for u in json.load(sys.stdin) if 'unit' in u]"
+
+
+================================================================================
+END OF SYSTEMD CLI REFERENCE (AUGMENTED)
+================================================================================
