@@ -866,8 +866,168 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PART 1: FOUNDATION — GITOPS, ARGO & THE BIG PICTURE                     🟢
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Chapters 1-3 · Difficulty: Beginner · "Why GitOps, and what am I
+    installing?"
+    What you'll build: a real local Kubernetes cluster, a built and
+    pushed easypj/jobpost Docker image, and Argo CD itself installed
+    and running easypj as a Synced/Healthy Application.
     🎯 EASYPJ FOCUS: Understand the GitOps philosophy and get your
        local cluster ready to deploy the easypj/jobpost Django app.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PART INTRO
+  ──────────
+  Every later Part in this guide assumes you already believe GitOps is
+  worth the trouble, already have a Kubernetes vocabulary Argo builds
+  on top of, and already have a control plane running. Part 1 delivers
+  exactly those three things and nothing more — no ApplicationSets, no
+  Workflows, no Rollouts, no Events. It is the shortest Part in the
+  guide (3 chapters) and the only one you cannot skip or reorder: every
+  one of the other 6 Parts opens by assuming Argo CD is already
+  installed and easypj is already Synced, and that assumption is built
+  here.
+
+  Chapter 1 makes the CASE for GitOps — starting from a real 2 AM
+  incident (a manual `kubectl edit` nobody wrote down), not an abstract
+  definition — and names the 4 tools (Argo CD, Workflows, Rollouts,
+  Events) this whole guide is about. Chapter 2 is deliberately NOT
+  exam-graded — it's Domain 0, the Kubernetes/Git/YAML/Docker raw
+  materials every graded chapter from here on assumes you already have
+  cold. Chapter 3 is the payoff: a real Argo CD control plane, installed
+  by hand, with easypj running through it as a genuine, Synced, Healthy
+  Application — not a diagram of one.
+
+  🎯 CAPA NOTE: Chapters 1-2 carry no weighted competency of their own
+     (per Appendix H's chapter-mapping table, they're Foundation —
+     "prerequisite for all domains") but the vocabulary they build
+     (OpenGitOps' 4 principles, push-vs-pull, CRD basics) is exactly
+     the kind of crisp, definitional content CAPA tests directly and
+     early. Chapter 3 is where real domain weight starts: "Understand
+     Argo CD Fundamentals" and "Synchronize Applications Using Argo
+     CD," both part of Argo CD's 34% exam domain.
+
+  [HOW THE CHAPTERS FIT — Part 1 map]
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Ch1 WHY ──────────▶ Ch2 RAW MATERIALS ──────────▶ Ch3 INSTALL            │
+  │ (GitOps philosophy,   (K8s objects, CRDs, Git,      (real Argo CD        │
+  │  push vs pull, the     YAML, a real cluster + a      control plane,      │
+  │  4 Argo tools as ONE   built easypj Docker image)    easypj Synced/      │
+  │  CNCF project)                                        Healthy)           │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Read that as a build-up: Ch1 gives you the WHY (without it, Ch3's
+  install steps are just more commands to memorize); Ch2 gives you
+  everything Ch3 needs as raw material — a cluster to install Argo CD
+  ONTO, and a real easypj image for it to deploy; Ch3 is where those
+  two threads converge into a running system.
+
+  ┌───────────────────────┬───────────────────────────────────────────────┐
+  │Ch  Title              │What it gives you                              │
+  ├───────────────────────┼───────────────────────────────────────────────┤
+  │1   What is GitOps?    │The case for pull-based, Git-as-source-of-     │
+  │                       │truth deployment, and Argo's real identity     │
+  │                       │as ONE CNCF project spanning 4 tools.          │
+  │2   Prerequisites      │K8s objects, CRDs, Git, YAML, a running        │
+  │    (K8s Refresher)    │local cluster, and a built easypj image.       │
+  │3   Installing Argo CD │The payoff -- a real 7-pod Argo CD control     │
+  │                       │plane with easypj live as a Synced App.        │
+  └───────────────────────┴───────────────────────────────────────────────┘
+
+  [PART SUMMARY + IMPLEMENTATION]
+  ──────────────────────────────
+  Implementation thread for Part 1, start to finish:
+
+    understand WHY GitOps beats manual/push deploys (Ch1)
+        │
+        ▼
+    refresh K8s objects + CRDs + Git + YAML (Ch2.1-2.4)
+        │
+        ▼
+    stand up a local cluster; install kubectl/argocd/argo CLIs (Ch2.5)
+        │
+        ▼
+    build + push a real easypj/jobpost Docker image (Ch2.6)
+        │
+        ▼
+    install Argo CD's 7-pod control plane with --server-side;
+    log in, rotate the admin password (Ch3.2)
+        │
+        ▼
+    meet the 7 pods and understand each one's job (Ch3.3)
+        │
+        ▼
+    write and apply easypj's first Application manifest (Ch3.4)
+        │
+        ▼
+    choose a sync policy; watch easypj go Synced/Healthy (Ch3.5)
+
+  VISUAL — where Part 1 ends and every later Part begins from:
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │          PART 1 END-STATE -- "WHAT YOU HAVE BEFORE PART 2"               │
+  │                                                                          │
+  │ Git (easypj-k8s repo) <-- your machine (kubectl, argocd, argo CLIs)      │
+  │      |                                                                   │
+  │      | Application manifest committed                                    │
+  │      v                                                                   │
+  │ +--------------------------------------------------------------+         │
+  │ | ARGO CD CONTROL PLANE (namespace: argocd, 7 pods)              |       │
+  │ | argocd-server · argocd-repo-server ·                           |       │
+  │ | argocd-application-controller (StatefulSet) · argocd-redis ·   |       │
+  │ | argocd-dex-server · argocd-notifications-controller ·          |       │
+  │ | argocd-applicationset-controller                               |       │
+  │ +-------------------------------+--------------------------------+       │
+  │                                 | reconciles                             │
+  │                                 v                                        │
+  │                easypj-dev namespace: Synced OK   Healthy OK              │
+  │                (Deployment / Service / ConfigMap running)                │
+  └──────────────────────────────────────────────────────────────────────────┘
+  PROSE RECAP: by the end of Part 1 you're not reading about GitOps —
+  you're standing on top of a real, running instance of it. Every Part
+  from here adds ONE more Argo tool onto this exact foundation: Part 2
+  goes deep on Argo CD itself, Part 3 adds Workflows for CI/CD, Part 4
+  adds Rollouts for progressive delivery, Part 5 adds Events for
+  automation, and Parts 6-7 wire all four together and prepare you for
+  the exam.
+
+  🧠 ANALOGY: if the rest of this guide is learning to fly a plane,
+     Part 1 is the pre-flight briefing AND rolling the plane out of the
+     hangar. You haven't taken off yet — but you now know why you're
+     flying instead of driving (Ch1), you've checked every instrument
+     (Ch2), and the engine is running (Ch3). Every later Part is a
+     different leg of the same flight.
+
+  📖 KEY TERMS YOU'LL MEET IN PART 1:
+     • GitOps — operating a system by declaring desired state in Git
+       and having a controller pull + reconcile toward it.
+     • Configuration drift — the invisible gap between what Git says
+       and what's actually running, when nothing is watching for it.
+     • OpenGitOps principles — Declarative, Versioned & Immutable,
+       Pulled Automatically, Continuously Reconciled — the 4-item exam-
+       tested definition of GitOps itself.
+     • CRD (Custom Resource Definition) — how Argo CD/Workflows/
+       Rollouts/Events each extend the Kubernetes API with their own
+       object types (Application, Workflow, Rollout, EventSource...).
+     • Application — Argo CD's own CRD; the object that ties a Git
+       source to a cluster destination and a sync policy.
+     • Sync — the act of making live cluster state match Git; manual
+       (you run it) or automated (the controller runs it for you).
+
+  ⚡ SPEED TIP (carry this through all of Part 1): install with
+     `--server-side --force-conflicts` from the very first `kubectl
+     apply`, not just when something breaks — the ApplicationSet CRD's
+     oversized annotation makes plain `kubectl apply` fail unpredictably
+     later, and it's one flag to just always include.
+
+  🔑 MUST-REMEMBER: by the end of Part 1 you should be able to, from
+     memory, state OpenGitOps' 4 principles, install Argo CD's 7-pod
+     control plane correctly the first time, retrieve and rotate the
+     admin password, and write + apply an Application manifest that
+     drives easypj to Synced/Healthy. If you can do that without
+     looking anything up, Part 2 onward is pure depth-adding — the
+     foundation itself is solid.
+
+  ──────────────────────────────────────────────────────────────────────────
 
 Chapter 1: What is GitOps? (The Philosophy Behind Argo)
 --------------------------------------------------------------------------------
@@ -3186,11 +3346,189 @@ Chapter 3: Installing and Configuring Argo CD
     acted on automatically only if you told it to.
 
 
+  ┌──── PART 1 -- KEY TAKEAWAYS ─────────────────────────────────────────────┐
+  │ ✅ GitOps = declare desired state in Git, pull + reconcile toward        │
+  │    it -- never push credentials or manifests INTO the cluster.           │
+  │ ✅ OpenGitOps' 4 principles: Declarative, Versioned & Immutable,         │
+  │    Pulled Automatically, Continuously Reconciled -- in that order.       │
+  │ ✅ Argo CD/Workflows/Rollouts/Events are ONE CNCF project sharing        │
+  │    a single maturity level (Graduated, 2022-12-06) -- never split.       │
+  │ ✅ Argo CD's control plane is 7 pods: 3 "brains" (API server,            │
+  │    repo-server, application-controller) + 4 support pods.                │
+  │ ✅ Install with --server-side --force-conflicts -- plain kubectl         │
+  │    apply can fail on the ApplicationSet CRD's oversized annotation.      │
+  │ ✅ SyncStatus (Synced/OutOfSync) and HealthStatus are separate           │
+  │    axes; reconcile (diff) is unconditional, sync (apply) is not.         │
+  │ 🎯 EXAM: Ch1-2 = Foundation (no weighted competency); Ch3 = Argo         │
+  │    CD 34% domain ("Understand Fundamentals" + "Synchronize Apps").       │
+  │ 🔑 kubectl apply --server-side --force-conflicts · argocd admin          │
+  │    initial-password · argocd login --insecure · argocd app sync          │
+  └──────────────────────────────────────────────────────────────────────────┘
+  [PART 1 VISUAL SUMMARY]: one diagram from "a 2 AM manual kubectl edit"
+  through OpenGitOps' 4 principles, a built easypj Docker image, and a
+  7-pod Argo CD control plane, to easypj running Synced/Healthy in-cluster.
+  PROSE RECAP: Part 1 took you from "why does drift keep happening?" to
+  a real, running answer — a Git repo, a control plane that continuously
+  pulls toward it, and easypj live as proof it works. Part 2 now goes
+  deep on the Application object you just barely touched in 3.4.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PART 2: ARGO CD DEEP DIVE — THE GITOPS ENGINE                         🟢🟡
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Chapters 4-8 · Difficulty: Beginner -> Intermediate · "Go from one
+    Application to a real GitOps estate"
+    What you'll build: fenced dev/staging/prod AppProjects, an
+    ApplicationSet-driven multi-environment rollout, and a real
+    easypj-k8s Git repo — plus the CLI/UI fluency to operate all of it.
     🎯 EASYPJ FOCUS: Deploy the easypj/jobpost Django app to dev,
        staging, and production using Argo CD GitOps with Kustomize.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PART INTRO
+  ──────────
+  Part 1 got you ONE Application, hand-written, running under the
+  wide-open `default` project. Part 2 is where that toy setup becomes a
+  real GitOps estate. Every chapter here works on the SAME object — the
+  Application CRD you first met in 3.4 — from a different angle: what
+  it IS (Ch4), who's allowed to touch it (Ch5), how to have MANY of
+  them safely (Ch6), what a production-shaped Git repo that generates
+  them actually looks like (Ch7), and how to operate all of it day to
+  day without reaching for raw `kubectl` (Ch8).
+
+  This is also the single highest-density Part in the whole guide for
+  exam purposes: Argo CD alone is 34% of the CAPA blueprint, and every
+  one of these 5 chapters maps to at least one official competency.
+  Nothing here is optional reading — if you only have time to master
+  one Part before the exam, it should be this one.
+
+  🎯 CAPA NOTE: Ch7 ("easypj GitOps Setup") is the single most
+     end-to-end-graded chapter in this Part — it's where Ch4's
+     Application, Ch5's AppProjects, and Ch6's ApplicationSets stop
+     being separate concepts and become one real, assembled repo. If
+     you can rebuild that repo from memory, you can answer almost any
+     Argo CD scenario question CAPA throws at you.
+
+  [HOW THE CHAPTERS FIT — Part 2 map]
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │ Ch4 DEFINE ──▶ Ch5 SECURE ──▶ Ch6 SCALE ──▶ Ch7 ASSEMBLE ──▶ Ch8 OPERATE     │
+  │ (Application    (AppProjects,   (Application-   (a real       (CLI/UI        │
+  │  CRD: source,    RBAC fencing,   Sets, Rolling-  easypj-k8s    fluency,      │
+  │  dest, sync-     who can touch   Sync, hooks,    repo, App-of- diagnose,     │
+  │  Policy)         what)           notifications)  Apps, sealed  sync,         │
+  │                                                  secrets)      rollback)     │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  Read that left to right as the Application object's own lifecycle:
+  DEFINE it (Ch4), SECURE who can touch it (Ch5), SCALE it to many
+  environments safely (Ch6), ASSEMBLE those pieces into a real Git repo
+  (Ch7), then OPERATE the whole thing from the CLI/UI (Ch8). Each
+  chapter assumes the vocabulary of the one before it.
+
+  ┌───────────────────────────┬────────────────────────────────────────────────┐
+  │Ch  Title                  │What it gives you                               │
+  ├───────────────────────────┼────────────────────────────────────────────────┤
+  │4   Applications (Core)    │The Application CRD itself -- source,           │
+  │                           │destination, project, syncPolicy fields.        │
+  │5   AppProjects            │Fenced dev/staging/prod projects with           │
+  │                           │scoped RBAC -- no more wide-open `default`.     │
+  │6   Advanced Features      │ApplicationSets (9 generators), RollingSync,    │
+  │                           │resource hooks, Notifications -- at scale.      │
+  │7   easypj GitOps Setup    │The real easypj-k8s repo: base+overlays,        │
+  │                           │App-of-Apps, sealed secrets -- assembled.       │
+  │8   CLI and UI Mastery     │Operator fluency -- diagnose, sync, roll        │
+  │                           │back, and navigate the UI's 4 resource views.   │
+  └───────────────────────────┴────────────────────────────────────────────────┘
+
+  [PART SUMMARY + IMPLEMENTATION]
+  ──────────────────────────────
+  Implementation thread for Part 2, start to finish:
+
+    master the Application CRD's real fields (Ch4)
+        │
+        ▼
+    fence dev/staging/prod behind real AppProjects + RBAC (Ch5)
+        │
+        ▼
+    generate all 3 environments from ONE ApplicationSet;
+    add RollingSync + PreSync hooks + Notifications (Ch6)
+        │
+        ▼
+    assemble the real easypj-k8s repo: base+overlays,
+    App-of-Apps, SealedSecrets (Ch7)
+        │
+        ▼
+    operate it — diff, sync, roll back, debug via CLI/UI (Ch8)
+
+  VISUAL — where Part 2 ends and Part 3 begins from:
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │        PART 2 END-STATE -- "easypj IS NOW A REAL GITOPS ESTATE"          │
+  │                                                                          │
+  │ easypj-k8s repo (Git)                                                    │
+  │   base/ + overlays/{dev,staging,prod}/ + argo-apps/ + app-of-apps.yaml   │
+  │      |                                                                   │
+  │      | kubectl apply -f app-of-apps.yaml   (ONE command, ONE time)       │
+  │      v                                                                   │
+  │ +--------------------------------------------------------------+         │
+  │ | AppProject: easypj-dev / easypj-staging / easypj-prod          |       │
+  │ | (fenced sourceRepos, destinations, RBAC roles)                 |       │
+  │ +-------------------------------+--------------------------------+       │
+  │                                 | generates (ApplicationSet)             │
+  │                                 v                                        │
+  │ easypj-dev  easypj-staging  easypj-prod   <- 3 Applications, one         │
+  │ Synced OK   Synced OK       Synced OK        List-generator source       │
+  │                                                                          │
+  │ You: argocd app diff / sync / rollback -- never `kubectl apply` again    │
+  └──────────────────────────────────────────────────────────────────────────┘
+  PROSE RECAP: Part 1 proved GitOps works on ONE Application. Part 2
+  proves it scales — the SAME reconcile loop from Ch3's Under-the-Hood
+  now drives three fenced, independently-secured environments from a
+  single Git repo, and you can operate all of them without ever typing
+  `kubectl apply` again. Part 3 hands easypj's CI/CD pipeline — the
+  thing that actually BUILDS the images this Application deploys — to
+  Argo Workflows.
+
+  🧠 ANALOGY: if Part 1 was rolling one plane out of the hangar, Part 2
+     is standing up an entire fleet-operations department — a fleet
+     manager (AppProjects) deciding who's cleared to fly which plane,
+     a scheduling system (ApplicationSets) that generates flight plans
+     for every destination at once, a real hangar with labeled bays
+     (the easypj-k8s repo's base/overlays structure), and a control
+     tower (the CLI/UI) watching all of it live.
+
+  📖 KEY TERMS YOU'LL MEET IN PART 2:
+     • AppProject — the namespace-scoped CRD that fences which repos,
+       destinations, and resource kinds an Application may use, and
+       who (via RBAC roles) may sync/delete/exec into it.
+     • ApplicationSet — a separate CRD + controller that generates many
+       Applications from one template + a generator (List, Cluster,
+       Git, Matrix, Merge, and 4 more).
+     • RollingSync — the ApplicationSet field that promotes generated
+       Applications dev → staging → prod in controlled steps, distinct
+       from a single Application's own sync waves.
+     • Resource hook — a manifest (PreSync/Sync/PostSync/SyncFail/Skip)
+       that runs at a specific point in ONE Application's sync, e.g. a
+       DB migration Job before the Deployment rolls out.
+     • App-of-Apps — a root Application whose only job is to point at
+       more Application manifests, bootstrapping an entire estate from
+       one `kubectl apply`.
+     • SealedSecret — a Secret that's safe to commit to Git because
+       only the target cluster's controller can decrypt it back.
+
+  ⚡ SPEED TIP (carry this through all of Part 2): before you `argocd
+     app sync` anything in a shared environment, run `argocd app diff`
+     first — it costs nothing, and reading the diff before applying it
+     is the single habit that separates confident operators from people
+     who find out what changed by watching Slack alerts fire.
+
+  🔑 MUST-REMEMBER: by the end of Part 2 you should be able to, from
+     memory, write an Application manifest with a correctly-scoped
+     AppProject, generate dev/staging/prod from one ApplicationSet,
+     lay out a real base+overlays Git repo with an App-of-Apps root,
+     and diagnose/sync/roll back any of it from the CLI. That is
+     the Argo CD 34% exam domain, fully covered.
+
+  ──────────────────────────────────────────────────────────────────────────
 
 Chapter 4: Argo CD Applications — The Core Object
 --------------------------------------------------------------------------------
@@ -7038,11 +7376,190 @@ Chapter 8: Argo CD CLI and UI Mastery
     UI and the fleet story for free.
 
 
+  ┌──── PART 2 -- KEY TAKEAWAYS ─────────────────────────────────────────────┐
+  │ ✅ The Application CRD is the atom of Argo CD: source + destination +    │
+  │    project + syncPolicy is ALL of it -- everything else configures       │
+  │    or scales this one object.                                            │
+  │ ✅ AppProjects fence WHO can do WHAT to WHICH Applications --            │
+  │    always move off the wide-open `default` project for real envs.        │
+  │ ✅ ApplicationSets scale ONE definition into MANY Applications;          │
+  │    RollingSync then promotes those Applications dev->staging->prod.      │
+  │ ✅ A real GitOps repo separates base/ (shared) from overlays/            │
+  │    (per-env) and never commits a plain Secret -- only SealedSecret.      │
+  │ ✅ `argocd app rollback` reverts the CLUSTER, not Git -- the next        │
+  │    auto-sync silently re-applies Git unless you `git revert` too.        │
+  │ 🎯 EXAM: this Part IS the Argo CD 34% domain -- the single largest       │
+  │    concentration of graded content anywhere in this guide.               │
+  │ 🔑 argocd app diff · argocd app sync · argocd app rollback ·             │
+  │    argocd proj get · kubectl apply -f app-of-apps.yaml                   │
+  └──────────────────────────────────────────────────────────────────────────┘
+  [PART 2 VISUAL SUMMARY]: one diagram from a single hand-written
+  Application manifest through fenced AppProjects, an ApplicationSet
+  generating dev/staging/prod, and a real assembled easypj-k8s repo, to
+  full CLI/UI operator fluency over the whole estate.
+  PROSE RECAP: Part 2 turned Part 1's one-off Application into a real,
+  secured, multi-environment GitOps estate — and turned you from
+  someone who can install Argo CD into someone who can run it. Part 3
+  now builds the CI/CD engine (Argo Workflows) that produces the images
+  this estate deploys.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PART 3: ARGO WORKFLOWS — JOB ORCHESTRATION                               🟡
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Chapters 9-13 · Difficulty: Intermediate · "Turn easypj's manual ops
+    tasks into Kubernetes-native pipelines"
+    What you'll build: a reusable easypj CI/CD WorkflowTemplate, a
+    self-healing database-migration Workflow, an ETL pipeline, and 3
+    scheduled CronWorkflows — all runnable, retryable, and debuggable
+    from the CLI.
     🎯 EASYPJ FOCUS: Build CI/CD pipelines for easypj (test → build
        → push), run DB migrations safely, and schedule nightly backups.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PART INTRO
+  ──────────
+  Part 2 gave easypj a real, secured, multi-environment GitOps estate —
+  but Argo CD only ever deploys an IMAGE that already exists. Something
+  still has to build that image, run the test suite against it, migrate
+  the database safely, and do the 2 AM maintenance jobs nobody wants to
+  be paged for. That "something" is Argo Workflows, and it's the single
+  largest CAPA domain (36%, edging out even Argo CD's 34%) — which
+  means this Part carries more exam weight than any other in the guide.
+
+  The throughline is a Workflow step being, underneath everything, just
+  a Pod — the exact primitive Part 1's Kubernetes refresher already
+  taught you. Argo Workflows' whole value is the orchestration layer on
+  top: DAGs that fan work out in parallel, templates that make a
+  pipeline reusable instead of copy-pasted, retry logic that survives a
+  flaky test run, and a CronWorkflow that means nobody has to remember
+  to run a backup by hand.
+
+  🎯 CAPA NOTE: Ch10 alone is the sole teaching chapter for 2 of the 16
+     official CAPA competencies — more concentrated exam weight than any
+     other single chapter in this guide. If your study time is limited,
+     Ch9-11 (the concept chapters) and Ch13's CLI reference table are
+     the highest-yield material in the entire 36%-weighted domain.
+
+  [HOW THE CHAPTERS FIT — Part 3 map]
+  ┌──────────────────────────────────────────────────────────────────────────────────┐
+  │ Ch9 INSTALL ──▶ Ch10 COMPOSE ──▶ Ch11 HARDEN ──▶ Ch12 APPLY ──▶ Ch13 OPERATE     │
+  │ (Controller +    (WorkflowTemplate, (retryStrategy,  (6 real       (submit/      │
+  │  Server, a real   templateRef, DAG   CronWorkflow,    easypj       watch/logs/   │
+  │  Workflow          depends, artifact  concurrency-    manifests:    retry/       │
+  │  succeeds)         passing)           Policy)          migration,   resubmit,    │
+  │                                                        CI/CD, ETL)  debug)       │
+  └──────────────────────────────────────────────────────────────────────────────────┘
+
+  Read that left to right as a maturity curve: INSTALL the engine and
+  prove it works (Ch9), make pipelines COMPOSABLE and reusable (Ch10),
+  HARDEN them against failure and put them on a schedule (Ch11), APPLY
+  all of it to easypj's real jobs (Ch12), then OPERATE the whole thing
+  like a pro (Ch13). Nothing here is decorative — every chapter fixes a
+  real gap the one before it leaves open.
+
+  ┌───────────────────────────────┬───────────────────────────────────────────────┐
+  │Ch  Title                      │What it gives you                              │
+  ├───────────────────────────────┼───────────────────────────────────────────────┤
+  │9   Intro to Workflows         │A working 2-pod install + a Workflow that      │
+  │                               │actually runs and succeeds via argo submit.    │
+  │10  Templates & Composition    │Reusable easypj-ci-template any PR can call,   │
+  │                               │with lint/tests/SAST fanning out via DAG.      │
+  │11  Advanced Features          │retryStrategy, dynamic withParam loops, and    │
+  │                               │self-scheduling CronWorkflows -- no more       │
+  │                               │human running argo submit by hand at night.    │
+  │12  Workflows for easypj       │6 tested manifests: DB migration, the real     │
+  │                               │easypj-ci-cd template, ETL, 3 CronWorkflows.   │
+  │13  CLI, UI, and Debugging     │Full lifecycle fluency -- submit, watch, retry/│
+  │                               │resubmit, stop/terminate, triage a stuck DAG.  │
+  └───────────────────────────────┴───────────────────────────────────────────────┘
+
+  [PART SUMMARY + IMPLEMENTATION]
+  ──────────────────────────────
+  Implementation thread for Part 3, start to finish:
+
+    install the Controller + Server; run one Workflow end to end (Ch9)
+        │
+        ▼
+    extract it into a reusable WorkflowTemplate with a
+    lint/test/SAST DAG any PR can call (Ch10)
+        │
+        ▼
+    add retryStrategy, dynamic withParam loops, and
+    CronWorkflow scheduling with the right concurrencyPolicy (Ch11)
+        │
+        ▼
+    apply all of it to easypj: DB-migration Workflow, the real
+    easypj-ci-cd template, an ETL pipeline, 3 CronWorkflows (Ch12)
+        │
+        ▼
+    operate it — submit, watch, retry/resubmit, stop/terminate,
+    debug a stuck DAG via CLI and UI (Ch13)
+
+  VISUAL — where Part 3 ends and Part 4 begins from:
+
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │     PART 3 END-STATE -- "easypj's OPS TASKS ARE NOW WORKFLOWS"               │
+  │                                                                              │
+  │ PR opened against easypj/jobpost                                             │
+  │      |                                                                       │
+  │      | argo submit --from workflowtemplate/easypj-ci-cd                      │
+  │      v                                                                       │
+  │ +--------------------------------------------------------------+             │
+  │ | DAG: clone-repo -> {unit-tests, lint} (parallel) -> build-image |          │
+  │ | (kaniko) -> push-image -> update-gitops-repo                   |           │
+  │ +-------------------------------+--------------------------------+           │
+  │                                 | on failure: retryStrategy                  │
+  │                                 | on schedule: 3 CronWorkflows               │
+  │                                 v                                            │
+  │ Workflow Succeeded  ──▶  Argo CD (Part 2) reconciles the new image           │
+  │                                                                              │
+  │ You: argo watch / argo logs -c main / argo retry -- never a                  │
+  │ manually-run shell script again.                                             │
+  └──────────────────────────────────────────────────────────────────────────────┘
+  PROSE RECAP: Part 2 taught you to deploy an image; Part 3 taught you
+  to BUILD one — safely, repeatably, on a schedule, with retries baked
+  in. The image that lands in the GitOps repo at the end of this
+  diagram is exactly what Part 2's Application picks up and syncs.
+  Part 4 now asks a harder question: once Argo CD deploys that new
+  image, how do you roll it out WITHOUT taking down easypj if it's bad?
+
+  🧠 ANALOGY: if Part 2 was standing up a fleet-operations department,
+     Part 3 is building the aircraft factory that department depends
+     on — an assembly line (the DAG) with parallel work stations
+     (lint/test/SAST running concurrently), quality control that can
+     re-run a failed station without scrapping the whole airframe
+     (retryStrategy), reusable blueprints (WorkflowTemplate) instead of
+     hand-drafting every plane from scratch, and a night shift
+     (CronWorkflow) that keeps running maintenance without anyone
+     clocking in.
+
+  📖 KEY TERMS YOU'LL MEET IN PART 3:
+     • Workflow — Argo's own CRD; a DAG or Steps sequence of templates,
+       each ultimately backed by a Pod.
+     • WorkflowTemplate / ClusterWorkflowTemplate — a named, reusable
+       Workflow definition other Workflows call via templateRef.
+     • DAG template — a dependency graph of tasks (`depends:` syntax)
+       that runs independent tasks in parallel automatically.
+     • retryStrategy — per-template retry policy (limit, backoff,
+       which failures qualify) so a flaky step doesn't fail the run.
+     • CronWorkflow — a Workflow on a cron schedule, governed by a
+       concurrencyPolicy (Allow/Forbid/Replace) for overlapping runs.
+     • Artifact — a file passed between steps via a configured
+       repository (S3/MinIO), not a shared volume.
+
+  ⚡ SPEED TIP (carry this through all of Part 3): default to `argo
+     resubmit`, not `argo retry`, whenever you've changed the
+     WorkflowTemplate itself since the failed run — retry replays the
+     OLD frozen spec on the same object, so a fix to the template won't
+     even apply until you resubmit.
+
+  🔑 MUST-REMEMBER: by the end of Part 3 you should be able to, from
+     memory, write a DAG-based WorkflowTemplate with parallel steps,
+     attach a retryStrategy and a CronWorkflow schedule, and diagnose a
+     stuck pipeline from the CLI without guessing. That is the Argo
+     Workflows 36% domain — the single biggest slice of the exam.
+
+  ──────────────────────────────────────────────────────────────────────────
 
 Chapter 9: Introduction to Argo Workflows
 --------------------------------------------------------------------------------
@@ -10152,12 +10669,192 @@ Chapter 13: Argo Workflows CLI, UI, and Debugging
     under real incident pressure costs real minutes.
 
 
+  ┌──── PART 3 -- KEY TAKEAWAYS ─────────────────────────────────────────────────┐
+  │ ✅ A Workflow step is, under the hood, just a Pod -- Argo Workflows          │
+  │    adds orchestration (DAG/Steps ordering) on top of primitives              │
+  │    you already know from Part 1's Kubernetes refresher.                      │
+  │ ✅ WorkflowTemplate/ClusterWorkflowTemplate make a pipeline                  │
+  │    reusable via templateRef -- never copy-paste a whole DAG again.           │
+  │ ✅ `depends:` (expression syntax) is the current way to order DAG            │
+  │    tasks -- the legacy `dependencies:` list is still readable but            │
+  │    not how you should author new Workflows.                                  │
+  │ ✅ retryStrategy + CronWorkflow + concurrencyPolicy turn easypj's            │
+  │    ops tasks (migrations, ETL, backups) into self-healing,                   │
+  │    self-scheduling automation -- zero manual `argo submit`.                  │
+  │ ✅ `argo retry` reuses the SAME object (failed nodes only);                  │
+  │    `argo resubmit` creates a NEW object and re-resolves                      │
+  │    templateRef -- picking the wrong one silently uses stale logic.           │
+  │ 🎯 EXAM: this Part IS the Argo Workflows 36% domain -- the single            │
+  │    largest CAPA domain, larger even than Argo CD's 34%.                      │
+  │ 🔑 argo submit --watch · argo logs -c main · argo retry ·                    │
+  │    argo resubmit · argo template create · argo cron create                   │
+  └──────────────────────────────────────────────────────────────────────────────┘
+  [PART 3 VISUAL SUMMARY]: one diagram from a bare 2-pod Workflows
+  install through a reusable DAG-based CI/CD template, retry/schedule
+  hardening, and 6 real easypj manifests, to full submit/watch/retry
+  operator fluency.
+  PROSE RECAP: Part 3 built the factory that produces the images Part
+  2's GitOps estate deploys — reusable, resilient, self-scheduling
+  pipelines instead of hand-run shell scripts. Part 4 now tackles what
+  happens the moment one of those images reaches the cluster: how do
+  you roll it out without betting the whole easypj-prod environment on
+  it being correct?
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PART 4: ARGO ROLLOUTS — PROGRESSIVE DELIVERY                              🟡
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Chapters 14-16 · Difficulty: Intermediate · "Ship changes gradually,
+    not instantly, and prove they're safe before 100% of users see them"
+    What you'll build: jobpost running under BOTH a Blue-Green and a
+    Canary Rollout, gated by a real Prometheus-backed AnalysisTemplate,
+    with promote/undo/abort as reflexive CLI commands.
     🎯 EASYPJ FOCUS: Canary-deploy new jobpost features (like search
        or filtering) to a small percentage of users, with automatic
        rollback if error rates spike.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PART INTRO
+  ──────────
+  Parts 2-3 solved WHO builds and deploys easypj's images. Part 4 asks
+  a sharper question: what happens the SECOND a new image reaches the
+  cluster? A plain Kubernetes Deployment's RollingUpdate is
+  availability-safe — some pods always stay up — but it is NOT
+  risk-safe: a broken image still reaches 100% of jobpost's users, just
+  a little more slowly than a hard cutover would. Part 4 replaces that
+  blind rollout with a Rollout that can PAUSE, MEASURE, and DECIDE
+  before going any further.
+
+  The core lesson threading all 3 chapters: nothing about this safety
+  is automatic. Argo Rollouts gives you the mechanism (staged traffic
+  shifting, a pause/resume state machine) but YOU have to attach the
+  sensor — an AnalysisTemplate reading real Prometheus metrics — or a
+  "canary" rollout is just a slower version of the same blind risk a
+  plain Deployment already had.
+
+  🎯 CAPA NOTE: this is the second-smallest of the 4 tool-specific
+     Parts by exam weight (18%, ahead of only Events' 12%, and behind
+     Workflows' 36% and Argo CD's 34%), but Ch16's AnalysisTemplate/
+     AnalysisRun material is flagged as the single most literally-
+     tested concept in the whole Rollouts domain — don't let the
+     smaller weight tempt you into skimming it.
+
+  [HOW THE CHAPTERS FIT — Part 4 map]
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Ch14 THE PROBLEM ──▶ Ch15 INSTALL ──▶ Ch16 APPLY IT                      │
+  │ (Deployment rolling    (Rollouts         (jobpost blue-green'd AND       │
+  │  update = availability- controller +      canary'd for real, gated by    │
+  │  safe but NOT risk-     CLI plugin,        a Prometheus AnalysisTemplate,│
+  │  safe; Blue-Green vs    Rollout CRD        promote/undo/abort as         │
+  │  Canary compared)       fields)            muscle memory)                │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Read that as: Ch14 makes you WANT a better rollout mechanism by
+  naming exactly what a plain Deployment can't do; Ch15 installs the
+  mechanism and teaches its YAML; Ch16 wires that mechanism to real
+  metrics and applies it to jobpost end to end.
+
+  ┌───────────────────────────────┬───────────────────────────────────────────┐
+  │Ch  Title                      │What it gives you                          │
+  ├───────────────────────────────┼───────────────────────────────────────────┤
+  │14  Intro to Progressive Del.  │The case for Rollouts over Deployment --   │
+  │                               │risk-safety, not just availability-safety. │
+  │15  Installation & Core        │A working Rollouts controller + CLI, and   │
+  │    Concepts                   │fluent strategy.blueGreen/canary YAML.     │
+  │16  Rollouts for easypj        │jobpost live under blue-green AND canary,  │
+  │                               │gated by a real AnalysisTemplate, with     │
+  │                               │promote/undo/abort as muscle memory.       │
+  └───────────────────────────────┴───────────────────────────────────────────┘
+
+  [PART SUMMARY + IMPLEMENTATION]
+  ──────────────────────────────
+  Implementation thread for Part 4, start to finish:
+
+    understand why RollingUpdate is availability-safe but not
+    risk-safe; compare Blue-Green vs Canary (Ch14)
+        │
+        ▼
+    install the Rollouts controller + kubectl argo rollouts
+    CLI plugin (Ch15.1-15.2)
+        │
+        ▼
+    convert an easypj Deployment to a Rollout; learn
+    strategy.blueGreen and strategy.canary fields (Ch15.3-15.4)
+        │
+        ▼
+    write a real AnalysisTemplate against Prometheus; attach it
+    to jobpost's canary steps (Ch16.3)
+        │
+        ▼
+    choose a traffic-routing provider (Ch16.4); promote/undo/
+    abort/retry a live jobpost rollout (Ch16.1-16.2, 16.5)
+
+  VISUAL — where Part 4 ends and Part 5 begins from:
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │      PART 4 END-STATE -- "jobpost SHIPS SAFELY, NOT JUST FAST"           │
+  │                                                                          │
+  │ new easypj image (from Part 3's Workflow)                                │
+  │      |                                                                   │
+  │      | Argo CD (Part 2) syncs the Rollout's new podTemplate              │
+  │      v                                                                   │
+  │ +--------------------------------------------------------------+         │
+  │ | Rollout: setWeight 10 -> pause -> AnalysisRun (Prometheus)     |       │
+  │ |   PASS -> setWeight 25 -> 50 -> 100   FAIL -> auto-abort       |       │
+  │ +-------------------------------+--------------------------------+       │
+  │                                 v                                        │
+  │ 10% live traffic, 90% stable -- weight-based split, formalized           │
+  │ via canaryService/stableService (field names taught in Ch22.4)           │
+  │                                                                          │
+  │ You: kubectl argo rollouts promote/undo/abort -- one bad canary          │
+  │ step never reaches 100% of easypj's real users.                          │
+  └──────────────────────────────────────────────────────────────────────────┘
+  PROSE RECAP: Part 4 didn't just make jobpost deploy gradually — it
+  made jobpost deploy PROVABLY safely, with a real metrics-backed gate
+  standing between a bad build and easypj's users. Part 5 now removes
+  the LAST manual step left in the whole pipeline: someone still has to
+  notice a `git push` happened and kick off Part 3's Workflow by hand.
+
+  🧠 ANALOGY: if a plain Deployment is replacing every tire on a moving
+     car one at a time, a Rollout is that same tire change PLUS a
+     mechanic (the AnalysisTemplate) checking tire pressure and
+     temperature after every single one before touching the next —
+     Blue-Green swaps the whole set at once but keeps the old set
+     bolted on nearby in case you need to swap back instantly; Canary
+     changes one tire, drives a measured distance, and only continues
+     if the readings look right.
+
+  📖 KEY TERMS YOU'LL MEET IN PART 4:
+     • Rollout — the Argo Rollouts CRD; a drop-in replacement for
+       Deployment that adds strategy.blueGreen or strategy.canary.
+     • AnalysisTemplate / AnalysisRun — the reusable metric-query
+       definition, and the live instance of it evaluating a rollout.
+     • successCondition / failureCondition — the expr-lang conditions
+       an AnalysisRun evaluates against its query result (Prometheus
+       results need `result[0]`, not bare `result`).
+     • activeService / previewService — the Blue-Green traffic-cutover
+       pair (instant switch between two full replica sets).
+     • setWeight / pause — the Canary mechanism Ch16.2 actually walks
+       through: staged traffic percentages with a wait between each
+       (canaryService/stableService are the underlying Service names
+       trafficRouting integrations target — formally covered in Ch22.4,
+       not Part 4 itself).
+     • trafficRouting — the optional integration (Istio/NGINX/ALB/
+       Gateway API) that makes canary weights EXACT traffic percentages
+       instead of a best-effort pod-count ratio.
+
+  ⚡ SPEED TIP (carry this through all of Part 4): `kubectl argo
+     rollouts get rollout <name> --watch` is the single most useful
+     command in this Part — it live-renders the whole state machine
+     (steps, current weight, AnalysisRun status) in one terminal
+     instead of piecing it together from `kubectl describe`.
+
+  🔑 MUST-REMEMBER: by the end of Part 4 you should be able to, from
+     memory, write a Rollout with either strategy, attach a working
+     Prometheus AnalysisTemplate with correct success/failure
+     conditions, and promote/abort/undo a live rollout via CLI. That is
+     the Argo Rollouts 18% domain, fully covered.
+
+  ──────────────────────────────────────────────────────────────────────────
 
 Chapter 14: Introduction to Progressive Delivery
 --------------------------------------------------------------------------------
@@ -11704,11 +12401,175 @@ Chapter 16: Argo Rollouts for easypj — Progressive Delivery in Action
     GitHub push to jobpost.
 
 
+  ┌──── PART 4 -- KEY TAKEAWAYS ─────────────────────────────────────────────┐
+  │ ✅ A plain Deployment's RollingUpdate is availability-safe (always       │
+  │    some pods up) but NOT risk-safe (a bad version still reaches          │
+  │    100% of users, just gradually) -- Rollouts adds the missing           │
+  │    risk gate.                                                            │
+  │ ✅ Nothing is automatic: auto-promote/auto-rollback both require an      │
+  │    explicitly-attached AnalysisTemplate -- canary steps alone are        │
+  │    just a timer, not a safety net.                                       │
+  │ ✅ Blue-Green uses activeService/previewService (instant cutover);       │
+  │    Canary shifts traffic via weighted setWeight/pause steps              │
+  │    (the underlying canaryService/stableService field names are           │
+  │    formalized in Ch22.4, not Part 4 itself).                             │
+  │ ✅ successCondition/failureCondition read a Prometheus vector --         │
+  │    use `result[0]`, not bare `result`, or the AnalysisRun errors.        │
+  │ ✅ Canary weight without trafficRouting configured is only a             │
+  │    best-effort POD-COUNT ratio, not an exact traffic percentage.         │
+  │ 🎯 EXAM: this Part IS the Argo Rollouts 18% domain -- smaller than       │
+  │    CD/Workflows but AnalysisTemplate/AnalysisRun is Ch16's single        │
+  │    most literally-tested concept.                                        │
+  │ 🔑 kubectl argo rollouts get rollout <n> --watch · promote ·             │
+  │    undo · abort · retry                                                  │
+  └──────────────────────────────────────────────────────────────────────────┘
+  [PART 4 VISUAL SUMMARY]: one diagram from a plain Deployment's blind
+  RollingUpdate through an installed Rollouts controller, a real
+  Prometheus AnalysisTemplate, to jobpost shipping under both
+  Blue-Green and Canary with promote/undo/abort as muscle memory.
+  PROSE RECAP: Part 4 made easypj's deploys provably safe instead of
+  just fast. Part 5 now automates the one thing still done by hand —
+  noticing that a change happened at all — by wiring real external
+  events straight into Part 3's Workflows.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PART 5: ARGO EVENTS — EVENT-DRIVEN AUTOMATION                              🟡
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Chapters 17-19 · Difficulty: Intermediate · "Remove the last human
+    trigger left in the pipeline"
+    What you'll build: 4 real EventSource+Sensor pairs for easypj —
+    push-to-deploy, an S3/minio ETL import, scheduled maintenance, and
+    a custom-resource watch — so nothing waits on a human noticing.
     🎯 EASYPJ FOCUS: Auto-deploy easypj on every GitHub push, process
        CSV job uploads from S3, and run nightly maintenance calendars.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PART INTRO
+  ──────────
+  Every automation built in Parts 2-4 still has one manual step hiding
+  at the front of it: SOMEONE has to notice a `git push` happened and
+  run `argo submit`, or notice a CSV landed in a bucket and kick off
+  the ETL Workflow by hand. Part 5 removes that last human trigger.
+  Argo Events watches the outside world — a webhook, an object landing
+  in storage, a clock, a Kubernetes resource being created — and fires
+  Part 3's Workflows (or refreshes Part 2's Argo CD Applications)
+  automatically, with zero one running a command.
+
+  It's also the smallest of the 4 tool-specific Parts by CAPA weight
+  (12%), but don't mistake "smallest weight" for "smallest chapter" —
+  Chapter 18's `dependencies`/`filters`/`triggers` fields are among the
+  most exact-field-name-tested material anywhere in this guide, because
+  there's genuinely no way to get a Sensor right by intuition alone.
+
+  🎯 CAPA NOTE: watch for the guide's own recurring GOTCHA that Argo
+     Events' webhook EventSource (this Part) is a completely different
+     component from Argo CD's own `/api/webhook` receiver (Ch6.7) — one
+     triggers a Workflow, the other just refreshes an Application's
+     sync status faster. CAPA questions deliberately test this mix-up.
+
+  [HOW THE CHAPTERS FIT — Part 5 map]
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Ch17 VOCABULARY ──▶ Ch18 WRITE IT ──▶ Ch19 APPLY IT                      │
+  │ (EventSource ->       (a real webhook     (4 shipped pairs: git push,    │
+  │  EventBus -> Sensor    EventSource +       S3/minio upload, Calendar,    │
+  │  -> Trigger; install    Sensor -- deps,     Resource-watch -- easypj     │
+  │  verified, no working   filters, triggers   now reacts to the world      │
+  │  automation yet)        written from        with zero manual steps)      │
+  │                         scratch)                                         │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Read that as: Ch17 gives you the 4-word vocabulary (EventSource,
+  EventBus, Sensor, Trigger) and a verified install with nothing
+  automated yet; Ch18 writes ONE complete EventSource+Sensor pair by
+  hand so every field has been typed at least once; Ch19 applies that
+  same pattern 4 more times against easypj's real needs.
+
+  ┌───────────────────────────────┬───────────────────────────────────────────┐
+  │Ch  Title                      │What it gives you                          │
+  ├───────────────────────────────┼───────────────────────────────────────────┤
+  │17  Intro to Event-Driven      │The EventSource/EventBus/Sensor/Trigger    │
+  │    Automation                 │vocabulary + a verified, running install.  │
+  │18  EventSources and Sensors   │A complete webhook EventSource + Sensor    │
+  │                               │(deps, data filters, triggers) from zero.  │
+  │19  Events for easypj          │4 real automations: push-to-deploy,        │
+  │                               │S3/minio ETL, Calendar backups, Resource   │
+  │                               │watch on a JobPost CRD.                    │
+  └───────────────────────────────┴───────────────────────────────────────────┘
+
+  [PART SUMMARY + IMPLEMENTATION]
+  ──────────────────────────────
+  Implementation thread for Part 5, start to finish:
+
+    learn EventSource -> EventBus -> Sensor -> Trigger;
+    verify the install (`kubectl get eventbus`) (Ch17)
+        │
+        ▼
+    write a webhook EventSource + Sensor with
+    dependencies/filters/triggers, from a blank file (Ch18)
+        │
+        ▼
+    apply it 4 times for easypj: GitHub push -> deploy,
+    S3/minio CSV -> ETL, Calendar -> nightly maintenance,
+    JobPost CRD -> auto-validation (Ch19)
+
+  VISUAL — where Part 5 ends and Part 6 begins from:
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │     PART 5 END-STATE -- "easypj REACTS -- NOBODY HAS TO REMEMBER"        │
+  │                                                                          │
+  │ git push          S3/minio        clock tick        kubectl apply        │
+  │ to jobpost         CSV upload       (Calendar)         (JobPost CRD)     │
+  │    |                  |                |                  |              │
+  │    v                  v                v                  v              │
+  │ +--------------------------------------------------------------+         │
+  │ | EventBus (JetStream) -- one shared nervous system              |       │
+  │ +-------------------------------+--------------------------------+       │
+  │                                 v                                        │
+  │ 4 Sensors  ──▶  triggers Part 3's Workflows / Part 2's Argo CD sync      │
+  │                                                                          │
+  │ Zero manual `argo submit` or `argocd app sync` left anywhere.            │
+  └──────────────────────────────────────────────────────────────────────────┘
+  PROSE RECAP: Part 5 closed the loop every earlier Part left open —
+  Parts 2-4 built the machinery (deploy, build, ship safely), and Part
+  5 made the machinery run itself. Part 6 now takes all four tools —
+  CD, Workflows, Rollouts, Events — and wires them into ONE pipeline
+  for easypj, end to end, then hardens it for real production use.
+
+  🧠 ANALOGY: if Parts 2-4 built a factory, an assembly line, and a
+     quality-control gate, Part 5 installs the motion sensors and
+     doorbells — nobody has to walk the floor checking whether a
+     shipment arrived; the sensor sees it and the line starts itself.
+
+  📖 KEY TERMS YOU'LL MEET IN PART 5:
+     • EventSource — the CRD that watches ONE external system
+       (webhook, S3/minio, Calendar, a K8s resource, and more) and
+       normalizes what it sees into a CloudEvent.
+     • EventBus — the shared messaging backbone (JetStream is current;
+       legacy NATS Streaming is deprecated) EventSources publish to and
+       Sensors subscribe from.
+     • Sensor — the CRD that listens for events, filters them, and
+       fires a Trigger once its `dependencies` are satisfied.
+     • Trigger — what actually happens: a k8s trigger (generic object
+       create) or an argoWorkflow trigger (lifecycle-aware: submit,
+       submit-from, resubmit, retry, resume, suspend, terminate, stop).
+     • CloudEvent — the CNCF-standard envelope ({id, source, type,
+       data}) every EventSource normalizes its payload into.
+
+  ⚡ SPEED TIP (carry this through all of Part 5): when a Resource
+     EventSource "isn't firing," check RBAC before touching the YAML —
+     a missing `list` verb on ITS ServiceAccount (not the Sensor's) is
+     the single most common silent failure, since the EventSource runs
+     the Informer that does the initial LIST, and it produces no error
+     message a human notices.
+
+  🔑 MUST-REMEMBER: by the end of Part 5 you should be able to, from
+     memory, write a complete EventSource+Sensor pair with correct
+     dependencies/filters/triggers, and explain exactly which of the
+     ~20 commonly-used EventSource types (of ~30+ that exist) fits a
+     given external-system scenario. That is the Argo Events 12%
+     domain, fully covered.
+
+  ──────────────────────────────────────────────────────────────────────────
 
 Chapter 17: Introduction to Event-Driven Automation
 --------------------------------------------------------------------------------
@@ -13341,11 +14202,178 @@ Chapter 19: Argo Events for easypj — Real-World Automation
     different `spec.<type>` block.
 
 
+  ┌──── PART 5 -- KEY TAKEAWAYS ─────────────────────────────────────────────┐
+  │ ✅ The chain is always EventSource -> EventBus -> Sensor -> Trigger      │
+  │    -- an EventSource never talks to a Trigger directly.                  │
+  │ ✅ `minio` is the real EventSource field for S3-compatible storage       │
+  │    -- there is no literal `s3` type, and real AWS S3 has NO              │
+  │    webhook-registration API (use the AWS-SNS EventSource instead).       │
+  │ ✅ A Sensor's `dependencies` gate WHICH events matter; `filters`         │
+  │    (data/exprs/script/time) gate WHICH payloads pass; `triggers`         │
+  │    decide WHAT fires -- k8s (generic) or argoWorkflow (submit,           │
+  │    submit-from, resubmit, retry, resume, suspend, terminate,             │
+  │    stop).                                                                │
+  │ ✅ Argo Events' own webhook (EventSource) is a DIFFERENT component       │
+  │    from Argo CD's `/api/webhook` (Ch6.7) -- one triggers                 │
+  │    Workflows, the other refreshes an Application's sync status.          │
+  │ ✅ Resource EventSources need `list` RBAC on their own                   │
+  │    ServiceAccount, not just `get`/`watch` -- the most common             │
+  │    silent-failure cause; Sensors never watch resources directly.         │
+  │ 🎯 EXAM: this Part IS the Argo Events 12% domain -- the smallest         │
+  │    by weight, but Ch18's dependencies/filters/triggers fields are        │
+  │    the densest single block of exact-field-name questions.               │
+  │ 🔑 kubectl get eventsource/sensor/eventbus -n argo-events ·              │
+  │    kubectl logs deploy/eventbus-controller                               │
+  └──────────────────────────────────────────────────────────────────────────┘
+  [PART 5 VISUAL SUMMARY]: one diagram from the bare EventSource/
+  EventBus/Sensor/Trigger vocabulary through one hand-written webhook
+  pair, to 4 real easypj automations reacting to pushes, uploads, the
+  clock, and custom-resource creation with zero manual triggers left.
+  PROSE RECAP: Part 5 made easypj a system that reacts to the world
+  instead of waiting on a human to notice it changed. Part 6 now wires
+  all four Argo tools — CD, Workflows, Rollouts, Events — into one
+  production-grade pipeline and hardens it for real use.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PART 6: EASYPJ IN PRODUCTION — FULL ARGO INTEGRATION                      🔴
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Chapters 20-22 · Difficulty: Advanced · "Wire all four tools
+    together, then make it trustworthy"
+    What you'll build: one real zero-touch pipeline where a single
+    `git push` is the only human action anywhere — plus the backup,
+    security, DR, and multi-tenancy posture to run it responsibly.
     🎯 EASYPJ FOCUS: Wire ALL Argo tools together into one seamless
        pipeline: push code → test → build → deploy → canary → monitor.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PART INTRO
+  ──────────
+  Parts 2-5 each mastered ONE Argo tool in isolation. Part 6 is where
+  that isolation ends: you already have everything needed to wire CD,
+  Workflows, Rollouts, and Events into one continuous pipeline — this
+  Part is about actually DOING it, then making sure it survives contact
+  with a real production environment, real auditors, and real incidents.
+
+  Unlike Parts 2-5, this Part carries no dedicated CAPA competency
+  weight of its own — Appendix H labels it "Integration: Ch 20-22." But
+  don't read that as "skip it." It's exactly where questions that
+  combine knowledge across multiple domains live, and those are
+  routinely the hardest questions on the actual exam, because they
+  require recognizing which tool's mental model applies to a scenario
+  that doesn't announce itself.
+
+  🎯 CAPA NOTE: Chapter 21 explicitly reinforces (not primarily
+     teaches) the official competency "Identify Common Reconciliation
+     Patterns" — its real job is making sure the watch-diff-reconcile
+     loop you first met in Ch3's Under-the-Hood, and have now seen
+     separately in Ch6, Ch11, and Ch19, is recognized as ONE idea, not
+     four unrelated ones.
+
+  [HOW THE CHAPTERS FIT — Part 6 map]
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Ch20 WIRE IT ──▶ Ch21 GENERALIZE ──▶ Ch22 HARDEN IT                      │
+  │ (one zero-touch      (4 canonical         (backup/HA reality, a          │
+  │  pipeline: push ->    integration           corrected security top-      │
+  │  Events -> Workflows   patterns you can      10, DR/cost/multi-          │
+  │  -> CD -> Rollouts,     recognize in ANY      tenancy/migration/         │
+  │  end to end)            future scenario)      culture)                   │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Read that as: Ch20 proves the integration works, concretely, on
+  easypj; Ch21 pulls back and generalizes what you just built into 4
+  reusable shapes; Ch22 asks the uncomfortable "but what happens when
+  this breaks, or gets audited, or needs to scale to another team"
+  questions and answers them for real.
+
+  ┌───────────────────────────────┬───────────────────────────────────────────┐
+  │Ch  Title                      │What it gives you                          │
+  ├───────────────────────────────┼───────────────────────────────────────────┤
+  │20  End-to-End CI/CD Pipeline  │ONE real zero-touch pipeline: git push is  │
+  │                               │the only human action left, anywhere.      │
+  │21  Integration Patterns       │Pattern-recognition -- 4 canonical shapes  │
+  │                               │so any new scenario maps to a known one.   │
+  │22  Production Hardening       │A trust posture: real backup/HA model,     │
+  │                               │corrected security top-10, DR/cost/multi-  │
+  │                               │tenancy/migration/culture playbooks.       │
+  └───────────────────────────────┴───────────────────────────────────────────┘
+
+  [PART SUMMARY + IMPLEMENTATION]
+  ──────────────────────────────
+  Implementation thread for Part 6, start to finish:
+
+    wire Events -> Workflows -> Argo CD -> Rollouts into one
+    pipeline; optimize it (parallel DAG, kaniko, caching) (Ch20)
+        │
+        ▼
+    step back and name the 4 canonical integration patterns
+    this pipeline is really an instance of (Ch21.1)
+        │
+        ▼
+    connect them all to the SAME shared reconciliation model
+    every Argo tool is secretly built on (Ch21.2)
+        │
+        ▼
+    audit backup/HA reality, fix the security top-10, and add
+    DR/cost/multi-tenancy/migration/culture playbooks (Ch22)
+
+  VISUAL — where Part 6 ends and Part 7 begins from:
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │   PART 6 END-STATE -- "easypj RUNS ITSELF, RESPONSIBLY"                  │
+  │                                                                          │
+  │ git push  ─▶  Events (Pt5)  ─▶  Workflows (Pt3): test/build/push         │
+  │                                        |                                 │
+  │                                        v                                 │
+  │                          Argo CD (Pt2) reconciles GitOps repo            │
+  │                                        |                                 │
+  │                                        v                                 │
+  │                    Rollouts (Pt4): canary + Prometheus gate              │
+  │                                        |                                 │
+  │                                        v                                 │
+  │         Hardened: real backups (Git, not a DB), corrected RBAC,          │
+  │         DR plan, multi-tenant AppProjects, migration playbook            │
+  │                                                                          │
+  │ ONE human action anywhere in this diagram: `git push`.                   │
+  └──────────────────────────────────────────────────────────────────────────┘
+  PROSE RECAP: Part 6 took four separately-mastered tools and made them
+  behave like one system — self-triggering, self-deploying,
+  self-verifying, and (per Ch22) actually safe to hand to a real team.
+  Part 7 now shifts entirely from BUILDING to PROVING you know all of
+  this — CAPA exam strategy, practice questions across every domain,
+  and a full hands-on simulation.
+
+  🧠 ANALOGY: Parts 2-5 each trained one specialist — a GitOps engineer,
+     a CI/CD engineer, a release engineer, an automation engineer. Part
+     6 is the day they all start working the same shift: Ch20 is their
+     first real joint project, Ch21 is the playbook they write down
+     afterward so the NEXT project doesn't start from scratch, and
+     Ch22 is the on-call runbook, security review, and budget meeting
+     that comes with actually being trusted with production.
+
+  📖 KEY TERMS YOU'LL MEET IN PART 6:
+     • Watch → diff → reconcile — the shared control-loop shape
+       underneath Argo CD's application-controller, Argo Workflows'
+       Controller, Argo Rollouts' controller, and Argo Events' Sensor.
+     • Push-to-Deploy / Manifest Generation / CD+Rollouts / Cluster
+       Watchdog — the 4 canonical integration patterns Ch21 names.
+     • Sharded StatefulSet — how application-controller scales (by
+       cluster), distinct from a plain-Deployment replica scale-out.
+     • Disaster recovery (DR) — for Argo CD specifically, this means
+       Git (not a database backup) is the real recovery source.
+
+  ⚡ SPEED TIP (carry this through all of Part 6): when a scenario
+     mixes tools, identify the trigger FIRST (what starts the chain —
+     a push? a schedule? a resource watch?) before worrying about which
+     tool does the deploying — the trigger is what tells you which of
+     Ch21's 4 patterns you're actually looking at.
+
+  🔑 MUST-REMEMBER: by the end of Part 6 you should be able to, from
+     memory, describe one end-to-end zero-touch pipeline using all four
+     Argo tools, name which of the 4 integration patterns a novel
+     scenario matches, and state Argo CD's real backup/HA/security
+     posture without inventing a database that doesn't exist.
+
+  ──────────────────────────────────────────────────────────────────────────
 
 Chapter 20: End-to-End CI/CD Pipeline with Argo
 --------------------------------------------------------------------------------
@@ -15056,12 +16084,180 @@ Chapter 22: Production Hardening and Best Practices
     into exam readiness.
 
 
+  ┌──── PART 6 -- KEY TAKEAWAYS ─────────────────────────────────────────────┐
+  │ ✅ All four Argo tools share ONE reconciliation shape -- watch ->        │
+  │    diff -> reconcile -- Ch21 makes that explicit so you recognize        │
+  │    it in scenarios the guide never literally covered.                    │
+  │ ✅ The 4 canonical integration patterns: Push-to-Deploy, Manifest        │
+  │    Generation, CD+Rollouts (Progressive Delivery), Cluster               │
+  │    Watchdog -- almost every real scenario is one of these four.          │
+  │ ✅ Argo CD has NO database of its own -- Git is the real backup;         │
+  │    Redis is a disposable cache, never a source of truth.                 │
+  │ ✅ application-controller shards by CLUSTER (StatefulSet), while         │
+  │    argocd-server/repo-server just scale as plain Deployments --          │
+  │    "add more replicas" means different things per component.             │
+  │ ✅ AppProject resourceWhitelist matters even when namespaces are         │
+  │    already isolated -- namespace scoping alone never blocks a            │
+  │    cluster-scoped resource kind.                                         │
+  │ 🎯 This Part is "Beyond CAPA" -- no dedicated exam-weighted              │
+  │    competency, but it's where all 4 domains' knowledge gets              │
+  │    tested together, the way real incidents actually happen.              │
+  │ 🔑 kubectl get applications,appprojects -A -o yaml ·                     │
+  │    argocd app get --hard-refresh · git log (the real audit log)          │
+  └──────────────────────────────────────────────────────────────────────────┘
+  [PART 6 VISUAL SUMMARY]: one diagram from four separately-mastered
+  tools through one wired, optimized zero-touch pipeline, generalized
+  into 4 reusable integration patterns, and hardened with a real
+  backup/security/DR/multi-tenancy posture.
+  PROSE RECAP: Part 6 proved everything from Parts 1-5 works together,
+  not just in isolation — and made it safe to actually run. Part 7 now
+  turns entirely toward the exam itself: strategy, practice questions
+  across all four domains, and a full timed simulation.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PART 7: CAPA EXAM PREPARATION                                             🔴
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Chapters 23-25 · Difficulty: Advanced · "Stop building, start
+    proving you know it"
+    What you'll build: nothing new — this Part converts everything from
+    Chapters 1-22 into exam readiness, ending with a real 60-minute,
+    10-task, pass-bar-scored simulation.
     🎯 EASYPJ FOCUS: All practice questions and hands-on labs use the
        easypj/jobpost project. You'll install, deploy, workflow,
        canary, and event-trigger easypj in simulated exam scenarios.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  PART INTRO
+  ──────────
+  Parts 1-6 taught and built. Part 7 does neither — it's the gate you
+  walk through to find out whether Parts 1-6 actually stuck. Nothing
+  here is new material; every fact, command, and YAML field in these 3
+  chapters was already taught somewhere in Chapters 1-22. What's new is
+  the CONDITION you're tested under: shuffled across all 4 domains,
+  against a clock, multiple-choice only, with no terminal and no docs
+  to lean on — exactly how the real CAPA exam works.
+
+  This is also the shortest Part by chapter count (3) but arguably the
+  highest-leverage one to NOT skip: it's where you find out which of
+  the 4 domains is actually your weak spot, before an exam fee is on
+  the line rather than a self-scored practice run.
+
+  🎯 CAPA NOTE: the single most important fact in this whole Part is
+     the one Ch23.1's GOTCHA states directly — CAPA is closed-book and
+     does NOT hand you a live terminal, unlike CKA/CKAD/CKS. Every hook,
+     drill, and lab in Chapters 1-22 exists to build MCQ recall speed,
+     not CLI muscle memory for its own sake. Recalibrate your practice
+     accordingly if you've studied for a hands-on Linux Foundation exam
+     before.
+
+  [HOW THE CHAPTERS FIT — Part 7 map]
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Ch23 STRATEGY ──▶ Ch24 ALL-DOMAINS ──▶ Ch25 SIMULATE                     │
+  │ (format, timing,     (35 questions,     (all 4 tools wired on a          │
+  │  domain weights,      all 4 domains       fresh cluster, then a real     │
+  │  the closed-book,     back-to-back,       60-min/10-task timed run       │
+  │  no-terminal reality) self-scored)        at CAPA's real pass bar)       │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Read that as a narrowing funnel: Ch23 tells you the RULES you're
+  playing by (timing, format, the closed-book/no-terminal reality);
+  Ch24 tests you across ALL 4 domains in one sitting, no longer fresh
+  off that domain's own chapter; Ch25 tests you under the real CLOCK (a
+  timed, scored, hands-on simulation) — each chapter removes one more
+  practice-condition comfort the earlier chapters of this guide gave you.
+
+  ┌───────────────────────────────┬───────────────────────────────────────────┐
+  │Ch  Title                      │What it gives you                          │
+  ├───────────────────────────────┼───────────────────────────────────────────┤
+  │23  Exam Overview & Strategy   │Format facts (90 min, ~60 MCQ, closed      │
+  │                               │book, no terminal) + a timing strategy.    │
+  │24  Practice Questions         │35 questions across all 4 domains --       │
+  │                               │domain-ID practice without a chapter's     │
+  │                               │own fresh context to lean on.              │
+  │25  Hands-On Labs / Simulation │A real 60-min/10-task simulation at        │
+  │                               │CAPA's real pass bar -- proof, not a guess.│
+  └───────────────────────────────┴───────────────────────────────────────────┘
+
+  [PART SUMMARY + IMPLEMENTATION]
+  ──────────────────────────────
+  Implementation thread for Part 7, start to finish:
+
+    learn the real format: 90 min, ~60 MCQ, closed-book,
+    no terminal, ~75% unpublished pass bar (Ch23.1)
+        │
+        ▼
+    build an exam-day timing strategy: ~90s/question,
+    flag-and-return, never leave a blank (Ch23.2)
+        │
+        ▼
+    drill 35 questions across all 4 domains;
+    self-score per domain to find weak spots (Ch24)
+        │
+        ▼
+    stand up all 4 tools from memory on a fresh cluster,
+    using only the Appendices as reference (Ch25.1-25.4)
+        │
+        ▼
+    run the real 60-minute, 10-task, pass-bar-scored
+    simulation (Ch25.5)
+
+  VISUAL — where Part 7 ends and the Appendices begin:
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │      PART 7 END-STATE -- "READY TO BOOK THE EXAM"                        │
+  │                                                                          │
+  │ Chapters 1-22 (all 4 tools, taught + drilled individually)               │
+  │      |                                                                   │
+  │      | Ch23: know the format, budget 90s/question, never blank           │
+  │      v                                                                   │
+  │ Ch24: 35 questions across all 4 domains, self-scored                     │
+  │      |                                                                   │
+  │      | per-domain weak spots identified                                  │
+  │      v                                                                   │
+  │ Ch25: fresh cluster, all 4 tools wired from memory, timed                │
+  │      |                                                                   │
+  │      v                                                                   │
+  │ Score >= 75% on the 60-min/10-task simulation  ──▶  book the exam        │
+  └──────────────────────────────────────────────────────────────────────────┘
+  PROSE RECAP: Part 7 didn't teach you anything Chapters 1-22 hadn't
+  already covered — it just removed every comfort those chapters gave
+  you (context, order, unlimited time) until what's left is exactly
+  what the real exam room feels like. If Ch25.5's score clears CAPA's
+  real pass bar, you're not guessing you're ready — you have a rubric
+  that says so. From here, the Appendices (A-J) are pure reference: no
+  new teaching, just the cheat-cards and glossaries you'll want open
+  during a LAST review pass, never during the exam itself.
+
+  🧠 ANALOGY: Chapters 1-22 were flight school — lesson by lesson,
+     instructor next to you, as much time as you needed. Part 7 is the
+     checkride: Ch23 is the pre-flight briefing on exactly what the
+     examiner will and won't allow, Ch24 is flying maneuvers out of
+     order with no warning which one's next, and Ch25 is the actual
+     checkride — timed, scored, solo.
+
+  📖 KEY TERMS YOU'LL MEET IN PART 7:
+     • Domain shuffle — the real exam's practice of mixing all 4
+       domains together with no signal which is which, unlike this
+       guide's own per-chapter practice questions.
+     • Domain identification — recognizing which of the 4 domains a
+       question belongs to from its CRD names/keywords, fast, before
+       attempting to answer it.
+     • Pass bar — CAPA's unpublished but estimated ~75% cutoff; Ch25.5
+       uses this as its own simulation's scoring target.
+     • Flag-and-return — the exam-day habit of never freezing on one
+       question; mark it uncertain, move on, come back if time remains.
+
+  ⚡ SPEED TIP (carry this through all of Part 7): time yourself on
+     EVERY practice question from Ch24 onward, not just Ch25.5's formal
+     simulation — 90 seconds per question is a hard habit to build
+     under real exam adrenaline if you've never rehearsed it.
+
+  🔑 MUST-REMEMBER: by the end of Part 7 you should know CAPA's exact
+     format cold, have a self-scored sense of your weakest domain, and
+     have cleared Ch25.5's simulation at or above the real pass bar. If
+     all three are true, the only thing left is booking the exam.
+
+  ──────────────────────────────────────────────────────────────────────────
 
 Chapter 23: CAPA Exam Overview and Strategy
 --------------------------------------------------------------------------------
