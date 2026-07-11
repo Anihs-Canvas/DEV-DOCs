@@ -1,0 +1,462 @@
+================================================================================
+  ODDS TARGETING & LEAGUE SELECTION GUIDE
+  Companion to: soccer_prediction_app_plan.txt
+  Purpose: WHICH odds bands to bet, WHEN to take the price, and WHICH
+           leagues the models should focus on for the highest
+           predictability and softest markets.
+  Author: Claude | Date: 2026-07-10 | Version: 2.0
+
+  CHANGELOG v2.0 (revision of v1.0):
+   * Added bet-TIMING strategy (early vs closing price, CLV discipline)
+   * Added bookmaker landscape: sharp vs soft books, limits, exchanges
+   * League Predictability Index now has a concrete weighted formula
+   * Added football-data.co.uk ingestion codes for every listed league
+   * Added seasonal coverage calendar (year-round pick flow)
+   * Added worked EV + quarter-Kelly example
+   * Added RiskProfile seed-data block mapping to the master plan schema
+   * Base rates re-hedged as ranges; several v1.0 point figures softened
+
+  CONTENTS
+   0. How to use this file
+   1. Core principles (bias, margin, timing)
+   2. Odds bands — target / avoid table
+   3. Per-market targeting table
+   4. Bookmaker landscape & line shopping
+   5. League Predictability Index (LPI) — scoring formula
+   6. Tier 1 leagues (start here) + ingestion codes
+   7. Tier 2 expansion leagues
+   8. Hard exclusions
+   9. Seasonal coverage calendar
+  10. Portfolio construction across leagues
+  11. Worked example (EV + Kelly)
+  12. RiskProfile seed data
+  13. Quick-reference cheat sheet
+
+  NOTE ON NUMBERS: all rates below are approximate multi-season ranges
+  meant for prioritization, not gospel. The backtester (master plan
+  section 9) must re-verify every figure on YOUR ingested data before
+  any threshold goes live. League character changes over time —
+  dominant-team eras end, formats change, scoring trends drift. The
+  quarterly LPI review (section 5) exists to catch exactly that.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+0. HOW TO USE THIS FILE
+--------------------------------------------------------------------------------
+  This file is DB seed data with commentary, not reading material.
+  Pipeline:
+    1. Seed the thresholds in sections 2, 3, 12 into valuebets.RiskProfile
+       and a new valuebets.MarketRule table (odds window, min edge, tier,
+       league whitelist per market).
+    2. Run the walk-forward backtester over each (league, market, odds
+       band) cell. Keep cells that show positive yield AND positive CLV
+       over >= 2 seasons; disable the rest. Expect roughly half of the
+       cells in this file to survive — that is normal and good.
+    3. Re-run the LPI + cell review quarterly. Rules live in the DB and
+       are edited in Django admin — never hard-coded.
+
+
+--------------------------------------------------------------------------------
+1. CORE PRINCIPLES — WHY ODDS BANDS ARE NOT EQUALLY BEATABLE
+--------------------------------------------------------------------------------
+  A) FAVORITE-LONGSHOT BIAS (the most documented inefficiency in sports
+     betting): recreational money chases big payouts, so bookmakers
+     shade longshot odds well below fair value and can price favorites
+     close to fair. Consequences:
+       * Short-priced favorites lose the LEAST to the margin.
+       * Longshots (> ~7.0) are structurally the worst bets in soccer.
+         Expected loss betting random longshots is several times worse
+         than betting random favorites.
+       * Model calibration is also weakest in the tails — so a "big edge"
+         on a longshot is more likely a model error than a market error.
+
+  B) MARGIN CONCENTRATION: the bookmaker's vig is not spread evenly
+     across a market's selections — disproportionate margin sits on the
+     draw and the outsider. De-vigging with Shin's method (master plan
+     5.6) exposes this. Your value engine will naturally surface more
+     edges on favorites and mid-range prices. Trust that pattern.
+
+  C) TIMING — WHEN TO TAKE THE PRICE (CLV discipline):
+     * Odds open ~5-7 days out at low limits, sharpen continuously, and
+       are most accurate at kickoff (the closing line).
+     * Soft bookmakers lag sharp moves by minutes-to-hours. The system's
+       cheapest edge: detect a sharp-book move (Pinnacle/exchange) and
+       take the stale price at a lagging soft book before it follows.
+     * Favorites that the model likes are usually best taken EARLY
+       (public money later shortens them); popular overs/big-club prices
+       drift the other way. Backtest per market: "price taken at T-24h
+       vs closing" tells you the optimal capture window empirically.
+     * Track CLV on every bet (bet.clv in the schema). If picks
+       consistently beat the close, profit follows; if CLV is negative,
+       stop and fix the model — do not wait for the bankroll to prove it.
+
+  D) LIQUIDITY & LIMITS REALITY: soft books limit or close winning
+     accounts, often within weeks. Plan for it: spread volume across
+     books, prefer exchanges (Betfair) and limit-friendly sharps
+     (Pinnacle) as volume grows, and treat account longevity as a
+     managed resource. This affects WHERE the best-odds engine should
+     route (section 4).
+
+
+--------------------------------------------------------------------------------
+2. ODDS BANDS — WHAT TO TARGET, WHAT TO AVOID
+--------------------------------------------------------------------------------
+
+  BAND         VERDICT       EXPECTED    NOTES
+                             HIT RATE
+  ------------------------------------------------------------------------------
+  1.01-1.09    AVOID            —        No room for error; one upset erases
+                                         10-90 wins; margin eats everything;
+                                         stake limits bite hardest here.
+  1.10-1.35    SAFE TIER     78-92%      The "low risk" product: Double
+                                         Chance, Draw No Bet, Over 0.5/1.5,
+                                         heavy Asian Handicaps. Only with
+                                         verified edge >= 1.5% — at these
+                                         odds tiny mispricings decide
+                                         profit vs slow bleed.
+  1.35-1.60    SAFE/VALUE    62-75%      Strong favorites in stable leagues,
+               OVERLAP                   DNB on away favorites, Over 1.5 in
+                                         scoring leagues. Consistency zone.
+  1.60-2.60    PRIME VALUE   40-60%      Main hunting ground. Margins are
+               ZONE                      thinnest here, 3-6% edges are
+                                         realistic, Kelly stakes meaningful.
+                                         Most long-run PROFIT lives here
+                                         despite the modest hit rate.
+  2.60-4.00    SELECTIVE     26-38%      Good away teams vs overrated homes.
+                                         Require edge >= 5-6%; variance is
+                                         high; cap stakes at half normal.
+  4.00-7.00    RARE          15-25%      Only with modeled edge >= 8% AND a
+                                         structural reason confirmed (key
+                                         absence, verified rotation,
+                                         motivation mismatch). Quarter-Kelly
+                                         keeps these stakes tiny anyway.
+  > 7.00       NEVER            —        Favorite-longshot kill zone. Hard
+                                         filter in the pick engine: never
+                                         published, regardless of modeled
+                                         edge — calibration is least
+                                         trustworthy exactly here.
+
+  DRAWS — SPECIAL CASE:
+    Draw odds (typically 3.0-3.6) carry disproportionate margin, and
+    models predict draws poorly (the draw is the residual outcome, and
+    gradient-boosted 1X2 models systematically under-call it). Do NOT
+    bet raw draws in MVP. Phase 6 specialist model only, on a narrow
+    profile: evenly-Elo'd, low-xG, defensively strong pairs late in the
+    season (France/Italy mid-table archetype). Until then, draw risk is
+    handled by SELLING it (DNB, DC) rather than buying it.
+
+
+--------------------------------------------------------------------------------
+3. PER-MARKET TARGETING TABLE (INITIAL SEED — BACKTESTER RE-TUNES ALL)
+--------------------------------------------------------------------------------
+  Market                Odds window   Min edge   Tier    Notes
+  ------------------------------------------------------------------------------
+  1X2 home favorite     1.45 - 2.20     3.0%     VALUE   Core market.
+  1X2 away favorite     1.60 - 2.40     3.5%     VALUE   Market underrates
+                                                         good away sides in
+                                                         mid-tier leagues.
+  1X2 away value        2.20 - 3.50     5.0%     VALUE   Half stakes.
+  Double Chance 1X/X2   1.15 - 1.45     1.5%     SAFE    Flagship safe pick.
+  Draw No Bet           1.25 - 1.70     2.0%     SAFE    Cleaner than DC for
+                                                         CLV measurement.
+  Over 1.5 goals        1.15 - 1.40     1.5%     SAFE    Scoring leagues only
+                                                         (see 6.3).
+  Over 2.5 goals        1.60 - 2.10     3.0%     VALUE   Style-stable leagues.
+  Under 2.5 goals       1.60 - 2.10     3.0%     VALUE   Unders leagues (6.4);
+                                                         beware late-season
+                                                         dead rubbers going
+                                                         over.
+  BTTS Yes / No         1.55 - 2.10     3.0%     VALUE   Derive from DC goal
+                                                         matrix + calibrate
+                                                         separately.
+  AH -0.25 / -0.5       1.70 - 2.05     3.0%     VALUE   Quarter lines OK;
+                                                         model must price the
+                                                         half-win/half-push
+                                                         split exactly.
+  AH -1.0 (favorites)   1.35 - 1.55     2.0%     SAFE    Push insurance makes
+                                                         this the safest way
+                                                         to back big favorites.
+  Correct score / HT-FT     —            —       NEVER   Margin monsters; even
+                                                         good goal models lose
+                                                         here.
+
+
+--------------------------------------------------------------------------------
+4. BOOKMAKER LANDSCAPE & LINE SHOPPING
+--------------------------------------------------------------------------------
+  Classify every book in the bookmaker table (is_sharp flag exists in
+  the schema; add a `limits_winners` boolean):
+
+  SHARP (price-setters — use as TRUTH SIGNAL, bet for volume/longevity):
+    * Pinnacle — lowest margins (2-3% on big leagues), welcomes winners,
+      its closing line is the calibration benchmark for the whole system.
+    * Betfair Exchange — no bookmaker margin (commission instead), true
+      market prices, best for large stakes; liquidity thin in small
+      leagues before matchday.
+  SOFT (price-followers — where most VALUE is captured, until limited):
+    * bet365, William Hill, Betway, Unibet/Kindred, 888, local books.
+    * They lag sharp moves and run promotions => stale prices = your EV.
+    * They limit winners; expect a soft-book account to have a lifetime.
+  BEST-ODDS ENGINE RULES:
+    * For every (match, market, selection): best price across books,
+      minus a realistic availability haircut (1-2%) in backtests.
+    * Line shopping alone is worth 1-3% ROI — the cheapest edge in the
+      entire system. It is also the difference between a losing and a
+      winning system at the margins.
+    * Consensus probability = margin-weighted blend leaning on sharps;
+      soft-vs-sharp divergence > 4-5% is itself a pick trigger (steam
+      chase) and a feature (master plan 5.5).
+
+
+--------------------------------------------------------------------------------
+5. LEAGUE PREDICTABILITY INDEX (LPI) — CONCRETE SCORING
+--------------------------------------------------------------------------------
+  Score each league quarterly, 0-100. Build as a Django admin report.
+
+    LPI = 25 * imbalance      (normalized Elo spread / rating Gini —
+                               dominant top teams => certainty at the top)
+        + 15 * (1 - draw_rate_norm)   (draws are the model-killer)
+        + 15 * style_stability (season-over-season correlation of league
+                               O2.5 & BTTS base rates; stable => derived
+                               markets calibrate)
+        + 10 * (1 - churn)     (managerial + roster mid-season turnover)
+        + 15 * data_depth      (0.3 results-only, 0.7 + odds archive,
+                               1.0 + xG/lineups/injuries)
+        + 10 * market_softness (inverse of league fame/liquidity — EPL
+                               ~0.05, Norwegian 2nd tier ~0.9)
+        + 10 * integrity       (1.0 clean history; 0 on any fixing flags;
+                               a single confirmed fixed match = league
+                               suspended from the pick engine)
+
+  Cutoffs: LPI >= 60 => eligible for pick generation
+           45-59      => model-training data only
+           < 45       => ingest-and-watch, no bets
+
+  THE TRADE-OFF TRIANGLE (you rarely get all three):
+      Predictability  x  Market Softness  x  Data Quality
+   * Big-5 leagues: best data, decent predictability, HARDEST markets.
+   * Mid-tier European leagues: good data, good predictability, medium
+     softness  <-- the sweet spot for the VALUE tier.
+   * Exotic/lower divisions: soft markets but data too thin — a modeled
+     "edge" there is usually noise. Enter only with a proven data feed.
+
+
+--------------------------------------------------------------------------------
+6. TIER 1 — BEST LEAGUES TO START WITH
+--------------------------------------------------------------------------------
+  All have historical results + closing odds on football-data.co.uk
+  (code in [brackets] = its CSV file code; "extra" = the extra-leagues
+  file) and live coverage on API-Football. Base rates shown as
+  (Home / Draw / Away | Over 2.5) — multi-season approximate ranges.
+
+  6.1 DOMINANT-TEAM LEAGUES (SAFE-tier goldmines)
+   * SCOTLAND Premiership [SC0]       (~40/24/36 | ~50-53%)
+       Celtic/Rangers vs bottom-half = Europe's most certain fixtures.
+       Away% is inflated BY the Old Firm winning away — model the split.
+       Raw odds on them are tiny; bet the derived markets (DC/DNB/AH).
+   * PORTUGAL Primeira Liga [P1]      (~43/25/32 | ~47-51%)
+       Big-3 dominance (Benfica/Porto/Sporting); top-vs-bottom highly
+       predictable; market meaningfully softer than Big-5.
+   * NETHERLANDS Eredivisie [N1]      (~46/23/31 | ~56-62%)
+       Twin edge: top-3 dominance AND Europe's most reliable Overs
+       league. Over 1.5/2.5 models calibrate beautifully here.
+   * AUSTRIA Bundesliga [extra]       (~44/24/32 | ~55-58%)
+       Salzburg-era dominance, high scoring, softer market. Note the
+       points-halving playoff split — the model must handle the format.
+   * SWITZERLAND Super League [extra] (~43/25/32 | ~55-58%)
+       Similar profile; YB/Basel dominance cycles.
+   * GREECE Super League [G1]         (~43/26/31 | ~42-46%)
+       Big-4 dominance, strong home advantage, LOW scoring => Unders +
+       home DC. Integrity: monitor — historical fixing incidents.
+   * TURKEY Super Lig [T1]            (~45/24/31 | ~51-55%)
+       Istanbul-club dominance + one of Europe's strongest home edges.
+       Volatile officiating => stick to 1X2/OU/DC, skip cards markets.
+
+  6.2 BIG-5 LEAGUES (training mass + market-aware features; smaller edges)
+   * GERMANY Bundesliga [D1]          (~44/24/32 | ~53-58%)
+       Highest-scoring Big-5; Bayern-era top-end certainty; elite data.
+       Best Big-5 league for Overs/BTTS models.
+   * SPAIN La Liga [SP1]              (~46/25/29 | ~44-48%)
+       Top-3 certainty; low scoring => Unders lean; strong home edge.
+   * ENGLAND Premier League [E0]      (~44/24/32 | ~51-55%)
+       Sharpest soccer market on earth. Use as CALIBRATION BENCHMARK
+       and rich training data, not a primary profit source. If the
+       model shows big EPL edges, suspect a bug before genius.
+   * ITALY Serie A [I1]               (~41/27/32 | ~50-54%)
+       Higher draw rate => harder 1X2; decent O/U + BTTS stability;
+       late-season motivation asymmetries are genuinely exploitable.
+   * FRANCE Ligue 1 [F1]              (~44/26/30 | ~48-52%)
+       PSG-era top certainty; the rest of the table is noisy; draws
+       frequent. Treat mid-table 1X2 with suspicion.
+
+  6.3 HIGH-SCORING SPECIALISTS (build Overs/BTTS models here)
+   * NORWAY Eliteserien [extra]       (O2.5 ~55-60%) — summer league:
+       fills June-August when Europe sleeps.
+   * SWEDEN Allsvenskan [extra]       (O2.5 ~53-57%) — same role.
+   * GERMANY 2. Bundesliga [D2]       (O2.5 ~53-58%) — good data, softer
+       market than the Bundesliga.
+   * NETHERLANDS Eerste Divisie [N2-not on FDCO; API only]
+       (O2.5 ~58-63%) — one of Europe's highest-scoring second tiers;
+       thinner data => derived goals markets only, half stakes.
+
+  6.4 LOW-SCORING / UNDERS SPECIALISTS
+   * FRANCE Ligue 2 [F2]              (O2.5 ~40-45%) — chronic Unders.
+   * ITALY Serie B [I2]               (low scoring, high draws) —
+       Under 2.5 + DC value; avoid raw 1X2.
+   * SPAIN LaLiga 2 [SP2]             (similar Unders + draws profile).
+
+
+--------------------------------------------------------------------------------
+7. TIER 2 — EXPANSION LEAGUES (ONLY AFTER 2+ BACKTESTED PROFITABLE SEASONS)
+--------------------------------------------------------------------------------
+   * BELGIUM Pro League [B1]     — good data, medium softness; the
+                                   points-halving playoff format splits
+                                   the season — model must know the stage.
+   * DENMARK Superliga [extra]   — stable, decent data, softer market.
+   * CROATIA HNL                 — Dinamo dominance (SAFE tier); thin data.
+   * CZECH Fortuna Liga          — Slavia/Sparta/Plzen dominance.
+   * POLAND Ekstraklasa [extra]  — soft market, mediocre data, volatile.
+   * JAPAN J1 [extra]            — good data quality, disciplined play,
+                                   low churn; timezone diversifies the
+                                   daily pick schedule.
+   * USA MLS [extra]             — AVOID 1X2 (salary-cap parity, travel,
+                                   high variance); usable for Overs only.
+   * BRAZIL Serie A [extra]      — liquid but high churn, travel/altitude
+                                   effects, cup congestion. Advanced.
+   * ARGENTINA Primera [extra]   — chaotic format changes, high draws,
+                                   low scoring. Unders only, if at all.
+
+
+--------------------------------------------------------------------------------
+8. HARD EXCLUSIONS (FILTERS CODED INTO THE PICK ENGINE)
+--------------------------------------------------------------------------------
+   * International friendlies       — motivation unknowable. Never.
+   * Club friendlies / pre-season   — rotation lottery. Never.
+   * Youth / reserve / U21 leagues  — data garbage + integrity risk.
+   * Early cup rounds with rotation — unless the lineup-confirmed
+     re-prediction (master plan 5.4) explicitly clears the pick.
+   * Dead rubbers at season end     — excluded UNLESS the model carries
+     an explicit motivation feature; then relegation six-pointers vs
+     nothing-to-play-for sides become a niche edge, not a trap.
+   * Any league with < 3 seasons of ingested history + odds archive.
+   * Integrity auto-blacklist: sudden heavy odds moves on meaningless
+     matches => flag the team pair, suspend picks, review manually.
+
+
+--------------------------------------------------------------------------------
+9. SEASONAL COVERAGE CALENDAR (YEAR-ROUND PICK FLOW)
+--------------------------------------------------------------------------------
+              J  F  M  A  M  J  J  A  S  O  N  D
+  Big-5 + most of Europe (Aug-May)
+              ██ ██ ██ ██ █.          .█ ██ ██ ██ ██
+  Norway / Sweden (summer leagues)
+                    .█ ██ ██ ██ ██ ██ ██ █.
+  Japan J1
+              .█ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ █.
+  MLS (Overs only)
+                 .█ ██ ██ ██ ██ ██ ██ ██ ██ █.
+  Brazil Serie A
+                 .█ ██ ██ ██ ██ ██ ██ ██ ██ ██ █.
+
+  => No dead weeks: European winter core + Scandinavian summer +
+     J1/Brazil keep the pipeline producing without ever FORCING picks
+     in thin weeks. The system's default answer in a thin week is
+     "fewer picks", never "lower thresholds".
+
+
+--------------------------------------------------------------------------------
+10. PORTFOLIO CONSTRUCTION ACROSS LEAGUES
+--------------------------------------------------------------------------------
+   * Cap any single league at 15% of daily staked volume (mirrors master
+     plan 8.3) — league-level model failure is correlated failure.
+   * Cap any single MATCH at 4% of bankroll across all its markets
+     (same-match picks are one exposure, not several).
+   * Specialize models per league-market pair: an Eredivisie-Overs model
+     and a SerieB-Unders model will each beat one global everything-
+     model. League embeddings in the pooled model cover the long tail.
+   * Quarterly LPI review catches regime change (post-dominance Scotland
+     or Austria seasons look very different) BEFORE the P&L does.
+
+
+--------------------------------------------------------------------------------
+11. WORKED EXAMPLE — EV + QUARTER-KELLY, END TO END
+--------------------------------------------------------------------------------
+  Fixture: Feyenoord (H) vs bottom-3 side, Eredivisie.
+  Model (calibrated ensemble):  P(home) = 0.62
+  Best odds found (soft book):  2.00    (implied raw = 0.500)
+  Market de-vig (Shin, all books): p_market = 0.575
+
+    edge = 0.62 - 0.575          = +4.5%   (>= 3.0% threshold: PASS)
+    odds window 1.45-2.20                   PASS
+    EV   = 0.62 * (2.00-1) - 0.38 = +0.24  (+24% per unit staked)
+
+    Full Kelly fraction f* = (p*odds - 1)/(odds - 1)
+                           = (0.62*2.00 - 1)/(2.00 - 1) = 0.24
+    Quarter-Kelly          = 0.06 of bankroll -> capped at 0.02 (2% cap)
+    STAKE = 2% of bankroll.
+
+  Sanity rails that must ALL pass before publishing:
+    * p_model inside the model's proven calibration range   PASS
+    * data completeness score for the match >= threshold    PASS
+    * league LPI >= 60                                      PASS
+    * not on integrity blacklist, not a dead rubber         PASS
+  Published as VALUE pick; odds re-checked at publish; CLV recorded at
+  kickoff against the closing line.
+
+
+--------------------------------------------------------------------------------
+12. RISKPROFILE SEED DATA (LOAD AS DJANGO FIXTURE / DATA MIGRATION)
+--------------------------------------------------------------------------------
+  risk_profile:
+    kelly_fraction: 0.25          # quarter-Kelly
+    max_stake_pct_bankroll: 0.02
+    max_open_exposure_pct: 0.10
+    max_match_exposure_pct: 0.04
+    max_league_daily_pct: 0.15
+    max_publish_odds: 7.0         # hard ceiling, no overrides
+    min_publish_odds: 1.10
+    slippage_haircut: 0.015       # backtest + live publish re-check
+    circuit_breakers:
+      rolling_20bet_clv_negative: pause
+      drawdown_pct: 0.15 -> pause
+      live_ece_vs_backtest_ratio: 2.0 -> pause
+
+  market_rules: (market, odds_lo, odds_hi, min_edge, tier) — table in
+  section 3 verbatim. league_whitelist: Tier 1 list (section 6) with
+  LPI >= 60; everything else data-only until it earns eligibility.
+
+
+--------------------------------------------------------------------------------
+13. QUICK-REFERENCE CHEAT SHEET
+--------------------------------------------------------------------------------
+  SAFEST COMBOS (85%+ hit-rate targets, SAFE tier):
+    * Eredivisie / Bundesliga / Austria:  OVER 1.5 GOALS     @ 1.15-1.35
+    * Scotland / Portugal / Greece top clubs vs bottom-4:
+        DOUBLE CHANCE 1X                                     @ 1.10-1.25
+        DRAW NO BET                                          @ 1.20-1.45
+    * Big favorites anywhere: ASIAN HANDICAP -1.0            @ 1.35-1.55
+      (push insurance = safest way to back a heavy favorite)
+
+  BEST PROFIT HUNTING (VALUE tier, 1.60-2.60):
+    * Mid-tier European 1X2 favorites the market slightly underrates:
+      Portugal, Netherlands, Austria, Denmark, Turkish home sides
+    * O/U 2.5 in style-stable leagues: NED/GER/NOR overs; F2/I2 unders
+    * BTTS in Eredivisie / Bundesliga / Eliteserien
+    * Steam-lag captures: sharp book moves, soft book hasn't followed
+
+  TIMING:
+    * Model-liked favorites: take prices EARLY (T-3d to T-24h)
+    * Everything else: empirical per-market capture window from backtest
+    * Every bet's CLV recorded; negative rolling CLV = stop and fix
+
+  NEVER:
+    * Odds > 7.0 | raw draws (until Phase 6 specialist) | friendlies |
+      youth football | correct score / HT-FT | leagues with < 3 seasons
+      of data | any pick without a de-vigged edge above its market
+      threshold | lowering thresholds to fill a thin day.
+
+================================================================================
+END — seed sections 2, 3, 12 into the DB, then let the backtester
+      (master plan section 9) confirm or overrule every cell.
+================================================================================

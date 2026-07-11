@@ -1,0 +1,453 @@
+================================================================================
+  PROJECT MILESTONES & PROCESS — SAFE-FIRST SOCCER PREDICTION PLATFORM
+  Companion to: soccer_prediction_app_plan.txt v3.0  (cited as [PLAN §n])
+                odds_and_leagues_targeting.txt v3.0  (cited as [ODDS §n])
+  Purpose: turn the v3.0 SAFE-FIRST plan into an executable project —
+           milestones, task checklists, exit gates, go/no-go decisions,
+           and the working process that carries it from empty repo to a
+           live, audited safe-picks product.
+  Author: Claude | Date: 2026-07-10 | Version: 1.0
+
+  CONTENTS
+   0. Process framework (rhythm, definition of done, gates)
+   1. Milestone map (overview + dependency chain)
+   2. M0  Bootstrap — repo, environment, CI
+   3. M1  Data foundation — schema + historical ingestion
+   4. M2  Probability engine — ratings + Dixon-Coles
+   5. M3  Calibration — band-ECE machinery
+   6. M4  Backtester + first MBI cell report        << GATE G1: GO/NO-GO
+   7. M5  ML layer — binary GBMs + champion/challenger
+   8. M6  Live data pipeline — odds, lineups, Celery
+   9. M7  Safe pick engine live — gates, floors, publishing
+  10. M8  Product — dashboard, API, notifications
+  11. M9  Paper trading + hardening                 << GATE G3: GO-LIVE
+  12. M10 Real stakes ramp + steady-state operations
+  13. M11 Secondary modules (optional, Phase 6)
+  14. Cross-cutting processes (git, testing, decisions, risk register)
+  15. Kill / pivot criteria (the honest exits)
+================================================================================
+
+
+--------------------------------------------------------------------------------
+0. PROCESS FRAMEWORK
+--------------------------------------------------------------------------------
+  0.1 Working rhythm
+    * Work in MILESTONES, not sprints. A milestone is done when its exit
+      gate passes — never on a calendar date. Durations below are
+      estimates for planning, not deadlines that bend quality.
+    * Weekly review (30 min, even solo — write it down):
+        - What moved? What is blocked? What did the data say?
+        - Any gate criteria newly met or newly broken?
+        - Decision log entries (14.3) for anything non-obvious.
+    * One milestone in progress at a time. Parallel work allowed only
+      inside a milestone's own task list.
+
+  0.2 Definition of Done (applies to EVERY task)
+    [ ] Code merged to main via PR (even solo — PRs create the audit
+        trail), CI green
+    [ ] Tests exist for the new behavior (unit at minimum; golden tests
+        for math per [PLAN §10.5])
+    [ ] No leakage: any feature/data change re-runs the as-of assertion
+        suite
+    [ ] Documented: README section or docstring updated; schema changes
+        have a migration + one-line note in CHANGELOG.md
+    [ ] Reproducible: someone (or future-you) can re-run it from the
+        repo + seed data alone
+
+  0.3 Gate reviews (hard checkpoints — written verdict required)
+    G0  after M1 : data trustworthy?          (proceed to modeling)
+    G1  after M4 : DOES THE EDGE EXIST?       (go/no-go for the product)
+    G2  after M7 : engine behaves end-to-end? (proceed to product build)
+    G3  after M9 : paper trade passes?        (go-live with real stakes)
+    G4  quarterly forever: cells still earn their place? (LPI/MBI review)
+    A gate verdict is a short written doc: evidence, decision, and what
+    would change the decision. No verbal-only gates.
+
+  0.4 Non-negotiable project rules (from [PLAN]/[ODDS], enforced here)
+    * No real money before G3. No exceptions, no "small test bets".
+    * Zero picks is a correct output — never tune thresholds to make a
+      day/week look productive.
+    * Every threshold lives in the DB (risk_profile / market_rule),
+      never in code.
+    * Subagent/automation safety: nothing writes to main without a PR;
+      backtest datasets are read-only snapshots.
+
+
+--------------------------------------------------------------------------------
+1. MILESTONE MAP (OVERVIEW + DEPENDENCY CHAIN)
+--------------------------------------------------------------------------------
+
+  M0 Bootstrap ──> M1 Data ──> M2 Prob engine ──> M3 Calibration ──┐
+      (wk 0)      (wk 1-2)      (wk 3-4)            (wk 4-5)       │
+                                                                   v
+                 GATE G1 <──────────────── M4 Backtester + MBI report
+                    │                            (wk 5-6)
+        NO-GO ◄────┴────► GO
+          │                │
+     (pivot/stop,     M5 ML layer ──> M6 Live pipeline ──> M7 Engine live
+      see §15)         (wk 6-8)          (wk 9-10)           (wk 11)
+                                                                │
+                                                             GATE G2
+                                                                │
+                                          M8 Product (wk 12-14) │
+                                                                v
+                                   M9 Paper trade (wk 15-16 + 4-6 wk)
+                                                                │
+                                                             GATE G3
+                                                                │
+                                        M10 Real stakes + operations
+                                                                │
+                                        M11 Secondary modules (optional)
+
+  Estimated calendar: ~4 months to G3 if full-time; scale accordingly.
+  The only immovable duration is M9's paper-trade window (>= 4 weeks of
+  real fixtures — it cannot be compressed, weekends are the data).
+
+
+--------------------------------------------------------------------------------
+2. M0 — BOOTSTRAP (days 1-3)
+--------------------------------------------------------------------------------
+  Goal: an empty but production-shaped skeleton anyone can run.
+
+  Tasks
+  [ ] Git repo + branch protection on main (PRs only)
+  [ ] Django 5 project, apps scaffolded per [PLAN §1] (core, ingestion,
+      features, predictions, odds, safepicks, valuebets, backtesting,
+      portfolio, dashboard, api)
+  [ ] Docker Compose: web, worker, beat, redis, postgres16; .env.example
+  [ ] CI (GitHub Actions): lint (ruff), tests (pytest), migrations check
+  [ ] pre-commit hooks; CHANGELOG.md; README with run instructions
+  [ ] Seed risk_profile + market_rule fixtures from [ODDS §3, §8]
+      (tables may not exist yet — commit the fixture files now)
+
+  Exit gate
+  [ ] `docker compose up` + `pytest` green from a fresh clone
+
+
+--------------------------------------------------------------------------------
+3. M1 — DATA FOUNDATION (weeks 1-2)
+--------------------------------------------------------------------------------
+  Goal: 10+ seasons of trustworthy historical data for the safe-first
+  league set, queryable in PostgreSQL.
+
+  Tasks
+  [ ] Migrations for reference/fixture/odds tables [PLAN §4]
+  [ ] football-data.co.uk ingester: dominant-team leagues (SC0, P1, N1,
+      G1, T1 + extra-file AUT/SUI) and scoring leagues (D1, D2 + extra
+      NOR/SWE) [ODDS §5] — 10+ seasons each incl. closing odds columns
+  [ ] TeamAlias resolver + fuzzy matcher + admin review queue
+      (expect ~5-10% of names to need manual mapping — do it now)
+  [ ] Raw payload storage (JSONB) + idempotent re-runnable parsers
+  [ ] Data-quality audit notebook/report: matches per league-season,
+      missing odds %, duplicate detection, result sanity (goals >= 0,
+      H/D/A distribution plausible vs [ODDS §5] base rates)
+  [ ] Data-completeness scorer v1 (results+odds depth only for now)
+
+  Exit gate — GATE G0: "is the data trustworthy?"
+  [ ] Row counts match source counts per league-season (spot-check 10)
+  [ ] < 1% matches missing closing odds in target leagues
+  [ ] Base rates computed from OUR db match [ODDS §5] ranges
+  [ ] Written G0 verdict committed to /docs/gates/G0.md
+
+
+--------------------------------------------------------------------------------
+4. M2 — PROBABILITY ENGINE (weeks 3-4)
+--------------------------------------------------------------------------------
+  Goal: Dixon-Coles + Elo producing a scoreline matrix -> S1-S4
+  probabilities for any historical fixture, leakage-free.
+
+  Tasks
+  [ ] Elo implementation (home-adv term, goal-diff multiplier, per-league
+      K) + daily historical replay -> team_rating rows
+  [ ] Dixon-Coles with time decay; validate vs published paper numbers
+      (golden test [PLAN §10.5]) — do not skip this validation
+  [ ] Scoreline matrix -> derived market probabilities: 1X, DNB (draw-
+      excluded renorm), O1.5, AH-1.0 (win/push/loss split) [PLAN §6.1]
+  [ ] feature_snapshot builder v1 (ratings + form windows [PLAN §5.1-5.2])
+      with as-of enforcement
+  [ ] Leakage test suite: every feature asserted pre-kickoff; a
+      deliberately-leaky fixture must FAIL the suite (test the tests)
+
+  Exit gate
+  [ ] DC golden tests pass; S1-S4 probabilities generated for >= 95% of
+      historical matches in target leagues; leakage suite green
+
+
+--------------------------------------------------------------------------------
+5. M3 — CALIBRATION (weeks 4-5, overlaps M2 tail)
+--------------------------------------------------------------------------------
+  Goal: calibrated probabilities with band-ECE measurement — the number
+  the whole product stands on [PLAN §6.3].
+
+  Tasks
+  [ ] Shin de-vig implementation + golden tests vs hand-computed cases
+      (multiplicative fallback for books with missing outcomes)
+  [ ] Isotonic + beta calibration fit on walk-forward held-out slices
+  [ ] Band-ECE metric on [0.80, 0.97] with high-resolution bins +
+      reliability diagram plotting (saved artifacts per model run)
+  [ ] Market baseline B0 (de-vigged closing) computed for every match —
+      stored so MBI is a query, not a recomputation
+
+  Exit gate
+  [ ] Band-ECE < 0.02 on held-out seasons for at least S1 and S3
+      probabilities in at least 3 leagues (if not: iterate here — do
+      NOT proceed to M4 with a miscalibrated engine; garbage in,
+      garbage verdict out)
+
+
+--------------------------------------------------------------------------------
+6. M4 — BACKTESTER + FIRST MBI CELL REPORT (weeks 5-6)   *** GATE G1 ***
+--------------------------------------------------------------------------------
+  Goal: answer THE question — do positive-MBI safe cells exist for us?
+
+  Tasks
+  [ ] Walk-forward backtest engine [PLAN §9]: full 8.1 gate pipeline,
+      price floors, flat staking, slippage haircut, void handling
+  [ ] Slow-bleed detector (rolling 200-pick ROI bootstrap CI)
+  [ ] Cell grid report: for every (league, S1-S4) cell — model log-loss,
+      B0 log-loss, MBI, hit rate, avg odds, EXPIRED rate, flat-stake
+      yield, max drawdown, sample size -> league_metric rows
+  [ ] Bootstrap p-value of profit vs luck per enabled-candidate cell
+  [ ] Sensitivity checks: results stable under floor margin +/-1%,
+      slippage 1% vs 2%, and per-season splits?
+
+  Exit gate — GATE G1: GO / NO-GO (written verdict, /docs/gates/G1.md)
+  GO requires ALL of:
+  [ ] >= 5 cells with positive MBI AND positive yield over >= 2 full
+      seasons AND >= 200 picks each AND p-value < 0.05
+  [ ] Combined portfolio (those cells, flat 1.5%) shows positive yield
+      with max drawdown < 15% in walk-forward
+  [ ] Findings survive the sensitivity checks
+  NO-GO or WEAK-GO -> §15 pivot options. DO NOT rationalize a weak
+  result into a GO — this gate exists to protect the bankroll.
+
+
+--------------------------------------------------------------------------------
+7. M5 — ML LAYER (weeks 6-8)
+--------------------------------------------------------------------------------
+  Goal: binary GBMs beat (or refine) DC per cell; champion/challenger
+  machinery running.
+
+  Tasks
+  [ ] Feature store finalization (form/H2H/context features [PLAN §5])
+  [ ] M1 "does 1X cover", M2 "O1.5", M3 "AH-1.0 covers" LightGBM models
+      with monotonic constraints; per-league-cluster variants
+  [ ] Stacking meta-learner {DC, M1-M3, market prob} + calibration
+  [ ] MLflow tracking + model registry; model_version rows; promotion
+      rule implemented: band-ECE AND cell MBI AND yield, >= 2 seasons,
+      >= 3 leagues [PLAN §9]
+  [ ] Optuna tuning (budgeted, walk-forward CV only)
+  [ ] Re-run M4 cell report with challenger models; update enabled cells
+
+  Exit gate
+  [ ] Challenger beats DC-only champion on the promotion rule for >= 3
+      cells, or documented verdict that DC-only remains champion (fine!)
+  [ ] Cell grid re-report committed; market_rule.enabled updated by
+      evidence, count of enabled cells recorded
+
+
+--------------------------------------------------------------------------------
+8. M6 — LIVE DATA PIPELINE (weeks 9-10)
+--------------------------------------------------------------------------------
+  Goal: the machine sees the real world — fixtures, odds, lineups —
+  reliably and within budget.
+
+  Tasks
+  [ ] API-Football client: fixtures, results, LINEUPS, injuries
+      (lineup latency measured — must arrive ~60-75 min pre-kickoff)
+  [ ] The Odds API client: multi-book odds; best-odds computation;
+      closing-line capture job
+  [ ] Rate-limit/budget wrappers per [PLAN §3]: token bucket, backoff,
+      Redis cache, budget degradation order (final-2h protected)
+  [ ] Celery Beat schedules (core queue) per [PLAN §10.2]; job_run
+      audit rows; Sentry alert on missed beats
+  [ ] Live completeness scorer v2 (odds coverage + lineup + injury
+      availability)
+  [ ] 2-week soak test: pipelines run unattended; measure sync success
+      rate, odds snapshot latency, lineup arrival timing
+
+  Exit gate
+  [ ] 14 consecutive days: >= 99% scheduled jobs succeeded; closing
+      line captured for >= 95% of tracked fixtures; lineups present
+      >= 90 min pre-kickoff for >= 80% of target-league fixtures
+
+
+--------------------------------------------------------------------------------
+9. M7 — SAFE PICK ENGINE LIVE (week 11)                  *** GATE G2 ***
+--------------------------------------------------------------------------------
+  Goal: the 8-gate pipeline [PLAN §8.1] runs daily against live data
+  and publishes (to a private log for now).
+
+  Tasks
+  [ ] run_gates() service: all 8 gates, each independently unit-tested
+      via the gate truth table [PLAN §10.5]
+  [ ] Price-floor publishing + hourly re-check + EXPIRED transitions
+  [ ] Lineup-confirmed re-check + retraction flow (+ notification stub)
+  [ ] Flat staking + exposure caps + circuit breakers from risk_profile
+  [ ] Daily 06:00 publish job writing pick rows (private)
+  [ ] Settlement job: results -> WON/LOST/VOID; CLV computation vs
+      captured closing line
+
+  Exit gate — GATE G2 (written verdict, /docs/gates/G2.md)
+  [ ] 2 weekend rounds observed end-to-end: picks generated, floors
+      re-checked, >= 1 natural EXPIRED occurred and handled, >= 1
+      lineup re-check ran, settlement + CLV correct vs manual audit of
+      10 picks
+
+
+--------------------------------------------------------------------------------
+10. M8 — PRODUCT (weeks 12-14)
+--------------------------------------------------------------------------------
+  Goal: the human-facing layer — trust through transparency.
+
+  Tasks
+  [ ] "/" today's safe picks page (cards with p_cal, floor, best odds,
+      stake, completeness, lineup status; DESIGNED zero-picks state)
+  [ ] /ledger — the hit-rate ledger [PLAN §10.3]: rolling hit rate vs
+      weighted break-even, ROI/pick, streaks, drawdown, EXPIRED rate
+  [ ] /match/<id> detail (prob vector, scoreline heatmap, SHAP, odds
+      history with floor line)
+  [ ] /leagues cell grid (MBI/LPI/status + why-enabled explanations)
+  [ ] /bankroll + risk-profile editor (admin-gated)
+  [ ] DRF API endpoints [PLAN §10.4] + token auth + throttling
+  [ ] Notifications: daily digest + retraction alerts (email/Telegram)
+  [ ] Playwright smoke test: each page renders, zero-picks state
+      renders, mobile no-overflow
+
+  Exit gate
+  [ ] A non-builder can open the dashboard and answer: "what should I
+      take today, at what minimum odds, and why should I trust it?"
+
+
+--------------------------------------------------------------------------------
+11. M9 — PAPER TRADING + HARDENING (weeks 15-16 + 4-6 wk)  *** GATE G3 ***
+--------------------------------------------------------------------------------
+  Goal: prove the live system matches the backtest before money exists.
+
+  Tasks
+  [ ] Paper-trade mode: every published pick "taken" at best available
+      floor-clearing odds, virtual bankroll, full ledger
+  [ ] Weekly live-vs-backtest comparison: hit rate, band-ECE, CLV,
+      EXPIRED rate, avg odds taken vs floor
+  [ ] Circuit breakers armed and TESTED (force-trip each one)
+  [ ] Ops hardening: Sentry wired, backup/restore drill for postgres,
+      odds-volume partitioning if needed, secrets audit
+  [ ] Runbook: what to do when feeds die on matchday, when a breaker
+      trips, when a pick must be manually voided
+
+  Exit gate — GATE G3: GO-LIVE (written verdict, /docs/gates/G3.md)
+  ALL of, over >= 4 consecutive weeks and >= 60 settled paper picks:
+  [ ] Hit rate within its cell-weighted expected band (no gate breach)
+  [ ] Positive CLV share >= 50%; live band-ECE < 2x backtest
+  [ ] Slow-bleed detector green; no unexplained gate failures
+  [ ] Every breaker fired correctly in its forced test
+  If any fail: diagnose, fix, RESTART the 4-week clock. The clock
+  restarting is the process working.
+
+
+--------------------------------------------------------------------------------
+12. M10 — REAL STAKES RAMP + STEADY-STATE OPERATIONS
+--------------------------------------------------------------------------------
+  Ramp (each step requires the previous step's criteria intact):
+    Step 1: 0.1% flat stakes, 4 weeks   -> criteria: same as G3, live
+    Step 2: 0.5% flat stakes, 4 weeks   -> plus: no execution problems
+                                           (limits, voids, price gaps)
+    Step 3: 1.0-1.5% target stakes      -> steady state
+
+  Steady-state operational cadence:
+    daily     : review published picks + retractions (5 min)
+    weekly    : ledger review — hit rate vs break-even, CLV, bleed CI
+    monthly   : model retrain review (champion/challenger verdicts)
+    quarterly : GATE G4 — LPI/MBI cell review; enable/disable cells by
+                evidence; league regime-change check [PLAN §9]
+    yearly    : full audit — leakage suite re-run, data-source health,
+                account/bookmaker longevity review [ODDS §4.2]
+
+
+--------------------------------------------------------------------------------
+13. M11 — SECONDARY MODULES (OPTIONAL, ONLY AFTER STABLE M10)
+--------------------------------------------------------------------------------
+  Preconditions: >= 3 months of profitable steady-state; core dials all
+  green; spare API budget.
+  Order of consideration (each gets its own mini-G1 gate):
+   1. VALUE tier enablement (/value, quarter-Kelly, [ODDS §9]) — the
+      machinery already exists; needs its own backtest gate.
+   2. Expansion-league safe cells (Croatia/Czech watchlist -> data
+      completeness proof first)
+   3. O2.5/BTTS models; strict double-builder; draw specialist;
+      steam-lag capture; in-play (each: flag-gated experiment ->
+      backtest gate -> paper trade -> tiny stakes)
+  Rule: no secondary work may consume core API budget or delay core
+  jobs (separate Celery queue) [PLAN §8.8].
+
+
+--------------------------------------------------------------------------------
+14. CROSS-CUTTING PROCESSES
+--------------------------------------------------------------------------------
+  14.1 Git & code
+    * main is protected; feature branches + PRs; CI green to merge.
+    * Conventional commits; CHANGELOG.md updated with schema/threshold
+      changes.
+    * Data/model artifacts are NOT in git: MLflow for models, versioned
+      dumps for seed data.
+
+  14.2 Testing policy (what CI runs, always)
+    * Unit tests; golden math tests (DC, Shin, Kelly, floor);
+      gate truth table; leakage suite; backtest regression on a pinned
+      mini-dataset; migration check.
+
+  14.3 Decision log (/docs/decisions/NNN-title.md)
+    * Any non-obvious choice gets a 10-line ADR: context, options,
+      decision, what would reverse it. Gate verdicts live in
+      /docs/gates/. This is the project's memory.
+
+  14.4 Risk register (/docs/risks.md — review at every gate)
+    Top standing risks + owners of mitigation:
+      R1 no real edge exists            -> G1 gate + §15
+      R2 leakage fakes the edge         -> leakage suite, M2
+      R3 slow bleed in production       -> floors + detector, M4/M9
+      R4 data source dies / ToS change  -> raw storage, second source
+      R5 bookmaker limits kill volume   -> [ODDS §4.2] routing, exchanges
+      R6 integrity incident in a league -> auto-blacklist, stricter cells
+      R7 scope creep into value/exotics -> §13 preconditions, this doc
+      R8 solo-dev burnout / bus factor  -> docs, runbook, reproducibility
+
+  14.5 Metrics dashboard (the only numbers that matter, in order)
+    rolling hit rate vs weighted break-even | band-ECE live/backtest |
+    slow-bleed CI | CLV share | EXPIRED rate | drawdown | enabled-cell
+    count | job success rate  [ODDS §11 "watch the dials"]
+
+
+--------------------------------------------------------------------------------
+15. KILL / PIVOT CRITERIA (THE HONEST EXITS)
+--------------------------------------------------------------------------------
+  Written here in advance so the decision is pre-made, not rationalized
+  in the moment:
+
+  * G1 NO-GO (no positive-MBI cells at adequate samples):
+      Pivot options, in order of preference:
+      a) Different cells: re-run with S-market variants (DNB away,
+         AH -1.25/-0.75, O1.5 in more leagues) before concluding.
+      b) Better data: add xG (Understat) features and retry once.
+      c) Reframe product: pure ANALYTICS tool (probabilities +
+         calibration dashboards, no betting claims) — still valuable,
+         zero bankroll risk.
+      d) Stop. A clean, evidenced stop after ~6 weeks is a success
+         relative to a slow bleed after 12 months.
+
+  * G3 repeated failure (3 restarts of the paper-trade clock):
+      The backtest and reality disagree — treat as R2 (leakage) or
+      R4 (data) until proven otherwise; freeze go-live indefinitely.
+
+  * In production: any quarter where the ledger shows negative yield
+    AND negative CLV share -> stakes to 0.1%, full audit, G1-style
+    re-verdict required to ramp again.
+
+  * Standing rule: the product's credibility asset is the honest
+    ledger. If a choice ever arises between looking good and reporting
+    truthfully, the ledger wins — that is the whole product.
+
+================================================================================
+END — v1.0. Start at M0. The first month's only real deliverable is an
+honest G1 verdict; everything after it is earned by that answer.
+================================================================================

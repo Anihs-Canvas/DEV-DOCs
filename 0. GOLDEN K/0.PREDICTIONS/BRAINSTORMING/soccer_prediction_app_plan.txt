@@ -1,0 +1,790 @@
+================================================================================
+  SOCCER PREDICTION PLATFORM — MASTER BUILD PLAN
+  *** SAFE-FIRST EDITION ***
+  Stack: Django + PostgreSQL + Celery/Redis + Python ML (scikit-learn,
+         XGBoost/LightGBM, statsmodels) + optional PyTorch
+  Author: Claude | Date: 2026-07-10 | Version: 3.1
+  Companion doc: odds_and_leagues_targeting.txt (v3.1) — cited as [ODDS §n]
+
+  CHANGELOG v3.1 (market research round, 2026-07-10):
+   * Candidate safe cells S5 (AH +1.5 underdog — soccer's lowest-margin
+     market) and S6 (Under 3.5, chronic unders leagues) added — specs
+     in [ODDS §2], seeds in [ODDS §3]. The cell grid (§6.6) is now
+     S1-S6. Candidates enter the product only via G1 cell evidence.
+   * The five-tests candidate-market framework lives in [ODDS §2.5];
+     corners/cards remain Phase 6 research; throw-ins and first-X
+     micro props are HARD-EXCLUDED on integrity grounds [ODDS §2.7].
+
+  CHANGELOG v3.0 — THE PRODUCT INVERSION:
+   * The app is now built AROUND the safest markets. The SAFE PICKS engine
+     is THE product; everything else (the VALUE tier, mid-odds hunting,
+     exotic markets) is demoted to a SECONDARY MODULE (§8.8), disabled by
+     default, shipped last.
+   * NEW §0 rewritten: the Safety Doctrine — what "safe" really buys you,
+     the break-even wall, the slow-bleed trap, and the price floor.
+   * §6 modeling re-prioritized: calibration in the 0.85-0.95 probability
+     band ("band-ECE") is now the core model deliverable.
+   * §8 rebuilt as the SAFE PICK ENGINE: publish gates, FLAT staking (the
+     Kelly cap always binds at odds-on prices), losing-streak math,
+     accumulator policy (singles only), price-floor publishing.
+   * §9 backtester adds the SLOW-BLEED DETECTOR (rolling ROI confidence
+     interval) — the failure mode specific to safe betting.
+   * §11 roadmap resequenced: safe engine ships end-to-end FIRST; the
+     value module moves to Phase 6 (optional).
+   * §12 success criteria recentered on the safe product.
+   * §13 failure modes: added #11 slow bleed, #12 accumulator temptation.
+   * v2.0 content (architecture, schema, MBI, LPI integration) retained —
+     nothing deleted, only re-ranked around the safe core.
+
+  CONTENTS
+    0. The product — a safe-picks engine (the Safety Doctrine)
+   0.5. Predictability vs beatability (and the MBI)
+    1. High-level architecture
+    2. Tech stack (pinned choices)
+    3. Data sources (the moat — budget tiers)
+    4. PostgreSQL schema (core tables)
+    5. Feature engineering (the real differentiator)
+    6. Modeling strategy (calibration-first, safe markets first)
+    7. Odds engine, price floors & "best odds" selection
+    8. THE SAFE PICK ENGINE (core product) + secondary modules
+    9. Backtesting framework (build before believing anything)
+   10. Django application design
+   11. Roadmap (safe engine first, everything else after)
+   12. Honest success criteria (what "best" looks like)
+   13. Failure modes & anti-patterns
+   14. Glossary
+================================================================================
+
+
+--------------------------------------------------------------------------------
+0. THE PRODUCT — A SAFE-PICKS ENGINE (THE SAFETY DOCTRINE)
+--------------------------------------------------------------------------------
+  MISSION: every day, surface a SHORT list (0-5) of the highest-probability
+  selections in world soccer — hit-rate target 88%+ — each published with
+  the exact minimum odds that make it worth taking, staked flat, tracked
+  honestly. Everything else the platform can do is scaffolding around
+  that list.
+
+  0.1 What "safest market" buys you — and what it does not
+    * "Safe" = per-bet certainty (high hit rate). It does NOT automatically
+      mean profit or a safe bankroll. At short odds the margin for error
+      is razor thin, because of the BREAK-EVEN WALL:
+
+        odds taken   break-even hit rate     (BE = 1/odds)
+        ----------   -------------------
+          1.10             90.9%
+          1.15             87.0%
+          1.20             83.3%
+          1.25             80.0%
+          1.30             76.9%
+          1.35             74.1%
+          1.40             71.4%
+          1.50             66.7%
+
+    * Consequence: a genuinely excellent 90%-accurate feed is PROFITABLE
+      at average odds 1.18 (ROI = 0.90 x 1.18 - 1 = +6.2% per bet) and a
+      SLOW LOSER at average odds 1.10 (ROI = -1.0%). The product's edge
+      is therefore not just picking winners — it is refusing every price
+      below the floor. Price discipline IS the product.
+
+    * THE SLOW-BLEED TRAP (the #1 killer of "safe tips" products): a feed
+      can win 88% of bets for months while losing money invisibly,
+      because each win returns pennies and each loss eats many wins.
+      Defenses are engineered in: the price floor (0.2), the de-vig edge
+      gate (§8.1), and the slow-bleed detector in the backtester and the
+      live monitor (§9).
+
+  0.2 The price floor (published with every pick)
+      Every pick carries its minimum acceptable odds:
+        min_odds = (1 + m) / p_cal
+      where p_cal is the calibrated probability and m the required margin
+      (default m = 3%). Example: p_cal = 0.90 -> min_odds = 1.144.
+      The pick is published as "TAKE ONLY AT >= 1.15". If the market never
+      offers the floor, the pick silently expires — that is the system
+      working, not failing.
+
+  0.3 The safe-market basket (full ranking + per-market spec in [ODDS §2])
+      S1  Double Chance 1X — dominant home favorite    p ~0.88-0.95
+      S2  Draw No Bet      — same fixture profile      p ~0.84-0.92 (+void)
+      S3  Over 1.5 goals   — scoring leagues only      p ~0.78-0.86
+      S4  Asian Handicap -1.0 — heavy favorites        win ~0.55-0.65 + push
+      S5  Asian Handicap +1.5 — underdog, balanced games  cover ~0.72-0.80
+      S6  Under 3.5 goals — chronic unders leagues only   p ~0.78-0.84
+      (S5/S6 added v3.1 as CANDIDATES — enabled only via G1 evidence.)
+      EXCLUDED from the core despite high hit rates: Over 0.5 goals and
+      anything priced 1.01-1.09 — the break-even wall makes them
+      mathematically unworkable at retail prices. Candidate markets are
+      screened by the five tests in [ODDS §2.5].
+
+  0.4 Product hierarchy (this ordering governs every section below)
+      CORE       : the daily SAFE PICKS list (S1-S4 cells only)
+      SUPPORTING : probability engine, odds engine, backtester, monitors —
+                   they exist to make the core list trustworthy
+      SECONDARY  : the VALUE tier (+EV mid-odds hunting), exotic markets,
+                   deep-learning experiments — OFF by default, Phase 6,
+                   never allowed to dilute the core list (§8.8)
+
+  0.5-legacy note: high accuracy is NOT the same claim as near-100%.
+      The theoretical 1X2 ceiling is ~75-80%; bookmakers run ~55-58%.
+      The safe basket reaches 85-93% only because it bets DERIVED markets
+      that bundle outcomes (1X covers two of three results). The three
+      pillars still stand under everything: CALIBRATION, VALUE (price
+      floor), RISK CONTROL.
+
+
+--------------------------------------------------------------------------------
+0.5 PREDICTABILITY vs BEATABILITY — TWO DIFFERENT TARGETS
+--------------------------------------------------------------------------------
+  Field observation: lower leagues often FEEL more predictable than top
+  leagues. Decompose carefully — two different things get called
+  "predictable" and they point in opposite directions:
+
+  A) RAW OUTCOME PREDICTABILITY (model accuracy / log-loss):
+     Top leagues usually WIN here. Lower divisions have more parity,
+     higher draw rates, lower scoring, heavier churn, more motivation
+     noise — models show WORSE accuracy and calibration there.
+
+  B) MARKET BEATABILITY (edge vs the bookmaker):
+     Lower leagues usually WIN here, and this is what the feeling really
+     is. The EPL closing line is the sharpest market in sports — disagree
+     with it and you are usually wrong. A lower-league line is set by a
+     junior model with fat margins — disagree with it and you are right
+     far more often. The predictability did not go up; the competition
+     got worse.
+
+  MEASUREMENT — Market Beatability Index (MBI), per league and per
+  (league, market) cell, computed by the backtester (§9):
+      (a) model log-loss                    — raw predictability
+      (b) de-vigged closing-line log-loss   — market sharpness
+      MBI = (b) - (a)                        — the gap = harvestable edge
+
+  SAFE-FIRST APPLICATION: the MBI is computed for the SAFE CELLS first
+  (S1-S4 x whitelisted leagues). A safe cell is enabled only when its MBI
+  is positive on an adequate sample — i.e. our probabilities for that
+  cell are demonstrably sharper than the prices we would take.
+
+  CAUTIONS (why "bet the lowest leagues" is still wrong): thin data =>
+  miscalibrated confidence; integrity risk concentrates low (fixing can
+  fake short "predictable" streaks); books cap stakes low and limit
+  winners fast. Sweet spot: mid-tier European leagues [ODDS §5].
+
+
+--------------------------------------------------------------------------------
+1. HIGH-LEVEL ARCHITECTURE
+--------------------------------------------------------------------------------
+
+  +----------------------------------------------------------------------+
+  |                          DJANGO PROJECT                              |
+  |                                                                      |
+  |  apps/                                                               |
+  |   ├── core/          shared models, settings, utils                 |
+  |   ├── ingestion/     data-source clients, sync jobs, raw storage    |
+  |   ├── features/      feature engineering, Elo/ratings, rolling stats|
+  |   ├── predictions/   model registry, inference, probability store   |
+  |   ├── odds/          odds ingestion, line movement, de-vig,         |
+  |   |                  best-odds, price floors                        |
+  |   ├── safepicks/     THE CORE: safe-pick engine, gates, publishing  |
+  |   ├── valuebets/     SECONDARY module: +EV mid-odds engine (off)    |
+  |   ├── backtesting/   walk-forward sim, MBI, slow-bleed detector     |
+  |   ├── portfolio/     bet tracking, bankroll, P&L, exposure limits   |
+  |   ├── dashboard/     web UI (Django templates + HTMX or DRF + SPA)  |
+  |   └── api/           DRF REST API (mobile/3rd-party consumption)    |
+  +----------------------------------------------------------------------+
+          |                    |                        |
+          v                    v                        v
+  +---------------+   +------------------+   +----------------------+
+  | PostgreSQL 16 |   | Celery + Redis   |   | ML Training Pipeline |
+  | (primary DB,  |   | (scheduled jobs: |   | (offline: notebooks/ |
+  |  TimescaleDB  |   |  fixture sync,   |   |  scripts, MLflow     |
+  |  ext optional |   |  odds polling,   |   |  model registry,     |
+  |  for odds     |   |  daily retrain,  |   |  joblib/ONNX export) |
+  |  ticks)       |   |  pick publishing)|   +----------------------+
+  +---------------+   +------------------+
+
+  In prose: a single Django project owns eleven apps, one per concern.
+  The safepicks app is the product; the valuebets app is the demoted
+  secondary module (identical machinery, different thresholds, disabled
+  until Phase 6). Everything persists to one PostgreSQL instance; Celery
+  Beat drives all recurring jobs; model training happens offline and
+  publishes versioned artifacts the service layer loads for inference.
+
+  Key principles (unchanged from v2.0):
+   * PostgreSQL is the single source of truth — everything versioned.
+   * Celery Beat drives all recurring work (no cron sprawl).
+   * Training OFFLINE, inference ONLINE. Never train in a request.
+   * Every prediction row stores model version, feature snapshot hash,
+     probability vector, and the odds available at prediction time.
+
+
+--------------------------------------------------------------------------------
+2. TECH STACK (PINNED CHOICES — unchanged from v2.0)
+--------------------------------------------------------------------------------
+  Language        : Python 3.12+
+  Web             : Django 5.x, Django REST Framework
+  DB              : PostgreSQL 16 (+ optional TimescaleDB for odds ticks)
+  Async jobs      : Celery 5 + Redis (broker & cache)
+  ML core         : pandas, numpy, scikit-learn, XGBoost, LightGBM,
+                    statsmodels (Poisson/Dixon-Coles), scipy
+  Calibration     : sklearn CalibratedClassifierCV (isotonic), betacal
+  Deep learning   : PyTorch (optional, Phase 6 — secondary module)
+  Experiment mgmt : MLflow (tracking + model registry)
+  Backtesting     : custom vectorized engine (pandas) — see section 9
+  Frontend        : Django templates + HTMX + Tailwind (fast to ship)
+                    OR DRF + React if a SPA is preferred later
+  Charts          : Plotly (server-rendered JSON) or Chart.js
+  Deploy          : Docker Compose (web, worker, beat, redis, postgres);
+                    Gunicorn + Nginx; GitHub Actions CI
+  Monitoring      : Sentry (errors), Prometheus/Grafana or Django admin
+                    dashboards for calibration drift, hit rate & ROI
+
+
+--------------------------------------------------------------------------------
+3. DATA SOURCES (THE MOAT — BUDGET TIERS)
+--------------------------------------------------------------------------------
+  Model quality is capped by data quality. Plan for 3 tiers:
+
+  TIER 0 — FREE (MVP, historical bootstrap):
+    * football-data.co.uk        — 25+ seasons CSV, results + closing odds
+                                   for ~25 leagues. THE backtesting
+                                   goldmine. League codes in [ODDS §5].
+    * football-data.org API      — fixtures, results, standings (free).
+    * Understat / FBref scraping — xG, shot data (respect robots.txt/ToS).
+    * OpenLigaDB, API mirrors    — supplemental.
+
+  TIER 1 — CHEAP PAID (production MVP):
+    * API-Football (api-sports.io) — fixtures, LINEUPS, INJURIES, live
+      scores, odds from 20+ books, ~$25-60/mo tiers.
+    * The Odds API — clean multi-bookmaker odds feed for line shopping
+      and closing-line capture.
+
+  TIER 2 — SERIOUS EDGE (later):
+    * StatsBomb / Opta / Sportmonks — event-level data. Only when ROI
+      justifies.
+    * Pinnacle API (via broker) — sharpest closing lines = calibration
+      benchmark.
+
+  SAFE-FIRST NOTE: lineup and injury feeds are promoted in importance.
+  The #1 source of "safe pick" upsets is late team news in mismatch
+  fixtures (rotation before cup/European games, rested stars). The
+  lineup-confirmed re-check (§5.4, §8.1) depends on Tier 1 data —
+  budget for it from Phase 3, not later.
+
+  Ingestion rules (unchanged): raw JSONB + parsed rows, immutable raw;
+  canonical IDs + TeamAlias + fuzzy matcher + review queue on day one;
+  idempotent syncs keyed on (source, external_id).
+
+  Data-completeness scoring: every match scored [0,1] at feature-build
+  time (history depth, odds coverage, xG/lineup/injury availability).
+  Stored on the feature snapshot; the safe engine refuses to publish
+  below threshold — STRICTER for the core product than for the
+  secondary module. A safe pick with unverifiable team news is not safe.
+
+  API budget & rate-limit rules: per-source daily budget, token-bucket
+  limiter, backoff + jitter, Redis cache with per-endpoint TTL, job_run
+  audit rows. Final-2h polling protected first when budget runs low.
+
+
+--------------------------------------------------------------------------------
+4. POSTGRESQL SCHEMA (CORE TABLES)
+--------------------------------------------------------------------------------
+  -- Reference
+  league(id, name, country, tier, source_ids JSONB)
+  season(id, league_id FK, name, start_date, end_date)
+  team(id, canonical_name, country)
+  team_alias(id, team_id FK, source, alias_name)         -- name resolution
+  player(id, canonical_name, ...)                        -- Phase 3+
+
+  -- Fixtures & results
+  match(id, season_id FK, home_team_id FK, away_team_id FK,
+        kickoff_utc, status,                              -- SCHEDULED/FT/PP
+        home_goals, away_goals, ht_home, ht_away,
+        stats JSONB, source, external_id, raw JSONB,
+        UNIQUE(source, external_id))
+  match_lineup(match_id FK, team_id FK, player_id FK, is_starting, position)
+  injury_report(team_id FK, player_id FK, reported_at, status, source)
+
+  -- Ratings & features (materialized, versioned)
+  team_rating(id, team_id FK, as_of_date, rating_type, value NUMERIC,
+              model_version)
+  feature_snapshot(id, match_id FK, feature_set_version,
+                   features JSONB, completeness NUMERIC, created_at)
+     -- features frozen at prediction time = no leakage, reproducible
+
+  -- Odds (high volume — partition by month or TimescaleDB hypertable)
+  bookmaker(id, name, is_sharp BOOLEAN, limits_winners BOOLEAN)
+  odds_snapshot(id, match_id FK, bookmaker_id FK, market, selection,
+                decimal_odds NUMERIC, captured_at TIMESTAMPTZ,
+                is_closing BOOLEAN DEFAULT FALSE)
+
+  -- Predictions
+  model_version(id, name, algo, feature_set_version, trained_at,
+                train_window, metrics JSONB,     -- logloss, brier, band_ece
+                artifact_uri, is_active)
+  prediction(id, match_id FK, model_version_id FK, market,
+             prob_vector JSONB, created_at,
+             UNIQUE(match_id, model_version_id, market))
+
+  -- THE CORE: safe picks (v3.0 — value_pick generalized to pick)
+  pick(id, prediction_id FK, odds_snapshot_id FK,
+       market, selection, model_prob, implied_prob_devig,
+       edge NUMERIC, ev NUMERIC,
+       min_acceptable_odds NUMERIC,              -- v3.0: the price floor
+       tier,                                     -- SAFE (core) | VALUE (2nd)
+       published_at, expires_at,                 -- v3.0: floor never met =>
+       status)                                   -- OPEN/WON/LOST/VOID/EXPIRED
+  bankroll(id, name, currency, starting_amount, current_amount)
+  bet(id, bankroll_id FK, pick_id FK, stake, odds_taken,
+      placed_at, settled_at, pnl, clv NUMERIC)
+
+  -- Rules & league scoring (seeds in [ODDS §3, §8])
+  risk_profile(id, name, staking_mode,           -- v3.0: FLAT default (§8.3)
+               flat_stake_pct, kelly_fraction, max_stake_pct_bankroll,
+               max_open_exposure_pct, max_match_exposure_pct,
+               max_league_daily_pct, max_publish_odds, min_publish_odds,
+               slippage_haircut, circuit_breakers JSONB, is_active)
+  market_rule(id, market, odds_lo, odds_hi, min_prob, min_edge, tier,
+              league_whitelist JSONB, enabled BOOLEAN)
+     -- v3.0: min_prob added — safe cells gate on calibrated probability
+  league_metric(id, league_id FK, as_of_date, lpi NUMERIC, mbi NUMERIC,
+                model_logloss NUMERIC, market_logloss NUMERIC,
+                draw_rate NUMERIC, over25_rate NUMERIC, sample_size INT)
+
+  -- Audit
+  job_run(id, job_name, started_at, finished_at, status, stats JSONB)
+
+  Notes (unchanged): NUMERIC everywhere for odds/money; probabilities
+  NUMERIC(6,5); everything UTC; features strictly pre-kickoff; ORM for
+  app logic, materialized views for heavy aggregation.
+
+
+--------------------------------------------------------------------------------
+5. FEATURE ENGINEERING (THE REAL DIFFERENTIATOR)
+--------------------------------------------------------------------------------
+  All features computed "as of" kickoff-minus-X, never after. Feature
+  sets versioned. Unchanged from v2.0 except priorities:
+
+  5.1 Strength ratings — Elo (home-adv term, goal-diff multiplier, K per
+      league), Dixon-Coles attack/defense with time decay, optional
+      Glicko-2 / pi-ratings.
+  5.2 Form & rolling windows — 5/10/20-match EW: PPG, GF/GA, xG for/
+      against, shots (on target), corners, clean-sheet rate, BTTS rate,
+      O2.5 rate, first-half goal rate; home/away splits; rest days,
+      congestion, travel (Phase 3), competition context.
+  5.3 Head-to-head — last-N with decay; style-matchup proxies.
+  5.4 Squad signals (PROMOTED — Phase 3 for the core, was "Phase 2+"):
+      starting-XI strength delta vs season average (lineups ~1h before
+      kickoff -> the LINEUP-CONFIRMED RE-CHECK that guards every safe
+      pick, §8.1); key-player availability index; keeper change flag.
+  5.5 Market features — opening/current implied probs (de-vig), line
+      velocity, sharp-vs-soft divergence. Train market-free AND
+      market-aware variants; disagreement = candidate edge.
+  5.6 Context — position, motivation proxies, season stage, derby flag,
+      weather (Phase 3), referee tendencies (secondary markets only),
+      manager change recency. Dead-rubber and rotation-risk flags are
+      PROMOTED: they gate safe picks (§8.1).
+  5.7 Data-quality features — completeness score in the vector AND as
+      the publish gate; league format flags (playoff splits).
+
+  De-vig: multiplicative for MVP -> Shin's method (favourite-longshot
+  aware — matters MORE at odds-on prices, exactly our range).
+
+
+--------------------------------------------------------------------------------
+6. MODELING STRATEGY (CALIBRATION-FIRST, SAFE MARKETS FIRST)
+--------------------------------------------------------------------------------
+  6.1 Baselines (build FIRST)
+    B0: Market baseline — de-vigged closing odds AS the prediction.
+        The honesty benchmark; every safe cell must beat it (MBI > 0).
+    B1: Poisson GLM — scoreline matrix -> every derived market's
+        probability (1X, DNB, O1.5, AH-1.0) from ONE model.
+    B2: Dixon-Coles — B1 + low-score correction + time decay. The
+        low-score correction matters MORE for us than for 1X2 bettors:
+        O1.5 and DC probabilities live exactly in the 0-0/1-0/0-1 cells
+        it corrects. Validate against published results.
+
+  6.2 ML layer — per-safe-market binary GBMs are the PRIMARY models
+    M1: LightGBM binary "does 1X cover?" per fixture profile.
+    M2: LightGBM binary Over 1.5; separate model per league cluster.
+    M3: LightGBM binary "favorite covers AH -1.0".
+    M4: (secondary module) multiclass 1X2 + O2.5/BTTS models — the old
+        VALUE-tier models, Phase 6.
+    Monotonic constraints on rating-diff features throughout.
+
+  6.3 Ensembling & calibration — WHERE THE SAFE PRODUCT LIVES OR DIES
+    * Stack: logistic meta-learner over {B2-derived prob, M1/M2/M3,
+      market prob}.
+    * Calibrate every output; then VERIFY calibration specifically in
+      the operating band [0.80, 0.97] with high-resolution reliability
+      bins: "BAND-ECE". A model can look calibrated overall and be 3
+      points optimistic at 0.90 — which at odds 1.18 is the difference
+      between +6% and roughly break-even. Band-ECE < 0.02 is the gate.
+    * Metrics that matter, in order (v3.0 re-ranked):
+        1. Band-ECE on [0.80, 0.97] + reliability diagrams
+        2. Log-loss / Brier vs B0 per SAFE CELL (=> cell MBI)
+        3. Backtested ROI & max drawdown of the safe list at flat stakes
+        4. CLV of published picks vs closing
+      (Accuracy reported, never used for selection.)
+
+  6.4 Training protocol (unchanged, leakage paranoia): walk-forward
+      time splits only; per-league models where data allows, pooled with
+      league embeddings otherwise; weekly retrain + daily rating updates;
+      Optuna budgeted on walk-forward CV; MLflow everything.
+
+  6.5 Deep learning — SECONDARY MODULE, Phase 6+, only after the safe
+      engine is profitable. Expected +1-2% log-loss at 10x complexity.
+
+  6.6 The unit of edge is the (league, market) SAFE CELL
+    * S1-S6 x whitelisted leagues = the candidate cell grid (S5/S6
+      added v3.1). Every cell benchmarks
+      against B0 -> cell MBI; cells enabled in market_rule by backtest
+      evidence only (positive MBI AND positive flat-stake yield AND
+      band-ECE < 0.02 on >= 2 seasons).
+    * Expect the grid to be SPARSE: maybe 10-25 enabled cells worldwide.
+      That is enough. A short trustworthy list beats a long noisy one.
+    * Draws get no cell, ever, in the core. (Secondary module, Phase 6+.)
+
+
+--------------------------------------------------------------------------------
+7. ODDS ENGINE, PRICE FLOORS & "BEST ODDS" SELECTION
+--------------------------------------------------------------------------------
+  * Polling: every 6h at T-7d, hourly at T-24h, every 5-10 min final 2h.
+  * Line shopping: best decimal odds per (match, market, selection)
+    across books — worth 1-3% ROI, and for odds-on betting it is often
+    THE difference between clearing the price floor and not.
+  * Closing-line capture (is_closing=TRUE) for every market — CLV + MBI.
+  * De-vig every book (Shin) -> consensus prob weighted toward sharps.
+  * Steam / sharp-divergence detection — alerts + features.
+
+  Price-floor mechanics (v3.0 — the core publishing rule):
+    * Every candidate pick computes min_acceptable_odds = (1+m)/p_cal
+      (m per market_rule, default 3% core / 1.5% for S1 at p>=0.93).
+    * Published picks display the floor. The engine re-checks the best
+      available price at publish time and every poll; if the market
+      never meets the floor before kickoff -> status=EXPIRED, no bet.
+      EXPIRED is a healthy outcome and is reported as such.
+    * Timing: odds-on favorites usually shorten as kickoff approaches
+      (public money piles on) -> capture EARLY (T-3d to T-24h) is the
+      default for S1/S2/S4; O1.5 prices are stabler. Backtest per cell
+      and store the optimal capture window on market_rule.
+    * Routing: soft books for price capture (stale prices = floor met
+      more often), sharps/exchanges for volume and account longevity
+      (limits_winners flag).
+
+
+--------------------------------------------------------------------------------
+8. THE SAFE PICK ENGINE (CORE PRODUCT)
+--------------------------------------------------------------------------------
+  8.1 Publish gates — a pick appears ONLY when ALL pass:
+      1. Cell enabled: (league, market) is an enabled safe cell (§6.6)
+      2. Probability: p_cal >= market_rule.min_prob
+         (S1: 0.88 / S2: 0.85 / S3: 0.80 / S4: 0.72 eff. — tuned by
+          backtest, seeds in [ODDS §3])
+      3. Band-calibration current: production model's live band-ECE
+         within 2x of backtest value
+      4. Price: best available odds >= min_acceptable_odds (floor, §7)
+         AND within the cell's odds window AND <= 7.0 global ceiling
+      5. Edge: de-vigged edge >= cell threshold (1.5-3%) — yes, even
+         safe picks must beat the de-vigged market or they slow-bleed
+      6. Data: completeness score >= safe threshold (stricter than
+         secondary); league LPI >= 60; integrity blacklist clean
+      7. Context: no dead-rubber flag, no rotation-risk flag UNLESS the
+         lineup-confirmed re-check (below) clears it
+      8. LINEUP-CONFIRMED RE-CHECK (Phase 3+): ~60-75 min before kickoff
+         re-run inference with confirmed XIs; if p_cal drops below the
+         gate, retract the pick (status change + notification). Late
+         team news is the #1 safe-pick killer; this is the seatbelt.
+
+  8.2 Staking — FLAT, not Kelly (v3.0)
+      * At odds-on prices Kelly is misleading: p=0.90 @ 1.20 gives
+        f* = 0.40 -> quarter-Kelly 10% of bankroll on ONE pick. The 2%
+        cap would always bind, so the cap IS the policy. Simplify:
+        FLAT 1.0-1.5% of bankroll per pick (risk_profile.staking_mode =
+        FLAT, flat_stake_pct = 0.015 default).
+      * Portfolio caps: max 5 open picks; max 4% on one match; max 15%
+        of daily staked volume on one league; same-match picks = one
+        exposure.
+      * LOSING-STREAK MATH (plan for it, don't be surprised by it):
+        at p = 0.88, expected LONGEST losing streak ~ ln(N)/ln(1/0.12):
+        ~3 over 300 picks, ~4 over 1500 picks. At flat 1.5% that is a
+        4.5-6% drawdown from streaks alone — normal operation, printed
+        on the dashboard so nobody panics into changing the system.
+      * Circuit breakers: pause publishing if rolling-50-pick hit rate
+        drops below the cell-weighted break-even + 1%, or rolling CLV
+        < 0 over 30 picks, or drawdown > 10%, or live band-ECE > 2x
+        backtest. All parameters in risk_profile, editable in admin.
+
+  8.3 Accumulator policy — SINGLES ONLY (v3.0)
+      * Safe picks invite acca temptation ("three 90% picks = easy
+        1.7x!"). Reality: hit rate compounds down (0.9^3 = 73%) and any
+        leg below its price floor drags the whole ticket -EV. The core
+        product publishes singles only.
+      * A "double builder" MAY ship in the secondary module later, but
+        only combining picks that INDIVIDUALLY passed every gate, with
+        variance warnings, and never in the core list.
+
+  8.4 Pick lifecycle
+      generated -> gates (8.1) -> published with price floor ->
+      re-checked each poll + lineup re-check -> taken/EXPIRED ->
+      settled -> P&L, CLV, hit rate -> daily + weekly reports.
+
+  8.5 Thin-week rule: the default answer in a thin week is "fewer
+      picks", never "lower thresholds". ZERO PICKS IS A CORRECT OUTPUT
+      and the UI treats it as a first-class state, not an error.
+
+  8.6 Transparency (product feature, not compliance): every pick links
+      to its full audit trail — probability, floor, edge, completeness,
+      cell history, and after settling, its contribution to the rolling
+      hit rate. Trust in a safe-picks product IS the hit-rate ledger.
+
+  8.8 SECONDARY MODULES (everything that used to be co-primary)
+      * VALUE tier (+EV mid-odds hunting, 1.60-2.60 band): the complete
+        v2.0 value engine remains implemented in valuebets/ but ships
+        DISABLED. Enable in Phase 6 for users who opt in. Its picks are
+        listed on a separate page, never mixed into the safe list.
+      * Exotic markets (BTTS, O2.5, corners/cards), draw specialist,
+        deep learning, in-play: Phase 6+ experiments behind flags.
+      * Secondary modules may not consume the core's API budget or
+        delay its jobs (Celery queues separated: `core` vs `secondary`).
+
+
+--------------------------------------------------------------------------------
+9. BACKTESTING FRAMEWORK (BUILD BEFORE BELIEVING ANYTHING)
+--------------------------------------------------------------------------------
+  * Vectorized pandas engine over historical matches + odds
+    (football-data.co.uk closing odds sufficient for MVP).
+  * Walk-forward: train < S, predict season S, run the FULL gate
+    pipeline (8.1) + flat staking, settle, compound. Never random folds.
+  * Honesty rules: odds available at prediction time (or closing as
+    conservative proxy) minus 1-2% slippage; void/postponed handling;
+    as-of assertions on every feature.
+  * Outputs: equity curve, ROI/pick, hit rate per cell, EXPIRED rate,
+    drawdown, CLV distribution, band-ECE reliability plots, bootstrap
+    p-value of profit vs luck.
+
+  SLOW-BLEED DETECTOR (v3.0 — the safe product's own alarm):
+    * For every rolling 200-pick window compute ROI and its bootstrap
+      95% CI. Alarm when the CI upper bound < +0.5%: the feed may be
+      hitting 88% and still bleeding — this catches it in ~2 months
+      instead of a year. Runs in backtest AND live (§10.2 daily job).
+    * Also decompose bleed source when alarmed: hit-rate shortfall vs
+      price shortfall (avg odds taken below floor+margin) vs cell mix.
+
+  Per-league/cell decomposition report (writes league_metric):
+    (a) model log-loss, (b) closing-line log-loss, (c) MBI = (b)-(a),
+    plus hit rate, avg odds, yield per cell. Ranked by MBI this table
+    IS the strategy; it flips market_rule cells on/off quarterly.
+
+  Promotion rule: a model/config ships ONLY if it beats the champion on
+  band-ECE AND cell MBI AND flat-stake yield over >= 2 full seasons
+  across >= 3 leagues.
+
+
+--------------------------------------------------------------------------------
+10. DJANGO APPLICATION DESIGN
+--------------------------------------------------------------------------------
+  10.1 Services layer (views stay thin)
+    ingestion/services.py    sync_fixtures(), sync_results(), sync_odds(),
+                             resolve_team_aliases()
+    features/services.py     build_feature_snapshot(match, version)
+    predictions/services.py  predict_match(match) -> prediction rows
+    safepicks/services.py    run_gates(match) -> pick rows; recheck_lineup();
+                             expire_unmet_floors()
+    valuebets/services.py    (secondary, disabled) generate_value_picks()
+    portfolio/services.py    settle_bets(), compute_clv(), risk_check()
+
+  10.2 Celery schedule (Beat) — queues: core | secondary
+    every 15 min : sync live/finished results; settle picks & bets
+    every 15 min : (matchday) lineup feeds -> lineup-confirmed re-checks
+    hourly       : sync odds (T-24h fixtures); refresh best-odds cache;
+                   re-check price floors; expire unmet floors
+    every 6 h    : sync odds (T-7d); fixtures for next 14 days
+    daily 04:00  : ratings update; materialized views; feature snapshots
+    daily 06:00  : inference -> safe-pick gates -> publish; digest
+    daily 07:00  : performance report (hit rate, ROI, CLV, band-ECE,
+                   slow-bleed detector status)
+    weekly Mon   : full retrain -> MLflow -> champion eval (band-ECE
+                   first) -> manual promotion
+    quarterly    : LPI + MBI review -> league_metric refresh -> cell
+                   whitelist changes flagged for approval
+
+  10.3 Web dashboard (pages — safe-first)
+    /            TODAY'S SAFE PICKS: 0-5 cards. Each: fixture, market,
+                 p_cal, PRICE FLOOR ("take only >= 1.15"), best current
+                 odds + book, edge, flat stake, completeness badge,
+                 lineup-check status. Zero-picks state is designed, not
+                 empty: shows why (no cell met gates today).
+    /ledger      THE HIT-RATE LEDGER: rolling 50/200/all-time hit rate
+                 vs weighted break-even line, ROI/pick, streak history,
+                 drawdown, EXPIRED rate. The trust page.
+    /match/<id>  Full breakdown: prob vector, scoreline heatmap, SHAP
+                 drivers, odds history + floor line, H2H, form.
+    /leagues     Cell grid: (league x S1-S4) with MBI, hit rate, status
+                 (enabled/watch/off) + LPI; explains WHY any cell is on.
+    /bankroll    Exposure, bet log, drawdown, risk-profile editor.
+    /models      Registry: versions, band-ECE, champion/challenger.
+    /value       (secondary, Phase 6, behind flag) the old VALUE tier.
+    /admin       Alias review queue, risk params, job status.
+
+  10.4 REST API (DRF, token auth, throttled)
+    GET /api/v1/picks/today            (core: safe picks + floors)
+    GET /api/v1/ledger/summary         (hit rate, ROI, streaks)
+    GET /api/v1/matches/<id>/prediction
+    GET /api/v1/matches/<id>/odds?market=DC
+    GET /api/v1/leagues/cells          (cell grid: MBI/LPI/status)
+    POST /api/v1/bets                  (record a manually placed bet)
+    GET /api/v1/value/today            (secondary, Phase 6, flag-gated)
+
+  10.5 Testing
+    * pytest + pytest-django; factory_boy fixtures.
+    * Golden tests: Dixon-Coles vs published numbers; price-floor,
+      Kelly and de-vig math vs hand-computed cases; gate logic truth
+      table (every 8.1 gate individually forced to fail).
+    * Leakage tests: assert every feature as-of < kickoff.
+    * Backtest regression: pinned dataset -> pinned metrics.
+    * Calibration test: band-ECE on holdout within tolerance.
+
+
+--------------------------------------------------------------------------------
+11. ROADMAP (SAFE ENGINE FIRST — EACH PHASE SHIPS SOMETHING USABLE)
+--------------------------------------------------------------------------------
+  PHASE 0 — Foundations (week 1-2)
+    Django + PG + Docker skeleton; schema & migrations; ingest
+    football-data.co.uk CSVs (10+ seasons, focus: dominant-team +
+    scoring leagues [ODDS §5]); team-alias resolver; admin browsing.
+
+  PHASE 1 — Probability engine + safe-cell backtest (week 3-5)
+    Elo + Dixon-Coles -> derived S1-S4 probabilities; calibration with
+    band-ECE reporting; walk-forward backtest of the FULL safe gate
+    pipeline at flat stakes; first cell-grid + MBI report.
+    DELIVERABLE: "which safe cells are real?" — this report decides
+    everything downstream.
+
+  PHASE 2 — ML layer for safe cells (week 6-8)
+    Feature store; binary GBMs (M1-M3); stacking + isotonic; MLflow;
+    champion/challenger on band-ECE; market_rule cells seeded from
+    [ODDS §3] and pruned by backtest; slow-bleed detector in backtests.
+
+  PHASE 3 — Live pipeline (week 9-11)
+    API-Football (incl. LINEUPS/injuries) + The Odds API; Celery core
+    queue; odds engine with price floors + closing capture; daily
+    inference -> gates -> publish; lineup-confirmed re-check;
+    EXPIRED-floor handling.
+
+  PHASE 4 — Product (week 12-14)
+    / (today's safe picks) + /ledger (the trust page) + /match +
+    /leagues cell grid; DRF API; notifications (email/Telegram) incl.
+    pick retractions from lineup re-checks.
+
+  PHASE 5 — Hardening + paper trade (week 15-16 + 4+ weeks)
+    Paper-trade the safe list >= 4 weeks; live vs backtest: hit rate,
+    band-ECE, CLV, slow-bleed status; circuit breakers armed; Sentry/
+    Grafana; only then real stakes at 0.1% units ramping to flat 1.5%.
+
+  PHASE 6 — SECONDARY MODULES (ongoing, optional, flag-gated)
+    VALUE tier enablement (/value); BTTS/O2.5 models; double builder
+    (strict); draw specialist; player-level features; niche-league safe
+    cells where MBI + completeness justify; sequence models; in-play.
+
+
+--------------------------------------------------------------------------------
+12. HONEST SUCCESS CRITERIA (WHAT "BEST" LOOKS LIKE — SAFE-FIRST)
+--------------------------------------------------------------------------------
+  * Product: >= 88% hit rate on the published safe list over 300+
+    settled picks; EXPIRED rate 10-30% (proves the floor is doing its
+    job); zero picks published that failed any gate (audited).
+  * Calibration: live band-ECE < 0.02 on [0.80, 0.97]; live-vs-backtest
+    ratio < 2x at all times.
+  * Economics: +2-5% ROI per settled pick at flat stakes; slow-bleed
+    detector green (rolling-200 ROI CI excludes <= +0.5%); max drawdown
+    < 10%; positive CLV on >= 55% of taken picks.
+  * League strategy: every enabled cell justified by positive MBI +
+    positive yield + band-ECE < 0.02 over >= 2 seasons; the /leagues
+    page can explain WHY any cell is on or off.
+  * Engineering: full audit trail pick -> raw data/odds/features/model;
+    zero-leakage verified; retrain-to-production one reviewed click.
+  * Discipline: the system publishes NOTHING on most thin days, retracts
+    picks on bad lineups, and lets floors expire unmet. That restraint
+    is the product.
+
+
+--------------------------------------------------------------------------------
+13. FAILURE MODES & ANTI-PATTERNS (HOW THESE SYSTEMS ACTUALLY DIE)
+--------------------------------------------------------------------------------
+  1. DATA LEAKAGE — post-kickoff data in features: spectacular backtests,
+     ruinous live. Defense: frozen snapshots, as-of test assertions.
+  2. BACKTEST OVERFITTING — thresholds tuned till history looks great.
+     Defense: walk-forward only, >=2 seasons x >=3 leagues, bootstrap
+     p-values, holdout seasons.
+  3. ODDS AVAILABILITY BIAS — backtesting prices you could not have
+     taken. Defense: slippage haircut, closing-as-proxy, paper-trade
+     comparison.
+  4. IGNORING NEGATIVE CLV — bankroll up on luck while CLV is negative.
+     Defense: CLV circuit breaker trumps the equity curve.
+  5. CHASING THE TAIL — "8% edge" on a 9.0 longshot = tail
+     miscalibration. Defense: 7.0 ceiling + calibration-range gate.
+  6. QUOTA PRESSURE — publishing because users expect picks today.
+     Defense: thin-week rule; zero picks is a designed state.
+  7. SOFT-DATA MIRAGE — "predictable" low league that is thin data or a
+     fixed match. Defense: completeness gate, integrity blacklist, MBI
+     on adequate samples only.
+  8. STAKING DRIFT — overriding stakes after wins/losses. Defense:
+     computed flat stakes, logged; manual bets flagged separately.
+  9. SILENT MODEL ROT — league regime changes outdate the model.
+     Defense: quarterly LPI/MBI review, live band-ECE monitor,
+     champion/challenger.
+ 10. INFRA DEBT AT THE WORST TIME — odds polling dies on matchday.
+     Defense: job_run audits, Sentry alerts on missed beats,
+     publish-time re-checks.
+ 11. SLOW BLEED (v3.0 — THE safe-product killer) — 88% hit rate, money
+     quietly gone: average odds taken crept below the floor+margin, or
+     calibration slipped 2 points at 0.90. Defense: price floors on
+     every pick, band-ECE gate, slow-bleed detector with bootstrap CI,
+     bleed-source decomposition.
+ 12. ACCUMULATOR TEMPTATION (v3.0) — combining "sure things" until the
+     ticket is -EV and high-variance. Defense: singles-only core (§8.3);
+     the UI never offers combination in the core list.
+
+
+--------------------------------------------------------------------------------
+14. GLOSSARY
+--------------------------------------------------------------------------------
+  1X2            Match result market: Home (1), Draw (X), Away (2).
+  Acca           Accumulator/parlay — multiplied-odds multi-leg bet.
+                 Core product: singles only (§8.3).
+  AH             Asian Handicap; AH -1.0 on heavy favorites = safe cell
+                 S4 (push insurance at -1.0 exactly).
+  Band-ECE       Expected Calibration Error measured ONLY inside the
+                 operating band [0.80, 0.97] — the safe product's core
+                 model metric (§6.3).
+  Break-even     1/odds — the hit rate below which a price loses money.
+  BTTS           Both Teams To Score (secondary module market).
+  CLV            Closing Line Value — % by which taken odds beat the
+                 close. Best long-run profit predictor.
+  DC             Double Chance (1X / X2) — safe cell S1.
+  De-vig         Removing bookmaker margin to recover true implied
+                 probabilities (Shin's method).
+  DNB            Draw No Bet — stake refunded on draw; safe cell S2.
+  Edge           p_model_calibrated - p_market_devig.
+  EV             p x (odds-1) - (1-p) per unit staked.
+  EXPIRED        Pick whose price floor was never met before kickoff —
+                 a healthy outcome, tracked as a product metric.
+  Flat staking   Fixed % of bankroll per pick (core default 1.5%) —
+                 replaces Kelly at odds-on prices where caps always bind.
+  LPI            League Predictability Index (0-100, [ODDS §5]);
+                 >= 60 = whitelisted.
+  MBI            Market Beatability Index = closing-line log-loss minus
+                 model log-loss per (league, market) cell; positive =
+                 harvestable edge (§0.5).
+  O/U            Over/Under total goals; O1.5 = safe cell S3.
+  Price floor    min_acceptable_odds = (1+m)/p_cal — published with
+                 every pick; below it, no bet (§0.2, §7).
+  Slow bleed     Losing money at a high hit rate via bad prices or
+                 small calibration drift — failure mode #11.
+  Steam move     Sharp-book line move from informed money.
+  Vig/Margin     Bookmaker profit built into prices.
+  xG             Expected Goals — shot-quality scoring model.
+
+================================================================================
+END OF PLAN — v3.0 SAFE-FIRST. Build Phase 0-1, run the safe-cell MBI
+report, and let the evidence pick the 10-25 cells the product will live on.
+================================================================================
