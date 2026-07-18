@@ -1,0 +1,392 @@
+================================================================================
+DATA SOURCES EXPANSION SURVEY — SafePicks
+Date: 2026-07-16 | Read-only research; every claim below verified by live
+fetch on this date unless explicitly marked "not verified live".
+Baseline inspected: safepicks/apps/ingestion/sources/fdcouk.py, docs/decisions/
+014-fixtures-history-predictions.md, docs/signal-catalog.md, better market.txt.
+================================================================================
+
+WHAT WE HAVE TODAY (baseline for "what's NEW")
+- football-data.co.uk MAIN files, 11 leagues (E0 SC0 P1 N1 G1 T1 D1 D2 F2 I2
+  SP2), seasons 2014-15+: FT+HT score, stats HS/AS/HST/AST/HC/AC/HF/AF/HY/AY/
+  HR/AR, odds 1X2 + OU2.5 + AH from B365/Pinnacle/Max/Avg incl. closing.
+- football-data.co.uk EXTRA country files, 15 leagues (AUT SUI NOR SWE USA +
+  newly ARG BRA CHN DNK FIN IRL JPN MEX POL ROU): results + single 1X2 odds
+  family only — NO HT, NO stats, NO OU/AH, and the newer files carry CLOSING
+  1X2 only (verified: new/ARG.csv header = PSCH..MaxC..AvgC..BFEC..B365C).
+- Two free fixtures CSVs (fixtures.csv, new_league_fixtures.csv) — daily
+  pre-match odds snapshots (ADR 014).
+- API-Football + The Odds API clients exist but are KEY-BLOCKED.
+
+Known gaps this survey addresses: (a) JPN extra file's last row is 06/12/2025
+(verified live — that is the final round of J1 2025; J.League moves to an
+autumn–spring calendar from 2026-27, so watch whether fdcouk resumes ~Aug 2026;
+the Feb–Jul 2026 transitional period is NOT in the file); (b) extra-format
+files have no closing OU/AH at all — that market surface cannot come from
+fdcouk for those 15 leagues.
+
+================================================================================
+TOP 3 IMMEDIATE ACTIONS (ranked, all free, all keyless)
+================================================================================
+
+ACTION 1 — Parse the odds columns we already download but throw away  [S]
+  fdcouk main files 2014-15..2018-19 carry OU2.5 and AH odds ONLY under
+  Bet Brain columns (Bb1X2/BbMxH/BbAvH, BbOU/BbMx>2.5/BbAv>2.5,
+  BbAH/BbAHh/BbMxAHH/BbAvAHA — verified in E0/P1/G1/T1/N1/I2/SP2/F2/D2/B1
+  1415–1819 headers). Our OU25_SETS/AH_SETS only read B365*/P*/Max*/Avg*
+  names, which exist from 2019-20 — so FIVE SEASONS x 11 leagues of OU2.5+AH
+  odds (and market max/avg 1X2) in our current window are being dropped.
+  Also unparsed in current 2025-26 files: Betfair Exchange 1X2/OU/AH incl.
+  CLOSING (BFEH/BFE>2.5/BFEAHH + BFEC* variants) and new books BFD (Betfred),
+  BMGM, BV (BetVictor), CL (Coral) incl. closing (verified 2526 headers).
+  BFE closing = a FREE exchange-based sharp-anchor proxy — directly relevant
+  to ADR 019 and to life after the Pinnacle-anchor worry.
+  Bonus: parse_main_csv stores every column in Match.raw, so already-ingested
+  matches can be backfilled from the DB (one migration) with ZERO re-downloads.
+  Minor: G1/F2/B1 2017-19 use HFKC/AFKC (free kicks conceded) instead of
+  HF/AF — map them to fouls or accept the gap.
+
+ACTION 2 — Extend first_year per league (same parser, zero keys)  [S]
+  Verified column evolution (headers fetched for E0 9495/0001/0506/1011/1314/
+  1516/1920/2526 and per-league transition seasons):
+    1993-94..1999-00: results only (Div,Date,Teams,FT score) — Elo warm-up only.
+    2000-01: England+Scotland (+Germany per notes.txt) gain HT, Referee, full
+      stats (E0 0001 even has woodwork/offsides/booking-points) + 1X2 odds.
+    2005-06: B365 + Bet Brain max/avg 1X2 + OU2.5 + AH appear EVERYWHERE;
+      I1 + SP1 have full stats (I1 0506 even has Referee), F1 partial stats
+      (shots+cards, no corners yet), D1 stats without HST/AST.
+    2012-13: Pinnacle PSH/PSD/PSA AND closing PSCH/PSCD/PSCA appear (E0 1213
+      verified) — closing-line data starts here, not 2019.
+    2017-18: P1 G1 T1 N1 B1 I2 SP2 F2 D2 all gain full stats (verified 1617 =
+      no stats, 1718 = stats for each).
+    2019-20: Time column + per-book OU/AH + full closing sets for all books.
+  RECOMMENDED first_year:
+    E0, SC0          -> 2000  (stats+HT+odds from 2000-01; OU/AH from 2005-06)
+    D1, D2           -> 2005  (odds era; D1 stats partial until ~2013,
+                               D2 stats from 2017-18)
+    P1 N1 G1 T1 I2 SP2 F2 -> 2005 (results+HT+1X2+BbOU/BbAH; stats stay
+                               2017-18+ — feature builders must tolerate that,
+                               which completeness scoring already does)
+    Conservative alternative for all: 2012 (adds Pinnacle closing 1X2 era).
+  WHY: the DC fit only uses a 900d window, so old seasons don't move daily
+  picks; the value is (a) far more walk-forward evaluation folds for the ML
+  stack and calibration, (b) longer Elo warm-up, (c) 2005+ OU/AH odds for
+  market-baseline research across two extra market families.
+
+ACTION 3 — Add main-format divisions we don't ingest (fixtures.csv already
+  carries them, so trial-week coverage grows for free)  [S]
+  Verified today: fixtures.csv rows exist for B1 and SP2 — the file covers ALL
+  main divisions, so any division added to MAIN_LEAGUES instantly gets daily
+  fixture rows + pre-match odds through the existing ADR-014 loop.
+  ADD (data + picks candidates):
+    B1  Belgium Pro League  — full odds always; stats from 2017-18 (verified);
+        scoring league, fits the dominant_team/scoring profile.
+    I1  Serie A, SP1 La Liga, F1 Ligue 1 — stats since 2005-06 (verified),
+        deepest odds history, and they're the leagues where free xG/shot-minute
+        sources (Understat/FBref/StatsBomb) actually overlap -> best training
+        substrate for first-half/team-total/minute models even if picks stay
+        elsewhere. Ingest as benchmark/data leagues like E0 if preferred.
+  ADD (data-only, EXCLUDE from pick cells — user's avoid list):
+    E1  English Championship — avoid list for BETTING, but it has the longest
+        stats history outside E0 (verified 0102 header: full stats+referee) and
+        is high-volume corners/cards data for those models. Same pattern as
+        E0 "benchmark": in DB, in no cell's league_group.
+  SKIP for now: E2/E3 (League One/Two — full stats but low liquidity), EC
+    (Conference — 2526 file DROPPED shots/corners, cards only, verified),
+    SC1-SC3 (no stats until recently, tiny), SP2-avoid note: SP2 already
+    ingested; Segunda is on the user's avoid list for PICKS — keep it
+    data-only rather than removing.
+  Evidence URLs: https://www.football-data.co.uk/mmz4281/{season}/{div}.csv
+    (fetched 9495,0001,0102,0506,1011,1213,1314,1415,1516,1617,1718,1819,1920,
+    2526 across E0,E1,E2,E3,EC,SC0-3,B1,I1,SP1,F1,P1,G1,T1,N1,D1,D2,I2,SP2,F2),
+    https://www.football-data.co.uk/notes.txt,
+    https://www.football-data.co.uk/fixtures.csv,
+    https://www.football-data.co.uk/new_league_fixtures.csv
+
+================================================================================
+FULL SOURCE SURVEY
+================================================================================
+
+--------------------------------------------------------------------------------
+1. FOOTBALL-DATA.CO.UK — MORE FROM THE SAME PUBLISHER (free, keyless)
+--------------------------------------------------------------------------------
+1a. Earlier seasons + 1b. more divisions + parser gaps: see ACTIONS 1–3 above.
+
+1c. Referee coverage (for a referee-strictness card/fouls feature):
+    England E0–E3+EC from 2000-01 (verified 0001, 0102, 0506) and Scotland
+    SC0-SC3 (verified 0506, 2526); Italy I1 had it mid-2000s (0506) but NOT by
+    2014-15. No other country carries it. It is already stored in Match.raw —
+    a feature can be derived without any ingestion change.
+
+1d. Extra-file catalogue: 16 country files exist under /new/. The only one we
+    don't ingest is RUS (Russia Premier League, 2012- , still updated — last
+    row 17/05/2026, verified). Understat's 6th league is also Russia, so RUS
+    is the only extra league with free shot-level xG — but liquidity/geo
+    concerns make it optional at best. NOT RECOMMENDED unless a cell wants it.
+
+1e. Extra-file hard limits (cannot be fixed inside fdcouk):
+    - No HT scores -> no first-half markets for the 15 extra leagues.
+    - No stats -> no corners/cards/shots features.
+    - 1X2 only, and newer files are CLOSING-only (ARG verified); the fixtures
+      file provides the pre-match set — ADR 014 already exploits this.
+    - JPN staleness: see header note above; add a per-league freshness watchdog
+      (JPN currently 7 months stale by calendar, legitimately so).
+
+  Serves: coverage + market surface (OU/AH odds) + training depth + sharp proxy
+  Cost/keys: none | License: free site data, no stated redistribution license —
+  we consume internally, fine. | Effort: S (column sets + catalog entries + one
+  raw-backfill migration).
+
+--------------------------------------------------------------------------------
+2. FREE xG / SHOT-EVENT SOURCES (minute-interval markets + training depth)
+--------------------------------------------------------------------------------
+2a. FiveThirtyEight SPI archive — BEST free xG training-depth win.  [S/M]
+    VERIFIED REALITY CHECK: the official CSVs are GONE. The GitHub folder
+    soccer-spi now contains only README.md (verified via GitHub API); the real
+    files lived on projects.fivethirtyeight.com, which now redirects to
+    abcnews.com/politics (verified). BUT the repo license is CC-BY-4.0
+    (verified via GitHub API), so pre-shutdown mirrors are legal to use with
+    attribution. Verified working mirror: github.com/ilyapt/spi_matches
+    (spi_matches.csv, 9.7 MB, downloaded + parsed in this survey):
+      68,913 matches, 2016-07-09..2023-12-03, 40 leagues, columns: SPI ratings,
+      win/draw probs, projected scores, IMPORTANCE, actual scores, shot-based
+      xg1/xg2, non-shot nsxg1/nsxg2, adjusted scores.
+    League overlap with US: Eredivisie, Portuguese Liga, Greek SL, Turkish SL,
+    Scottish Prem, Bundesliga + 2.Bundesliga, Ligue 2, Serie B, Segunda,
+    Austrian BL, Swiss SL, Norwegian, Swedish, MLS, Argentina, Brazil, China,
+    Japan, Mexico, Danish + E0 benchmark (+ Belgium/Ligue 1/Serie A/La Liga if
+    divisions added). Missing: Finland, Ireland, Poland, Romania.
+    NEW vs what we have: per-match xG/nsxG ground truth 2016-2023 to VALIDATE/
+    CALIBRATE our SOT-based xG proxies (signal-catalog 5.2+), plus a match-
+    importance signal precedent. Static archive — no live use.
+    Serves: training depth, proxy validation | Cost: none, keyless | License:
+    CC-BY-4.0, attribute FiveThirtyEight | Effort: S import + M team-name
+    mapping across 40 leagues (reuse resolve_team patterns; one-time).
+
+2b. Understat — richest free shot-minute data, but ToS-hostile.  [M, gray]
+    Coverage (verified live): 6 leagues — EPL, La Liga, Bundesliga, Serie A,
+    Ligue 1, RFPL(Russia) — since 2014/15. Per-shot JSON embedded in match
+    pages (minute, xG, player, situation, shot type) — exactly what minute-
+    interval goal markets need. HONESTY: https://understat.com/robots.txt is
+    "User-agent: * / Disallow: /" (verified) — scraping is explicitly
+    disallowed; there is no official API; community scrapers exist but a
+    production pipeline on it is a policy violation with breakage risk.
+    Overlap with our leagues: only D1 (+E0 benchmark; +I1/SP1/F1 if added).
+    RECOMMENDATION: do NOT build production dependency; at most one-off local
+    research to sanity-check minute-distribution priors.
+    Serves: minute markets (research only) | Cost: none | License: disallowed
+    by robots.txt | Effort: M + reputational/breakage risk.
+
+2c. StatsBomb open-data (GitHub) — free event data for PROTOTYPING.  [S]
+    Verified competitions.json: full 2015/16 season for all Big-5 leagues,
+    Bundesliga 2023/24, Ligue 1 2021-23, PL 2003/04+2015/16, La Liga 2004-2020
+    (Barcelona-centric), MLS 2023, plus WCs/Euros/Copa/AFCON, women's leagues.
+    Event-level JSON with minute+second, shot xG, freeze-frames, lineups.
+    NEW vs what we have: true event timelines to DESIGN and unit-test the
+    minute-interval market models (goal-time hazard curves, 1st-10-min rates)
+    before any paid live source is bought. NOT a production source for our
+    leagues (wrong/old seasons).
+    License (verified README): free with attribution "state the data source as
+    StatsBomb and use our logo"; registration not required for the GitHub data.
+    Serves: minute-market model design, training methodology | Cost: none,
+    keyless | Effort: S (well-documented JSON; parsers exist).
+    URL: https://github.com/statsbomb/open-data
+
+2d. FBref (Sports Reference) — per-shot tables w/ minutes for Big-5.  [M]
+    Big-5 match pages carry Opta shot tables (minute, xG, PSxG) from 2017-18.
+    Scraping policy (verified via their bot-traffic page/search): hard cap
+    ~10 requests/minute, violators blocked up to 24h; polite scraping below
+    the cap is de facto tolerated (worldfootballR/soccerdata communities run
+    on it). Underlying data is Opta-licensed — do not republish raw.
+    Only useful if we add I1/SP1/F1 (and for E0/D1). Slow full-history pulls
+    (rate cap) — days of polite crawling.
+    Serves: minute markets + xG for Big-5 | Cost: none, keyless | License:
+    site ToS + Opta restrictions; internal use tolerated, republishing not |
+    Effort: M (existing libs help; rate-cap management mandatory).
+
+--------------------------------------------------------------------------------
+3. FREE FIXTURES / RESULTS APIs (7-day trial coverage)
+--------------------------------------------------------------------------------
+3a. ESPN hidden JSON API — the strongest free+keyless fixtures/events feed.
+    Verified live (site.api.espn.com/apis/site/v2/sports/soccer/{code}/
+    scoreboard?dates=YYYYMMDD): works keyless for eng.1, ned.1, nor.1, por.1,
+    tur.1 (gre.1 returned 0 events on the date tried — verify per league).
+    Each event carries status, competitors, ODDS object, and a `details` array
+    of scoring plays/cards WITH clock ("8'", value seconds) and players
+    (verified on 2026-05-10 EPL). Season calendar included -> can enumerate
+    fixtures ~any horizon, filling fdcouk's between-rounds fixture gaps
+    (ADR 014 lists this exact weakness).
+    HONESTY: undocumented, unofficial, no SLA, ToS-gray, can change silently.
+    Use as SECONDARY/fallback fixture+goal-minute source, never the spine, and
+    never redistribute.
+    Serves: trial coverage (fixture discovery beyond ~1 week), minute markets
+    (goal minutes for most of our leagues incl. extra ones: nor.1 verified;
+    arg/bra/jpn/mex/chn codes exist), postponement detection | Cost: none,
+    keyless | Effort: M (league-code map + team-name resolution + fragility
+    guards).
+
+3b. OpenLigaDB — keyless community API, Germany only.  [S/M]
+    Verified live: api.openligadb.de/getmatchdata/bl1/2024/1 returns HT+FT
+    results AND goals[] with matchMinute, scorer, penalty/own-goal flags.
+    Covers Bundesliga 1/2/3 + DFB-Pokal, seasons back ~2003.
+    NEW: free goal minutes for D1+D2 — the ONLY clean, keyless, ToS-clean
+    minute source for any of our current leagues. Enables first D1/D2
+    minute-interval market models (better market.txt lines "Total Goals O/U
+    from 1 to N minute", "10 minutes 1X2").
+    HONESTY: community-maintained, no SLA; verify against fdcouk results (we
+    already have FT/HT to cross-check).
+    Serves: minute markets (2 leagues), goal-minute training depth | Cost:
+    none, keyless | Effort: S/M.
+
+3c. football-data.org free tier — SKIP.
+    Verified pricing page: free = 12 competitions (CL, PL, Championship, BL1,
+    SA, PD, FL1, DED, PPL, Brazil Serie A, WC, EC), 10 calls/min, requires a
+    free API KEY, scores/schedules DELAYED, and it explicitly EXCLUDES goal
+    scorers, lineups, stats, odds. Adds nothing over fdcouk fixtures.csv
+    (which even has odds) except Brazil fixtures redundancy. Not keyless.
+
+3d. TheSportsDB — LOW VALUE.
+    Free community JSON API (shared test key; $9/mo Patreon for a real key +
+    V2). Crowd-sourced data, no minute-event guarantees, moderate reliability.
+    Useful only for logos/artwork if the frontend ever wants them.
+
+--------------------------------------------------------------------------------
+4. ODDS DEPTH
+--------------------------------------------------------------------------------
+4a. Betfair Historic Data, BASIC tier — the only truly free TIMESTAMPED
+    odds archive.  [L]
+    From the Betfair developer docs/community (historicdata.betfair.com is an
+    SPA; verified via support articles + betfair-datascientists guide): BASIC
+    tier is free, covers exchange markets from ~April 2015, pre-off data at
+    1-MINUTE granularity, last-traded price only (no volume, no ladder).
+    Requires a (free) Betfair account to download; TAR of bz2 JSON market
+    streams; heavy processing.
+    NEW vs what we have: genuine timestamped pre-match odds SERIES (our
+    OddsSnapshot currently gets one capture/day from fixtures.csv) -> line-
+    velocity features, CLV research, and — uniquely — CORNERS and other
+    side-market odds history where such exchange markets existed. This is the
+    only free path to historical odds for the corners/team-totals surface.
+    HONESTY: UK/geo restrictions on Betfair accounts may apply; data files are
+    large; a meaningful subset (one league-season pilot) is the right first
+    bite. | Cost: free w/ account (not keyless) | Effort: L.
+    URLs: https://historicdata.betfair.com/,
+    https://betfair-datascientists.github.io/data/usingHistoricDataSite/,
+    https://support.developer.betfair.com/hc/en-us/articles/360002407732
+
+4b. OddsPortal — NOT RECOMMENDED.
+    Reality check (2026 guides): odds tables are JS-rendered (headless browser
+    required), light Cloudflare/rate-limiting, community scrapers exist
+    (OddsHarvester etc.), ToS prohibits scraping. Historical opening+closing
+    odds exist for huge league coverage — tempting for the 15 extra leagues'
+    OU/AH gap — but it's a fragile, ToS-violating pipeline with no timestamps
+    beyond open/close. Only revisit if the extra-league OU/AH gap becomes a
+    hard blocker and no paid option is on the table.
+
+4c. Already-free closing-line notes: fdcouk main files carry Pinnacle closing
+    (PSC*) since 2012-13 and Betfair Exchange closing (BFEC*) since 2025-26 —
+    post-match only (backfilled in result files). ACTION 1 captures these.
+    The extra files' closing 1X2 (PSCH/MaxC/AvgC/BFEC/B365C) is already
+    parsed. aussportsbetting.com historical Excel sheets exist for EPL etc.
+    (open+close, totals) — NOT verified live in this survey; low priority.
+
+--------------------------------------------------------------------------------
+5. CLUB ELO (api.clubelo.com) — free keyless Elo + score distributions  [S]
+--------------------------------------------------------------------------------
+    Verified live (intermittently): /Fixtures returned CSV with, per upcoming
+    match: full goal-difference probability distribution AND exact-score
+    probabilities R:0-0..R:6-0 — i.e., a free external CORRECT-SCORE benchmark
+    that maps directly onto our goal-range / team-total / O-U market surface.
+    Other endpoints: /{YYYY-MM-DD} daily ranking, /{ClubName} full Elo history
+    (Europe-wide, decades deep). No key, plain CSV.
+    HONESTY: the API was FLAKY during this survey — /Fixtures succeeded once,
+    the ranking/history endpoints returned empty responses on several tries
+    (site had a known outage Apr 2025; API doc page last updated Feb 2026).
+    Europe only — no MLS/BRA/ARG/JPN/CHN/MEX. Treat as a nightly best-effort
+    pull with graceful skip (matches ADR 007 no-crash pattern).
+    NEW vs what we have: independent Elo (validates our own), and an external
+    correct-score prior to benchmark DC calibration per league.
+    Serves: training depth (benchmark), calibration QA | Cost: none, keyless |
+    License: free API, credit clubelo.com | Effort: S.
+
+================================================================================
+FULL RANKED RECOMMENDATION LIST
+================================================================================
+ 1. fdcouk parser upgrade + raw-backfill (Bb* 2005-2019 OU/AH/1X2, BFE incl.
+    closing, new books, HFKC)                    free, keyless, S — DO NOW
+ 2. fdcouk first_year extension per league table above
+                                                 free, keyless, S — DO NOW
+ 3. fdcouk divisions: +B1, +I1, +SP1, +F1 (+E1 data-only)
+                                                 free, keyless, S — DO NOW
+ 4. 538 SPI archive import (mirror, CC-BY-4.0)   free, keyless, S/M
+ 5. OpenLigaDB goal minutes for D1/D2            free, keyless, S/M
+ 6. ESPN hidden API as secondary fixtures + goal-minute feed
+                                                 free, keyless, M (unofficial)
+ 7. Club Elo nightly benchmark pull              free, keyless, S (flaky)
+ 8. StatsBomb open-data for minute-model prototyping
+                                                 free, keyless, S (attribution)
+ 9. Betfair Historic BASIC pilot (one league-season)
+                                                 free w/ account, L
+10. FBref Big-5 shot tables (only after #3 adds Big-5)
+                                                 free, keyless, M (10 req/min)
+11. Understat — local research only, no production dependency (robots.txt)
+12. football-data.org free tier — skip (keyed, delayed, no scorers)
+13. TheSportsDB — skip (community data, no guarantees)
+14. OddsPortal — skip (ToS + fragility)
+
+Market-surface mapping (better market.txt -> source):
+  First-half O/U, HT/FT, half goal ranges  -> already possible: MAIN files
+     have HT scores; Actions 1-2 add depth. Extra leagues: NOT possible free
+     (no HT in extra files; ESPN details could derive HT for recent seasons).
+  Match/team corners O/U                   -> MAIN files HC/AC (2017-18+ for
+     smaller leagues, 2000s for England); corners ODDS history only via
+     Betfair Historic. 1st-half corners: impossible free (needs event feed).
+  Team totals, GG/NG, odd/even, goal range -> FT+HT already in DB; depth via
+     Actions 1-2; xG validation via 538 archive.
+  Minute-interval (1-5/10/15/20/30 min)    -> OpenLigaDB (D1/D2) now; ESPN
+     (broad, gray); StatsBomb (prototyping); production-grade for all leagues
+     needs a paid events API.
+  AH / DNB                                 -> AH odds unlocked 2005+ by
+     Action 1; DNB derivable from 1X2.
+
+================================================================================
+WHAT REMAINS IMPOSSIBLE WITHOUT PAID / KEYED SOURCES
+================================================================================
+- Lineups, injuries, suspensions, transfers (signal families 5.4/5.8; gate 8
+  confirmed-XI): API-Football key or similar. No free substitute found.
+- Live / intraday odds polling, T-24h + final-2h closing-line capture, CLV on
+  OUR bets going forward: The Odds API / bookmaker APIs. fdcouk gives one
+  snapshot/day pre-match + closing only after the match.
+- Pinnacle as a LIVE pre-match anchor: fdcouk still publishes PS/PSC in
+  2025-26 result files (verified), but only retrospectively; a live sharp
+  anchor post-Jan-2026 needs a keyed odds feed. Free partial mitigation:
+  Betfair Exchange closing (BFEC*, Action 1) + Betfair Historic research.
+- Odds history for the exotic surface (corners lines, team totals, first-half
+  lines, minute markets) across our leagues: no free archive exists except
+  Betfair Historic BASIC (exchange markets, L effort). Modeling is possible
+  from stats; PRICING/edge-measurement vs the book is the missing half.
+- Referee ASSIGNMENTS pre-match (we only get names post-match, England/
+  Scotland), stadium/weather, granular player events for all 27+ leagues.
+
+================================================================================
+EVIDENCE — URLS ACTUALLY FETCHED (2026-07-16)
+================================================================================
+football-data.co.uk: /notes.txt; /fixtures.csv; /new_league_fixtures.csv;
+  /new/ARG.csv, /new/JPN.csv, /new/RUS.csv; /mmz4281/{9394,9495,0001,0102,0506,
+  1011,1213,1314,1415,1516,1617,1718,1819,1920,2526}/{E0,E1,E2,E3,EC,SC0,SC1,
+  SC2,SC3,B1,I1,SP1,F1,P1,G1,T1,N1,D1,D2,I2,SP2,F2}.csv (header rows)
+understat.com/robots.txt; understat.com/league/EPL
+github.com/statsbomb/open-data (README + data/competitions.json raw)
+GitHub API: repos/fivethirtyeight/data (+ /contents/soccer-spi, commits);
+  raw README; projects.fivethirtyeight.com/soccer-api/... (redirect verified);
+  github.com/ilyapt/spi_matches (mirror CSV downloaded + parsed)
+football-data.org/coverage; football-data.org/pricing
+api.openligadb.de/getmatchdata/bl1/2024/1
+site.api.espn.com/apis/site/v2/sports/soccer/{eng.1,ned.1,nor.1,por.1,tur.1,
+  gre.1}/scoreboard(?dates=...)
+api.clubelo.com/Fixtures (+ /2026-07-15, /Feyenoord — intermittent empties)
+thesportsdb.com/free_sports_api
+historicdata.betfair.com (SPA) + Betfair support/community docs via search
+sports-reference.com/bot-traffic.html (via search; direct fetch 403)
+OddsPortal reality via 2026 scraping guides (search)
+================================================================================
+END

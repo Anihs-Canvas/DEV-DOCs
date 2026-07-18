@@ -20328,9 +20328,9 @@ CMD ["gunicorn", "easypj.wsgi:application", \
                 <tr><td>1</td><td><code>FROM python:3.11-slim</code></td><td>Slim = Debian-based, glibc compatibility. Alpine would break psycopg2 and Pillow C-extensions. Pinned to 3.11, not :latest.</td></tr>
                 <tr><td>3-5</td><td><code>ENV PYTHONDONTWRITEBYTECODE=1</code></td><td>Stops .pyc generation in immutable image layers — saves MBs and prevents unnecessary layer deltas.</td></tr>
                 <tr><td>7</td><td><code>WORKDIR /app</code></td><td>Creates /app if missing; all subsequent commands run here. Better than <code>RUN mkdir /app && cd /app</code>.</td></tr>
-                <tr><td>10-12</td><td><code>RUN apt-get install gcc libpq-dev</code></td><td>libpq-dev is needed to compile psycopg2 (PostgreSQL driver). gcc is removed after pip install to keep image lean.</td></tr>
+                <tr><td>10-12</td><td><code>RUN apt-get install gcc libpq-dev</code></td><td>libpq-dev is needed to compile psycopg2 (PostgreSQL driver). gcc is purged again below — see the note under this table for what that purge does and does not actually accomplish.</td></tr>
                 <tr><td>15</td><td><code>COPY requirements.txt .</code></td><td>Copied BEFORE source code — maximizes layer caching. requirements.txt rarely changes.</td></tr>
-                <tr><td>16-18</td><td><code>RUN pip install --no-cache-dir</code></td><td><code>--no-cache-dir</code> prevents ~100 MB wasted pip cache. Purge gcc after install to remove build tool from final image.</td></tr>
+                <tr><td>16-18</td><td><code>RUN pip install --no-cache-dir</code></td><td><code>--no-cache-dir</code> prevents ~100 MB wasted pip cache. Purges <code>gcc</code> from the running container's shell — a security nicety, not the size win it looks like (this <code>RUN</code> is a separate layer from lines 10-12's install, see below).</td></tr>
                 <tr><td>21</td><td><code>COPY . .</code></td><td>Copies application code LAST (changes most frequently). .dockerignore filters out env files, __pycache__, .git.</td></tr>
                 <tr><td>24-26</td><td><code>RUN addgroup/adduser + USER app</code></td><td>Creates system user (no login, no home dir). Switches from root — defense-in-depth security. Must chown app files.</td></tr>
                 <tr><td>28</td><td><code>EXPOSE 8000</code></td><td>Documentation — tells readers the app listens on 8000. Does NOT publish the port; use <code>-p 8000:8000</code> at runtime.</td></tr>
@@ -20338,6 +20338,7 @@ CMD ["gunicorn", "easypj.wsgi:application", \
                 <div class="info-box warning"><h5>🧮 Sizing <code>--workers</code> Correctly — and the Container Gotcha Nobody Warns You About</h5><p>Gunicorn's own docs recommend <strong>(2 &times; CPU cores) + 1</strong> worker processes as a starting point — enough to keep the CPU busy while one worker blocks on I/O. The trap: if you compute that number with Python's <code>multiprocessing.cpu_count()</code> (or a <code>--workers $(python -c "import multiprocessing; print(multiprocessing.cpu_count())")</code> idiom), it reads the HOST machine's total core count — NOT the container's <code>--cpus</code> cgroup limit (6.6). A host with 16 cores but a container capped at <code>--cpus=1</code> auto-sizes to 33 workers fighting over one CPU's worth of scheduler time, each one starved and slow. Either hardcode <code>--workers</code> to match the ACTUAL <code>--cpus</code>/<code>resources.limits.cpu</code> the container will run under, or size it at deploy time from an environment variable your orchestrator sets — never trust in-container CPU auto-detection to know its own cgroup limit.</p></div>
                 <div class="info-box tip"><h5>💡 Why Not Alpine for Django?</h5><p>Alpine is 5 MB — incredibly tempting! But it uses musl libc instead of glibc. Many Python C-extensions (psycopg2, Pillow, numpy, lxml) are pre-compiled for glibc. On Alpine, they either fail to install or crash at runtime with cryptic errors. Slim images keep glibc compatibility while stripping development cruft — the pragmatic sweet spot for Python web apps.</p></div>
                 <div class="info-box note"><h5>🎲 A Rebuilt Image Can Silently Reassign <code>app</code>'s UID</h5><p>Docker's own Dockerfile best-practices guide flags a subtlety this section's <code>addgroup</code>/<code>adduser</code> pair inherits: the UID/GID a system user gets is <strong>non-deterministic across rebuilds</strong> — the "next" free ID is picked at build time, not fixed by the Dockerfile's text, so two builds of the exact same file can hand <code>app</code> two different UIDs. That's invisible until something OUTSIDE the container cares about the number — a bind-mounted host directory's ownership (Part 6), or a Kubernetes <code>securityContext.runAsUser</code> pinning a specific UID. Pin it explicitly the moment either applies: <code>RUN addgroup --system --gid 1000 app &amp;&amp; adduser --system --uid 1000 --gid 1000 app</code>. One more wrinkle straight from the same official guidance: raw <code>useradd</code> examples elsewhere often add a <code>--no-log-init</code> flag to dodge a legacy disk-exhaustion bug in <code>/var/log/faillog</code> — but Debian/Ubuntu's own <code>adduser</code> wrapper (what this Dockerfile actually calls, being <code>python:3.11-slim</code>) does <strong>not</strong> accept that flag at all, so don't go copying it in from a raw-<code>useradd</code> example you find elsewhere.</p></div>
+                <div class="info-box warning"><h5>🪨 The <code>gcc</code> Purge on Lines 16-18 Doesn't Actually Shrink This Image</h5><p>Line 10-12's <code>apt-get install gcc libpq-dev</code> and line 16-18's <code>apt-get purge -y gcc</code> are TWO SEPARATE <code>RUN</code> instructions, not one — and 8.3's same-layer-cleanup rule is exact about what that means: a deletion in a LATER layer never reclaims a file's bytes from an EARLIER one, it only hides the file from the merged filesystem view with a whiteout marker. So this purge does not shrink the 185 MB image (9.4) by a single byte — <code>gcc</code>'s bytes stay fossilized in the install layer, exactly like 8.3's own "Prove Cross-Layer Deletion Is a Lie" exercise predicts. The purge is worth keeping anyway (it stops a live shell from finding a compiler at runtime), but treat it as a security nicety here, not a size optimization. The REAL fix isn't "purge in the same RUN as the install" — it is 9.7's multi-stage split, where the runtime stage never runs <code>apt-get install gcc</code> in the first place, so there is nothing to fossilize. (And since <code>requirements.txt</code> pins <code>psycopg2-binary</code> — the pre-compiled wheel, per 9.1 — neither <code>gcc</code> nor <code>libpq-dev</code> is strictly required for THIS dependency set at all; this Dockerfile installs them defensively, the way many real teams do in case a future dependency needs to compile.)</p></div>
                 <div class="analogy-box">
                     <h5>♟️ Analogy — A Chess Game's Annotated Score Sheet</h5>
                     <p>Every move is written down WITH the reason it was played, not just "pawn to e4." A reviewer replays the reasoning, not merely the moves — which is exactly what the table above does for this Dockerfile: every instruction cites the chapter that decided it, so a teammate can audit the file without you in the room.</p>
@@ -21000,7 +21001,7 @@ RUN adduser --system --group app &amp;&amp; chown -R app:app /app   # ❌ permis
                 </tbody></table></div></details></div>
 
                 <div class="exam-question-item"><span class="eq-number">Q18</span><div class="eq-question">In the final multi-stage Dockerfile, what does copying ONLY the installed-packages directory from the builder stage into the runtime stage accomplish that a single-stage build could not?</div>
-                <details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><span class="eq-answer-label">ANSWER</span><p>It brings ONLY the installed Python packages into the final image, leaving the builder stage's pip cache, build tools, and full source checkout entirely behind in the discarded builder layer.</p></div><div class="eq-explanation"><span class="eq-exp-label">EXPLANATION</span><p>Isolating installed packages to one directory in the builder stage, then copying just that directory (plus the <code>--chown</code>ed app code) into the runtime stage, is what keeps the final image at ~180 MB instead of carrying the builder's whole toolchain. This is a bigger win than 9.2's same-layer <code>apt-get purge -y gcc</code> alone: that trick already got the single-stage Dockerfile down to 185 MB (9.4) by removing the COMPILER, but the pip cache and every earlier layer's fossilized bytes were still in the image — multi-stage discards the builder's entire filesystem, cache included, which is the extra margin below.</p>
+                <details><summary>Show Answer &amp; Explanation</summary><div class="eq-answer"><span class="eq-answer-label">ANSWER</span><p>It brings ONLY the installed Python packages into the final image, leaving the builder stage's pip cache, build tools, and full source checkout entirely behind in the discarded builder layer.</p></div><div class="eq-explanation"><span class="eq-exp-label">EXPLANATION</span><p>Isolating installed packages to one directory in the builder stage, then copying just that directory (plus the <code>--chown</code>ed app code) into the runtime stage, is what keeps the final image at ~180 MB instead of carrying the builder's whole toolchain. This margin is bigger than it looks at first: 9.2's <code>apt-get purge -y gcc</code> runs in a LATER, separate <code>RUN</code> from the one that installed it — per 8.3's same-layer-cleanup rule that is a CROSS-layer removal, so gcc's bytes never actually leave the 185 MB single-stage image (9.4); the purge only hides them from a shell prompt inside the running container, the same "fossilized, not deleted" trap 8.3's own <code>docker history</code> exercise proves. Multi-stage sidesteps the problem instead of fixing it in place: the runtime stage (9.7) never runs <code>apt-get install gcc</code> at all, so there is nothing to purge and nothing to fossilize — the compiler's bytes are absent from the shipped image's layer history, not merely hidden from its merged filesystem view.</p>
                 <table><thead><tr><th></th><th>Naive single-stage (no cleanup at all)</th><th>Multi-stage (<code>COPY --from=builder</code>)</th></tr></thead><tbody>
                 <tr><td>Final image contains</td><td>pip cache + build tools (gcc) + full source checkout</td><td>only the installed packages dir + <code>--chown</code>ed app code</td></tr>
                 <tr><td>Typical size</td><td>~850 MB</td><td>~180 MB</td></tr>
@@ -21010,43 +21011,29 @@ RUN adduser --system --group app &amp;&amp; chown -R app:app /app   # ❌ permis
             <!-- ─────────── DRILL ─────────── -->
             <span class="ch-jump" id="ch9-drill"></span>
             <div class="cka-practice-drill">
-                <h4>🔬 Practice Drill 9.1 — Sabotage On Purpose, Then Diagnose By the Book</h4>
-                <div class="drill-timer">⏱️ Target Time: 15 minutes</div>
+                <h4>🔬 Practice Drill 9.1 — Verify the Tree Before Touching Docker</h4>
+                <div class="drill-timer">⏱️ Target Time: 2 minutes</div>
                 <div class="drill-scenario">
                     <h5>Scenario</h5>
-                    <p>From a clean checkout, build easypj:v1.0 and bring up the two-container circuit from 9.5. Then break it on purpose, three separate ways, one at a time: (1) omit <code>-e DB_HOST=easypj-db</code> on the second run, (2) run easypj-container on a DIFFERENT network than easypj-db, and (3) override the entrypoint to run gunicorn directly against a typo'd module path. Done when 9.6's table names the correct culprit for each, using only <code>docker logs</code>, in under a minute per scenario.</p>
+                    <p>Before writing or building anything, run <code>python -c "import easypj.wsgi"</code> from inside your easypj checkout, then open <code>requirements.txt</code>. Done when the import succeeds with no traceback AND the file pins all three names the rest of this chapter depends on: Django, gunicorn, psycopg2-binary.</p>
                 </div>
                 <div class="drill-hint">
-                    <strong>Hint:</strong> all three break DIFFERENTLY on purpose — a missing <code>DB_HOST</code> still resolves to SOMETHING (a wrong default), a wrong network fails at DNS resolution, and a typo'd module fails before gunicorn's master process even forks a worker. Matching the SHAPE of the error in <code>docker logs</code> to the right class — content, config, or wiring — without guessing is the actual skill this drill rehearses.
+                    <strong>Hint:</strong> this check costs seconds and catches an entire class of mistakes — a broken <code>wsgi.py</code> import or a missing dependency pin — BEFORE you spend 40+ seconds on a Dockerfile build that would only fail for the exact same reason, just later and with a noisier error.
                 </div>
                 <div class="drill-solution">
                     <details>
                         <summary>View Solution</summary>
                         <div class="code-block-wrapper">
-                            <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">TERMINAL — three sabotaged runs</span></div>
-<pre><code class="language-bash"><span class="comment"># 1. Missing DB_HOST — omit the -e flag entirely</span>
-$ docker run -d --name easypj-c1 --network easypj-net -p 8000:8000 \
-    --env-file .env easypj:v1.0
-$ docker logs easypj-c1
-<span class="comment"># django.db.utils.OperationalError: connection to server at "localhost" ... failed
-# culprit: DB_HOST never set, Django fell back to a wrong default — CONFIG class</span>
+                            <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">TERMINAL</span></div>
+<pre><code class="language-bash">$ python -c "import easypj.wsgi"
+<span class="comment"># no output, no traceback — the import succeeded</span>
 
-<span class="comment"># 2. Wrong network — db and web can't see each other at all</span>
-$ docker network create wrong-net
-$ docker run -d --name easypj-c2 --network wrong-net -p 8001:8000 \
-    -e DB_HOST=easypj-db --env-file .env easypj:v1.0
-$ docker logs easypj-c2
-<span class="comment"># OperationalError: could not translate host name "easypj-db" to address
-# culprit: DNS can't resolve a name that isn't on the SAME network — WIRING class</span>
-
-<span class="comment"># 3. Typo'd module — bypass the entrypoint to isolate the CMD itself</span>
-$ docker run --rm --network easypj-net -e DB_HOST=easypj-db --env-file .env \
-    --entrypoint gunicorn easypj:v1.0 easypj.wgsi:application --bind 0.0.0.0:8000
-$ docker logs
-<span class="comment"># ModuleNotFoundError: No module named 'easypj.wgsi'
-# culprit: a one-letter typo (wgsi vs wsgi) — CONTENT class</span></code></pre>
+$ cat requirements.txt
+Django==5.2
+gunicorn==21.2.0
+psycopg2-binary==2.9.9</code></pre>
                         </div>
-                        <p><strong>Check yourself:</strong> if any of the three took longer than a minute to name, re-read <code>docker logs</code>' FIRST line before anything else — every one of these errors names its own cause in plain English; the skill is trusting that line instead of reaching for <code>docker inspect</code> or <code>exec</code> first.</p>
+                        <p><strong>Check yourself:</strong> if the import raises <code>ModuleNotFoundError</code> or <code>ImportError</code>, the Dockerfile you are about to write would fail at the exact same line inside <code>docker run</code>, just after paying the full build cost first — this drill exists to make that failure cheap instead of expensive.</p>
                     </details>
                 </div>
             </div>
@@ -21188,29 +21175,43 @@ docker restart easypj-container
 
             <!-- ─────────── PRACTICE DRILL 9.6 ─────────── -->
             <div class="cka-practice-drill">
-                <h4>🔬 Practice Drill 9.6 — Verify the Tree Before Touching Docker</h4>
-                <div class="drill-timer">⏱️ Target Time: 2 minutes</div>
+                <h4>🔬 Practice Drill 9.6 — Sabotage On Purpose, Then Diagnose By the Book</h4>
+                <div class="drill-timer">⏱️ Target Time: 15 minutes</div>
                 <div class="drill-scenario">
                     <h5>Scenario</h5>
-                    <p>Before writing or building anything, run <code>python -c "import easypj.wsgi"</code> from inside your easypj checkout, then open <code>requirements.txt</code>. Done when the import succeeds with no traceback AND the file pins all three names the rest of this chapter depends on: Django, gunicorn, psycopg2-binary.</p>
+                    <p>From a clean checkout, build easypj:v1.0 and bring up the two-container circuit from 9.5. Then break it on purpose, three separate ways, one at a time: (1) omit <code>-e DB_HOST=easypj-db</code> on the second run, (2) run easypj-container on a DIFFERENT network than easypj-db, and (3) override the entrypoint to run gunicorn directly against a typo'd module path. Done when 9.6's table names the correct culprit for each, using only <code>docker logs</code>, in under a minute per scenario.</p>
                 </div>
                 <div class="drill-hint">
-                    <strong>Hint:</strong> this check costs seconds and catches an entire class of mistakes — a broken <code>wsgi.py</code> import or a missing dependency pin — BEFORE you spend 40+ seconds on a Dockerfile build that would only fail for the exact same reason, just later and with a noisier error.
+                    <strong>Hint:</strong> all three break DIFFERENTLY on purpose — a missing <code>DB_HOST</code> still resolves to SOMETHING (a wrong default), a wrong network fails at DNS resolution, and a typo'd module fails before gunicorn's master process even forks a worker. Matching the SHAPE of the error in <code>docker logs</code> to the right class — content, config, or wiring — without guessing is the actual skill this drill rehearses.
                 </div>
                 <div class="drill-solution">
                     <details>
                         <summary>View Solution</summary>
                         <div class="code-block-wrapper">
-                            <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">TERMINAL</span></div>
-<pre><code class="language-bash">$ python -c "import easypj.wsgi"
-<span class="comment"># no output, no traceback — the import succeeded</span>
+                            <div class="code-block-header"><span class="code-dot red"></span><span class="code-dot yellow"></span><span class="code-dot green"></span><span class="code-lang">TERMINAL — three sabotaged runs</span></div>
+<pre><code class="language-bash"><span class="comment"># 1. Missing DB_HOST — omit the -e flag entirely</span>
+$ docker run -d --name easypj-c1 --network easypj-net -p 8000:8000 \
+    --env-file .env easypj:v1.0
+$ docker logs easypj-c1
+<span class="comment"># django.db.utils.OperationalError: connection to server at "localhost" ... failed
+# culprit: DB_HOST never set, Django fell back to a wrong default — CONFIG class</span>
 
-$ cat requirements.txt
-Django==5.2
-gunicorn==21.2.0
-psycopg2-binary==2.9.9</code></pre>
+<span class="comment"># 2. Wrong network — db and web can't see each other at all</span>
+$ docker network create wrong-net
+$ docker run -d --name easypj-c2 --network wrong-net -p 8001:8000 \
+    -e DB_HOST=easypj-db --env-file .env easypj:v1.0
+$ docker logs easypj-c2
+<span class="comment"># OperationalError: could not translate host name "easypj-db" to address
+# culprit: DNS can't resolve a name that isn't on the SAME network — WIRING class</span>
+
+<span class="comment"># 3. Typo'd module — bypass the entrypoint to isolate the CMD itself</span>
+$ docker run --rm --network easypj-net -e DB_HOST=easypj-db --env-file .env \
+    --entrypoint gunicorn easypj:v1.0 easypj.wgsi:application --bind 0.0.0.0:8000
+$ docker logs
+<span class="comment"># ModuleNotFoundError: No module named 'easypj.wgsi'
+# culprit: a one-letter typo (wgsi vs wsgi) — CONTENT class</span></code></pre>
                         </div>
-                        <p><strong>Check yourself:</strong> if the import raises <code>ModuleNotFoundError</code> or <code>ImportError</code>, the Dockerfile you are about to write would fail at the exact same line inside <code>docker run</code>, just after paying the full build cost first — this drill exists to make that failure cheap instead of expensive.</p>
+                        <p><strong>Check yourself:</strong> if any of the three took longer than a minute to name, re-read <code>docker logs</code>' FIRST line before anything else — every one of these errors names its own cause in plain English; the skill is trusting that line instead of reaching for <code>docker inspect</code> or <code>exec</code> first.</p>
                     </details>
                 </div>
             </div>
