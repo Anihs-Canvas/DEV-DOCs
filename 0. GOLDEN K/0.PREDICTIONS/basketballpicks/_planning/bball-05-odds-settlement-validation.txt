@@ -1,0 +1,467 @@
+================================================================================
+BASKETBALLPICKS — ODDS / PROP-LINE INGESTION + SETTLEMENT + FORWARD-CLV
+VALIDATION LAYER  (the honesty harness that decides whether the props edge is real)
+Data-pipeline design memo · 2026-07-19
+Mirrors safepicks apps/odds + apps/ingestion. Read-only against safepicks.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. WHAT THIS LAYER DECIDES (frame)
+--------------------------------------------------------------------------------
+
+basketball-feasibility.txt verdict, distilled: the main market is dead (as in
+soccer), and the ONE live edge is PLAYER PROPS / DFS pick'em on soft books — a
+LINE-SHOPPING / DE-VIG edge (soft price disagrees with the sharp consensus),
+NOT a forecasting edge. Prop history only reaches ~2023-05, too thin for a
+Last-Dance backtest, so validation MUST be FORWARD.
+
+Therefore this layer is not "store odds." It is a PRE-REGISTERED HONESTY GATE
+built the way safepicks' paper_clv.py + sharp_anchor.py were built, so we do not
+fool ourselves the way we almost did in soccer (where cards/corners "confidence"
+correlated NEGATIVELY with closing-line value). Every design choice below serves
+one question: *when we flag a soft/DFS prop as +EV, does the line actually drift
+toward us by lock — repeatably, per-market, with a confidence interval that
+clears zero?* If yes, the edge is real; if no, we kill the cell. Nothing is
+"enabled" by a backtest — cells go live only when forward CLV confirms.
+
+What we MIRROR from safepicks (studied read-only, ported not copied):
+  * OddsSnapshot: (match, book, market, selection, line, decimal_odds,
+    captured_at REAL, is_closing) with a uniqueness key that lets a live time
+    SERIES accumulate per combo. -> our PropSnapshot adds a PLAYER dimension.
+  * the_odds_api.py: pure parse module, SPORT_KEYS map, SHARP_BOOK_KEYS set,
+    CREDITS_PER_CALL cost model, budget priority per window.
+  * http.py BudgetedClient: DailyBudget with priority RESERVE FLOORS
+    (CRITICAL protected to last unit, LOW sacrificed first) + TokenBucket +
+    ResponseCache + backoff. Reuse verbatim; add a DFS client.
+  * services.sync_odds / capture_closing_lines: poll fixtures in a window,
+    write REAL captured_at rows, flag the last pre-tip snapshot per combo as
+    is_closing. -> ported with per-game (staggered tipoff) closing logic.
+  * sharp_anchor.py: Shin-de-vig the sharp book -> fair prob; measure how often
+    soft/best price exceeds fair (edge_vs_fair = price*p_fair - 1); bootstrap
+    CI; anchor-fallback policy (Pinnacle primary, exchange fallback). -> ported
+    to props with a market-consensus fallback anchor.
+  * paper_clv.py: forward-only CLV on EVERY model/edge-flagged selection with an
+    early->closing pair; empty report today, real numbers as captures accrue;
+    per-market / per-league aggregates; weekly beat logs to a JobRun. -> the
+    core template for our validation harness (§5).
+  * tasks.py + config/celery.py beat_schedule: cadence x priority; skip_job when
+    a key is missing (no key, no crash); run_beat leaves one JobRun per slot;
+    watchdog EXPECTED_BEATS staleness map. -> ported (§6).
+  * devig.py Shin (odds-on accurate) — reuse verbatim.
+
+--------------------------------------------------------------------------------
+1. DATA MODEL  (new app: apps/odds for lines; apps/nba for entities/box scores)
+--------------------------------------------------------------------------------
+
+Entities (apps/nba/models.py):
+  Team(nba_id, abbr, name, league)                     league in {NBA,WNBA,NCAAB,EURO}
+  Player(nba_id, name, team FK, position, is_two_way)  two_way flags Porter-rule voids
+  Game(source_refs, league, home_team, away_team, tipoff_utc, status,
+       home_pts, away_pts, period_final)               status: SCHED/LIVE/FINAL/PPD
+  PlayerBoxScore(game, player, started, dnp (bool), minutes,
+       pts, reb, ast, threes_made, blk, stl, tov, fgm, ftm, fga, fta,
+       dd (bool), td (bool), first_basket (bool|null))
+       -- one row per player per game; the settlement fact table.
+
+Books (apps/odds/models.py — mirror safepicks Bookmaker + one new flag):
+  Bookmaker(key, is_sharp, is_dfs, limits_winners, is_aggregate)
+     is_dfs=True for underdog/prizepicks/dk_pick6 (pick'em, fixed payout, no
+     two-way price); is_sharp=True for pinnacle (+ market_consensus pseudo-book).
+
+Lines (apps/odds/models.py — PropSnapshot, the OddsSnapshot analog + PLAYER +
+       DFS payout):
+  PropSnapshot(
+     game        FK,
+     player      FK NULL,          # NULL => team market (h2h/spread/total)
+     bookmaker   FK,
+     market      CharField,        # our codes below
+     selection   CharField,        # OVER|UNDER | HOME|AWAY | YES|NO
+     line        Decimal NULL,     # 24.5 pts; NULL only for h2h moneyline
+     decimal_odds Decimal NULL,    # NULL for pure-line DFS legs (no odds)
+     payout_mult  Decimal NULL,    # DFS: implied leg multiplier if published
+     captured_at  DateTime,        # REAL capture time (the datum)
+     is_closing   Bool,
+  )
+  Unique key (mirrors safepicks uniq_odds_row_v2, + player):
+     (game, player, bookmaker, market, selection, line, is_closing, captured_at)
+  Indexes: (game, market), (market, is_closing), (game, captured_at),
+           (player, market).
+
+MARKET code vocabulary (settlement-oriented, stable keys):
+  Player props:  PTS REB AST THREES BLK STL TOV FGM FTM
+                 PRA (pts+reb+ast) PR PA RA BLKSTL (blk+stl)
+                 DD (double-double) TD (triple-double) FIRST_BASKET
+  Team markets:  ML (moneyline) SPREAD TOTAL  (line on SPREAD/TOTAL rows)
+  These map 1:1 to The Odds API keys in §3b and to the grading table in §4b.
+
+DFS lines carry decimal_odds=NULL: a pick'em leg is a fixed line at an implied
+~ -110/-120 with the real payoff living in the parlay multiplier. The edge on
+DFS is measured in LINE POINTS vs the sharp number (§5), not odds-vs-odds, so we
+never fabricate a price for it. is_dfs books are EXCLUDED from odds-devig math
+and handled on the line-difference path.
+
+--------------------------------------------------------------------------------
+2. INGESTION — SOURCES
+--------------------------------------------------------------------------------
+
+2a. THE ODDS API — TEAM MARKETS (bulk endpoint) [verified 2026-07-19]
+  Endpoint: GET /v4/sports/{sport_key}/odds
+  SPORT_KEYS = { NBA:"basketball_nba", WNBA:"basketball_wnba",
+                 NCAAB:"basketball_ncaab", EURO:"basketball_euroleague" }
+     (verify each against GET /v4/sports on first real sync — same ADR-007
+      caveat as soccer; EuroLeague/NCAAB keys are best-effort.)
+  markets = "h2h,spreads,totals"; regions = "us,eu" (us = soft DK/FD/MGM/
+     Caesars; eu = Pinnacle sharp anchor).
+  COST (verified from official v4 docs): "1 per region per market" =>
+     cost = [markets] x [regions] = 3 x 2 = 6 credits per league call.
+  GET /v4/sports/{sport}/events is FREE ("does not count against the usage
+     quota") — use it to enumerate tonight's game IDs at zero cost before
+     spending any credits on the per-event prop calls.
+
+2b. THE ODDS API — PLAYER PROPS (per-event endpoint) *** the core feed ***
+  Endpoint: GET /v4/sports/{sport_key}/events/{eventId}/odds  (one game at a
+     time — props are NOT on the bulk endpoint).
+  COST (verified): "cost = [number of UNIQUE MARKETS RETURNED] x [regions]".
+     Critical nuance vs bulk: billed on markets ACTUALLY RETURNED, not
+     requested. Request 8 prop markets, only 5 come back for a low-profile
+     game => billed 5 x regions. Cost is per EVENT.
+  Verified NBA/WNBA/NCAAB prop market keys (the-odds-api betting-markets):
+     player_points, player_rebounds, player_assists, player_threes,
+     player_blocks, player_steals, player_blocks_steals, player_turnovers,
+     player_points_rebounds_assists, player_points_rebounds,
+     player_points_assists, player_rebounds_assists, player_field_goals,
+     player_frees_made, player_double_double, player_triple_double,
+     player_first_basket, player_fantasy_points (DFS-style), plus every
+     "..._alternate" variant (alt lines / milestone ladders), and "..._q1"
+     quarter variants. Outcome payload: name=Over/Under, description=player
+     name, point=line, price=decimal odds.
+  Books returned on props: DraftKings, FanDuel, BetMGM, Caesars (us) + Pinnacle
+     on eu WHERE it quotes the prop (Pinnacle's prop menu is thinner than its
+     mainline menu — this is why §3d needs a consensus fallback anchor).
+  PLAN GATING (from feasibility + provider): player props + Pinnacle + the
+     historical archive require the BUSINESS plan ($99/mo). Free = h2h only;
+     Pro ($29) = core markets, NO props. Historical additional-markets
+     (incl. props) begin 2023-05-03 at 5-min snapshots and bill a 10x
+     multiplier (10 per market per region per event) — expensive, and the
+     reason we do NOT plan a deep prop backtest.
+  PARSING (apps/odds/sources/the_odds_api.py, pure, no ORM):
+     parse_event_props(payload) -> list[ParsedPropQuote(book, player_name,
+     market, selection, line, decimal_odds)]. Player-name -> Player FK
+     resolution reuses the fuzzy resolve_team pattern (resolve_player), with an
+     aliases_pending counter surfaced LOUDLY on first sync (soccer's ADR 007.4
+     lesson: far-miss names silently fork entities).
+
+2c. DFS LINES — UNDERDOG / PRIZEPICKS  (the durable, un-limited home of the edge)
+  No official public API for either; both are obtained by reverse-engineered
+  JSON endpoints (respect ToS; single low-rate polite poller; IP-block risk):
+    * PrizePicks: GET https://api.prizepicks.com/projections?league_id={id}
+        &per_page=250&single_stat=true  (JSON: projections + included players;
+        line_score = the pick'em line, stat_type = market). partner-api.
+        prizepicks.com/projections is the documented partner variant.
+        PrizePicks silently DEMOTES sharp accounts after ~200 entries.
+    * Underdog: over/under lines + payout multipliers via the site's pick'em
+        JSON (public GitHub scraper "underdog-fantasy-pickem-scraper" documents
+        the shape). Underdog advertises NO limiting of +EV players -> the #1
+        target venue.
+    * Managed fallback (if self-scraping is too brittle/ToS-risky): Apify
+        actors "underdog-player-props" and "prizepicks-player-props" expose
+        run-sync-get-dataset-items HTTP endpoints returning O/U lines, decimal
+        odds, payout multipliers, 16-29 leagues — a paid but maintained feed.
+  Mapping: stat_type -> our MARKET vocab (Points->PTS, Rebounds->REB,
+     Pts+Rebs+Asts->PRA, 3-PT Made->THREES, ...). Store as PropSnapshot with
+     bookmaker.is_dfs=True, decimal_odds=NULL, payout_mult set when published,
+     line = line_score. Player resolution via the same resolve_player.
+  DFS lines are LINE-ONLY: the harness compares the DFS line to the sharp
+     consensus line (§5 line-difference path), not price-to-price.
+
+2d. SHARP ANCHOR FOR PROPS  (the fair-value reference; sharp_anchor.py analog)
+  Primary anchor = Pinnacle (eu) wherever it quotes the exact (player, market,
+     line). Shin-de-vig the Over/Under PAIR at that line -> p_fair(OVER),
+     p_fair(UNDER)  (devig.shin, reused verbatim; two-way = effective no-push
+     space, exactly like safepicks devigged_two_way_consensus).
+  FALLBACK anchor (props Pinnacle-coverage is thin — the direct analog of
+     soccer ADR 024's Pinnacle->Betfair fallback): a MARKET_CONSENSUS
+     pseudo-book = the median de-vigged fair prob across all NON-DFS, non-
+     aggregate books quoting that (player, market, line), sharp-weighted. Every
+     record carries which anchor supplied p_fair (anchor="pinnacle"|"consensus")
+     and coverage is split per anchor, so a Pinnacle-collapse quarter is read as
+     COVERAGE, not efficiency — the exact honesty check sharp_anchor.py makes.
+  Line-normalization: Pinnacle may quote 25.5 while DK quotes 24.5. Convert the
+     anchor's fair prob to the soft line via the anchor's own O/U odds ladder
+     (interpolate p_fair across the half-point) before computing edge — never
+     compare probabilities at different lines.
+
+2e. CAPTURE CADENCE — EARLY (open) vs CLOSING  (adapted: props are INTRADAY)
+  KEY DIFFERENCE FROM SOCCER: soccer early-vs-close spans days (t7d->close).
+  NBA props post the MORNING/AFTERNOON of gameday and the meaningful drift is
+  intraday (hours), with the biggest moves at the final injury bulletin
+  (~15-30 min pre-tip). Tipoffs are STAGGERED across an evening, so "closing"
+  is PER-GAME, not a single slot. Windows (mirror safepicks WINDOWS map,
+  re-timed):
+     "open"   : first capture after lines post — sweep new games each morning/
+                midday; the EARLY line (LOW priority, sacrificed first).
+     "intraday": hourly re-sweep through the afternoon (NORMAL).
+     "final"  : every 10 min for games inside T-90min (CRITICAL — the last
+                credits belong here; captures the injury-bulletin cascade the
+                feasibility flags as the exploitable window).
+     "closing": per game, flag the LAST pre-tipoff snapshot of every combo as
+                is_closing once its tipoff passes (DB-only, no key).
+  The "early->closing pair" the CLV harness needs = (earliest open snapshot,
+  is_closing snapshot) per (player, market, line, book) — identical shape to
+  paper_clv._gather_direct_offers, just keyed with the player.
+
+2f. CREDIT-COST + BUDGET MODEL + RATE LIMITS
+  Per full NBA slate (~12 games), one prop sweep at 6 core markets returned x
+  2 regions = 12 credits/game x 12 = ~144 credits/sweep. A day with an open
+  sweep + ~6 intraday + heavy final-window sweeps ~ a few thousand credits/day —
+  comfortably inside a Business-tier monthly quota (quota/30 = daily budget).
+  Team markets add 6 credits x n_leagues per bulk sweep. Wire this into the
+  reused DailyBudget with the SAME priority reserve floors so, when the quota
+  runs low, LOW "open" sweeps are refused first and CRITICAL "final" pre-tip
+  sweeps are protected to the last credit (http.py RESERVE_FLOORS: CRITICAL
+  0.00, HIGH 0.05, NORMAL 0.15, LOW 0.30). Cost per call is set on the client
+  call (cost=markets_returned*regions) exactly as soccer sets CREDITS_PER_CALL=3.
+  Rate limits: The Odds API does not hard-rate-limit; it bills credits, so the
+  TokenBucket only needs to stay polite. DFS endpoints DO block abusive IPs —
+  give underdog/prizepicks their own BudgetedClient with a slow bucket
+  (~1 req / 5-10 s), TTL cache, browser User-Agent, and a generous safety-
+  ceiling "budget" (they are free but fragile). Every source no-ops with a
+  skipped JobRun when its key/endpoint is unset (no key, no crash).
+
+--------------------------------------------------------------------------------
+3. SETTLEMENT — box score -> prop grading
+--------------------------------------------------------------------------------
+
+3a. SOURCE. nba_api (stats.nba.com) BoxScoreTraditional + PlayByPlay (free,
+    deep, mirrors ESPN keyless settle role in soccer). WNBA via nba_api's WNBA
+    endpoints; NCAAB/EuroLeague via their own free feeds (settlement coverage
+    is the gating constraint for those leagues — flag as partial). Populate
+    PlayerBoxScore once Game.status=FINAL; DB-only settle beat re-reads it.
+
+3b. PROP GRADING TABLE (stat from PlayerBoxScore vs PropSnapshot.line):
+    MARKET      statistic                        settle
+    PTS         pts                              over: pts>line; push: pts==line
+    REB         reb                              "
+    AST         ast                              "
+    THREES      threes_made                      "
+    BLK/STL/TOV blk / stl / tov                  "
+    FGM/FTM     fgm / ftm                        "
+    PRA         pts+reb+ast                       over/under vs line
+    PR/PA/RA    pts+reb / pts+ast / reb+ast       "
+    BLKSTL      blk+stl                           "
+    DD          #{pts,reb,ast,blk,stl >= 10} >=2  YES/NO
+    TD          same categories >= 3              YES/NO
+    FIRST_BASKET first made FG in PlayByPlay      YES/NO (needs PBP)
+    Over/Under rule: OVER wins if stat > line, UNDER wins if stat < line,
+    PUSH (VOID, stake back) if stat == line. Half-point lines (24.5) never
+    push; whole-number lines (24.0) can. Reuse a settle() vocabulary the way
+    safepicks reuses engine.settle — one grader, no per-market reimplementation.
+
+3c. TEAM MARKETS. ML: winner by final score. SPREAD: (home_margin + line) vs 0,
+    push on exact. TOTAL: (home_pts+away_pts) vs line, push on exact. OT is
+    INCLUDED (full-game stats already contain it) unless a market is explicitly
+    regulation-only (rare; flag). Quarter/half (_q1) markets grade off period
+    box splits.
+
+3d. EDGE CASES (pre-committed policy; the props-specific hazards):
+    * DNP / inactive / 0 minutes: player prop -> VOID (stake back). This is the
+      universal book rule and non-negotiable for grading integrity. Detect via
+      PlayerBoxScore.dnp or minutes==0 / not on the active list.
+    * Minutes restriction / early exit (played, limited, or injured mid-game):
+      GRADE NORMALLY (books do not void a prop just because minutes were low) —
+      but flag games where a starter played < a floor (e.g. <12 min) for manual
+      review, because that is exactly where a stat lands short and a dispute
+      arises.
+    * Porter-rule (post-Jontay-Porter): books VOID UNDER bets (and often all
+      props) on two-way / 10-day players, and some pulled such props entirely.
+      Honor it: if Player.is_two_way and selection==UNDER -> VOID; never grade a
+      market the book would not have paid.
+    * Push: line exactly hit -> VOID (see 3b).
+    * Postponement / suspension: Game.status=PPD past a grace window -> VOID all
+      that game's picks (mirror safepicks POSTPONED_VOID_GRACE_H).
+    * Late scratch AFTER flag but BEFORE tip: the pick was placed on a player who
+      then sat -> VOID; but this is ALSO the cleanest CLV signal (the line you
+      beat vanished) — record it in the harness even though it settles VOID.
+    * Stat corrections: nba_api box scores revise for ~24-48h. Settle on first
+      FINAL, then a re-grade pass within 48h; log any flip. Idempotent, row-
+      locked settlement (safepicks _claim_open pattern) so a re-grade never
+      double-counts.
+
+--------------------------------------------------------------------------------
+4. FORWARD-CLV VALIDATION HARNESS  *** the gate the project hinges on ***
+    (apps/odds/paper_clv.py analog — call it apps/odds/prop_clv.py)
+--------------------------------------------------------------------------------
+
+PURPOSE. For EVERY selection we FLAG as +EV (a soft/DFS line the sharp-consensus
+fair prob says is underpriced), record it at flag-time and, at that game's lock
+(tipoff), measure whether the market moved TOWARD us. This is forward-only by
+construction — empty report today, real numbers as open->closing pairs accrue —
+exactly like paper_clv.py runs clean on day one. Pure read-side, no ORM writes.
+
+4a. A "FLAGGED PICK" (the pre-registered universe — frozen in code):
+    For a game with an OPEN capture AND a CLOSING capture, for every
+    (player, market, line, book) combo:
+      p_fair = sharp/consensus anchor fair prob at the OPEN capture (§2d),
+               line-normalized to the soft book's line.
+      Soft-book path (non-DFS): edge = O_open_soft * p_fair - 1  (edge_vs_fair,
+               sharp_anchor.py's exact form). Flag if edge >= FLAG_EDGE_MIN.
+      DFS path: edge in LINE POINTS = signed distance the DFS line sits on the
+               favorable side of the sharp median line, converted to prob via the
+               sharp O/U ladder; flag if that implied edge >= FLAG_EDGE_MIN.
+    FLAG_EDGE_MIN, the sharp-anchor set, the market list, and the leagues are
+    FROZEN CONSTANTS committed BEFORE data collection (the pre-registration).
+
+4b. THREE CLV MEASURES per flagged pick (all logged; #3 is the verdict metric):
+    (1) same-book price CLV = O_open / O_close(same book, same line) - 1.
+        Positive = the book itself shortened your side. (Bet.clv convention;
+        matches safepicks paper_clv exactly.)
+    (2) LINE-MOVE CLV = signed (close_line - open_line) in points toward your
+        pick. The honest measure for DFS (price is fixed; only the NUMBER moves).
+        A pick's edge is real if the number consistently comes to you.
+    (3) SHARP-BEAT CLV = p_fair_sharp_CLOSE * O_open - 1  = EV of your taken
+        price measured against the SHARP's OWN CLOSING fair prob. This is the
+        gold-standard gate: the sharp close is the best available estimate of
+        true probability, so beating it repeatedly = a real edge, not noise.
+    Realized ROI-at-flag is also carried (settle each pick via §3, P&L at the
+    taken price/line), the way paper_clv carries roi_at_early — but CLV, not
+    ROI, is the primary signal (ROI is far noisier at these sample sizes).
+
+4c. AGGREGATION + SIGNIFICANCE (sharp_anchor.py machinery, reused):
+    Report overall + by_market + by_book + by_league + by_venue-class
+    (soft-book vs DFS) cells, each: n, mean CLV (all three flavors),
+    share_positive, realized ROI, and a SEEDED bootstrap 95% CI on the mean
+    (bootstrap_yield_ci, verbatim). Correlation caveat carried verbatim: one
+    game contributes many correlated legs (a star's PTS/PRA/threes move
+    together), so i.i.d. bootstrap CIs are modestly too narrow — noted in the
+    report, and a game-block bootstrap is the honest upgrade.
+
+4d. PRE-REGISTERED KILL / CONFIRM THRESHOLDS  (frozen; per (venue,market,league)
+    CELL — the direct analog of safepicks' G4 cells that are never auto-enabled):
+      CONFIRM a cell (edge is real, allow live deployment) iff, on SETTLED
+        flagged picks:
+          n >= 500  AND  mean SHARP-BEAT CLV >= +2.0%
+          AND bootstrap 95% CI lower bound > 0
+          AND sustained >= 8 distinct weeks (not one hot streak)
+          AND realized-ROI CI lower bound > -0.5% (ROI not contradicting CLV).
+      KILL a cell (edge is illusory, disable) iff:
+          n >= 300  AND  ( mean sharp-beat CLV <= 0 with CI upper bound < +1.0%
+          OR realized-ROI CI upper bound < 0 ).
+      HOLD (keep paper-trading, deploy nothing) otherwise.
+    These numbers are committed as module constants BEFORE collection and are
+    NOT tuned to the incoming data — changing them requires a dated ADR, so we
+    cannot move the goalposts to rescue a dying cell (the exact soccer trap:
+    "confidence" that correlated negatively with CLV once measured honestly).
+    All cells start DISABLED; CONFIRM is necessary-not-sufficient (limiting tax
+    and fill quality still gate real money).
+
+4e. HONESTY GUARDS baked in (from the soccer post-mortem):
+    * Availability haircut: closing price/line is optimistic (soft books move to
+      the sharp late; DFS lines vanish on scratches). Carry a haircut-sensitivity
+      column (safepicks SLIPPAGE_SENSITIVITY 1.5%) as the realistic bound.
+    * market_consensus is an UPPER bound (best-of-panel); single-account
+      (one soft book) view is reported alongside.
+    * Limiting is the real tax: persistent +EV vs sharp-fair is precisely what
+      DK/FD/MGM detect and throttle in days-to-weeks; the report states the
+      confirmed edge is a WASTING ASSET at retail books and durable mainly on
+      Underdog / thin leagues (feasibility §3c).
+
+--------------------------------------------------------------------------------
+5. CELERY BEAT SCHEDULE  (ingest -> predict -> settle -> validate)
+--------------------------------------------------------------------------------
+
+Ported from config/celery.py + apps/*/tasks.py. Every beat leaves one
+JobRun "beat:<job>"; missing key -> skip_job; run_beat never crash-loops;
+watchdog EXPECTED_BEATS staleness map extended for the new beats.
+
+  INGEST
+   props-final-10min   */10          events(free) -> per-event props for games
+                                      inside T-90m; CRITICAL. (the edge window)
+   props-intraday-hourly  min 5      hourly re-sweep of today's games; NORMAL.
+   props-open-6h       */6h          new-game open lines; LOW (early datum).
+   team-odds-6h        */6h min 20   bulk h2h/spreads/totals; NORMAL.
+   dfs-lines-15min     */15          underdog + prizepicks projections; own
+                                      slow client; NORMAL (no The-Odds credits).
+   closing-capture-15min 3-58/15     DB-only: per-game flag last pre-tip
+                                      snapshot is_closing once tipoff passes.
+  ENTITIES / STATS
+   nba-boxscores-15min */15          FINAL games -> PlayerBoxScore + PBP.
+   injuries-hourly     min 40        league injury bulletins (feeds the cascade
+                                      model + the late-scratch VOID path).
+  PREDICT (thin — model is optional, only for neglected/thin lines)
+   predict-props-daily 04:30         minutes/usage Poisson on neglected markets
+                                      + refresh flags for tonight's slate.
+  SETTLE
+   settle-props-15min  6-59/15       DB-only: grade props+team markets from box
+                                      scores (idempotent, row-locked, 48h
+                                      re-grade). VOID rules from §3d.
+  VALIDATE  (the gate)
+   prop-clv-weekly     Mon 07:45     trailing-90d prop_clv read -> JobRun;
+                                      per-cell CLV trend + CONFIRM/KILL/HOLD
+                                      verdicts logged. DB-only, no key.
+   cell-review-monthly 1st 08:00     apply frozen thresholds to accumulated
+                                      cells; recommend enable/disable; writes
+                                      NOTHING live (recommendation only).
+   watchdog-30min      7,37          JobRun recency vs schedule; Sentry alert.
+
+Data-flow contract per night: free /events enumerates game IDs -> paid per-
+event prop sweeps (budget-prioritized) + DFS scrape -> flag +EV picks (open) ->
+final-window sweeps capture the drift -> per-game closing capture -> box scores
+settle -> weekly prop_clv measures whether the flagged lines drifted our way ->
+monthly cell review renders the pre-registered verdict.
+
+--------------------------------------------------------------------------------
+6. BUILD ORDER / FILE LAYOUT  (4-8 wk MVP per feasibility §6)
+--------------------------------------------------------------------------------
+  apps/nba/            models(Team,Player,Game,PlayerBoxScore), sources/nba_api,
+                       services(sync_games, sync_boxscores, resolve_player),
+                       settlement(grade_props, grade_team, VOID policy).
+  apps/odds/           models(Bookmaker,PropSnapshot),
+                       sources/the_odds_api(parse team + parse_event_props, cost),
+                       sources/underdog, sources/prizepicks,
+                       devig(Shin, reused), sharp_anchor(props consensus fallback),
+                       services(sync_props, sync_dfs, capture_closing, best_line,
+                                edge_vs_fair, line_normalize),
+                       prop_clv(forward CLV harness — the gate),
+                       tasks(beats), management/commands(prop_clv_report).
+  apps/ingestion/      http(BudgetedClient reused + dfs clients), models(JobRun),
+                       tasks(run_beat, skip_job, watchdog), etl(daily orchestrator).
+  config/celery.py     beat_schedule (§5).
+  Order: (1) entities+box scores+settlement, (2) The-Odds team+props ingestion
+  + budget, (3) DFS ingestion, (4) sharp anchor + edge flagging, (5) prop_clv
+  harness + pre-registered thresholds, (6) beats + watchdog. Ship the harness
+  EMPTY first (it runs clean on zero pairs) so the honesty gate exists before
+  any edge claim can be made.
+
+--------------------------------------------------------------------------------
+7. TRAPS / HONESTY NOTES
+--------------------------------------------------------------------------------
+  * Props Pinnacle coverage is thin -> the consensus fallback anchor is load-
+    bearing; split coverage per anchor or a Pinnacle-collapse looks like edge.
+  * Line-shopping across DIFFERENT lines (24.5 vs 25.5) is the #1 correctness
+    hazard — always normalize prob to a common line before computing edge.
+  * DFS legs have no price; never invent one — use the line-difference path.
+  * DNP/scratch VOIDs correlate with the biggest CLV signals; count them in the
+    harness but settle them VOID — do not let VOIDs inflate realized ROI.
+  * The gate CONFIRMS structure, not profit: limiting tax + fill quality live
+    OUTSIDE this layer; a confirmed cell is a WASTING ASSET at retail books.
+  * Pre-registration is the whole point: thresholds/constants frozen before
+    data; moving them needs a dated ADR. This is the discipline soccer lacked.
+
+--------------------------------------------------------------------------------
+SOURCES (verified 2026-07-19)
+--------------------------------------------------------------------------------
+  The Odds API v4 cost model (events FREE; bulk = markets x regions; event-odds
+    = unique-markets-returned x regions):  https://the-odds-api.com/liveapi/guides/v4/
+  Prop market keys: https://the-odds-api.com/sports-odds-data/betting-markets.html
+  Historical props from 2023-05-03, 5-min, 10x cost:
+    https://the-odds-api.com/historical-odds-data/
+  PrizePicks projections endpoint (api.prizepicks.com/projections?league_id&
+    per_page&single_stat): github.com/mada949/PrizePicks-API ;
+    Apify prizepicks-player-props / underdog-player-props actors ;
+    github.com/aidanhall21/underdog-fantasy-pickem-scraper
+  Feasibility verdict (props = the one live edge; forward-validate):
+    ../basketball-feasibility.txt
+  safepicks mirrored modules (read-only): apps/odds/{models,paper_clv,
+    sharp_anchor,devig,services,tasks,sources/the_odds_api}.py ;
+    apps/ingestion/{http,tasks}.py ; config/celery.py
+================================================================================

@@ -1,0 +1,136 @@
+PARLIAMENT DIVERSITY ANALYSIS — safepicks model consensus
+Read-only DB + code analysis. 2026-07-19. Docker Postgres (safepicks-db-1).
+Question: is a 5-model "parliament" genuinely DIVERSE (members make DIFFERENT
+mistakes), or is it theater (near-duplicate voters)? Judged as a SAFE-POOL
+robustness gate, NOT a market-beater.
+
+================================================================================
+1. REAL ModelVersion INVENTORY (29 rows; those with CORE 1X2/DC/OU output)
+================================================================================
+Only a handful produce comparable 1X2 / DC / OU probabilities. Grouped by
+GENUINE engine family:
+
+FAMILY A — Dixon-Coles / Poisson goal model (algo dixon_coles*):
+  dc-v1        ACTIVE   133,133 FT preds   the mainline (Dixon-Coles)
+  dc-v2        ACTIVE   135,615            refit variant (same engine)
+  dc-v2-xg     gated    105,751            xG-blended DC (dixon_coles_xg)
+  dc-v2-xg-w0  gated    105,751            w=0 CONTROL == dc-v1 EXACTLY (a literal
+                                           duplicate; prob corr 1.000 vs dc-v1)
+
+FAMILY B — LightGBM stack (algo stack; ingests the DC vector as a FEATURE):
+  stack-v1     gated     54,114            GBM stack on dc-v1 base
+  stack-v2     gated     51,667            v2 feature set
+  stack-v3     gated     51,668            v2 features re-stacked on dc-v2 base
+  NOTE: stack models COPY 1X2 verbatim from their DC base (code:
+  ml/services._prob_vector, "1X2 copied from dc-v1 for side determination").
+  They emit genuine GBM output only for DC_fav / DNB_fav / O1.5. They store
+  OU15, NOT OU25.
+
+BLEND / MARKET:
+  blend-v1     gated     49,223            convex blend of DC + GBM (behaves as B)
+  b0-market    ACTIVE   139,945            shin-devigged bookmaker odds = the
+                                           MARKET line (the benchmark, not a model)
+
+Everything else is a DIFFERENT MARKET, not a core voter: cd-v1 (cards),
+cr-v1 (corners), sot-v1, fh-v1/sh-v1 (halves), mn-v1 (minutes), tg/tot/rng/oe/
+btts/ah/cmb/htft-v1. These are orthogonal-by-market, not diverse judges of the
+same pick. gbm-free/aware-v* and dc-v1-cal have 0 predictions.
+
+=> The prompt's "expected 5" does NOT hold. For the CORE safe pick there are
+   exactly TWO genuine engine families (Dixon-Coles vs LightGBM-stack). dc-v2-xg
+   is currently a control (w=0) == dc-v1. b0-market is the market target itself.
+
+================================================================================
+2. CORRELATION EVIDENCE  (FT matches, pairwise-complete, N up to 133k)
+================================================================================
+Two signals: (a) PROB correlation of served probabilities; (b) ERROR correlation
+of (prob - outcome). CAVEAT: raw ERROR correlation is ~0.97-0.99 for EVERY pair
+INCLUDING the market -- an ARTIFACT: both errors share the -outcome term (a
+Bernoulli with var ~0.21), which dominates. So raw error-corr OVERSTATES
+co-movement. The honest "different mistakes" metric is the RESIDUAL-vs-MARKET
+correlation corr(p_i - p_mkt, p_j - p_mkt): it strips the shared outcome and
+isolates whether two models deviate from the line in the SAME direction.
+
+--- 1X2 home (H) PROB correlation ---
+                dc-v1   dc-v2  dc-v2xg  stk-v1  stk-v2  stk-v3  blend  b0-mkt
+   dc-v1        1.000   0.971  0.982    1.000   1.000   0.941   1.000  0.814
+   dc-v2        0.971   1.000  0.950    0.939   0.940   0.999   0.940  0.821
+   dc-v2xg      0.982   0.950  1.000    0.978   0.977   0.928   0.977  0.813
+   stack-v1     1.000   0.939  0.978    1.000   1.000   0.941   1.000  0.818
+   b0-market    0.814   0.821  0.813    0.818   0.821   0.840   0.820  1.000
+=> stack/blend 1X2 == dc-v1 (1.000) BY CONSTRUCTION (copied). stack-v3 == dc-v2
+   (0.999). On 1X2 there is only ONE engine (DC); the stack vote is pure theater.
+   Even within DC, variants sit at 0.95-1.0. Only the MARKET (0.81) truly differs.
+
+--- Double-chance fav side (1X) RESIDUAL-vs-MARKET correlation (honest signal) ---
+                dc-v1   dc-v2  dc-v2xg  stk-v1  stk-v2  stk-v3  blend
+   dc-v1        1.000   0.913  0.949    0.517   0.478   0.435   0.546
+   dc-v2        0.913   1.000  0.859    0.478   0.442   0.554   0.507
+   dc-v2xg      0.949   0.859  1.000    0.499   0.466   0.428   0.529
+   stack-v1     0.517   0.478  0.499    1.000   0.932   0.890   0.955
+   stack-v2     0.478   0.442  0.466    0.932   1.000   0.892   0.974
+   blend-v1     0.546   0.507  0.529    0.955   0.974   0.902   1.000
+=> WITHIN family: 0.86-0.97 (near-duplicate deviations). CROSS family (DC vs
+   GBM-stack): 0.43-0.55. THIS is the only real diversity in the system: the two
+   engine families deviate from the market in weakly-correlated ways (~0.5).
+
+--- Over 1.5 goals (O15) PROB correlation (the one market where BOTH families
+    emit genuine output) ---
+                dc-v1   dc-v2  dc-v2xg  stk-v1  stk-v2  stk-v3  blend
+   dc-v1        1.000   0.943  0.966    0.629   0.659   0.676   0.780
+   dc-v2        0.943   1.000  0.901    0.634   0.650   0.706   0.749
+   stack-v1     0.629   0.634  0.633    1.000   0.862   0.955   0.872
+   blend-v1     0.780   0.749  0.753    0.872   0.918   0.883   1.000
+=> Same pattern: DC-family 0.90-0.97 internally, stack-family 0.86-0.96
+   internally, CROSS-family 0.63-0.68. Genuine but modest diversity.
+
+--- Over 2.5 (O25): only DC family emits it -> stack cannot vote on OU2.5 at all.
+    dc-v1/dc-v2/dc-v2-xg prob corr 0.91-0.97. No cross-family diversity exists.
+
+================================================================================
+3. DISCRETE CO-ERROR — does member B fail when member A fails? (OU1.5 call, .5)
+================================================================================
+                     N      agree_side  P(Bfail)  P(Bfail|Afail)  lift
+dc-v1 vs stack-v1   54,114    0.963       0.243      0.903         3.72
+dc-v1 vs dc-v2-xg  103,181    0.991       0.271      0.980         3.62
+dc-v1 vs dc-v2     133,038    0.987       0.270      0.971         3.60
+dc-v1 vs blend-v1   49,223    0.964       0.241      0.905         3.76
+stack-v1 vs blend-v1 49,223   0.998       0.241      0.997         4.14
+=> CROSS-family (dc-v1 vs stack): when the mainline's OU1.5 call is WRONG, the
+   GBM stack is ALSO wrong 90% of the time -> a 2-of-2 gate vetoes only ~10% of
+   the mainline's would-be losers. Modest, but real.
+   WITHIN-family (dc-v1 vs dc-v2/dc-v2-xg 97-98%; stack vs blend 99.7%): the
+   second vote catches ~2-3% -> essentially nothing. Padding.
+
+================================================================================
+4. VERDICT
+================================================================================
+* EFFECTIVE distinct engines for the core pick = TWO (Dixon-Coles; LightGBM
+  stack). Not five. A "5 models voting" framing on 1X2 is THEATER: stack/blend/
+  dc-v2-xg-w0 copy or clone dc-v1 (prob corr 1.000, 0.999, 1.000).
+* On DC / DNB / OU markets there IS genuine — but modest — diversity: the two
+  families' deviations from the market correlate only ~0.5, and the GBM stack
+  disagrees with the DC call ~4% of the time and independently vetoes ~10% of the
+  mainline's OU1.5 mistakes. That is real information, not zero.
+* BEST genuinely-diverse roster (2-3 members):
+    1. dc-v1        (Dixon-Coles, active mainline)
+    2. stack-v1     (LightGBM stack; or stack-v3, stacked on dc-v2) -- the ONLY
+                     cross-family voter available (residual corr ~0.5 with dc-v1)
+    3. b0-market    (the market line) -- OPTIONAL 3rd veto: genuinely different
+                     (prob corr ~0.81 vs DC, ~0.88 vs stack) and the single best
+                     predictor; "does the close agree?" is the most valuable safe
+                     veto, though it is the benchmark, not a model.
+* A 4th/5th member would be PADDING: dc-v2 / dc-v2-xg are 0.95-1.0 correlated
+  with dc-v1 (same engine; dc-v2-xg is pinned at w=0 == dc-v1); stack-v2 / blend-v1
+  are 0.92-0.97 correlated with stack-v1. Adding them inflates the vote count
+  without adding an independent opinion. Justifying a real 3rd/4th member needs a
+  NEW engine — e.g. a truly independent xG/shot-based model that is not just dc-v1
+  blended, or per-league market-microstructure probabilities distinct from the
+  devig baseline. Specialist models (cards/corners/halves/etc.) do not qualify:
+  they vote on other markets, not the same pick.
+
+BOTTOM LINE: The parliament is diverse enough to be worth ~2 (at most 3) seats,
+not 5. A K-of-N gate across dc-v1 + a GBM-stack (+ optionally the market line)
+adds genuine robustness (catches ~10% of single-model mistakes on OU/DC). A gate
+that counts dc-v1, dc-v2, dc-v2-xg, stack-v1, stack-v2 as five independent voters
+is largely theater — three of those five are near-duplicates of the other two.

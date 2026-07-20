@@ -1,0 +1,449 @@
+================================================================================
+BASKETBALLPICKS — THE PLAYER-PROPS / DFS PICK'EM EDGE ENGINE
+Quant design memo · 2026-07-19 · brutally honest, build-spec grade
+Companion to: basketball-feasibility.txt (the verdict that opened this door)
+Mirrors: safepicks apps/odds/sharp_anchor.py, apps/odds/paper_clv.py,
+         apps/valuebets/services.py (READ-ONLY reference — NOT modified)
+================================================================================
+
+--------------------------------------------------------------------------------
+(0) TL;DR — WHAT THIS ACTUALLY IS
+--------------------------------------------------------------------------------
+
+The edge is LINE-SHOPPING + DE-VIG ARBITRAGE against lazy soft/DFS prop lines,
+NOT model superiority. We build a "true" per-player distribution from the SHARP
+consensus (Pinnacle/Circa), reprice it at each soft-book and DFS-app line, and
+bet only where their number is stale enough that the true side clears their
+price plus the (large) house hold. Our own model earns its keep on ONE narrow
+slice — obscure lines the sharp market itself does not price (deep-bench usage,
+WNBA/college, blocks/steals, post-injury minute cascades) — and NOWHERE the
+sharps quote, because there their de-vig already IS the truth to within noise
+(the same information ceiling that killed the soccer model).
+
+Honest headline: ~+2% to +6% ROI per qualifying entry, HIGH variance, taxed by
+fast limiting on books and capped per-entry stakes on DFS. It is a grind worth
+low-four to low-five figures/yr for a disciplined solo operator, NOT a fund, and
+it is SHRINKING (tools proliferating; DFS apps pivoting to peer-to-peer — see
+§3d). The single biggest EV lever is not the model, it is CORRELATION on DFS
+same-game stacks (§3c). Kill it fast if forward CLV ≤ 0 (§6d).
+
+--------------------------------------------------------------------------------
+(1) THE EDGE, STATED PRECISELY
+--------------------------------------------------------------------------------
+
+Three price sources for the same event "Player X points OVER/UNDER L":
+
+  A. SHARP consensus — Pinnacle + Circa (+ sharp-ish: BetOnline, Bookmaker).
+     De-vigged, this is the market's best estimate of the true probability.
+     We treat it as truth. We do NOT try to beat it.
+  B. SOFT sportsbooks — DK/FD/MGM/Caesars/ESPNBet. Post 200-400 lines/night,
+     cannot sharpen them all, lag the sharp consensus by minutes-to-hours, and
+     disagree with each other by whole points. THIS GAP is the edge.
+  C. DFS pick'em — Underdog (classic vs-house, no-limit), PrizePicks/Underdog
+     "Arena/Champions" (peer-to-peer), DK Pick6, Sleeper. Lines lag sharp by
+     15-30 min in peak windows and sit 0.5-1.5 units off consensus; payout
+     structure bakes in a large hold you must clear (§3a).
+
+The signal, per prop, per venue:
+
+    p_true  = de-vig(sharp two-way at sharp's line), REPRICED to the venue's
+              line via an implied stat distribution   (§2)
+    EDGE_book = soft_decimal_price * p_true - 1        (identical to
+                sharp_anchor.edge_vs_fair — a soft book is +EV iff EDGE_book>0)
+    For DFS: a leg is a candidate iff  p_true(DFS side) >= breakeven(N)+margin
+             and the ENTRY EV = (Π p_true_i · corr-adj) * M(N) - 1 > 0   (§3)
+
+Everything downstream (Kelly, CLV, kill-criteria) hangs off p_true and EDGE.
+This is exactly safepicks' sharp_anchor structure, ported from 1X2/OU2.5 to
+player props — with ONE new hard part props have and 1X2 did not: the venues
+quote the SAME player at DIFFERENT LINES, so you cannot compare prices directly.
+You must reprice. That is §2.
+
+--------------------------------------------------------------------------------
+(2) THE SIGNAL ENGINE — DE-VIG WITH A LINE SHIFT (the props-only wrinkle)
+--------------------------------------------------------------------------------
+
+2a. SHARP "TRUE PROBABILITY" AT THE SHARP LINE  (mirror sharp_anchor.fair_*)
+  For each (player, market, sharp_line) collect the two-way over/under decimals
+  from the anchor set. De-vig to a fair pair {p_over, p_under}. Method choice
+  matters more on props than on 1X2 because prop holds are 6-10%+:
+    - Shin (safepicks default, devig.shin) — good general choice, models
+      insider/favourite bias; use as primary, exactly as sharp_anchor does.
+    - Multiplicative (normalize by overround) and Additive are the fast
+      fallbacks; log all three and report method-sensitivity (a 2% edge that
+      only survives one de-vig method is not real). Two-way markets ONLY —
+      props are natively two-way, so unlike 1X2 no synthesis is needed.
+  ANCHOR POLICY (mirror ADR 024): Pinnacle primary; Circa fallback; a small
+  sharp-book consensus (median of de-vigged p_over) as tertiary. Record which
+  anchor supplied p_true on every candidate. Where <2 sharp books quote a prop,
+  it is a THIN line -> route to the model (§4), never to blind arbitrage.
+
+2b. REPRICING TO A DIFFERENT LINE  (THE NEW PART — no 1X2 analog)
+  DFS says 18.5; Pinnacle says 21.5. You cannot compare 18.5-over to 21.5-over.
+  Reconstruct the player's stat distribution implied by the sharp market, then
+  evaluate it at the target line:
+    1. Gather ALL sharp quotes for that player+market incl. ALTERNATE lines
+       (Pinnacle posts alts). De-vig each into a P(stat > line_k) point.
+    2. Fit a parametric CDF to those points:
+         - points / PRA / combos  -> Normal or skew-Normal (continuous-ish);
+         - rebounds / assists / 3PM / blocks / steals -> Negative-Binomial or
+           Poisson (low-count, right-skew — the memo's "more modelable" stats).
+       One or two sharp anchor points already pin mean+dispersion; alts refine.
+    3. p_true(target_line) = 1 - CDF(target_line - 0.5 continuity) for OVER.
+  This step is unavoidable and it means EVEN the "pure arbitrage" path carries
+  a light distributional MODEL (the CDF shape). Be honest that the edge is only
+  as clean as that assumption; sanity-cap repricing to <= ~2 units from the
+  nearest sharp anchor (extrapolation risk explodes past that).
+  Half-point buffers matter: NBA scoring is ~continuous so a 0.5 gap is ~1-2%
+  of probability; on 3PM/steals a 0.5 gap is huge — never treat integer-line
+  moves as small.
+
+2c. EDGE PER VENUE
+  Soft sportsbook: EDGE_book = price * p_true - 1. Keep if >= threshold (start
+  2%, sweep 2/3/4% exactly like sharp_anchor.THRESHOLDS). Line-shop across ALL
+  soft books, take the max price (their market_max analog) but log single-book
+  bet365-style availability too — the best-of-panel price overstates what one
+  account can hold.
+  DFS: see §3. The "price" is implicit in the payout multiplier and the leg
+  count, so the comparison is p_true vs a BREAKEVEN, not vs a decimal.
+
+--------------------------------------------------------------------------------
+(3) THE DFS PICK'EM ANGLE (Underdog / PrizePicks / Pick6) — THE DURABLE HOME
+--------------------------------------------------------------------------------
+
+3a. THE PAYOUT MATH AND THE HOLD YOU MUST OVERCOME
+  Pick'em is a fixed-multiplier parlay. Per-leg breakeven prob b(N)=M^(-1/N)
+  for all-must-hit (Power/Standard). Computed exactly:
+
+   Entry (all-must-hit)    mult M   fair(2^N)   breakeven/leg   hold@50-50 legs
+   ---------------------   ------   ---------   -------------   ---------------
+   UD 2-pick                3.0x       4.0x        57.74%           25.0%
+   UD 3-pick                6.0x       8.0x        55.03%           25.0%
+   UD 4-pick               10.0x      16.0x        56.23%           37.5%
+   UD 5-pick               20.0x      32.0x        54.93%           37.5%
+   PP 6-pick flex          25.0x      64.0x        58.48%*          60.9%
+   (PrizePicks Power Plays ~ same family; 6-flex pays partial, *effective be
+    higher and hold ~61% — the worst product on the board.)
+
+  READ THIS: if you throw RANDOM legs at the posted line, the house keeps
+  25-61% of your money. The hold is enormous vs a sportsbook's ~4.5-10%. The
+  ONLY reason DFS is +EV is that a stale DFS line at 18.5 (vs sharp 21.5) can
+  push p_true(over) to 62-70%, far above the 55-58% breakeven. You are not
+  beating a small vig; you are exploiting a WHOLE-POINT line error big enough
+  to swamp a big vig. No line error -> no edge -> you are donating.
+  Structural note: 3-pick (55.03%) and 5-pick (54.93%) have the LOWEST
+  breakevens; 2-pick (57.74%) and 4-pick (56.23%) are structurally more
+  expensive. Prefer odd-leg power plays, all else equal.
+
+3b. PER-LEG EDGE -> ENTRY EV
+  Leg qualifies iff  p_true(DFS side) >= b(N) + margin (start margin = 0.03).
+  Entry EV (power/all-must-hit):  EV = P_joint * M(N) - 1, where P_joint is the
+  correlation-adjusted joint hit prob (§3c). Flex/insured entries pay on 1-2
+  misses; their payout is a random variable, so EV = Σ_k P(k of N hit)·pay(k)-1
+  and you MUST compute the full distribution (do not eyeball flex EV).
+
+3c. CORRELATION — THE SINGLE BIGGEST EV LEVER (and the noisiest, most policed)
+  DFS prices legs as INDEPENDENT (multiplier = independent-fair minus hold). Any
+  real POSITIVE correlation among your legs raises P(all hit) above the product
+  of marginals -> pure EV the book did not charge for. Bernoulli joint:
+     P(both) = p1·p2 + rho·sqrt(p1(1-p1)·p2(1-p2))
+  Worked 2-leg power play (M=3), both legs p_true=0.58:
+     rho=0.00 -> P=0.336, EV = +0.9%   (barely alive on pure line edge)
+     rho=0.10 -> P=0.361, EV = +8.2%
+     rho=0.20 -> P=0.385, EV = +15.5%
+  At p=0.60: rho 0.00/0.10/0.20 -> EV +8.0% / +15.2% / +22.4%.
+  So a modest positive correlation is worth MORE than the line edge itself.
+  Sources of real positive correlation to STACK (same direction):
+     - Game pace/total up -> multiple players' counting-stat OVERS together
+       (both teams' scorers' points; a PG's assists + teammates' points).
+     - A blowout risk correlates star UNDERS (minutes capped) — stack unders.
+     - Within-player: points-over and PRA-over on the same player (near-
+       deterministic positive corr — but books often BLOCK same-player combos).
+  BRUTAL CAVEATS: (i) rho is estimated from thin, noisy data — a wrong +0.2
+  assumption manufactures phantom EV; be conservative, cap the credited rho at
+  ~0.15 unless you have a fitted game-level joint model. (ii) DFS apps
+  increasingly RESTRICT or re-price obvious same-game/same-player stacks and
+  demote correlated slips. (iii) Negative correlation (two players competing
+  for the same rebounds/usage) SILENTLY KILLS all-must-hit slips — screen for
+  it and never co-rostered anti-correlated overs. Correlation is the edge's
+  turbo AND its biggest self-deception risk.
+
+3d. *** THE 2026 STRUCTURAL SHIFT — PEER-TO-PEER (updates the feasibility memo) ***
+  Since the memo, regulatory pressure (cease-and-desist in NY, FL, MI, MA, MD,
+  OH, CT, IA, TN and more) pushed the vs-the-house model out of many states.
+  PrizePicks transitioned ALL contests to its peer-to-peer "Arena" format
+  nationwide; Underdog runs "Champions" P2P in banned states. THIS MATTERS:
+    - vs-HOUSE pick'em (classic): you beat a STALE HOUSE LINE. The devig+
+      dispersion edge above applies directly. Underdog's classic vs-house
+      product (legal states, advertises NO limiting) is the PRIME venue.
+    - PEER-TO-POOL (Arena/Champions): you no longer beat a house line — you beat
+      the FIELD of other entrants, minus rake (~the same hold, taken as rake).
+      Devig still tells you which side is +EV, but your realized edge is now
+      (your edge) minus (the sharpest other players' edge) minus rake. As sharp
+      money and OddsJam/Outlier users crowd the same +EV legs, P2P edge
+      COMPRESSES toward the rake. This is the existential trend risk to the
+      whole thesis: the durable, no-limit venue is exactly the one being
+      converted to a format where the edge decays as the field sharpens.
+  IMPLICATION FOR SCOPE: prioritise (1) Underdog classic vs-house where it still
+  exists; (2) obscure legs (WNBA/college/deep bench) where the FIELD is soft
+  even in P2P; and treat P2P NBA-star props as near-dead (sharp field).
+
+3e. STAKE SIZING — QUARTER-KELLY ON THE ENTRY (mirror quarter_kelly_fraction)
+  The BET is the entry, not the leg. Kelly for a multiplier bet paying (M-1)
+  to 1 at win prob P_joint:  f* = (P_joint·M - 1)/(M - 1); then f = 0.25·f*,
+  capped at max_stake_pct_bankroll (seed 0.02), floored at 0 — identical shape
+  to valuebets.quarter_kelly_fraction, returning every intermediate for audit.
+  PORTFOLIO CAP: entries on a slate SHARE LEGS -> bankroll outcomes are
+  correlated; a naive per-entry Kelly over-bets the slate. Cap AGGREGATE nightly
+  exposure (e.g. <= 5-10% bankroll across all live entries) and de-duplicate
+  overlapping legs, exactly as the sharp_anchor report warns that one match
+  contributing several correlated selections narrows the true CI.
+
+--------------------------------------------------------------------------------
+(4) WHERE OUR MODEL ACTUALLY ADDS VALUE (honest: a thin slice, and never vs sharps)
+--------------------------------------------------------------------------------
+
+  ~90% of realized edge is pure devig+line-shop. Zero model needed; OddsJam /
+  Unabated / Outlier already sell this and are faster than a home scraper.
+
+  The model helps in EXACTLY ONE regime: props the SHARP market prices thinly or
+  not at all, so there is no de-vig truth to copy and the DFS/soft line is the
+  ONLY number:
+    - WNBA / NCAA small-conference / EuroLeague obscure props (thin sharp books).
+    - NBA neglected stats: blocks, steals, deep-bench minutes/usage, second-unit
+      scoring — books lavish attention on points, neglect these.
+    - INJURY-CASCADE window: star ruled out -> main line reprices in minutes (no
+      edge), but the usage/minutes cascade onto 5-8 teammates' props reprices
+      slowly and unevenly. A minutes->usage->NB model can price the cascade
+      before the soft/DFS line catches up. This is the model's best moment.
+  Model spec (v1): minutes projection (rotation + injury news) -> usage share ->
+  per-stat Negative-Binomial/Poisson rate -> P(stat > line). Same nba_api-fed
+  pattern the feasibility memo scoped.
+
+  HARD HONESTY BOUND (the soccer ceiling, restated): on ANY prop Pinnacle/Circa/
+  DK/FD price with real volume, their de-vig IS p_true to within noise. Your
+  model CANNOT beat it — the residual is information they have and you don't
+  (final minutes intent, load management, sharp flow). So the model is a
+  FALLBACK ANCHOR for uncovered lines, never a primary signal, and every model-
+  sourced candidate must be flagged "model-anchored, no sharp cross-check" and
+  held to a HIGHER edge threshold + tighter stake, because it has no sharp
+  price validating it. If the model ever appears to "beat" a well-quoted sharp
+  line, assume a bug or a stale pull before assuming alpha.
+
+--------------------------------------------------------------------------------
+(5) THE LIMITING PROBLEM + HONEST LIFETIME-VALUE CEILING
+--------------------------------------------------------------------------------
+
+  SPORTSBOOKS (DK/FD/MGM/Caesars): the edge is a WASTING ASSET per account.
+  ML risk systems flag persistent +EV-vs-sharp betting fast (winners cut to
+  $75, or new prop accounts capped at ~$10, within days-to-weeks — worse on
+  props post-Jontay-Porter, where structural prop limits and under-bet bans
+  were added). Mitigations are palliative, not cures:
+    - Bet EARLY (soft lines are stalest right after posting), round stakes to
+      look recreational, don't only bet the steam side, spread across books,
+      mix in main-market noise. Extends life from days to weeks, not to years.
+    - Realistic per-book LTV: extract a few thousand dollars, get throttled,
+      done. Books are a SMASH-AND-GRAB layer, not the business.
+
+  DFS pick'em: the durable-but-capped home.
+    - Underdog classic advertises NO limiting -> the one place you can persist.
+      BUT: per-entry stakes are capped (often $100-$250, less on obscure props),
+      daily volume is bounded by how many qualifying legs exist (~5-30/night in
+      season), and PrizePicks silently demotes to flex-only after ~200 winning
+      entries. So even "no limit" is capped by stake ceilings and leg supply.
+    - P2P conversion (§3d) caps it further by decaying the edge toward rake as
+      the field sharpens.
+
+  HONEST LTV CEILING (solo operator, few-thousand-$ bankroll, disciplined):
+    - Per-night realized EV in season: single-digit to low-double-digit dollars
+      early, scaling with bankroll and leg supply, minus brutal variance.
+    - Annual take: LOW FOUR to LOW FIVE FIGURES, and DECLINING year over year as
+      tools proliferate, sharp books reprice props in minutes, and DFS goes P2P.
+    - This is NOT a scalable quant fund. It is a part-time edge with a shelf
+      life. Size ambition — and engineering spend — accordingly. If the plan
+      needs >$300/mo of tooling to run, the tooling can eat the whole edge.
+
+--------------------------------------------------------------------------------
+(6) FORWARD VALIDATION HARNESS  (mirror paper_clv.py + a weekly beat)
+--------------------------------------------------------------------------------
+
+  Prop odds history only reaches ~2023 and is thin -> a Last-Dance-grade
+  backtest is UNDERPOWERED. Validate FORWARD, paper first. Reuse paper_clv's
+  read-only, empty-runs-clean, formula-shared discipline verbatim.
+
+6a. TWO CLV MEASURES (props need both — the sharp truth AND the venue number)
+  When a candidate is FLAGGED, snapshot: DFS/soft line + our p_true + the sharp
+  consensus de-vigged p_sharp(our side). At LOCK (tip-off) snapshot the sharp
+  CLOSING consensus and the venue's CLOSING line. Then:
+    CLV_sharp = p_sharp_close(our side) / p_sharp_flag(our side) - 1
+        -> did the SHARP market drift toward our side? Positive = we were on the
+           right side of information (the real, honest signal — same role as
+           paper_clv's O_early/O_close, inverted to probability space).
+    CLV_venue = p_venue_implied_close(our side) / p_venue_implied_flag - 1
+        -> did the SOFT/DFS number itself move to our side (i.e., did we beat
+           the number they eventually posted)? Positive = we captured a stale
+           line before it corrected.
+  A REAL edge shows CLV_sharp > 0 (we predate information) OR CLV_venue > 0 with
+  CLV_sharp ~ 0 (we harvested a genuine stale-line dispersion). If BOTH are ~0
+  and realized ROI is positive, it is variance, not edge — do not scale.
+  Settlement: grade actual stat vs venue line -> W/L/push -> realized ROI-at-
+  entry, reusing an engine.pnl_per_unit-style settler (half/push handling like
+  paper_clv._early_pnl). Paper-trade ALL of this before a cent is real.
+
+6b. PRE-REGISTERED THRESHOLDS (a props mini-G1 — write them down, then don't move)
+    - min per-leg edge margin over breakeven: 0.03 (sweep 0.02/0.03/0.04).
+    - min de-vig agreement: >= 2 sharp books, and edge must survive Shin AND
+      multiplicative de-vig (method-robust, per §2a).
+    - max repricing distance from nearest sharp anchor: 2.0 units.
+    - correlation credited: capped at rho <= 0.15 without a fitted joint model.
+    - min forward sample before real money: >= 500 graded paper legs OR 8 weeks,
+      whichever is later; per-venue and per-league sub-samples reported (WNBA,
+      NBA-neglected, NCAA separately — pooled hides where the edge really is).
+    - model-anchored (no sharp cross-check) candidates: 2x the edge threshold,
+      half the stake, tracked as a SEPARATE cohort.
+
+6c. THE WEEKLY BEAT (ops cadence, mirrors safepicks JobRun discipline)
+    A scheduled job that, each week: pulls the week's flagged->locked->settled
+    paper picks; recomputes CLV_sharp, CLV_venue, realized ROI with bootstrap
+    95% CI (seeded, like bootstrap_yield_ci); breaks down by venue/league/stat/
+    de-vig method; writes an evidence-only report (no auto-enable, no bet
+    writes) + a JobRun audit row. Green light to risk real money requires a
+    human read of that report clearing 6b — never an automatic promotion.
+
+6d. THE KILL CRITERION (pre-committed — decide now, execute without flinching)
+  Declare the operation DEAD and stop if ANY of:
+    (K1) After the 500-leg/8-week paper window, mean CLV_sharp 95% CI <= 0
+         (no informational edge) AND CLV_venue 95% CI <= 0 (no stale-line
+         capture). Positive realized ROI without positive CLV = luck; kill.
+    (K2) Realized paper ROI 95% CI <= 0 after crediting only rho<=0.15 and at
+         ACHIEVABLE per-entry stakes (not the best-of-panel fantasy price).
+    (K3) Qualifying-leg supply < ~5/night sustained -> not worth the time even
+         if per-leg edge is real (the soccer "volume-starved" failure mode).
+    (K4) LIVE, post-launch: within 8 weeks of real money the prime venue
+         (Underdog classic) is limited/demoted, or the P2P field compresses
+         edge to < time cost, such that per-entry EV < the value of the hour
+         spent. Smash-and-grab the books, then stop.
+  Any single K firing = stop. Do NOT lower thresholds to keep it alive — that is
+  the exact self-deception (chasing a dead pocket) the soccer verdict warned of.
+
+--------------------------------------------------------------------------------
+(7) EXPECTED ROI, VARIANCE, AND WHAT "SUCCESS" LOOKS LIKE
+--------------------------------------------------------------------------------
+
+  EXPECTED ROI (per qualifying entry, disciplined, forward-validated):
+    - Single +EV legs at soft books: ~+2% to +4% ROI, before limiting tax.
+    - DFS power plays on line-edge alone (no correlation): +0% to +3% — the
+      hold barely cleared; margin for error is thin (see §3a: p=0.58 -> +0.9%).
+    - DFS with genuine, conservatively-estimated positive correlation: +5% to
+      +12% on 2-3 leg stacks — but this is the number most inflated by bad rho
+      estimates, so trust it LEAST and paper it HARDEST.
+    - Model-anchored obscure/WNBA/cascade legs: potentially higher (thin market)
+      but unvalidated and highest-variance; treat as speculative until 6b clears.
+
+  VARIANCE: severe and non-negotiable. A 3-leg power play hits ~18-22% of the
+  time; a +6% EV entry still LOSES ~80% of the time. You need HUNDREDS of entries
+  to distinguish edge from noise — which is also long enough for limiting/
+  demotion to bite. Bankroll must survive 15-20 consecutive entry losses (real
+  at these hit rates); quarter-Kelly + the aggregate slate cap (§3e) is the
+  floor of discipline, not a nicety.
+
+  WHAT SUCCESS LOOKS LIKE (set expectations honestly): a small, real, positive-
+  CLV grind that nets low-four-to-low-five figures a year at low limits with high
+  variance and a declining trend line — a proof that "beat the bookies" is
+  literally true in this one derivative corner, not a business that scales. If
+  the goal is a scalable product, this is not it (and neither was soccer). If the
+  goal is "extract real money from bookmaker/DFS laziness before it closes," this
+  is the single best vehicle examined — run it lean, validate forward, kill on
+  schedule.
+
+--------------------------------------------------------------------------------
+(8) DATA + BUILD PLAN (reuse the Django/Postgres + safepicks odds architecture)
+--------------------------------------------------------------------------------
+
+  DATA:
+    - nba_api (free): box/PBP/advanced/lineups/aggregated tracking -> minutes/
+      usage/pace model + settlement of realized stats. Injury feeds: ESPN/
+      rotowire (mandated, cleaner than soccer's).
+    - The Odds API BUSINESS ($99/mo): REQUIRED for player props + Pinnacle +
+      historical (~2023). Free/Pro tiers have NO props — do not bother.
+    - DFS lines: Underdog/PrizePicks lines via a real-time feed (Outlier/OddsJam/
+      Unabated) or a home poller; a vendor +EV feed is faster than DIY and may
+      be worth it ONLY if its cost < measured edge (it often isn't — watch K-
+      criteria on tooling spend).
+    - HONEST DATA GAP: raw optical tracking is paywalled; you get aggregates
+      (fine for props). Prop history ~2023 is too thin for a rigorous backtest
+      -> forward paper only, per §6.
+
+  COMPONENTS (each a near-direct port of a safepicks file — DO NOT modify
+  safepicks; build fresh in basketballpicks mirroring the pattern):
+    - devig/true-line builder + line-shift repricer  <- mirrors sharp_anchor.py
+      (fair_* / edge_vs_fair) + adds the §2b CDF repricing (the new piece).
+    - DFS pick'em EV + breakeven + correlation-adjusted joint  <- new, §3.
+    - quarter-Kelly-on-entry stake + slate portfolio cap  <- mirrors
+      valuebets.services.quarter_kelly_fraction (audit-dict shape identical).
+    - forward paper-CLV harness (two CLV measures, empty-runs-clean, read-only)
+      <- mirrors paper_clv.py; add the weekly-beat JobRun report (evidence-only,
+      no auto-enable) mirroring sharp_anchor's build_report/JobRun discipline.
+    - minutes->usage->NB prop model (fallback anchor for thin lines only) <- new.
+  TIMELINE: 4-8 week MVP, ~$100-300/mo running. Engineering risk is LOW; the
+  real risk is that the only live edge gets limited / goes P2P before it pays
+  back the build. Gate the build on the paper window clearing §6b.
+
+--------------------------------------------------------------------------------
+(9) ONE-SCREEN SUMMARY
+--------------------------------------------------------------------------------
+
+  * EDGE = de-vig the sharp consensus into a true distribution, reprice it at
+    each soft/DFS line, bet where their stale line beats it past their (large)
+    hold. Pure arbitrage; not forecasting.
+  * MODEL matters ONLY on lines the sharps don't price (WNBA/college/blocks/
+    deep-bench/injury-cascade) — a thin, higher-threshold, half-stake cohort.
+    Never vs a well-quoted sharp line (soccer ceiling holds).
+  * BIGGEST LEVER is not the model — it's conservative positive CORRELATION on
+    DFS same-game stacks (a +0.9% line-only entry becomes +15% at rho=0.2), also
+    the noisiest and most policed input.
+  * DURABLE HOME = Underdog classic vs-house (no limit); books are smash-and-
+    grab (limited in days-weeks); DFS is capped by stakes/leg-supply and is
+    going peer-to-peer, which decays the edge toward rake.
+  * VALIDATE FORWARD: two CLV measures (sharp-drift + venue-drift), 500-leg/
+    8-week paper mini-G1, weekly evidence-only beat, pre-registered thresholds.
+  * EXPECT ~+2-6% ROI/entry, HIGH variance, low-4-to-low-5 figures/yr solo,
+    declining. KILL on: CLV<=0, ROI CI<=0 at real stakes, leg-supply<5/night, or
+    venue limiting/P2P-compression. Do not lower thresholds to keep it alive.
+
+================================================================================
+SOURCES (consulted 2026-07-19; feasibility memo sources not repeated)
+--------------------------------------------------------------------------------
+DFS pick'em math / breakeven / hold:
+  - Unabated, "The Art and Science of DFS Pick'em Strategy" (breakeven % by legs)
+    https://unabated.com/articles/art-and-science-of-dfs-pickem-strategy
+  - GamedayMath, "Underdog Fantasy Payout Math" (2/3/4/5-pick multipliers, be%)
+    https://www.gamedaymath.com/blog/underdog-fantasy-payout-math
+  - SickFade Pick'em Calculator  https://sickfade.com/calculators/pickem
+  - OddsReference Pick'em Payout Calculator
+    https://oddsreference.com/tools/pickem-payout-calculator
+  - Outlier, "How to Win on PrizePicks: the math behind DFS"
+    https://help.outlier.bet/en/articles/12674224
+Positive-EV / devig for DFS:
+  - Stokastic, "Positive EV Betting For DFS Players: Why It Works"
+    https://www.stokastic.com/articles/dfs-strategy/positive-ev-betting-for-dfs-players
+  - Unjuiced, "Positive EV | True Devig +EV Bet Finder"
+    https://unjuiced.bet/features/positive-ev
+  - OddsShopper, "Positive Expected Value Explained"
+    https://www.oddsshopper.com/articles/betting-101/positive-expected-value-explained-finding-ev-sports-betting-y10
+Correlation / same-game stacking:
+  - Stokastic, "Using Correlation in NBA DFS Pick'em Entries"
+    https://www.stokastic.com/nba/nba-dfs-correlation-for-pickem-entries-strategy-for-prizepicks-underdog-more-ac11/
+Peer-to-peer / legal shift (2026):
+  - Gaming America, "PrizePicks switches all DFS contests to peer-to-peer Arena"
+    https://gamingamerica.com/news/14029/
+  - Deadspin, "PrizePicks Transitions to Nationwide Peer-to-Peer"
+    https://deadspin.com/legal-betting/prizepicks-transitions-to-nationwide-peer-to-peer-daily-fantasy-contests/
+  - RotoGrinders, "Underdog Champions: Peer-to-Peer Pick'em"
+    https://rotogrinders.com/sports-betting/underdog-fantasy/champions
+Venue comparison / limiting:
+  - XCLSV, "PrizePicks vs Underdog vs DK Pick6 2026 (sharp players)"
+    https://xclsvmedia.com/prizepicks-vs-underdog-vs-draftkings-pick6-2026/
+  - PropsBot, "PrizePicks vs Underdog 2026"  https://propsbot.ai/prizepicks-vs-underdog/
+  - OddsAssist, "Underdog vs PrizePicks"  https://oddsassist.com/dfs/underdog-vs-prizepicks/
+================================================================================

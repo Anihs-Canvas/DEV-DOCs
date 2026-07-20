@@ -1,0 +1,139 @@
+SafePicks React frontend — read-only quality review (2026-07-19)
+Scope: frontend/src (App, api, format, components, pages/*). No edits made.
+
+=====================================================================
+VERDICT ON THE "REAL + SAFE" CLAIMS (all still hold)
+=====================================================================
+- FAKE-DATA PURGE holds. No sim_m7 / SIM / mock / dummy / hardcoded-fixture
+  references remain anywhere in frontend/src. Every "fabricated" hit is honest
+  copy ("nothing is fabricated"). The frontend constructs NO data client-side:
+  odds products, joint probabilities, totals and settlement all come verbatim
+  from the API (rendered via entry.math / combo.math), so it cannot invent legs.
+- ODDS CAP holds structurally. The frontend never multiplies legs or builds an
+  accumulator itself; it only renders API-supplied legs, so MAX_SAFE_LEG_ODDS
+  (1.50) is a BACKEND invariant the UI cannot violate. The only >1.50 prices on
+  screen are SINGLE picks on /high-odds (band [2,7]), which are explicitly NOT a
+  combined surface and carry the DangerBanner. Daily/DailyBoom "sure odds" cards
+  CAN show risky legs when the safe stack can't reach a target, but they are
+  loudly flagged ("NOT all-safe", "Reaches BEYOND the safe band") — intended,
+  not a silent leak.
+- HONESTY BANNERS hold. DangerBanner on HighOdds/Multi/MultiEx/MultiLab/Pref;
+  custom ro-banner ("NOT the safe product") on Rollover/MyRollover; PaperBanner
+  on Daily/DailyBoom/Wide. HighOdds copy is blunt ("expect most of these to
+  lose"). Nothing overstates the model as a market-beater — ModelVsMarketCell,
+  edge and joint-edge are all framed as "information, not a tip".
+
+=====================================================================
+STANDING TODO (explicitly requested)
+=====================================================================
+- CACHE OFF FOR ITERATION — RE-ENABLE BEFORE SHIP.
+  api.js:38  CACHE_ENABLED = false
+  api.js:145 getJson() short-circuits to revalidate() (no SWR)
+  api.js:165 peekJson() returns null while off
+  Backend twin: FRONTEND_CACHE_ENABLED=0 (server page cache). Flip BOTH back on
+  once iteration ends, then re-verify the SWR seed/onRevalidate path (see P2-a:
+  that machinery is currently dormant/dead across Daily/DailyBoom/HighOdds/Wide).
+
+=====================================================================
+P0 / P1 — CORRECTNESS (latent crashes on partial payloads)
+=====================================================================
+These do not fire on a complete payload but will white-screen a page if the API
+omits a field. They matter because the SAME copy-pasted block repeats on 4-5
+pages, so one contract gap breaks several routes at once. All depend on the
+backend contract I cannot execute here — verify the field is always present, or
+add a guard.
+
+P1-a  Unguarded rec.available — crashes if `recommendation` is absent.
+  Multi.jsx:202, MultiEx.jsx:218, MultiLab.jsx:225, Pref.jsx:229
+  VariantCard renders <RecommendationBlock rec={data.recommendation}/> for EVERY
+  status, including insufficient_days / target_unreachable / short_of_target —
+  states that are COMMON in short replay windows. If the endpoint omits
+  `recommendation` on those branches, `rec.available` throws. Guard: `if (!rec)
+  return null;` at the top of each RecommendationBlock.
+
+P1-b  Unguarded leg.best_odds.price in the accumulator/combo tables.
+  Daily.jsx:420, DailyBoom.jsx:424, Multi.jsx:144, MultiEx.jsx:160, MultiLab.jsx:174
+  Reads leg.best_odds.price with no null check. MyRollover.jsx:388 and Pref.jsx:145
+  DO guard the identical field (`leg.best_odds ? … : "—"`), proving unpriced legs
+  are possible in the data model. The combo tables assume every leg is priced; a
+  single unpriced leg crashes the card. Inconsistent and fragile.
+
+P1-c  Unguarded settlement.realized_return.toFixed(2).
+  Daily.jsx:456/459, DailyBoom.jsx:459/462, Multi.jsx:185, MultiEx.jsx:201, MultiLab.jsx:208
+  Guarded only by settlement?.settled. If a settled combo has null
+  realized_return, `.toFixed` throws. Pref.jsx:208 is the correct pattern (extra
+  `!= null` check) — the others should match it.
+
+P1-d  Unguarded leg_criteria.max_leg_odds.toFixed(2) / pct(leg_criteria.min_p).
+  MultiEx.jsx:59-60, MultiLab.jsx:62-63; Multi.jsx:56 (any.target_total_odds.toFixed).
+  Reads nested criteria fields in the subtitle before any data guard. Crashes the
+  whole page (not just a card) if leg_criteria is missing on the payload.
+
+=====================================================================
+P1 — UX / ACCESSIBILITY
+=====================================================================
+P1-e  Incomplete ARIA tab pattern. Day tabs use role="tablist"+role="tab" but the
+  content below has no role="tabpanel", no id, and tabs have no aria-controls, so
+  SR users get "tab" semantics with no announced panel and no arrow-key nav.
+  Daily.jsx:212-227, DailyBoom.jsx:216-231, HighOdds.jsx:122-137,
+  Wide.jsx:121-135 (day tabs) and Wide.jsx:181-196 (nested family tabs).
+  Minimum fix: add aria-controls/id + a tabpanel role, or drop role="tab" and use
+  plain buttons with aria-pressed.
+
+P1-f  Icon-only anchor arrows have no accessible name. App.jsx:49-69 — the ←/→
+  buttons rely on `title` only (not a reliable accessible name); add aria-label
+  ("one week back"/"one week forward").
+
+P1-g  No catch-all route. App.jsx:184-195 — an unknown URL renders a blank <main>
+  (no 404 / redirect). Add a fallback <Route path="*">.
+
+=====================================================================
+P2 — CLEANLINESS / CONSISTENCY / DRIFT
+=====================================================================
+P2-a  Dormant SWR machinery = effectively dead code while cache is off.
+  With CACHE_ENABLED=false, peekDaily/peekDailyBoom/peekHighOdds always return
+  null and onRevalidate never fires, so the seed()/onRevalidate branches in
+  Daily.jsx:128-172, DailyBoom.jsx:131-175, HighOdds.jsx:44-84, Wide.jsx:41-81
+  are inert. Also seed() is invoked 3× per mount (two useState initializers +
+  the effect). Harmless now, but must be re-tested when the flag flips (tie to
+  the STANDING TODO).
+
+P2-b  Number/odds formatting drift. format.js exports pct/odds/signedPct, but
+  Rollover.jsx:19-21 and MyRollover.jsx:25-27 define their OWN local pct/oddsFmt/
+  money. odds() renders 1 decimal at value≥10 (format.js:8) while local oddsFmt
+  always renders 2 — the same odds value formats differently across pages. The
+  local variants also coerce via Number() while the shared odds() does not.
+  Consolidate on format.js (add a money() there).
+
+P2-c  Copy-paste page duplication. Multi/MultiEx/MultiLab/Pref each carry a nearly
+  identical VariantCard + Combo + StatusChip + RecommendationBlock (~120 lines
+  each). DailyBoom.jsx is a near-verbatim copy of Daily.jsx (auto-derived, by
+  design, but still ~470 duplicated lines). Any fix to the P1 guards above must
+  be applied in 4-5 places — a shared <Combo>/<RecommendationBlock> module would
+  collapse the drift and the risk surface.
+
+P2-d  Honesty-banner drift. Rollover.jsx:92-97 and MyRollover.jsx:101-106 hand-roll
+  a <div className="ro-banner"> instead of the shared <DangerBanner>. Same honest
+  text, but it bypasses the one component the review would audit for tone.
+
+P2-e  Safety-cap not surfaced uniformly. The 1.50 market-odds cap is shown to the
+  user only on MultiEx.jsx:60 and MultiLab.jsx:63 ("market odds ≤ 1.50×"). It is
+  NOT surfaced on Multi.jsx (subtitle mentions only the target), Daily/DailyBoom
+  "Sure odds" (min_p only, Daily.jsx:326-337), or Rollover. The cap holds
+  server-side everywhere; it is just invisible to the user on ~5 of the surfaces.
+
+P2-f  Silent error swallow. CumulativeSummary catches fetch errors with `() => {}`
+  and returns null on no-summary (Daily.jsx:56-65 / DailyBoom.jsx:59-68), so a
+  failed summary endpoint makes the whole section vanish with no error/empty
+  distinction. Acceptable for a supplementary block, but note it hides outages.
+
+=====================================================================
+SINGLE MOST IMPORTANT FIX
+=====================================================================
+Add null guards to the copy-pasted Combo / RecommendationBlock blocks (P1-a/b/c/d):
+`if (!rec) return null;`, guard leg.best_odds before .price, and match Pref's
+`realized_return != null` check. These are the only findings that can hard-crash
+(white-screen) a whole route on an otherwise-valid partial payload, and because
+the block is duplicated they should be fixed once in a shared component (P2-c).
+No fake data, no odds-cap leak, and no over-claiming copy was found — those
+guarantees hold.

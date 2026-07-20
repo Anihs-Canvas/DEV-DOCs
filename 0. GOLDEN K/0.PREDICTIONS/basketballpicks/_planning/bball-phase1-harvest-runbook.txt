@@ -1,0 +1,229 @@
+================================================================================
+BASKETBALLPICKS — PHASE-1 HARVEST RUNBOOK
+Verify each FREE source is live (2026) + exact signup/run steps to start harvesting
+Companion to: bball-02-leagues-and-sources.txt, bball-06-FREE-odds-sources.txt
+Verification pass: 2026-07-19 (web-hit where noted). READ-ONLY: no code changed.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. WHAT THIS DELIVERS
+--------------------------------------------------------------------------------
+Two layers, two purposes:
+  * DATA / PREDICTOR layer  = box + PBP player data. ALL KEYLESS + FREE. This is
+    what feeds the model. You can start harvesting TODAY with zero signups.
+  * ODDS / EDGE layer       = de-vig + line-shop feeds. Free but each needs a
+    (free, no-card) API key OR is a keyless public-JSON scrape. Unlocks betting
+    edge, NOT the predictor. Wired as BudgetedClient factories in
+    apps/odds/free_clients.py; see the GAP note in §5.
+
+================================================================================
+1. DATA SOURCES — LIVE-STATE VERIFICATION (2026)
+================================================================================
+
+S1. nba_api (NBA)                                            [CONFIRMED LIVE]
+    - PyPI v1.11.4, released 2026-02-20; actively maintained; Python 3.10+.
+    - Wraps stats.nba.com + cdn.nba.com, 200+ endpoint classes.
+    - NOTE: the harvest code does NOT import the pip package — it calls
+      stats.nba.com/stats directly through its own BudgetedClient
+      (harvest.nba_api_client) with browser headers. So the package version is a
+      health signal, not a dependency. Endpoints used: scoreboardv2,
+      boxscoretraditionalv2, boxscoreadvancedv2 — all still current.
+    - Caveat unchanged since design: stats.nba.com 403s bare bots; the client
+      already supplies browser UA + Referer/Origin + x-nba-stats headers + a
+      ~20/min bucket. Undocumented — can change without notice; keep the DQ gate.
+
+S2. ESPN endpoints behind wehoop (WNBA) + hoopR (NCAA Men's) [CONFIRMED LIVE-HIT]
+    - Hit site.api.espn.com/.../basketball/wnba/scoreboard this pass: HTTP 200,
+      valid JSON, 3 WNBA games for 2026-07-19 with full box + player data. Live.
+    - Keyless, no auth. Code harvests the ESPN feed DIRECTLY (does not run the
+      R/py wehoop/hoopR runtimes) via espn_basketball_client — one pure parser
+      serves every slug: wnba, mens-college-basketball, womens-college-basketball,
+      nba. Endpoints: {slug}/scoreboard?dates=YYYYMMDD and {slug}/summary?event=.
+    - Unchanged since design. Standard ESPN caveat: undocumented, US-centric,
+      can move without notice.
+
+S3. euroleague-api (EuroLeague)                    [PARTIAL — endpoint drift risk]
+    - Package LIVE + maintained: PyPI v0.1.1 released 2026-04-29; a "EuroLeague
+      Advanced API" was launched 2026-04. Not the MVP first slate, but flagged:
+    - The code calls the CLASSIC host live.euroleague.net/api directly
+      (Schedules / Results / Boxscore). A datacenter GET to
+      live.euroleague.net/api/Schedules?seasonCode=E2025 returned HTTP 403 this
+      pass. Most likely a UA gate (the euroleague_client supplies a browser UA,
+      same class as other keyless feeds) rather than a move — but recent
+      euroleague-api versions have migrated some feeds to a new incrowdsports/
+      api-live host, so the classic host COULD be deprecated.
+    - ACTION before first Euro sync: spot-verify the Schedules/Results/Boxscore
+      shapes with the browser UA (this is exactly the code's own "(verify)"
+      flag). The PARSE logic is locked by recorded-fixture tests and is the
+      load-bearing part; only the fetch host/params may need a nudge. Not a
+      Phase-1-MVP blocker (NBA+WNBA carry the first slate).
+
+VERDICT: nba_api (NBA) and ESPN/wehoop (WNBA) — the two MVP-first-slate sources —
+are CONFIRMED live and keyless. hoopR/NCAA rides the same ESPN feed (live).
+EuroLeague classic host needs a UA/host spot-check on first sync.
+
+================================================================================
+2. ODDS / EDGE SOURCES — SIGNUP, ENV VAR, WHAT IT UNLOCKS, LIMITS (2026)
+================================================================================
+Each factory in apps/odds/free_clients.py reads its key via
+getattr(settings, NAME, "") — a MISSING key is a clean no-op skip, never a crash.
+Keyless scrapes need only a browser UA (already set in the factory).
+
+KEYED (free, no credit card):
+
+A1. SportsGameOdds — free "Amateur" tier               [CONFIRMED, pricing-hit]
+    SIGNUP:   https://sportsgameodds.com  (dashboard issues the key; no card)
+    ENV VAR:  SPORTSGAMEODDS_API_KEY   (sent as header X-Api-Key)
+    UNLOCKS:  PRIMARY structured soft-book prop + team feed. 9 books (FanDuel,
+              DraftKings, BetMGM, Caesars, ESPN BET, Bovada, Unibet, PointsBet,
+              William Hill) + a pre-computed Fair-Odds/Consensus field. The
+              de-vig backbone.
+    LIMITS:   2,500 objects/month, 10 req/min, ~10-min update delay. "Objects"
+              is the binding budget — spend like credits (client budget=80/day).
+
+A2. The Odds API — free "Starter" tier                 [CONFIRMED, docs-hit]
+    SIGNUP:   https://the-odds-api.com  (request a key; no card; credits reset 1st
+              of month)
+    ENV VAR:  THE_ODDS_API_KEY   (query param apiKey, owned by the source module)
+    UNLOCKS:  TEAM markets (h2h/spreads/totals) + Betfair-exchange near-zero-vig
+              team anchor; /events enumeration is FREE. Spot single-event props
+              only (credit-heavy). Basketball sport keys: basketball_nba,
+              basketball_wnba, basketball_ncaab, basketball_euroleague.
+    LIMITS:   500 credits/month. Cost = markets x regions per call (~2-3 team
+              calls/day). Do NOT buy Business $99/mo — it no longer ships
+              Pinnacle either (Pinnacle killed public API 2025-07-23).
+
+D1. OddsPapi — free tier                               [CONFIRMED, docs-hit]
+    SIGNUP:   https://oddspapi.io  (instant key on signup; no card)
+    ENV VAR:  ODDSPAPI_API_KEY
+    UNLOCKS:  The ONLY free Pinnacle trickle left — each request returns a full
+              fixture board across ~370 books incl. Pinnacle + player props;
+              free historical (no 10x penalty). Used ONLY as the closing sharp
+              AUDIT on flagged games (anti-contamination guardrail), never volume.
+    LIMITS:   250 requests/month (~8 full boards/mo). VERIFY on first key —
+              flagged longevity/ToS risk; treat as could-vanish.
+
+KEYLESS (public JSON scrape — NO signup, browser UA only):
+
+A3. Bovada        [CONFIRMED reachable from datacenter IP, no 403] — the robust
+    always-on soft-panel backbone (team markets + props). No key. Polite poll.
+B1. PrizePicks    [LIVE but Cloudflare-gated to datacenter IPs → 403; works from
+    residential IP + browser UA]. DFS line source #2. No key.
+B2. Underdog      [endpoint LIVE: api.underdogfantasy.com/beta/v5/over_under_lines;
+    less gated than PP]. DFS line source #1 (prime durable venue). No key.
+    (Base URLs are overridable via *_BASE_URL settings; none require a key.)
+
+================================================================================
+3. PHASE-1 HARVEST RUNBOOK — PULL THE FIRST NBA + WNBA SLATE
+================================================================================
+Run from the Django project root (where manage.py lives). No API keys needed for
+this section — both sources are keyless.
+
+Prereqs (one-time): migrations applied (creates core models + ingestion.JobRun),
+Postgres up. Env: browser-UA defaults are baked into the client factories.
+
+--- NBA (nba_api, keyless) -----------------------------------------------------
+  # default = yesterday's completed slate (NBA runs overnight ET)
+  python manage.py harvest_nba
+
+  # a specific day
+  python manage.py harvest_nba --date 2026-01-15
+
+  # a backfill window (inclusive; idempotent + resumable)
+  python manage.py harvest_nba --from 2026-01-01 --to 2026-01-07
+
+  # add the props usage signal (USG%/pace/off-def rating) — costs 1 extra call/game
+  python manage.py harvest_nba --date 2026-01-15 --with-advanced
+
+  # soak/smoke guard: stop after N games (great for a first run)
+  python manage.py harvest_nba --date 2026-01-15 --max-games 3
+
+  FLAGS: --date | (--from & --to together) | --with-advanced | --max-games N.
+  NB: July is NBA offseason — a July --date returns an empty slate (healthy, see
+  §4). Use an in-season date like 2026-01-15 for a live-data smoke test.
+
+--- WNBA (ESPN/wehoop, keyless) ------------------------------------------------
+  python manage.py harvest_wnba                      # yesterday's slate
+  python manage.py harvest_wnba --date 2026-07-18
+  python manage.py harvest_wnba --from 2026-06-01 --to 2026-06-07
+  python manage.py harvest_wnba --date 2026-07-18 --max-games 3
+
+  FLAGS: --date | (--from & --to) | --max-games N.  (No --with-advanced: ESPN
+  box has no usage/pace overlay.)  WNBA is IN SEASON now — use it for the live
+  smoke test (verified 3 games on 2026-07-19).
+
+--- FAST-FOLLOW (same keyless sources, once MVP proven) ------------------------
+  python manage.py harvest_ncaam --date 2026-01-15        # NCAA Men's D1 (ESPN)
+  python manage.py harvest_euroleague ...                 # EuroLeague — see §1 S3
+     (spot-verify the classic host with a browser UA first).
+
+RECOMMENDED FIRST RUN (proves the pipeline end-to-end, today):
+  python manage.py harvest_wnba --date 2026-07-18 --max-games 3
+  python manage.py harvest_nba  --date 2026-01-15 --max-games 3
+
+--------------------------------------------------------------------------------
+4. WHAT A HEALTHY RUN LOOKS LIKE
+--------------------------------------------------------------------------------
+Every command wraps the harvest in an ingestion.JobRun audit row
+(harvest.run_harvest_job) and prints a one-line summary.
+
+STDOUT (healthy, in-season day) — e.g.:
+  nba_api 2026-01-15..2026-01-15: games seen=8 (new=8 upd=0), team-box=16
+  player-box=~230; calls=17 cache=0 errors=0
+
+HEALTHY = read it like this:
+  * games_seen > 0 and games_created + games_updated == games_seen.
+  * team_box_rows == 2 x (FINAL games)   (one row per team).
+  * player_box_rows roughly 20-30 x FINAL games (both benches).
+  * fetch_errors == 0  (a couple of transient errors are tolerated + skipped,
+    never raised — but 0 is the target).
+  * NO "stopped:" WARNING line (that prints only when a budget is exhausted).
+  * A re-run of the SAME slate shows new=0, all upd — proves idempotency (games
+    key on (source, external_id); box rows update_or_create in place; a stored
+    FINAL is never downgraded and a score is never erased).
+
+JobRun row (in DB): status == OK; stats == the HarvestStats dict
+  (games_seen/created/updated, team_box_rows, player_box_rows, players_seen,
+  fetch_errors, empty_slates, requests_made, cache_hits, per_day{date:{...}}).
+  status == FAILED only on a real raised exception (stats.error set), which also
+  re-raises to the beat wrapper.
+
+HEALTHY-BUT-EMPTY (offseason / no games that day): games_seen=0,
+  empty_slates=1, errors=0, status=OK. This is a correct no-op, not a failure.
+  (Expect this for any July NBA --date.)
+
+--------------------------------------------------------------------------------
+5. ORDERED FREE-SIGNUP CHECKLIST FOR THE OWNER
+--------------------------------------------------------------------------------
+PREDICTOR (data) layer — needed to HARVEST + MODEL. Cost: $0, zero signups:
+  [0] NONE. nba_api (NBA), ESPN/wehoop (WNBA), ESPN/hoopR (NCAA) are all keyless.
+      Start §3 immediately.
+
+EDGE (odds) layer — needed to BET / compute CLV. All free, no credit card.
+Complete in this order (highest value first):
+  [1] SportsGameOdds  https://sportsgameodds.com   -> set SPORTSGAMEODDS_API_KEY
+        Backbone prop+team+consensus feed. 2,500 objects/mo. DO THIS FIRST.
+  [2] The Odds API    https://the-odds-api.com      -> set THE_ODDS_API_KEY
+        Team markets + Betfair anchor + free /events enumeration. 500 credits/mo.
+  [3] OddsPapi        https://oddspapi.io           -> set ODDSPAPI_API_KEY
+        Free-Pinnacle closing AUDIT (250 req/mo). Verify longevity on first key.
+  [4] Bovada / Underdog / PrizePicks — NO signup, NO key. Keyless public JSON;
+        the browser UA + Referer are already set in the factories. (PrizePicks +
+        DK/FD need a residential IP; Bovada + Underdog work from a datacenter.)
+
+Which unlocks what:
+  * Signups [1]-[4] unlock the EDGE / betting layer only.
+  * The PREDICTOR needs NONE of them — it is fully keyless and ready now.
+
+GAP TO FLAG (owner should know): there is NO odds-layer management command yet.
+apps/odds/ ships the BudgetedClient factories (free_clients.py) + the pure
+parsers (sources/*.py: sportsgameodds, the_odds_api, oddspapi, bovada, underdog,
+prizepicks, common), but apps/odds has NO management/commands/. So once keys are
+set, odds ingestion is not yet runnable via manage.py — an odds harvest command
+(and its beat wiring) is the next build step before the edge layer produces data.
+The data-layer commands (harvest_nba/wnba/ncaam/euroleague) + the backtesting
+commands (settle_props, prop_clv_report) DO exist.
+
+================================================================================
+END — verified 2026-07-19. Data MVP (NBA+WNBA) is live + keyless: harvest now.
+================================================================================

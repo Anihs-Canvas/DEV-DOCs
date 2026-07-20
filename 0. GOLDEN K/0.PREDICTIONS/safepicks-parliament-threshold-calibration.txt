@@ -1,0 +1,160 @@
+================================================================================
+SAFEPICKS "PARLIAMENT" — AGREEMENT THRESHOLD + BLEND CALIBRATION ANALYSIS
+Read-only study of stored walk-forward predictions. 2026-07-19.
+================================================================================
+
+SCOPE / METHOD
+--------------
+- READ-ONLY. Postgres (docker `web` container), Match.status='FT' only. No DB
+  writes, no code changes, no git.
+- Probabilities read RAW from Prediction.prob_vector (the stored walk-forward
+  backtest output — each row was priced as-of that match's date, so it is
+  already out-of-sample). Compared PRE-calibration on purpose: the point of
+  Q2 is whether blending helps calibration BEFORE the isotonic layer; if you
+  isotonic-calibrate everything first the comparison collapses.
+- Metrics from apps.predictions.metrics: full-range ECE (10-bin equal-width,
+  occupancy-weighted), Brier, and band-ECE / band-bias (equal-mass inside the
+  [0.80,0.98) operating band = THE safe-product scalar). Positive bias =
+  overconfident.
+
+THE REAL MEMBER MODELS (not 5 — this matters)
+---------------------------------------------
+30 ModelVersions are registered. Those that actually store CORE who-wins
+(1X2/DC) on FT rows: dc-v1, dc-v2, dc-v2-xg, dc-v2-xg-w0, blend-v1,
+stack-v1/v2/v3, and b0-market. The gbm-* LightGBM models store NO CORE rows
+(they feed the stack/blend, nothing persisted to vote with). Only the
+DC-family (dc-v1/dc-v2/dc-v2-xg/-w0) carries OU2.5 — blend/stack/b0 do not.
+
+CRITICAL: the who-wins block has FAKE DIVERSITY. Measured on shared FT matches:
+  blend-v1 vs dc-v1 : 90.2% bit-identical, mean|Δ|=0.00002  -> DUPLICATE
+  stack-v3 vs dc-v2 : mean|Δ|=0.0025, p95=0.016            -> NEAR-DUPLICATE
+  dc-v1 vs dc-v2    : mean|Δ|=0.027,  p95=0.108            -> distinct
+  dc-v2 vs dc-v2-xg : mean|Δ|=0.040,  p95=0.126            -> distinct
+So a {dc-v1,dc-v2,dc-v2-xg,blend-v1,stack-v3} "5-member" parliament is really
+~3 independent signals: dc-v1 (+blend clone), dc-v2 (+stack near-clone),
+dc-v2-xg. Any vote/average double-counts dc-v1 and dc-v2 unless deduped.
+
+b0-market = the bookmaker de-vigged close. It is the BENCHMARK we try to
+match, not a servable model — reported for reference only.
+
+Panels used:
+  PANEL A (1X2, DC): dc-v1, dc-v2, dc-v2-xg, blend-v1, stack-v3 — 49,223 common FT
+  PANEL OU (OU2.5) : dc-v1, dc-v2, dc-v2-xg (DC-family)         — 103,181 common FT
+
+================================================================================
+Q1 — OPTIMAL AGREEMENT THRESHOLD (K of N)
+================================================================================
+Each member casts a directional vote; a pick is issued only if >=K agree.
+
+1X2 argmax consensus (Panel A, N=5)          DC-FAVORITE consensus (Panel A, N=5)
+  K/N   picks  vol%  hit                        K/N   picks  vol%   hit    claim_p
+  2/5  49223 100.0 0.4901                        3/5  49223 100.0  0.7543  0.7772
+  3/5  49097  99.7 0.4902                        4/5  44413  90.2  0.7665  0.7901
+  4/5  43561  88.5 0.5083                        5/5  43318  88.0  0.7697  0.7927
+  5/5  42341  86.0 0.5131                       base rate (fav DC holds)=0.7572
+
+OU2.5 over/under consensus (Panel OU, N=3)
+  K/N   picks  vol%   hit    claim_p       base rate P(over)=0.499
+  2/3 103181 100.0  0.5511  0.6120
+  3/3  91134  88.3  0.5599  0.6240
+
+Reading it:
+- DC-favorite is the ONLY genuinely safe consensus market (~0.76 hit). 1X2
+  argmax tops out at 0.513 even unanimous; OU2.5 tops out at 0.560 (vs a
+  claimed 0.624 — badly overconfident). 1X2-argmax and OU2.5 should NOT
+  headline the safe pool at ANY threshold on this model set.
+- Because of the two duplicate pairs, some side ALWAYS has >=3 votes, so 3/5
+  == no filter. The only meaningful thresholds are 4/5 and 5/5.
+- On the honest 3-distinct-family basis: 4/5 ≈ "2 of 3 families agree"
+  (0.7665 @ 90% vol); 5/5 ≈ "3 of 3 unanimous" (0.7697 @ 88% vol).
+- Marginal value: 3/5->4/5 buys +1.22pp hit for -9.8% volume; 4/5->5/5 buys
+  only +0.32pp for a further -2.2%. Unanimity's premium is negligible.
+- Every consensus pick stays ~2-3pp OVERCONFIDENT (hit 0.767 < claim 0.793);
+  raising K does not fix the bias, it just trims volume.
+
+RECOMMENDED DEFAULT: K/N = 4/5 (supermajority, ~80% agreement) — equivalently
+"at least 2 of the 3 independent families agree" after de-duplicating the panel
+to {dc-v1, dc-v2, dc-v2-xg}. It banks essentially all the reliability jump
+(0.7543 -> 0.7665) at 90% volume; the +0.3pp from full unanimity is not worth
+the extra -2% volume or the fragility of counting clone votes. Apply it to
+DC-favorite only.
+
+================================================================================
+Q2 — IS THE BLEND BETTER CALIBRATED THAN THE BEST SINGLE MEMBER?
+================================================================================
+ANSWER: NO. One model — dc-v2 (and its near-twin stack-v3) — already dominates
+every safe market. Simple-average and logit-average tie it at best and are
+WORSE in the high-confidence operating band. The blend does not add
+calibration; it regresses toward the mean of a contaminated (duplicate-laden)
+panel.
+
+1X2 (multiclass Brier / top-confidence ECE / accuracy), Panel A:
+  dc-v1       BrierMC 0.6176  ECE 0.0435  acc 0.4883   (== blend-v1)
+  dc-v2       BrierMC 0.6114  ECE 0.0274  acc 0.4931   <- BEST
+  dc-v2-xg    BrierMC 0.6143  ECE 0.0348  acc 0.4901
+  stack-v3    BrierMC 0.6113  ECE 0.0270  acc 0.4929
+  SIMPLE-AVG  BrierMC 0.6119  ECE 0.0320  acc 0.4938
+  LOGIT-AVG   BrierMC 0.6123  ECE 0.0327  acc 0.4938
+  -> avg beats no one on ECE or Brier; dc-v2/stack dominate.
+
+DC-FAVORITE (ECE / Brier / band-ECE / band-bias), Panel A, base 0.7572:
+  dc-v1       0.0376 / 0.1820 / 0.0539 / +0.0539   (== blend-v1)
+  dc-v2       0.0261 / 0.1800 / 0.0356 / +0.0356   <- BEST band
+  dc-v2-xg    0.0306 / 0.1809 / 0.0435 / +0.0435
+  stack-v3    0.0259 / 0.1799 / 0.0356 / +0.0356   <- BEST full
+  SIMPLE-AVG  0.0253 / 0.1801 / 0.0389 / +0.0389
+  LOGIT-AVG   0.0264 / 0.1803 / 0.0403 / +0.0403
+  -> avg wins full-range ECE by a hair (-0.0006 vs stack) but LOSES the
+     operating band (+0.0033 band-ECE) and ties/loses Brier.
+
+DC 1X-LEG P(home win or draw), objective, Panel A:
+  dc-v2       ECE 0.0207 / Brier 0.1916   <- BEST
+  dc-v2-xg    ECE 0.0297 / Brier 0.1926
+  dc-v1       ECE 0.0381 / Brier 0.1940
+  SIMPLE-AVG  ECE 0.0253 / Brier 0.1918
+  -> dc-v2 dominates; avg worse on ECE, ~tie Brier.
+
+OU2.5 P(OVER) (ECE / Brier), Panel OU, base 0.499:
+  dc-v2       0.0568 / 0.2517   <- BEST
+  dc-v2-xg    0.0640 / 0.2530
+  dc-v1       0.0706 / 0.2544
+  SIMPLE-AVG  0.0612 / 0.2522
+  LOGIT-AVG   0.0618 / 0.2523
+  -> dc-v2 dominates on both; avg worse. (band-ECE ~0.21 on all is a
+     ~1000-sample tail artifact — the honest OU calibration number is the
+     full-range ECE 0.057-0.07; still the worst-calibrated safe market.)
+
+WHY: averaging drags the well-calibrated dc-v2 toward the stale, overconfident
+dc-v1 (=blend clone), and the duplicate members double-weight dc-v1/dc-v2 in
+the mean. Logit-average behaves the same as simple-average throughout (no
+edge). So no linear blend of the current panel can beat dc-v2 — it can only
+regress to it.
+
+BENCHMARK (honesty): b0-market, the close, is dramatically better calibrated
+than ANY model or blend — DC-fav ECE 0.0087, band-ECE 0.0051, band-bias
+-0.0047 (slightly UNDER-confident), Brier 0.1728 vs models' ~0.180; 1X-leg ECE
+0.0114. This re-confirms the standing verdict: the model set matches but does
+not beat the close. The realizable win here is CALIBRATION + a sound
+threshold, not edge.
+
+================================================================================
+RECOMMENDATIONS (config defaults)
+================================================================================
+1. AGREEMENT THRESHOLD: default K/N = 4/5 supermajority (~80%), i.e. >=2 of the
+   3 independent families after de-duping the panel. DC-favorite only.
+     4/5: 90% volume, 0.7665 hit  (vs 3/5=unfiltered 0.7543; 5/5=0.7697).
+2. BLEND: DO NOT serve the parliament average as the probability. Serve dc-v2
+   (with the existing per-cell isotonic in core_1x2_calibration) — it already
+   dominates 1X2/DC/OU2.5 on ECE and Brier. Deltas best-single(dc-v2) ->
+   simple-avg: 1X2 ECE +0.0046 (worse); DC-fav band-ECE +0.0033 (worse), full
+   ECE -0.0006 (marginal); OU ECE +0.0044 (worse); Brier +0.0001..+0.0005
+   (worse/tie) everywhere. A blend, if kept at all, must first dedupe to
+   {dc-v1, dc-v2, dc-v2-xg} — and even then it only ties dc-v2.
+3. HYGIENE: blend-v1 and stack-v3 are (near-)clones of dc-v1/dc-v2 in the
+   who-wins block; treat the parliament as 3 members, not 5, in any vote or
+   average, or dc-v1/dc-v2 get phantom double weight.
+4. MARKET SCOPE: keep OU2.5 and raw 1X2 out of the safe headline pool — neither
+   clears a useful hit rate at any threshold; DC-favorite is the one safe
+   consensus market. All picks remain ~2-3pp overconfident, so a calibrator on
+   the served leg is still needed regardless of threshold.
+================================================================================

@@ -1,0 +1,177 @@
+================================================================================
+THE PARLIAMENT — consensus gate + calibrated blend for the SAFE pool
+Implementation notes (2026-07-19)
+================================================================================
+
+HONEST FRAME (restated verbatim in code + meta, do NOT oversell)
+----------------------------------------------------------------
+An ensemble of exactly these models has ALREADY been measured in this project:
+it REACHES the closing line to within ~+/-0.001 nats but does NOT beat it.
+Model count is not the lever; INFORMATION is. The Parliament is therefore NOT a
+market-beater and adds NO betting edge. Its legitimate value is ROBUSTNESS:
+a pick a supermajority of DIVERSE models independently rate "safe" is less
+likely to be one model's calibration artefact than a pick only one model likes
+-> FEWER FALSE POSITIVES in the SAFE pool. It is a consensus GATE for safe-pick
+selection + a calibrated blended probability. A SAFE-FIRST product benefit.
+
+
+THE REAL MEMBER MODELS FOUND (honest count)
+-------------------------------------------
+Inventory of ModelVersions that produce a CORE prob_vector (the comparable
+who-wins / totals / DNB / AH space the members can all vote in):
+
+  dc-v1      Dixon-Coles Poisson on ACTUAL goals          (services.py)      ACTIVE
+  dc-v2      tuned per-league-calibrated DC refresh        (cmd tune_dc.py)   gated
+  dc-v2-xg   xG-informed Dixon-Coles (expected, not actual)(services_xg.py)  gated
+  stack-v1   LightGBM stack (v1 features, dc-v1 base)       (ml/services.py)  gated
+  stack-v2   LightGBM stack (v2 feature generation)         (ml/services.py)  gated
+  stack-v3   LightGBM stack (v2 features, dc-v2 base)        (ml/services.py) gated
+  b0-market  Shin-de-vigged CLOSING line stored as a model  (odds/baseline)   -- EXCLUDED
+
+Default roster = 5, priority-ordered, capped at MAX_MEMBERS=5:
+  ["dc-v1", "dc-v2-xg", "stack-v1", "stack-v2", "stack-v3"]
+
+HONEST DIVERSITY CAVEAT (stated in the module docstring): these 5 span only
+TWO methodologies — 2 Dixon-Coles goal models + 3 LightGBM stacks. "5 votes"
+is LESS independent than the number suggests; the code says so rather than
+pretending 5 uncorrelated experts exist. At runtime ONLY members with a stored
+CORE prediction for the fixture vote, so the Parliament self-adjusts to however
+many (3, 4 or 5) actually exist for that match — no fabrication to reach 5.
+
+b0-market is DELIBERATELY NOT a member: it is the evaluation BENCHMARK,
+closing-line and leakage-sensitive — a yardstick, not a peer. (The "market must
+also agree" safety check already lives independently in the serializer's
+MAX_SAFE_LEG_ODDS cap; the Parliament adds a MODEL-agreement cap on top.)
+
+NOTE ON THE LOCAL DB: dev.sqlite3 has ZERO ModelVersion/Prediction rows, so the
+roster above is inventoried from the CODE (the pipelines that register + persist
+each name), not from live rows. Which of the 5 are populated in PRODUCTION is a
+data question for the orchestrator; the service votes with whatever is present.
+
+
+FILES ADDED
+-----------
+  apps/predictions/parliament.py                      (~495 ln) — the service
+  apps/predictions/tests/test_parliament.py           (~355 ln) — 37 tests
+  apps/predictions/management/commands/score_parliament.py     — the runner
+
+FILES EDITED (additive, minimal)
+--------------------------------
+  apps/api/serializers_frontend.py
+     + import: `from apps.predictions import parliament`
+     + _sure_candidates() now returns parliament.apply_consensus_gate(candidates)
+       (the SINGLE safe-pool choke point — see "attach point" below)
+  config/settings.py
+     + documented PARLIAMENT_* defaults block (all getattr-read; gate default OFF)
+
+
+BLEND + AGREEMENT DESIGN
+------------------------
+Pure math (ORM-free, unit-tested on plain dicts):
+
+  selection_prob(vector, key, sel)
+      one member's settlement-space P(selection wins) in the vector's own
+      convention (AH effective = WIN/(WIN+LOSE); else the stored block value).
+      Returns None when the member does not price the selection = an ABSTENTION
+      (never a No vote). Mirrors the serializer's _row_probabilities first elem.
+
+  blend_probability(probs, calibrator=None)
+      CALIBRATED blended prob = arithmetic MEAN of the present members' already-
+      calibrated probabilities, optionally passed through a fitted calibrator
+      (any .predict([x])->[y]; e.g. calibration.IsotonicCalibrator). Identity
+      (raw mean) until an artifact is fit — the house idiom. Averaging
+      individually-calibrated diverse probs is a standard, well-behaved ensemble.
+
+  required_endorsers(n_present, cfg)  -> the K in K-of-N
+      absolute K (clamped [1,N]) if configured, else ceil(ratio*N) with a -1e-9
+      FP guard so 2/3*3 = 2 (not 3). Genuine supermajority.
+      N=3->2, N=4->3, N=5->4 at the default 2/3 ratio.
+
+  ConsensusVerdict(n_members, endorsers, required, quorum, threshold, blended_p,
+                   member_probs).consensus ==
+      blended_p is not None AND n_members >= quorum AND endorsers >= required
+      i.e. a QUORUM of voters AND a SUPERMAJORITY endorsing (p >= threshold).
+
+  build_match_consensus(vectors_by_name, cfg, calibrator)
+      -> {"consensus": {key: {sel: verdict.as_dict()}}, "meta": {...}} — the
+      persisted prob_vector. Only selections >=1 member priced appear. meta
+      carries roster, members_present, threshold/quorum/ratio/k + the honesty
+      note.
+
+
+CONFIG KNOBS (settings; every one getattr-read, safe defaults)
+--------------------------------------------------------------
+  PARLIAMENT_MEMBERS           roster (<=5)     default the diverse 5 above
+  PARLIAMENT_SAFE_THRESHOLD    endorse cutoff   default 0.80 (safe-band doctrine)
+  PARLIAMENT_QUORUM            min voters       default 3
+  PARLIAMENT_CONSENSUS_RATIO   supermajority    default 2/3 (~0.667)
+  PARLIAMENT_CONSENSUS_K       absolute K       default None (use ratio)
+  PARLIAMENT_CONSENSUS_GATE    the safe-pool gate switch   default OFF (env=1 -> on)
+  PARLIAMENT_GATE_REQUIRE_ROW  fail-closed on unscored CORE legs   default True
+  PARLIAMENT_BLEND_CALIBRATOR  optional isotonic artifact path     default None
+
+
+PERSISTENCE (parliament-v1)
+---------------------------
+score_predictions(match_ids=None, cfg, persist=True, calibrator="__default__")
+  * gathers member CORE vectors, tallies every CORE_SELECTION, stores ONE row
+    per fixture as ModelVersion "parliament-v1", market = "CONSENSUS".
+  * ensure_model_version(): parliament-v1, algo="consensus", is_active=FALSE
+    (additive — never the active serving model).
+  * KEY additivity trick: rows persist under market="CONSENSUS", NOT "CORE".
+    The frontend CORE read path (_core_vectors filters market=CORE) therefore
+    NEVER sees a Parliament row — display / top-5 / recommendation unchanged.
+  * Replaces only its OWN CONSENSUS rows; no other model touched. Idempotent.
+Runner: `manage.py score_parliament [--no-persist]` (wrapped in run_job).
+
+
+HOW IT ATTACHES TO THE SAFE POOL
+--------------------------------
+Single choke point: serializers_frontend._sure_candidates() — the SAFE-pool leg
+filter (p>=0.80 AND edge>=MIN_EDGE AND best odds<=MAX_SAFE_LEG_ODDS AND not an
+overconfident-total). It is imported + reused by EVERY safe surface:
+  serializers_cumulative_ex / _lab, serializers_daily_boom, serializers_rollover
+  and serializers_frontend's own day tables.
+Gating it once protects all of them.
+
+apply_consensus_gate(candidates):
+  * DEFAULT OFF -> identity pass-through (zero DB work) => byte-identical
+    payloads, 1500+ existing tests untouched.
+  * ON -> for each leg:
+      - OUTSIDE competence (wide families: corners/cards/halves/... which no
+        member prices) -> PASS THROUGH untouched (abstain; do not gut the wide
+        pool). Competence = the 16 CORE (market,selection) pairs.
+      - INSIDE competence -> keep iff the stored verdict.agree is True; a CORE
+        leg the Parliament never scored is dropped (fail-closed) unless
+        PARLIAMENT_GATE_REQUIRE_ROW=False.
+  Reads the precomputed verdicts via endorsement_index() (one query over the
+  stored CONSENSUS rows) — the gate consults, it does not recompute.
+
+
+TESTS (new) + RESULTS
+---------------------
+apps/predictions/tests/test_parliament.py — 37 tests, ALL PASS:
+  blend math (mean / single / empty / NaN filter / optional calibrator /
+  clip / isotonic monotone), K-of-N supermajority incl. FP-boundary + K clamp,
+  selection_prob extraction (direct / AH effective / missing / bool guard),
+  the verdict (all-agree, disagree, a MEMBER MISSING lowers N but can still
+  pass, below-quorum never passes, no-voters), persisted-vector shape + honesty
+  note, ORM persistence under the isolated CONSENSUS market (CORE untouched,
+  is_active False, idempotent), and the OPT-IN gate (default-OFF identity,
+  keep-endorsed / drop-rejected, fail-closed vs fail-open, out-of-competence
+  passthrough).
+
+Ran with the SQLite fallback (POSTGRES_HOST= .venv/Scripts/python.exe -m pytest):
+  * apps/predictions/tests/test_parliament.py .......... 37 passed
+  * apps/api/tests/test_frontend_endpoints.py ......... 84 passed (additivity)
+  * apps/api -k "cumulative|rollover|boom|wide|frontend|sure" 263 passed
+  => the gate-OFF default leaves every existing safe-pool surface unchanged.
+All changed modules byte-compile. The orchestrator should run the FULL suite.
+
+
+ONE BLUNT SENTENCE
+------------------
+The Parliament makes the SAFE pool more robust (a supermajority of diverse
+models must agree, fewer false positives) — it does NOT beat the closing line
+and gives no betting edge; model count was never the lever, information is.
+================================================================================

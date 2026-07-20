@@ -1,0 +1,514 @@
+================================================================================
+BASKETBALLPICKS — LEAGUE LIST + DATA-SOURCE MATRIX
+Definitive harvest roster for the basketball equivalent of safepicks
+Research analyst deliverable · 2026-07-19 · all sources web-verified this date
+Companion to: basketball-feasibility.txt (strategic verdict, read first)
+================================================================================
+
+--------------------------------------------------------------------------------
+(0) HOW TO READ THIS — THE STRATEGIC FRAME DRIVES LEAGUE SELECTION
+--------------------------------------------------------------------------------
+
+The feasibility memo is blunt: the MAIN market (spread/ML/total) is efficient
+EVERYWHERE — a public-data model goes market-grade and stalls, same wall as
+soccer. The ONE live edge is PLAYER PROPS / DFS PICK'EM, and it is a devig +
+line-shopping edge, not a forecasting edge. That edge is strongest exactly where
+books allocate the fewest resources: NBA neglected props on soft books, WNBA
+(softest major-sport prop market), and NCAA / EuroLeague (thin, low-attention).
+
+So league selection is weighted on TWO axes, scored per league below:
+  (A) COVERAGE value — needed for a credible market-grade predictor PRODUCT
+      (the honest deliverable) and for a broad, safepicks-style catalogue.
+  (B) EDGE value — prop-line AVAILABILITY (sportsbook props via The Odds API
+      are NBA+WNBA ONLY; everything else's props live on DFS pick'em apps) x
+      prop-line SOFTNESS (how lazy/thin the pricing is) x free PLAYER-LEVEL
+      data availability (you cannot model props without player box + minutes).
+
+KEY ASYMMETRY you must internalise before picking leagues:
+  * The Odds API sells sportsbook PLAYER PROPS for NBA + WNBA ONLY (verified
+    2026-07-19). NCAAB, EuroLeague — core markets only (spread/total/ML).
+  * DFS pick'em apps (Underdog / PrizePicks / DK Pick6) post prop lines for
+    NBA, WNBA, NCAAM/W, EuroLeague, ACB, and more — but there is NO clean paid
+    API for these; you scrape their public projection endpoints.
+  * Therefore the edge stack is: sportsbook-props leagues (NBA/WNBA) are
+    harvestable via The Odds API Business; all OTHER leagues' prop edge is a
+    DFS-app scrape problem, gated on having a free PLAYER-box data source to
+    model the neglected lines the DFS apps post.
+
+This is why the MVP is US-centric (best free player data + only sportsbook
+props) and international leagues are Phase 2/3 coverage-and-DFS plays.
+
+--------------------------------------------------------------------------------
+(1) THE FREE / CHEAP DATA-SOURCE TOOLKIT (verified 2026-07-19)
+--------------------------------------------------------------------------------
+
+These are the reusable ingestion adapters. Each maps to a safepicks-style pure
+parsing module (sources/<name>.py) — see §6. Effort ratings assume you already
+have the safepicks Django/Postgres BudgetedClient + services pattern to reuse.
+
+S1. nba_api  (swar/nba_api, PyPI, v1.11.4 Feb-2026, FREE, no key)  ***CORE***
+    - stats.nba.com wrapper. 130+ endpoints. NBA + G League + (some) WNBA.
+    - Granularity: schedule, TEAM box, PLAYER box (traditional+advanced),
+      full PLAY-BY-PLAY (playbyplayv2/v3), lineups, on/off, hustle,
+      tracking-derived AGGREGATES (NOT raw Second Spectrum x/y — paywalled),
+      minutes, usage, shot charts. This is the richest free player layer in
+      any sport you have touched.
+    - History: box/PBP effectively 1996-present; basic stats to 1946.
+    - Effort: LOW-MED. Caveat: undocumented endpoints break without notice;
+      needs browser-like headers + gentle rate limiting (~0.6s between calls).
+
+S2. hoopR / wehoop  (via sportsdataverse-py, FREE, no key)  ***CORE (breadth)***
+    - hoopR   = men's: NBA + NCAA Men's D1. wehoop = women's: WNBA + NCAA
+      Women's D1. Python entrypoint = sportsdataverse-py (espn_nba_*,
+      espn_wnba_*, espn_mbb_*, espn_wbb_* wrappers); R packages are the
+      reference impl. hoopR is ALSO a full NBA-Stats wrapper (127 fns) and a
+      kenpom.com scraper.
+    - Granularity: schedule, TEAM + PLAYER box, PLAY-BY-PLAY (with shot
+      locations where ESPN has them), rosters, standings. The ONLY free
+      turnkey PLAYER-box + PBP source for NCAA Men's AND Women's D1 — 350+
+      D1 teams, the single biggest volume in the roster.
+    - History: bulk PBP loaders ~2002-present (load_nba_pbp/load_mbb_pbp/
+      load_wbb_pbp); ESPN game data deeper for schedules.
+    - Effort: LOW for NBA/WNBA, MED for NCAA (roster/ID reconciliation across
+      350+ teams). Backed by ESPN's undocumented API (same stability caveat).
+
+S3. euroleague-api  (giasemidis/euroleague_api, PyPI, FREE, no key)  ***CORE-EU***
+    - Official EuroLeague/EuroCup swagger + extras. Modules: game_stats,
+      player_stats, team_stats, standings, shot_data, play_by_play_data,
+      boxscore_data, game_metadata, schedule.
+    - Granularity: schedule, TEAM + PLAYER box, PLAY-BY-PLAY, SHOT data,
+      PIR (the efficiency metric the memo flags as the EuroLeague modeling
+      lever). Covers BOTH EuroLeague and EuroCup.
+    - History: ~2007-present for EuroLeague; EuroCup slightly shallower.
+    - Effort: LOW. Cleanest of the international sources — an official-ish API,
+      not a scrape.
+
+S4. The Odds API  (the-odds-api.com, PAID tiers)  ***THE ODDS + PROPS ENGINE***
+    - Same vendor safepicks already integrates. Tiers (verified 2026-07-19):
+        Free    $0    25 req/day,  NBA+MLB only, h2h only.
+        Pro     $29/mo 20k req,    all 25 sports, core markets, US books.
+        Business$99/mo 200k req,   + Pinnacle + international books
+                                   + HISTORICAL archive + PLAYER PROPS.
+    - Basketball sport keys: basketball_nba, basketball_wnba, basketball_ncaab,
+      basketball_euroleague. (No basketball_nbl / _acb / _cba key — those
+      leagues are NOT in The Odds API; use API-Basketball + DFS scrape.)
+    - PLAYER PROPS: NBA + WNBA ONLY. Market keys incl. player_points,
+      player_rebounds, player_assists, player_threes, player_blocks,
+      player_steals, player_points_rebounds_assists (PRA), + alternates.
+      Requires BUSINESS tier. NCAAB/EuroLeague = core markets only, no props.
+    - History: featured markets (h2h/spreads/totals) from mid-2020; PLAYER
+      PROPS history only from 2023-05-03 at 5-min snapshots. (This thinness is
+      why the memo says validate FORWARD, not on a deep props backtest.)
+    - Effort: LOW (reuse safepicks odds client verbatim). $99/mo is the single
+      unavoidable spend and is REQUIRED for the entire edge thesis.
+
+S5. API-Basketball  (api-sports.io, FREE 100 req/day → paid)  ***INTL WORKHORSE***
+    - The DIRECT basketball analogue of API-Football (the safepicks Tier-1
+      source). 340+ leagues across 50+ countries: NBA, EuroLeague, EuroCup,
+      ACB, Lega A, Greek Basket League, Turkey BSL, France LNB, Germany BBL,
+      Adriatic ABA, VTB, Israel, NBL Australia, China CBA, Japan B.League,
+      Korea KBL, NCAA, + national-team FIBA events.
+    - Granularity: leagues, seasons, games (schedule+results), standings,
+      TEAM statistics, and a players/statistics endpoint (per game & per
+      season). PLAYER-box depth is GOOD for top European leagues, THINNER /
+      patchier for lower leagues — spot-verify per league on first sync
+      (exactly the ADR-007 caveat safepicks uses for API-Football ids).
+    - History: multi-season for major leagues; varies by competition.
+    - Effort: MED. Free 100/day mirrors API-Football's perpetual-free tier
+      (same account model). This is your ONE key to ~30 international leagues.
+
+S6. Basketball-Reference scrapers  (FREE, scrape)  ***DEEP HISTORY / BACKUP***
+    - jaebradley/basketball_reference_web_scraper (PyPI) — NBA player+team box,
+      schedule, PBP, shot charts, injuries. Rate-limited 20 req/min (the lib
+      handles the wait). GabrielPastorello/BRScraper adds G-League +
+      INTERNATIONAL leagues. vishaalagartha/basketball_reference_scraper is a
+      3rd variant.
+    - Granularity: PLAYER box + advanced, schedules, some PBP/shot charts.
+    - History: DEEPEST free NBA history (decades). Use as backfill + a
+      cross-check against nba_api, and for international box where API-
+      Basketball is thin.
+    - Effort: MED (HTML scrape, brittle, strict rate limit). Backup, not primary.
+
+S7. balldontlie  (balldontlie.io, FREEMIUM)  ***OPTIONAL CONVENIENCE***
+    - Clean REST API, Python/JS SDKs, MCP server. NBA/WNBA/NCAAB + others.
+    - Free: teams/players/games only, 5 req/min. ALL-STAR $9.99/mo adds game
+      PLAYER stats + injuries. GOAT $39.99/mo adds box scores, lineups, PBP,
+      ODDS, PLAYER PROPS, contracts.
+    - Verdict: nba_api gives you everything balldontlie's paid tiers do, for
+      free. Consider ONLY if you want a turnkey injuries/props convenience
+      feed and value the clean SDK over maintaining scrapers. NOT required.
+
+S8. ESPN hidden API  (site.api.espn.com, FREE, no key)  ***KEYLESS COVERAGE***
+    - Same keyless pattern safepicks uses for soccer breadth. Basketball slugs:
+      basketball/nba, basketball/wnba, basketball/mens-college-basketball,
+      basketball/womens-college-basketball. Scoreboard + summary (box).
+    - CRITICAL LIMIT vs soccer: ESPN's basketball coverage is US-CENTRIC.
+      International club leagues (ACB, Lega A, CBA, NBL, etc.) are NOT reliably
+      on ESPN's basketball scoreboard the way soccer leagues are. So ESPN is a
+      keyless SETTLE/schedule backstop for the 4 US competitions (and what
+      hoopR/wehoop already wrap), NOT the international breadth source. That
+      role belongs to API-Basketball (S5).
+    - Effort: LOW. Use for free results-settlement + schedule redundancy.
+
+S9. DFS pick'em scrapers  (Underdog / PrizePicks / DK Pick6)  ***EDGE VENUE***
+    - NOT a clean API. Public projection endpoints exist (Underdog
+      /beta/v5/over_under_lines, PrizePicks /projections) and are widely
+      scraped. These are where the DURABLE edge lives (memo §3: Underdog
+      advertises no limiting) AND the ONLY prop-line source for NCAA /
+      EuroLeague / international (which The Odds API does not carry).
+    - Granularity: player + stat + line + (sometimes) implied multiplier.
+      No odds/vig — pick'em lines; you devig vs the sharp consensus yourself.
+    - Effort: MED-HIGH (unofficial, ToS-grey, changes often, needs rotation/
+      backoff). Phase 2 — stand up sportsbook props (NBA/WNBA) first.
+
+Reference-only / NOT recommended for the free build (quote-only, enterprise):
+  Sportradar, Genius Sports (official NBL/many-league data — enterprise
+  licensing, $$$$, quote-only), SportsDataIO, Highlightly, Entity Sports,
+  iSports, Statorium, OpticOdds/OddsJam/Unabated odds feeds. OddsJam/StatsBench
+  are worth a SUBSCRIPTION later as the real-time devig engine (memo §3b) — but
+  as a tool, not an ingestion source.
+
+--------------------------------------------------------------------------------
+(2) THE FULL LEAGUE ROSTER — RANKED DATA-SOURCE MATRIX (35 leagues)
+--------------------------------------------------------------------------------
+
+Columns:
+  DATA      = primary FREE player-level source (fallback in parens)
+  GRAN      = best free granularity: SCHED / TEAMBOX / PLAYERBOX / PBP
+  HIST      = free history depth
+  ODDS      = The Odds API coverage: CORE (h2h/spread/total) / PROPS (player
+              props too) / NONE (not in The Odds API — DFS-scrape only)
+  EFFORT    = harvest effort Low/Med/High
+  EDGE      = edge-relevance note (why it matters for the props thesis)
+
+=== TIER 0 — US CORE (best free data + only sportsbook props + strongest edge) ===
+
+ 1. NBA
+    DATA nba_api (+hoopR, +bbref)  GRAN PLAYERBOX+PBP+tracking-aggs
+    HIST box/PBP 1996–, basic 1946–   ODDS PROPS   EFFORT Low
+    EDGE Neglected props (reb/ast/threes/blocks/steals + injury-cascade bench
+         usage) on SOFT books = memo rank #3 live edge. Deepest free data of
+         any league. Main market DEAD — model is market-grade only.
+
+ 2. WNBA
+    DATA wehoop/sportsdataverse (+nba_api partial, +bbref)  GRAN PLAYERBOX+PBP
+    HIST ~2002–                      ODDS PROPS   EFFORT Low
+    EDGE ***SOFTEST major-sport prop market*** (memo rank #2). Wild cross-book
+         dispersion (18.5 vs 21.5 pt), lines move on small money. Both
+         sportsbook props (The Odds API) AND DFS. Low limits cap absolute $.
+
+ 3. NCAA Men's D1
+    DATA hoopR/sportsdataverse (+kenpom via hoopR, +bbref)  GRAN PLAYERBOX+PBP
+    HIST ~2002–                      ODDS CORE (no props via API) EFFORT Med
+    EDGE Small-conf / weekday / conf-tourney games are soft (memo rank #4).
+         Props are DFS-ONLY (Underdog/PrizePicks carry them; The Odds API does
+         not). 350+ teams = biggest data volume; injury info patchy.
+
+ 4. NCAA Women's D1
+    DATA wehoop/sportsdataverse  GRAN PLAYERBOX+PBP
+    HIST ~2002–                      ODDS NONE/thin  EFFORT Med
+    EDGE Least-watched of the US four → softest lines, but thinnest liquidity
+         and odds coverage. DFS carries limited WNCAA. Coverage + long-tail
+         edge play; deprioritise vs the top three.
+
+ 5. NBA G League
+    DATA nba_api (G-League endpoints) (+BRScraper)  GRAN PLAYERBOX+PBP
+    HIST ~2017– (nba_api)            ODDS thin/NONE  EFFORT Med
+    EDGE Very soft, very thin. DFS occasionally posts. Coverage/depth extension
+         of the NBA pipeline (same source), low priority.
+
+=== TIER 1 — TOP EUROPE (free player data exists; props are DFS-only) ===
+
+ 6. EuroLeague
+    DATA euroleague-api (+API-Basketball)  GRAN PLAYERBOX+PBP+SHOT+PIR
+    HIST ~2007–                      ODDS CORE (no props via API) EFFORT Low
+    EDGE Softer openers; PIR-based efficiency model can exploit reputation/
+         recency pricing (memo rank #5). Props DFS-only. Best intl free data.
+
+ 7. EuroCup
+    DATA euroleague-api (+API-Basketball)  GRAN PLAYERBOX+PBP+SHOT
+    HIST ~2007– (shallower)          ODDS CORE (thin)  EFFORT Low
+    EDGE Tier below EuroLeague, softer still. Same free source. DFS-only props.
+
+ 8. Spain — Liga ACB
+    DATA API-Basketball (+BRScraper, +euroleague overlap for shared clubs)
+    GRAN PLAYERBOX (verify)  HIST multi-season  ODDS NONE  EFFORT Med
+    EDGE Top domestic league in Europe; PrizePicks/Underdog post ACB props in
+         Euro windows. DFS-only edge; needs API-Basketball player box.
+
+ 9. Italy — Lega Basket Serie A (LBA)
+    DATA API-Basketball (+BRScraper)  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Strong domestic league; DFS-only props.
+
+10. Greece — Basket League (HEBA A1 / GBL)
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Pana/Oly draw DFS lines; thin, soft.
+
+11. Turkey — Basketbol Süper Ligi (BSL)
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Deep league (EuroLeague clubs); DFS props.
+
+12. France — LNB (Betclic Élite / Pro A)
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Strong, NBA-prospect heavy; DFS props.
+
+13. Germany — easyCredit BBL
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Solid domestic; DFS props in Euro windows.
+
+14. Adriatic League — ABA Liga
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Regional (Serbia/Croatia/etc.); thin, soft.
+
+15. VTB United League
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Russia/East-Europe; low attention, soft.
+
+16. Israel — Ligat Winner (BSL)
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Maccabi in EuroLeague; DFS occasionally.
+
+17. FIBA Champions League (BCL)
+    DATA API-Basketball (+FIBA LiveStats)  GRAN TEAMBOX/PLAYERBOX (verify)
+    HIST multi  ODDS NONE  EFFORT Med  EDGE Pan-European club cup; coverage.
+
+18. FIBA Europe Cup
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Lower European cup; coverage/long-tail.
+
+=== TIER 2 — OTHER NATIONAL LEAGUES (coverage breadth; edge = thin/DFS-only) ===
+
+19. Australia — NBL
+    DATA API-Basketball (+SpatialJam shots, +ESPN-AU, +Genius quote-only)
+    GRAN PLAYERBOX (verify)  HIST multi  ODDS NONE  EFFORT Med
+    EDGE Off-season (Oct–Mar) fills the calendar; DFS posts NBL; soft.
+
+20. China — CBA
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE High-scoring, import-heavy; DFS posts CBA.
+
+21. Japan — B.League
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Growing; occasional DFS; coverage.
+
+22. South Korea — KBL
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Thin; coverage.
+
+23. Philippines — PBA
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Popular locally; thin data; coverage.
+
+24. Argentina — Liga Nacional (LNB)
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Coverage; fills S.American calendar.
+
+25. Brazil — NBB (Novo Basquete Brasil)
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Coverage.
+
+26. Lithuania — LKL
+    DATA API-Basketball  GRAN PLAYERBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Zalgiris/Rytas in Euro comps; coverage.
+
+27. Poland — Energa Basket Liga (PLK)
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Coverage.
+
+28. Serbia — KLS / Super Liga
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Overlaps ABA (top clubs); coverage.
+
+29. Belgium+Netherlands — BNXT League
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Coverage.
+
+30. UK — Super League Basketball (ex-BBL)
+    DATA API-Basketball (+FIBA LiveStats)  GRAN TEAMBOX (verify)  HIST recent
+    ODDS NONE   EFFORT Med   EDGE Coverage; thin.
+
+31. Puerto Rico — BSN
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Summer calendar filler; NBA-name imports.
+
+32. Mexico — LNBP
+    DATA API-Basketball  GRAN TEAMBOX (verify)  HIST multi
+    ODDS NONE   EFFORT Med   EDGE Coverage.
+
+33. New Zealand — NBL (Sal's)
+    DATA API-Basketball (+FIBA LiveStats)  GRAN TEAMBOX (verify)  HIST recent
+    ODDS NONE   EFFORT Med   EDGE Winter (Apr–Jul) calendar filler; coverage.
+
+=== TIER 3 — INTERNATIONAL / NATIONAL-TEAM (event-driven, coverage) ===
+
+34. FIBA senior events — World Cup / Olympics / EuroBasket / AmeriCup /
+    Continental qualifiers / U-events
+    DATA API-Basketball (+FIBA LiveStats)  GRAN TEAMBOX/PLAYERBOX (verify)
+    HIST by event  ODDS CORE for marquee events only  EFFORT Med
+    EDGE Sparse calendar spikes; softer international pricing (memo §4); some
+         DFS during World Cup/Olympics. Event-scheduled ingestion, not daily.
+
+35. NCAA lower divisions / NIT / other US college (optional long tail)
+    DATA hoopR/wehoop where ESPN carries it  GRAN SCHED/TEAMBOX  HIST recent
+    ODDS NONE  EFFORT High  EDGE Marginal; only if chasing max DFS long-tail.
+
+--------------------------------------------------------------------------------
+(3) RECOMMENDED MVP SET vs FULL ROSTER
+--------------------------------------------------------------------------------
+
+MVP (build ONLY this first — 4 leagues, ~2 free sources + 1 paid odds tier):
+  1. NBA        — nba_api          — the edge core + richest data + props
+  2. WNBA       — wehoop           — softest props market + props via API
+  3. NCAA Men D1— hoopR            — biggest volume, DFS-only props, soft tail
+  4. EuroLeague — euroleague-api   — cleanest intl data, PIR model, soft opens
+  + The Odds API BUSINESS ($99/mo) — sportsbook props for NBA/WNBA, core for
+    NCAAB/EuroLeague, Pinnacle sharp consensus for devig, historical archive.
+
+  WHY these four: they are the entire intersection of {best free PLAYER-level
+  data} x {live edge per the memo}. NBA+WNBA are the ONLY leagues with
+  sportsbook props in The Odds API; NCAAM + EuroLeague add soft, high-volume
+  DFS-prop surfaces with free player box. You can stand up the full devig +
+  paper-CLV loop on this set in the 4–8 week window the memo scopes. Start
+  even TIGHTER if needed: NBA + WNBA alone proves the sportsbook-props devig
+  engine before you add the DFS-scrape complexity for NCAA/Euro.
+
+MVP+1 (fast follow, same sources, ~zero new integration):
+  5. NCAA Women D1 (wehoop)  6. EuroCup (euroleague-api)  — free once wehoop
+  and euroleague-api adapters exist.
+
+PHASE 2 — INTERNATIONAL BREADTH (one new adapter: API-Basketball):
+  Leagues 8–18 (ACB, Lega A, Greece, Turkey, France, Germany, ABA, VTB,
+  Israel, BCL, Europe Cup). Single API-Basketball key (free 100/day, upgrade
+  if needed) unlocks all of them for a market-grade PREDICTOR catalogue +
+  DFS-prop modeling where Underdog/PrizePicks post lines. This is the
+  "safepicks 30+ leagues" coverage tier.
+
+PHASE 3 — LONG-TAIL COVERAGE + DFS SCRAPE:
+  Leagues 19–35 (NBL, CBA, B.League, KBL, PBA, LatAm, minor Europe, FIBA
+  events) via API-Basketball, scheduled per-season. Plus the DFS pick'em
+  scraper (S9) that turns all these into prop-edge venues. Calendar bonus:
+  NBL (Oct–Mar), NZ-NBL (Apr–Jul), BSN/PR (summer) fill the NBA off-season.
+
+Full roster = 35 leagues (exceeds the 30+ target). Realistic steady state
+after Phase 2 ≈ 18 actively-modeled competitions; Phase 3 adds coverage-only
+long tail that you settle + display but do not necessarily bet.
+
+--------------------------------------------------------------------------------
+(4) HARVEST-PIPELINE DESIGN (reuse the safepicks ETL wholesale)
+--------------------------------------------------------------------------------
+
+ARCHITECTURE (ports the safepicks pattern 1:1):
+  - Each source = a PURE parsing module apps/ingestion/sources/<name>.py
+    (nba_api, hoopr, euroleague, oddsapi, apibasketball, bbref, espn, dfs),
+    exactly mirroring safepicks' sources/{api_football,espn,thestatsapi}.py:
+    a LEAGUE_IDS/LEAGUE_SLUGS map, a STATUS_MAP, per-endpoint TTL constants,
+    dataclasses for parsed rows, and thin fetch fns that take an injected
+    BudgetedClient (budget/rate/backoff owned centrally, NOT per source).
+  - services_<name>.py owns persistence (ORM), tests feed recorded payloads.
+  - A unified daily orchestrator + a blocking data-quality gate (safepicks
+    already has this — 8c6c5e4). Player-box row-count + null-rate thresholds
+    per league gate the model run, just like the soccer DQ gate.
+
+PER-SOURCE INGESTION + RATE LIMITS + SCHEDULE:
+  nba_api        : ~0.6s/call self-throttle, browser headers; NIGHTLY box+PBP
+                   backfill for FINAL games (02:00 ET), plus a PRE-TIP sweep
+                   (schedule + injury report) at T-45min for lineup/minutes.
+                   TTL: schedule 30m, final box ∞ (immutable), live 0.
+  hoopR/wehoop   : ESPN-backed; NIGHTLY bulk PBP/box load per league-day.
+                   NCAA = 350+ teams → tile by date, cap-aware paging
+                   (ESPN needs groups=<big> to avoid truncation, same class
+                   of cap-guard as safepicks' ESPN 100-event subdivide).
+  euroleague-api : per-round pull on EU game days (Tue–Fri Euro evenings);
+                   schedule weekly, box/PBP post-game. Low volume, gentle.
+  The Odds API   : the ONLY hard budget. Business = 200k req/mo. Poll props
+                   for NBA/WNBA on a T-minus schedule that TIGHTENS toward
+                   tip (e.g. every 30m from T-6h, every 5m from T-30m) to
+                   catch soft-line drift; core markets every 30–60m. Cost per
+                   call = 1 x regions x markets (props are multi-market =
+                   expensive) — budget by league, reuse safepicks Priority
+                   (HIGH=props near tip, LOW=discovery). Snapshot EVERY pull
+                   to the odds archive → forward paper-CLV (memo mandate:
+                   validate forward, props history only back to 2023).
+  API-Basketball : free 100 req/day is TIGHT across 20+ leagues → cache hard
+                   (schedule TTL 6–12h), stagger leagues across the day, pull
+                   player box only for FINAL games. Upgrade tier when Phase 2
+                   coverage outgrows 100/day. Spot-verify every league id on
+                   first sync (ADR-007 pattern) — the §2 "(verify)" flags.
+  bbref          : 20 req/min HARD cap (lib enforces). BACKFILL + cross-check
+                   ONLY, run off-peak; never in the live path.
+  ESPN           : keyless; nightly results-SETTLE for the 4 US comps
+                   (flip SCHEDULED→FINAL) + schedule redundancy. TTL 15m.
+  DFS scrape     : Phase 2+. Rotate UA/proxy, backoff, poll on the same
+                   T-minus tightening schedule as props; store line + implied
+                   multiplier; NO vig (pick'em) → devig vs Pinnacle consensus.
+
+MODELING/EDGE LOOP (the actual product, per feasibility memo §8):
+  1. DEVIG + LINE-SHOP core: Pinnacle/Circa (via The Odds API Business) →
+     remove vig → fair prob → flag any soft-book / DFS line worse than fair.
+     This is the engine; your own model is OPTIONAL and used only on
+     neglected/thin lines the sharp consensus prices weakly.
+  2. Minutes → usage → Poisson/neg-binomial for pts/reb/ast/threes, with an
+     injury-cascade usage bump (star OUT → teammate usage/minutes rise). nba_api
+     gives every input free. Deploy the model layer FIRST on WNBA + neglected
+     NBA stats + NCAA/Euro DFS lines (where it beats, not just shops, the mkt).
+  3. paper_clv logger (reuse safepicks' exact module) → forward-validate vs
+     soft/DFS closing lines. Green-day / CLV reporting rides the existing
+     frontend + Redis/sessionStorage caching pattern.
+
+COST + TIMELINE: The Odds API Business $99/mo is the only mandatory spend
+(API-Basketball free until Phase 2 scale; everything else free). ~$100–300/mo
+all-in. 4–8 week MVP on the 4-league set, per the feasibility memo.
+
+--------------------------------------------------------------------------------
+(5) CRITICAL CAVEATS / QUOTE-ONLY FLAGS
+--------------------------------------------------------------------------------
+  * SPORTSBOOK PROPS = NBA + WNBA ONLY in The Odds API. Every other league's
+    prop edge is DFS-pick'em-scrape-dependent (S9) — no clean paid API exists.
+    This single fact shapes the whole build order.
+  * Props HISTORY only from 2023-05-03 → forward paper-CLV, not deep backtest.
+  * API-Basketball PLAYER-box depth is uneven below the top European leagues —
+    every "(verify)" in §2 must be confirmed on first sync before you promise
+    a league's player-prop model. Team-box + schedule + odds coverage is
+    reliable; player-box for Tier-2/3 may be schedule/team only.
+  * Undocumented feeds (nba_api, ESPN, hoopR/wehoop) can break without notice —
+    same operational risk safepicks carries; keep the DQ gate strict.
+  * Genius Sports / Sportradar / SportsDataIO = official but ENTERPRISE, quote-
+    only, NOT part of this free/cheap build. Listed for completeness only.
+  * DFS scraping is ToS-grey and brittle — treat as an operational, not a
+    contractual, data source; expect maintenance.
+  * OddsJam / StatsBench are worth a paid SUBSCRIPTION later as the real-time
+    devig ENGINE (faster than a home scraper), but are tools, not ingestion.
+
+================================================================================
+SOURCES (all verified 2026-07-19)
+--------------------------------------------------------------------------------
+Free player/stat data:
+  - nba_api            https://github.com/swar/nba_api  |  https://pypi.org/project/nba_api/
+  - hoopR / wehoop / sportsdataverse-py
+      https://hoopr.sportsdataverse.org/  |  https://wehoop.sportsdataverse.org/
+      https://sportsdataverse-py.sportsdataverse.org/  |  https://github.com/sportsdataverse
+  - euroleague-api     https://github.com/giasemidis/euroleague_api  |  https://pypi.org/project/euroleague-api/
+  - basketball_reference scrapers
+      https://pypi.org/project/basketball-reference-scraper/
+      https://github.com/vishaalagartha/basketball_reference_scraper
+      https://github.com/GabrielPastorello/BRScraper (G-League + international)
+      https://jaebradley.github.io/basketball_reference_web_scraper/api/
+  - balldontlie        https://www.balldontlie.io/  |  https://www.balldontlie.io/docs
+  - ESPN hidden API    https://gist.github.com/akeaswaran/b48b02f1c94f873c6655e7129910fc3b
+                       https://github.com/pseudo-r/Public-ESPN-API
+Odds / props:
+  - The Odds API       https://the-odds-api.com/  |  https://the-odds-api.com/sports-odds-data/nba-odds.html
+                       https://the-odds-api.com/historical-odds-data/  (props history from 2023-05-03)
+  - The Odds API NCAAB https://the-odds-api.com/sports-odds-data/ncaa-basketball-odds.html
+International league coverage:
+  - API-Basketball     https://www.api-basketball.com/  |  https://www.api-basketball.com/coverage
+                       https://api-sports.io/documentation/basketball/v1
+  - Australia NBL      https://www.nbl.com.au/stats/statistics  |  https://spatialjam.com/spatialjam-public-datasets/
+                       Genius Sports (official, quote-only) https://be.web.geniussports.com/
+DFS pick'em (edge venue, memo §3):
+  - Underdog / PrizePicks / DK Pick6 — public projection endpoints (scrape;
+    see basketball-feasibility.txt §3 sources for the strategic case)
+Enterprise/reference-only (NOT used):
+  - Sportradar https://developer.sportradar.com/basketball/reference/overview
+  - SportsDataIO https://sportsdata.io/live-odds-api  |  Entity/iSports/Highlightly/Statorium
+================================================================================

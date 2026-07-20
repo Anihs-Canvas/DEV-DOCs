@@ -1,0 +1,76 @@
+# basketballpicks local stack [bball-01 §4]: web, worker, beat, redis, postgres16.
+# Exit gate: `docker compose up` from a fresh clone works (migrate then serve).
+# NOTE: the orchestrator runs `makemigrations` at integration time; until then
+# `migrate` is a no-op for the app tables (models exist, migrations pending).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-basketballpicks}
+      POSTGRES_USER: ${POSTGRES_USER:-basketballpicks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-basketballpicks}
+    ports:
+      - "127.0.0.1:5432:5432"  # local-dev access (ingestion from host venv)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-basketballpicks} -d ${POSTGRES_DB:-basketballpicks}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build: .
+    command: sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"
+    ports:
+      - "8000:8000"
+    environment: &app_env
+      DJANGO_DEBUG: "1"
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-basketballpicks}
+      POSTGRES_USER: ${POSTGRES_USER:-basketballpicks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-basketballpicks}
+      REDIS_URL: redis://redis:6379/0
+      # live-source keys, forwarded from .env via compose ${VAR} substitution
+      # (empty default keeps the no-key-no-crash contract when a key is absent)
+      THE_ODDS_API_KEY: ${THE_ODDS_API_KEY:-}
+      ODDSJAM_API_KEY: ${ODDSJAM_API_KEY:-}
+      STATSBENCH_API_KEY: ${STATSBENCH_API_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    # core + ingestion + secondary queues [bball-01 §3]. The slow keyless
+    # nba_api pulls go on `ingestion` so they never delay the 10-min prop loop
+    # on `core`; secondary may never starve core.
+    command: celery -A config worker -Q core,ingestion,secondary -l INFO
+    environment: *app_env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: .
+    command: celery -A config beat -l INFO
+    environment: *app_env
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,404 @@
+================================================================================
+BASKETBALLPICKS — THE $0 ODDS LAYER
+Free-source sourcing + verification memo · 2026-07-19
+HARD CONSTRAINT: budget = $0. Replaces The Odds API Business tier ($99/mo) in
+bball-05-odds-settlement-validation.txt. Endpoints hit live with WebFetch where
+possible; verification status flagged per source. Read-only vs safepicks +
+basketballpicks (no code touched).
+================================================================================
+
+--------------------------------------------------------------------------------
+0. THE REFRAME THAT CHANGES EVERYTHING (read first)
+--------------------------------------------------------------------------------
+
+The paid design (bball-05) is built around one load-bearing assumption:
+"Pinnacle (eu) is the primary sharp anchor; Business tier buys it." THAT
+ASSUMPTION IS ALREADY DEAD, PAID OR NOT.
+
+  *** Pinnacle shut down public API access on 2025-07-23. *** It now serves only
+  "select high-value bettors & commercial partnerships." The Odds API LOST
+  Pinnacle as a source and publicly replaced it with Betfair Exchange, SingBet,
+  and Polymarket. So the $99/mo Business tier would NOT deliver a Pinnacle prop
+  anchor today either. [VERIFIED — odds-api.io + The Odds API blog, 2025-26]
+
+Consequence: the marginal cost of going $0 is NOT "you lose Pinnacle." Nobody
+below a commercial-partner tier has Pinnacle props anymore. The real question
+collapses to: **can a free SOFT-BOOK CONSENSUS (built from DK/FD/MGM/Caesars/
+Bovada public JSON) devig cleanly enough to beat stale DFS lines — the same
+consensus-fallback anchor bball-05 already specified in §2d, now PROMOTED from
+fallback to primary?** That is the hypothesis this memo pressure-tests (§3).
+
+One genuinely free trickle of Pinnacle STILL exists (OddsPapi resells it, 250
+full-boards/mo free — §1.D1), enough for a low-n sharp CROSS-CHECK but nowhere
+near enough to anchor a full slate. We exploit exactly that: soft-consensus for
+volume, OddsPapi-Pinnacle for an ~8-games/mo honesty audit.
+
+--------------------------------------------------------------------------------
+1. VERIFIED SOURCE INVENTORY  (grouped by the A/B/C/D the task defines)
+--------------------------------------------------------------------------------
+
+Legend for verification status:
+  [LIVE-HIT]  I hit the endpoint this session and saw the described behaviour.
+  [GATED]     endpoint exists but returned 403 to a datacenter IP / non-browser
+              UA (Cloudflare/Akamai) — works from a US residential IP + browser
+              headers, confirmed by public scrapers, NOT by me directly.
+  [DOC]       provider's own docs/marketing; not independently price-checked —
+              treat headline numbers as claims to verify on first real key.
+
+=======================  (A) SPORTSBOOK PLAYER PROPS  =======================
+The devig raw material. Need TWO-SIDED over/under per (player, market, line) so
+Shin devig can run.
+
+A1. SPORTSGAMEODDS — FREE "Amateur" tier          [DOC, strongest free structured]
+    Provides: NBA + WNBA (8 leagues) player props + team markets from 9 books
+      (FanDuel, DraftKings, BetMGM, Caesars, ESPN BET, BOVADA, Unibet,
+      PointsBet, William Hill), as clean structured JSON. Crucially ships a
+      "Fair Odds" and "Book Consensus" field ON THE FREE TIER — a pre-computed
+      devig/consensus you would otherwise build by hand.
+    Live/historical: live.
+    Limits: 10 req/min, **2,500 objects/month** (the binding constraint — an
+      "object" ≈ one market/odds record, so a full prop board burns objects
+      fast; budget it like credits).
+    Free-forever: yes, no card. No Pinnacle, no PrizePicks/Underdog on free.
+    ToS/brittleness: sanctioned API, low brittleness — the cleanest free feed
+      here. Object cap is the ceiling, not IP bans.
+    Role: PRIMARY structured soft-book prop + team feed AND a ready-made
+      consensus/fair-odds field for the anchor (§1.D2). Single best free find.
+
+A2. THE ODDS API — FREE "Starter" tier            [LIVE-HIT 401 (key required)]
+    Provides: NBA/WNBA/NCAAB player props (player_points, player_rebounds,
+      player_assists, player_threes, ..._alternate, ..._q1) for US soft books,
+      + team markets. NO Pinnacle (dropped after the 2025 shutdown; Betfair
+      Exchange/SingBet/Polymarket added instead).
+    Live/historical: live only (historical is paid, 10x multiplier).
+    Limits: **500 credits/mo.** events + sports endpoints are FREE (enumerate
+      game IDs at zero cost). Bulk team call = markets×regions (h2h,spreads,
+      totals × us = 3 credits). Per-event props = unique-markets-returned ×
+      regions. Math: 500 credits ≈ 83 team calls/mo (~2-3/day) OR ~80-100
+      single-event prop pulls/mo. A TRICKLE — one marquee game's props/day, or
+      daily team markets, not both, not a full slate.
+    Free-forever: yes. ToS: sanctioned, robust. Role: secondary/spot cross-book
+      prop + reliable team markets when SGO objects run low.
+
+A3. BOVADA public JSON (offshore)                 [LIVE-HIT — reachable, no geoblock!]
+    Provides: NBA (offseason→empty in July) + WNBA (LIVE — I pulled 3 games:
+      spread/ML/total JSON). Bovada DOES carry two-sided player props + alts
+      (confirmed via Betstamp normalization); default marketFilterId=def shows
+      team markets only — props live under the per-EVENT coupon path with a
+      props filter.
+    Endpoint (team, verified live): GET https://www.bovada.lv/services/sports/
+      event/coupon/events/A/description/basketball/wnba?marketFilterId=def&
+      preMatchOnly=true&lang=en → returns events/competitors/displayGroups with
+      American+decimal+fractional odds.
+    KEY PROPERTY: this is the ONLY book whose public JSON WebFetch reached from a
+      datacenter IP WITHOUT a 403 — i.e. it is NOT geo/UA-gated the way DK/FD are.
+      That makes Bovada the most ROBUST free book to poll from a cheap VPS.
+    Limits: none published; poll politely (1 req / 5-10 s). Free-forever
+      (unofficial). ToS/brittleness: reverse-engineered, US-legal-grey (offshore)
+      but reachable + stable. Role: consensus contributor + the reliability
+      backbone of the soft panel (works where DK/FD scrapers get blocked).
+
+A4. DRAFTKINGS / FANDUEL / BETMGM public JSON      [GATED — 403 to datacenter IP]
+    Provides: the deepest US soft prop boards (200-400 lines/night). DK path
+      family sportsbook-nash.draftkings.com/api/sportscontent/... ; FD/MGM
+      analogous. All returned 403 to WebFetch (Akamai/Cloudflare + geofence).
+    Live only. Free but FRAGILE: needs US residential IP + full browser header
+      set + rotating UA; schema changes silently; hardest to keep alive headless.
+    Role: enrich the consensus panel WHEN a residential poller exists; do NOT
+      make the pipeline depend on them — let SGO (A1) + Bovada (A3) carry it.
+
+=======================  (B) DFS PICK'EM (the thing we bet against)  ========
+B1. PRIZEPICKS public JSON                         [LIVE-HIT 403 (Cloudflare-gated)]
+    Endpoint: GET https://api.prizepicks.com/projections?league_id={id}&
+      per_page=250&single_stat=true  (partner-api.prizepicks.com variant exists).
+      Response: data[] projections (line_score=the pick'em line, stat_type=market,
+      odds_type demon/goblin/standard) + included[] players. league_id enumerated
+      via /leagues (NBA/WNBA are small integers; resolve at runtime, don't
+      hard-code — they drift).
+    Status: returned 403 to my datacenter IP (Cloudflare) — the endpoint is LIVE,
+      it just refuses non-browser/datacenter callers. Works with a browser UA +
+      residential IP (dozens of public scrapers confirm). Silently DEMOTES sharp
+      accounts after ~200 entries. Peer-to-peer "Arena" conversion (bball-04 §3d)
+      has degraded its vs-house edge.
+    Free (unofficial), brittle. Role: DFS line source #2 (P2P — lower priority).
+
+B2. UNDERDOG public JSON                           [endpoint CONFIRMED from scraper config]
+    Endpoint (verified from aidanhall21/underdog-fantasy-pickem-scraper config):
+      GET https://api.underdogfantasy.com/beta/v5/over_under_lines  with headers
+      User-Agent: Mozilla/5.0..., Accept: application/json, Accept-Language,
+      Referer: https://www.google.com/  . Returns over/under lines + payout
+      multipliers + appearance/player mapping.
+    Free (unofficial), needs browser headers; less aggressively gated than PP.
+    Underdog CLASSIC (vs-house) advertises NO limiting → per bball-04 this is the
+    PRIME durable venue. Role: DFS line source #1 (the #1 target to beat).
+
+B3. APIFY actors (managed fallback, NOT free)      [DOC]
+    zen-studio/prizepicks-player-props + underdog-player-props: pay-per-result,
+      ~$0.05/1,000 projections → ~$0.25 for an NBA slate, ~$0.60 for all leagues.
+    NOT $0, but the cheapest managed insurance if self-scraping keeps getting
+    blocked. Note it as a <$5/mo escape hatch, outside the $0 mandate.
+
+=======================  (C) TEAM MARKETS (predictor calibration)  ==========
+C1. SPORTSGAMEODDS free (A1) — team markets included, with Fair Odds/Consensus.
+C2. THE ODDS API free (A2) — h2h/spreads/totals bulk, ~2-3 league-calls/day.
+    Adds BETFAIR EXCHANGE (us/eu region) — a betting EXCHANGE = near-zero-vig
+    back/lay midpoint = a genuinely sharp-ish TEAM anchor (no props). This is the
+    closest free thing to a sharp mainline reference post-Pinnacle.
+C3. BOVADA free (A3) — team markets, datacenter-reachable.
+C4. FREE HISTORICAL DATASETS (backtest only, team markets, NOT props):
+    - sportsbookreviewsonline.com/scoresoddsarchives/nba — Excel, opening+closing
+      spreads/totals + moneylines + 2nd-half, multi-season. [confirmed]
+    - Kaggle: ehallmar/nba-historical-stats-and-betting-data;
+      cviaxmiwnptr/nba-betting-data (Oct-2007→Jun-2026); MGM-Grand set
+      (2021-22→2025-26 incl. this season to All-Star break). [confirmed]
+    Role: walk-forward backtest of the pace×efficiency TEAM model (bball-03) at
+    $0. Does NOT help props (no prop history free — forward-only stands, §5).
+
+=======================  (D) THE DEVIG ANCHOR — the hardest gap  ============
+D1. ODDSPAPI — FREE tier, the only free Pinnacle left  [DOC — verify on first key]
+    Provides: 250 requests/mo where EACH request returns the ENTIRE board for one
+      fixture — every one of ~370 bookmakers, every market, "no multiplier" —
+      INCLUDING Pinnacle + Betfair Exchange, with player props (playerName field)
+      and HISTORICAL odds free at every tier (no 10x penalty).
+    Endpoint shape: GET /v4/odds?fixtureId={id}&bookmakers=pinnacle,fanduel,...
+      (+ /tournaments, /odds-by-tournaments for enumeration).
+    Limits: **250 req/mo ≈ 8 full boards/mo** — a TRICKLE. How they still have
+      Pinnacle post-shutdown is unstated (commercial partner or site-scrape) →
+      LONGEVITY + ToS RISK; treat as could-vanish. Pinnacle's PROP menu is thin
+      anyway (it prices few props), so some pulls return Pinnacle team-only.
+    Role: **NOT a volume anchor.** Use the 250 pulls surgically — at CLOSING, on
+      your highest-conviction flagged games — to compute a low-n but REAL
+      CLV_sharp / sharp-beat audit (§4b-3 of bball-05) that soft-consensus alone
+      cannot give. It is the single thread of independent sharp truth in a $0
+      world. [Independent verification REQUIRED before relying on it.]
+
+D2. SOFT-BOOK CONSENSUS pseudo-book  (the workhorse anchor — free, built in-house)
+    The bball-05 §2d "market_consensus" fallback, PROMOTED to primary. For each
+    (player, market, line): Shin-devig every non-DFS book quoting it (SGO panel +
+    Bovada + Odds-API + any DK/FD when a residential poller exists), take the
+    sharp-weighted MEDIAN fair prob → p_fair. Line-normalize across half-points
+    (bball-05 §2b CDF repricing) before comparing to a DFS line.
+    SGO's built-in "Fair Odds"/"Book Consensus" field (A1) is a zero-effort first
+    cut of exactly this — but recompute it yourself so you control the devig
+    method + can log method-sensitivity (a 2% edge surviving only one devig
+    method is not real).
+    HONESTY TAG on every record: anchor="pinnacle" (rare, OddsPapi) vs
+    anchor="consensus" (usual) — split coverage per anchor so a consensus-only
+    stretch is read as COVERAGE, not efficiency (the bball-05 trap).
+
+D3. NOT viable free for props: Betfair Exchange (team only, no US props),
+    odds-api.io free (2 books, no consensus field), any "Pinnacle alternative"
+    vendor (all paid). Circa/BetOnline/Bookmaker have no free public JSON feed.
+
+N/A — nba_api / hoopR / wehoop / euroleague-api: rich box/PBP/minutes/usage, ZERO
+    odds. Correctly scoped in the plan as SETTLEMENT + model-input only, never a
+    price source. Free-forever, no key (nba_api), keyless. Keep as-is.
+
+--------------------------------------------------------------------------------
+2. RANKED FREE-SOURCE MATRIX
+--------------------------------------------------------------------------------
+Rank by (edge-value × reliability × free-forever confidence):
+
+ #  Source              Gives         Live? Limit          Free   Brittle  Role
+ 1  SportsGameOdds free A,C + consensus L   2.5k obj/mo    ✓✓    low      backbone
+ 2  Bovada JSON         A,C(props+team) L   polite poll    ✓     low*     robust panel
+ 3  The Odds API free   A,C + Betfair   L   500 cr/mo      ✓✓    v.low    team + spot props
+ 4  Underdog JSON       B (bet target)  L   headers        ✓     med      DFS #1
+ 5  OddsPapi free       D (Pinnacle!)   L   250 req/mo     ✓?    med(ToS) sharp AUDIT only
+ 6  PrizePicks JSON     B               L   headers        ✓     med-hi   DFS #2 (P2P)
+ 7  DK/FD/MGM JSON      A (deepest)     L   residential IP ✓     HIGH     enrich if poller
+ 8  Kaggle/SBRO hist    C (backtest)    H   n/a            ✓✓    none     team backtest
+ 9  Apify actors        B (managed)     L   ~$0.25/slate   ✗     low      <$5 escape hatch
+  *Bovada = offshore/legal-grey but technically the most datacenter-friendly.
+  ✓? = free claim not independently price-verified this session.
+
+--------------------------------------------------------------------------------
+3. THE KEY HYPOTHESIS, PRESSURE-TESTED
+   "Can free-scraped SPORTSBOOK-consensus props be a sharp-enough devig anchor to
+    beat free DFS lines — i.e. carry the whole edge at $0?"
+--------------------------------------------------------------------------------
+
+VERDICT: PARTIALLY YES — real on the liquid core, degrades to NOISE on the
+thin/model-anchored corner. Precisely:
+
+WHY IT CAN WORK (the honest positive case):
+  * You do NOT need Pinnacle-grade sharpness to beat DFS. You only need your
+    anchor to be SHARPER THAN THE DFS LINE — and DFS pick'em lines are
+    structurally staler and softer than DK/FD/MGM (they update slower, shade for
+    the house/rake, and lag the injury cascade by 15-30 min). For mainline props
+    on rotation players (PTS/PRA/REB/AST), 5+ soft books converge to within ~1-2%
+    of each other; that tight consensus IS within noise of true, and the stale
+    DFS number sitting 0.5-1.5 pts off it is a real, capturable dispersion edge.
+  * Pinnacle's disappearance is INDUSTRY-WIDE (§0): OddsJam/Outlier/Unabated are
+    ALSO devigging soft consensus now. You are not structurally disadvantaged vs
+    the paid tools on the anchor — only on speed and coverage.
+
+WHY IT DEGRADES (the honest negative case — do not wave this away):
+  * A consensus of SOFT books is not an independent sharp signal; it is the
+    average opinion of the same lazy market you are partly betting into. When all
+    the soft books are wrong in the SAME direction (correlated error — the
+    classic pre-injury-news or public-team bias), your "truth" is wrong with them,
+    and DFS may be wrong the same way. You lose the ability to distinguish "I beat
+    true probability" from "I and the softs share a blind spot." Pinnacle's whole
+    value was being the OUTSIDE price-maker that exposed exactly that shared error.
+  * You LOSE the gold-standard honesty metric. bball-05 §4b-3 / bball-04 §6a made
+    SHARP-BEAT CLV (taken price vs the SHARP's own closing fair) the verdict
+    metric. At $0 that metric can only be computed on the ~8 OddsPapi-Pinnacle
+    games/mo — orders of magnitude below the n≥500 the gate needs. The gate MUST
+    be rewritten (§4) to lean on CLV_VENUE (did the DFS/soft number itself move to
+    me) + realized ROI, with the Pinnacle pulls as a low-n bias spot-check.
+  * On the THIN corner the plan reserves for the model — WNBA obscure, NCAA
+    small-conf, blocks/steals, deep-bench, injury-cascade legs — there is NO soft
+    consensus (books disagree wildly or don't price it) AND no sharp cross-check.
+    At $99/mo you had a thin Pinnacle line to sanity-check the model there; at $0
+    you have NOTHING validating it. That cohort goes from "half-stake speculative"
+    to "display-only / unbettable" — it is pure model-vs-itself, the exact soccer
+    failure mode (confidence that correlated NEGATIVELY with CLV).
+
+BOTTOM LINE: the free soft-consensus anchor carries the LIQUID-MAINLINE-vs-DFS
+edge (the bulk of realistic $0 volume) but cannot carry the thin/model corner and
+cannot give you the sharpest honesty metric. The edge survives at maybe ~60-75%
+of the paid design's strength on the part that was ever realistically bettable
+solo — and 0% on the corner that needed the sharp line. Net: a real but
+NARROWER edge, and a WEAKER lie-detector guarding it.
+
+--------------------------------------------------------------------------------
+4. THE $0 INGESTION DESIGN (drops into bball-05 in place of the Business tier)
+--------------------------------------------------------------------------------
+
+Keep the ENTIRE bball-05 architecture (PropSnapshot model, BudgetedClient,
+per-game closing capture, prop_clv harness, pre-registered thresholds, settlement
+via nba_api). Only the SOURCES + the ANCHOR + the GATE METRIC change.
+
+4a. SOURCE STACK (multi-tenant free budgets, each its own BudgetedClient):
+    - SGO client   : 2,500 objects/mo budget. Priority-reserve floors as
+                     bball-05 (CRITICAL final-window pulls protected to the last
+                     object; LOW open sweeps sacrificed first). Primary props+team.
+    - OddsAPI client: 500 credits/mo. events FREE → enumerate IDs; spend credits
+                     on team markets daily + Betfair team anchor + a spot prop
+                     pull only on the day's marquee game.
+    - Bovada client: no formal cap, slow polite bucket, browser UA. Datacenter-
+                     safe → the always-on backbone of the soft panel.
+    - OddsPapi client: 250 req/mo budget, spent ONLY at closing on flagged
+                     marquee games (the sharp audit sample). Never on open sweeps.
+    - DFS clients (Underdog, PrizePicks): own slow buckets, browser UA + Referer,
+                     TTL cache, generous safety-ceiling "budget"; no-op skip_job
+                     on 403 (no key/endpoint → no crash, per bball-05 §2f).
+    - Optional residential DK/FD poller: enrich-only, never load-bearing.
+
+4b. THE ANCHOR (replaces "Pinnacle primary / consensus fallback"):
+    PRIMARY  = soft-book CONSENSUS pseudo-book (§1.D2): sharp-weighted median of
+               Shin-devigged fair probs across SGO panel + Bovada + Odds-API
+               (+DK/FD when available). Line-normalized via the §2b CDF reprice.
+    AUDIT    = OddsPapi Pinnacle closing pulls on flagged games (low-n CLV_sharp).
+    Every record tagged anchor="consensus"|"pinnacle"; coverage split per anchor.
+
+4c. THE GATE METRIC (rewritten for $0 — the one real design change to bball-05):
+    OLD verdict metric: SHARP-BEAT CLV vs Pinnacle close, n≥500. UNCOMPUTABLE now.
+    NEW primary metric: CLV_VENUE — signed move of the DFS/soft line itself toward
+      our pick between flag and lock (bball-05 §4b-2). A real stale-line edge
+      shows the NUMBER consistently coming to us. Pair with realized ROI-at-flag
+      and a GAME-BLOCK bootstrap CI (not i.i.d. — one game's legs are correlated).
+    SECONDARY: the OddsPapi CLV_sharp on the ~8/mo audit games — reported as a
+      bias check, NOT as the gate (n too small to gate on).
+    Re-frozen pre-registered thresholds (write once, move only via dated ADR):
+      CONFIRM cell: n≥500 settled legs AND mean CLV_venue ≥ +0.5 line-pts (or the
+        prob-equivalent) AND game-block CI lower bound > 0 AND realized-ROI CI
+        lower bound > -0.5% AND sustained ≥8 weeks AND the OddsPapi audit does NOT
+        show consensus systematically biased vs Pinnacle on the same legs.
+      KILL cell: n≥300 AND (CLV_venue CI upper bound < 0 OR realized-ROI CI upper
+        bound < 0).  HOLD otherwise. All cells DISABLED at birth.
+
+4d. CADENCE (bball-05 §5 beats, re-sourced — unchanged shape):
+    open sweep (SGO+Bovada, LOW) → hourly intraday (NORMAL) → 10-min final window
+    inside T-90m (CRITICAL, objects/credits reserved here) → per-game closing flag
+    (DB-only) + OddsPapi Pinnacle pull on flagged marquee closings → nba_api box
+    settle → weekly prop_clv on CLV_venue → monthly cell verdict.
+
+--------------------------------------------------------------------------------
+5. HONEST DEGRADATION + KILL CRITERION for the $0 path
+--------------------------------------------------------------------------------
+
+HOW MUCH THE EDGE DEGRADES vs the (already-Pinnacle-less) paid design:
+  * Liquid-mainline-vs-DFS edge: ~LITTLE degradation. SGO/Bovada consensus is
+    close to what paid Odds API Business would give (both now Pinnacle-less), so
+    on PTS/PRA/REB/AST for rotation players the $0 stack is ~85-95% as good; the
+    only real loss is SPEED (soft scrapers lag a paid push feed by seconds-minutes
+    in the injury-cascade window — where the edge is fattest, so this hurts more
+    than 5-15% sounds).
+  * Thin/model-anchored corner (WNBA obscure / NCAA / blocks-steals / deep-bench /
+    cascade): ~FULL degradation to noise. No consensus, no sharp cross-check →
+    DISPLAY-ONLY. This is a real capability loss, but bball-04 §4 already rated it
+    speculative + highest-variance, so we lose a cohort that was never bankable.
+  * Honesty harness: MODERATE degradation — verdict metric downgraded from
+    independent-sharp CLV to venue-drift CLV + a low-n Pinnacle audit. Weaker
+    lie-detector; the game-block bootstrap + the OddsPapi bias check are the
+    partial compensations.
+
+KILL-CRITERION (pre-committed; fires in ADDITION to bball-04 §6d K1-K4):
+  K5 ($0-specific): if, after the 500-leg / 8-week paper window, CLV_VENUE 95% CI
+     ≤ 0 on the LIQUID cohort (the only cohort a $0 stack can bank) → the soft
+     consensus is not sharper than the DFS line → the whole $0 thesis is dead;
+     keep the honest predictor, drop the betting claim. Do NOT rescue it by
+     lowering thresholds or by pretending the thin corner works.
+  K6 (anchor-integrity): if the OddsPapi Pinnacle audit shows soft-consensus
+     SYSTEMATICALLY biased (not merely noisy) vs Pinnacle on the same legs — i.e.
+     our "truth" is contaminated by shared soft-book error — kill immediately;
+     a biased anchor manufactures phantom edge (the deepest $0 hazard).
+  K7 (supply/feed-starvation): if Cloudflare/geo blocking on the DFS + DK/FD
+     scrapers sustains qualifying-leg supply < ~5/night, the pipeline is
+     effectively dead regardless of theoretical edge — same as bball-04 K3.
+
+--------------------------------------------------------------------------------
+6. CONCRETE EDITS TO THE PLAN
+--------------------------------------------------------------------------------
+  bball-00 §5 / §6 Phase-3 line "Odds API Business ($99/mo)": REPLACE with
+    "SportsGameOdds free (props+team+consensus) + Bovada JSON + The Odds API free
+    (team+Betfair) + Underdog/PrizePicks scrape + OddsPapi free (Pinnacle audit)".
+    Total mandatory spend to reach a verdict: **$0** (optional <$5/mo Apify
+    insurance only if scrapers get blocked). Every phase now free.
+  bball-05 §2a/2b/2d: swap SPORT_KEYS/anchor block for the §4a-4b stack above;
+    demote Pinnacle to AUDIT, promote consensus to PRIMARY.
+  bball-05 §4b/4d + bball-04 §6a/6b/6d: swap SHARP-BEAT CLV verdict metric for
+    CLV_VENUE + game-block bootstrap; add K5/K6/K7; keep everything else frozen.
+
+--------------------------------------------------------------------------------
+7. THE SINGLE BIGGEST RISK OF GOING $0
+--------------------------------------------------------------------------------
+NOT the money and NOT the scraper fragility (real but engineerable). It is the
+ANCHOR-CONTAMINATION risk: with no independent sharp price, your "true"
+probability is a devig of the same soft market you're grading against, so the
+honesty gate — the ONE discipline that separates this project from the soccer
+self-deception — can confirm a PHANTOM edge when the soft books and the DFS line
+are wrong together. The 250-req/mo OddsPapi Pinnacle audit (K6) is the only thin
+guardrail against it, and it may not survive Pinnacle's ongoing lockdown. If that
+guardrail vanishes, run the predictor and DO NOT bet.
+
+================================================================================
+SOURCES (verification status inline; hit this session 2026-07-19)
+--------------------------------------------------------------------------------
+ [LIVE-HIT] api.the-odds-api.com/v4/sports (401, live/key-gated) ;
+   docs the-odds-api.com/liveapi/guides/v4/ (events free; event-odds =
+   markets-returned×regions; historical paid 10x) ; the-odds-api.com/ pricing
+   (Starter free = 500 credits, "most bookmakers, all markets") ;
+   betting-markets.html (player_* keys, "US sports/US books", no Pinnacle).
+ [LIVE-HIT] bovada.lv/services/sports/event/coupon/events/A/description/
+   basketball/wnba?marketFilterId=def (live WNBA team-market JSON, no geoblock;
+   NBA empty in July offseason) ; props via per-event coupon (Betstamp-confirmed).
+ [LIVE-HIT 403] api.prizepicks.com/projections?league_id&per_page&single_stat
+   (Cloudflare-gated to datacenter; live w/ browser UA + residential IP).
+ [LIVE-HIT 403] sportsbook-nash.draftkings.com/api/sportscontent/... (geo/UA-gated).
+ [CONFIRMED] api.underdogfantasy.com/beta/v5/over_under_lines + required headers
+   (aidanhall21/underdog-fantasy-pickem-scraper config.json).
+ [DOC] Pinnacle public API shutdown 2025-07-23 (odds-api.io + The Odds API blog).
+ [DOC] OddsPapi free = 250 req/mo, full-board-per-request incl Pinnacle + props +
+   free historical (oddspapi.io/blog free-tier-limits + player-props-api + docs)
+   — INDEPENDENT VERIFICATION REQUIRED on first key.
+ [DOC] SportsGameOdds free = 10 req/min, 2,500 objects/mo, 9 soft books + props +
+   "Fair Odds"/"Book Consensus" fields, no Pinnacle/DFS (sportsgameodds.com).
+ [DOC] odds-api.io free = 2 books, 100 req/hr (modest; no consensus).
+ [DOC] Apify zen-studio prizepicks/underdog actors ~$0.05/1k projections.
+ [CONFIRMED] Free historical (team only): sportsbookreviewsonline.com/
+   scoresoddsarchives/nba (Excel, open+close) ; Kaggle ehallmar / cviaxmiwnptr
+   (2007→Jun-2026) / MGM-Grand (→2025-26). nba_api/hoopR = box/PBP, ZERO odds (N/A).
+================================================================================

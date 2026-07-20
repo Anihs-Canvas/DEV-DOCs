@@ -1,0 +1,95 @@
+================================================================================
+SAFE-POOL "PARLIAMENT" (K-of-N MODEL-AGREEMENT) GATE — READ-ONLY BACKTEST
+Window: settled Jan-Mar 2026 dev window (3,264 FT matches, 2,867 priced)
+Method: production serializer functions reused VERBATIM (no reimplementation)
+Date run: 2026-07-19   |   READ-ONLY, no code/git touched
+================================================================================
+
+QUESTION
+--------
+Does requiring K-of-N CORE models to AGREE on a safe pick (vs single-model
+dc-v1 selection) reduce false positives and improve the real product goal —
+the green-day 5-in-7 cadence?
+
+WHAT THE SAFE POOL ACTUALLY IS (apps/api/serializers_frontend.py)
+-----------------------------------------------------------------
+The "sure-odds" SAFE pool = _sure_candidates() over policy_rows(...,
+"statistical") — i.e. per (match, market, selection) built from ONE CORE
+prob_vector, screened by:
+  * p_win >= 0.80           (DAY_CUMULATIVE_MIN_P)
+  * best market odds <= 1.50 (MAX_SAFE_LEG_ODDS; odds are model-independent)
+  * refund-adj edge >= -0.05 (DAY_CUMULATIVE_MIN_EDGE; model-dependent via p)
+  * (market,selection) not in OVERCONFIDENT_TOTALS
+  * 1X2 and DC selections dropped (HIDDEN_MARKETS, default "statistical" view)
+Production feeds this from _core_vectors (dc-v1 preferred). The pick OUTCOME
+(WON/LOST/PUSH via engine.settle) is model-INDEPENDENT — the gate only changes
+WHICH picks are taken, never a taken pick's result.
+
+PARLIAMENT MEMBERS
+------------------
+The 3 genuine full-CORE families (produce a complete CORE prob_vector):
+  dc-v1  (2,691 matches predicted in window)  <- production base
+  dc-v2  (2,694)                               <- iteration-2 challenger
+  stack-v3 (1,343 — granular-stat leagues only)
+A model "endorses" a key if it predicted the match AND its own vector clears
+the identical safe screen. Gate selects keys with >= K endorsers.
+Green-day metrics use the codebase's own weekly_green_rollup
+(apps/backtesting/period_replay.py): green day = >=1 settled pick, >=1 win,
+0 losses; loss day = >=1 loss; plus a smoothed sliding-7-day 5-of-7 estimator.
+
+RESULTS (Jan-Mar 2026)
+----------------------
+config                legs  %base   W   L  P/V   hit%   FP%  grn los psh zero  g/pd%  wk>=5   roll5/7
+baseline dc-v1 (1of1)  232   100%  176  46  10  79.3% 19.8%  28  29   0   33    49%  1/14    6/84= 7%
+2of2 {dc1,dc2}         144    62%  113  24   7  82.5% 16.7%  34  16   1   39    67%  0/14   10/84=12%
+2of3 {dc1,dc2,stk3}    148    64%  116  24   8  82.9% 16.2%  35  16   1   38    67%  0/14   11/84=13%
+3of3 {dc1,dc2,stk3}      5     2%    5   0   0 100.0%  0.0%   3   0   0   87   100%  0/14    0/84= 0%
+
+  hit% = W/(W+L);  FP% = L/(W+L+P/V) = share of safe picks that busted;
+  grn/los/psh/zero = green / loss / push-only / zero-pick DAYS over 90 days;
+  g/pd% = green days / pick-days;  wk>=5 = ISO-weeks with >=5 green days;
+  roll5/7 = sliding 7-day windows meeting >=5 green.
+
+GATE AS A FILTER ON dc-v1's POOL (mechanism)
+--------------------------------------------
+  2of2: 144/144 selected legs were ALSO in baseline; prunes 88, admits 0 new.
+  2of3: 146/148 in baseline; prunes 86, admits only 2 new.
+  3of3: 5/5 in baseline; prunes 227.
+=> Consensus almost never ADDS picks; it is a PRUNE of dc-v1's pool. The 88
+legs pruned by 2of2 carried 22 losses = 25% loss rate, vs the pool average
+19.8% — i.e. model DISAGREEMENT is a genuine risk flag: it strips losers
+faster than winners (46->24 losses, -48%; 176->113 wins, -36%).
+
+VERDICT
+-------
+1. The 2-of-N consensus gate is a REAL reliability upgrade, not just volume
+   starvation: false-positive rate 19.8% -> 16.2% (2of3), hit rate 79.3% ->
+   82.9%, and LOSS DAYS nearly HALVED (29 -> 16). Daily green rate jumped
+   49% -> 67% and the smoothed rolling-5/7 roughly DOUBLED (7% -> 13%).
+   Green days even rose in absolute terms (28 -> 35).
+
+2. COST is ~38% of pick VOLUME (232 -> ~146 legs) and +5 zero-pick days
+   (33 -> 38). Acceptable: the pruned legs are disproportionately losers.
+
+3. BUT it does NOT deliver the headline goal. The project's own ISO-week
+   "5 green days in a week" count went 1/14 -> 0/14 — i.e. UNCHANGED / a hair
+   worse. Reason is exactly the prior green-day diagnosis: 5-in-7 fails on
+   green-day CLUSTERING, not per-pick reliability. ~35 green days over 90 days
+   (2.7/wk) simply cannot cluster to 5-in-a-calendar-week no matter how clean
+   each pick is. The gate makes each day safer; it does not concentrate green
+   days into weeks.
+
+4. 3-of-3 UNANIMITY is a non-starter: 5 legs / 90 days. Requiring stack-v3
+   (47% coverage) collapses the pool. Do not ship unanimity.
+
+BOTTOM LINE
+-----------
+Adopt 2-of-3 (or 2-of-2) as a SAFE-pool robustness gate: it halves
+false-positive loss days and lifts hit rate ~3.5pp for a ~38% volume cut,
+tightening the honesty of the "sure" label. It is worth having. It is NOT the
+5-in-7 lever — that remains a clustering problem, unchanged by consensus.
+Note: 2of3 is essentially a subset-prune of dc-v1's pool (admits ~0 new picks),
+so it changes nothing structurally in the pipeline beyond a stricter filter.
+Result is in-sample on the visible dev window; the sealed Apr-Jun quarter is
+the true confirmation.
+================================================================================

@@ -1,0 +1,548 @@
+================================================================================
+BASKETBALLPICKS — ARCHITECTURE SCAFFOLD (design doc, not a build)
+bball-01 · architect memo · mirrors the safepicks Django/Postgres/Celery stack
+Companion to basketball-feasibility.txt (the strategic verdict this obeys)
+================================================================================
+
+--------------------------------------------------------------------------------
+(0) THE ONE STRATEGIC FACT THAT SHAPES EVERY DECISION BELOW
+--------------------------------------------------------------------------------
+
+basketball-feasibility.txt is blunt: the MAIN market (spread / moneyline /
+total) is at least as efficient as soccer's. A points/pace model goes
+MARKET-GRADE and stalls at the information ceiling — do NOT rebuild the soccer
+"beat the closing line with a smarter model" thesis. The ONE live +EV door is
+PLAYER PROPS on soft books + DFS pick'em (Underdog/PrizePicks), plus WNBA / NCAA
+/ EuroLeague. And the edge there is NOT forecasting genius — it is a
+DEVIG + LINE-SHOP arbitrage: take the sharp consensus (Pinnacle/Circa), remove
+the vig to a fair probability, bet any soft/DFS price that beats fair.
+
+Consequences for the scaffold (these recur throughout):
+
+  A. The schema is PLAYER-FIRST. safepicks deliberately left Player as a bare
+     name string ("Player table is Phase 3+", ingestion/models.py header).
+     basketballpicks INVERTS that: Player, PlayerBoxScore and PropLine are the
+     first-class, high-cardinality core (200-400 prop lines/night).
+
+  B. The HERO engine is DEVIG + LINE-SHOP, not a model. safepicks' hero app
+     (`apps.safepicks`) selects "safe" picks from its own CORE model's
+     probability. Here, `apps.odds.sharp_anchor` — which in safepicks is an
+     EVIDENCE-ONLY study ("no gate verdict, no Pick writes") — is PROMOTED to
+     the live product core. The model is a SECONDARY input, used only on
+     neglected/thin lines where even the sharp consensus is weak.
+
+  C. DFS pick'em is a first-class VENUE and a new PARLAY construct. It is the
+     durable, limit-resistant home for the edge, and it needs correlated
+     2-6-leg entry math that soccer's singles-only paper ledger never had.
+
+  D. Validation is FORWARD paper-CLV, not deep backtest. Prop odds history only
+     reaches ~2023 (too thin for a "Last Dance"-grade backtest); safepicks'
+     `paper_clv.py` forward logger becomes the CENTRAL validation harness, not a
+     side experiment.
+
+--------------------------------------------------------------------------------
+(1) DJANGO APPS LAYOUT (mirror safepicks; adapt names for basketball)
+--------------------------------------------------------------------------------
+
+safepicks apps → basketballpicks apps (role kept, grain/names adapted):
+
+  core         → core         reference + results. NOW ALSO Player + box scores.
+  ingestion    → ingestion    JobRun audit, source-refs, ETL orchestrator, sources/.
+  features     → features     TeamRating(+pace); NEW PlayerForm + MinutesProjection.
+  odds         → odds         TEAM markets (spread/ML/total) + devig + sharp_anchor.
+  predictions  → predictions  ModelVersion/Prediction (team, market-grade, de-emphasised).
+  (none)       → props        *** NEW HERO DATA APP: PropMarket/PropLine/PropPrediction
+                              + the devig/line-shop engine. THE differentiator. ***
+  safepicks    → edge         *** HERO PUBLISHER: EdgeRule/EdgePick/ProductionModel/
+                              PipelineState/RiskProfile — the +EV selection + gates. ***
+  valuebets    → secondary    SecondaryModule flag registry (EuroLeague, in-play, ...).
+  backtesting  → backtesting  settle/pnl/CLV engine; forward paper-CLV emphasis.
+  portfolio    → portfolio    Bankroll/Bet (singles) + NEW DFSEntry (pick'em parlays).
+  dashboard    → dashboard    Django ops templates (reuse).
+  api          → api          DRF v1 read surface (reuse shape; new prop routes).
+
+Why props is split OUT of odds/predictions (unlike soccer, where OddsSnapshot
+lives in `odds` and probabilities in `predictions`): props are the product, are
+player-grained, are two-sided (over/under on one row), and carry their own devig
++ settlement. Giving them a dedicated app keeps them FIRST-CLASS and cohesive.
+Team-market odds stay in `apps.odds` and share the pure `odds.devig` math.
+
+INSTALLED_APPS (config/settings.py):
+    "apps.core", "apps.ingestion", "apps.features", "apps.odds",
+    "apps.props", "apps.predictions", "apps.edge", "apps.secondary",
+    "apps.backtesting", "apps.portfolio", "apps.dashboard", "apps.api",
+
+--------------------------------------------------------------------------------
+(2) CORE POSTGRES DATA MODEL (models.py sketches)
+--------------------------------------------------------------------------------
+
+Conventions carried verbatim from safepicks: DecimalField for anything
+money/odds/minutes-shaped; everything UTC; verbatim source row retained in
+`raw`; cross-source identity via *SourceRef + *Alias (never mutate another
+source's row — ADR 007). `.` = FK.
+
+========================= apps/core/models.py ==================================
+
+class League(models.Model):
+    code       = CharField(max_length=16, unique=True)   # NBA, WNBA, NCAAB, EURO
+    name       = CharField(max_length=64)
+    level      = CharField(max_length=16)                 # pro | college | intl
+    source_ids = JSONField(default=dict, blank=True)      # {nba_api:00, odds_api:basketball_nba}
+
+class Season(models.Model):
+    league     = FK(League, related_name="seasons")
+    name       = CharField(max_length=16)                 # "2025-26"
+    start_date = DateField(null=True); end_date = DateField(null=True)
+    UniqueConstraint(league, name)
+
+class Team(models.Model):
+    canonical_name = CharField(max_length=64)
+    abbreviation   = CharField(max_length=8)              # LAL, BOS, ...
+    league         = FK(League, related_name="teams")
+    conference     = CharField(max_length=16, blank=True) # East|West (nullable college/intl)
+    division       = CharField(max_length=24, blank=True)
+    UniqueConstraint(canonical_name, league)
+# TeamAlias — copy safepicks TeamAlias verbatim (source name resolution queue).
+
+class Player(models.Model):                               # *** FIRST-CLASS (soccer had none) ***
+    canonical_name   = CharField(max_length=80)
+    current_team     = FK(Team, null=True, on_delete=SET_NULL, related_name="roster")
+    primary_position = CharField(max_length=4, blank=True)  # G|F|C|G-F...
+    birthdate        = DateField(null=True, blank=True)
+    status           = CharField(max_length=16, default="active")  # active|two_way|10day|inactive
+    source_ids       = JSONField(default=dict, blank=True)          # {nba_api: 2544, ...}
+    UniqueConstraint(canonical_name, current_team)  # + PlayerAlias table (mirror TeamAlias)
+
+class Game(models.Model):                                 # the Match analog
+    SCHEDULED/LIVE/FINAL/POSTPONED status choices (mirror Match.STATUS_*)
+    season      = FK(Season, related_name="games")
+    home_team   = FK(Team, PROTECT, related_name="home_games")
+    away_team   = FK(Team, PROTECT, related_name="away_games")
+    tipoff_utc  = DateTimeField()
+    status      = CharField(...)  # SCHEDULED|LIVE|FINAL|PP
+    home_score  = PositiveSmallInt(null=True); away_score = PositiveSmallInt(null=True)
+    period_scores = JSONField(default=dict, blank=True)   # {"Q":[..], "OT":[..]}
+    num_ot      = PositiveSmallInt(default=0)             # OT changes prop-minutes math
+    venue       = CharField(max_length=64, blank=True)
+    home_rest_days = SmallInt(null=True); away_rest_days = SmallInt(null=True)  # B2B flag input
+    pace        = DecimalField(max_digits=6, decimal_places=2, null=True)  # possessions/48
+    source      = CharField(max_length=32); external_id = CharField(max_length=128)
+    raw         = JSONField(default=dict, blank=True)
+    UniqueConstraint(source, external_id); Index(tipoff_utc), Index(season, tipoff_utc)
+
+class TeamBoxScore(models.Model):
+    game = FK(Game, related_name="team_boxscores"); team = FK(Team, PROTECT)
+    is_home = BooleanField()
+    pts,reb,ast,stl,blk,tov,pf = PositiveSmallInt each
+    fgm,fga,tpm,tpa,ftm,fta   = PositiveSmallInt each
+    minutes  = DecimalField(6,1)                          # 240 (+25/OT)
+    pace     = DecimalField(6,2, null=True)
+    off_rtg  = DecimalField(6,2, null=True); def_rtg = DecimalField(6,2, null=True)
+    raw = JSONField(default=dict, blank=True)
+    UniqueConstraint(game, team)
+
+class PlayerBoxScore(models.Model):                       # *** THE differentiator table ***
+    game    = FK(Game, related_name="player_boxscores")
+    player  = FK(Player, PROTECT, related_name="boxscores")
+    team    = FK(Team, PROTECT)
+    started = BooleanField(); dnp = BooleanField(default=False)  # DNP-CD / inactive
+    minutes = DecimalField(6,2)                           # 34.5 — the master prop driver
+    pts,oreb,dreb,reb,ast,stl,blk,tov,pf = PositiveSmallInt each
+    fgm,fga,tpm,tpa,ftm,fta = PositiveSmallInt each
+    plus_minus  = SmallInt(null=True)
+    usage_rate  = DecimalField(5,2, null=True)           # USG% — the cascade signal
+    raw = JSONField(default=dict, blank=True)
+    UniqueConstraint(game, player)
+    Index(player, -game_id), Index(game, team)
+    # PRA / PR / PA / RA / double-double etc. are DERIVED from these columns at
+    # settle time (props.settle), never stored — one source of truth.
+
+class PlayByPlay(models.Model):   # OPTIONAL / DEFERRED (nba_api gives it free but
+    game=FK; period=SmallInt; game_clock=CharField; event_type=CharField           # heavy).
+    player=FK(Player,null=True); team=FK(Team,null=True); raw=JSONField
+    # Build only if in-play / minute-distribution modelling is greenlit. Mark
+    # unmounted like soccer's play-by-play scope; not needed for the props MVP.
+
+========================= apps/odds/models.py =================================
+# TEAM markets only (spread/ML/total). ~copy of safepicks OddsSnapshot, Game-scoped.
+
+class Bookmaker(models.Model):
+    name = CharField(max_length=32, unique=True)
+    is_sharp    = BooleanField(default=False)   # pinnacle, circa = True (the anchors)
+    is_dfs      = BooleanField(default=False)   # underdog, prizepicks (no-vig pick'em)
+    limits_winners = BooleanField(default=True) # DK/FD/MGM/Caesars = True; underdog=False
+    is_aggregate   = BooleanField(default=False)
+
+class OddsSnapshot(models.Model):
+    MARKET_ML="ML"; MARKET_SPREAD="SPREAD"; MARKET_TOTAL="TOTAL"
+    game       = FK("core.Game", related_name="odds")
+    bookmaker  = FK(Bookmaker, PROTECT)
+    market     = CharField(choices=...)          # ML|SPREAD|TOTAL
+    selection  = CharField(max_length=8)         # HOME|AWAY | OVER|UNDER
+    line       = DecimalField(6,2, null=True)    # spread/total number
+    decimal_odds = DecimalField(8,3)
+    captured_at  = DateTimeField(); is_closing = BooleanField(default=False)
+    UniqueConstraint(game,bookmaker,market,selection,line,is_closing,captured_at)
+    Index(game,market), Index(market,is_closing), Index(game,captured_at)
+
+========================= apps/props/models.py ================================
+#  *** THE differentiator app — design carefully ***
+
+class PropMarket(models.Model):
+    """Catalog of prop market types (the MarketRule-catalog idea, but market
+    DEFINITIONS). settle_expr maps a market to PlayerBoxScore columns."""
+    key         = CharField(max_length=24, unique=True)   # points|rebounds|assists|
+                                                          # pra|pr|pa|ra|threes|blocks|
+                                                          # steals|turnovers|double_double
+    label       = CharField(max_length=48)
+    settle_expr = CharField(max_length=64)   # "pts" | "pts+reb+ast" | "tpm" | "dd(...)"
+    is_combo    = BooleanField(default=False)             # PRA / PR etc.
+    default_active = BooleanField(default=True)
+
+class PropLine(models.Model):                             # *** the prop odds snapshot ***
+    """One book's two-sided quote for one player's one market at one instant.
+    Over AND under prices on ONE row (props are two-way — differs from
+    OddsSnapshot's one-selection-per-row). Unique key mirrors OddsSnapshot
+    but is (game,player,market,book,line,is_closing,captured_at)."""
+    game        = FK("core.Game", related_name="prop_lines")
+    player      = FK("core.Player", PROTECT, related_name="prop_lines")
+    market      = FK(PropMarket, PROTECT)
+    bookmaker   = FK("odds.Bookmaker", PROTECT)
+    line        = DecimalField(6,2)                       # 24.5
+    over_price  = DecimalField(8,3, null=True)            # decimal; DFS pick'em -> ~1.90/None
+    under_price = DecimalField(8,3, null=True)
+    payout_mult = DecimalField(6,3, null=True)            # DFS: leg payout multiplier (no vig)
+    is_closing  = BooleanField(default=False)
+    captured_at = DateTimeField()
+    source      = CharField(max_length=32); raw = JSONField(default=dict, blank=True)
+    UniqueConstraint(game,player,market,bookmaker,line,is_closing,captured_at)
+    Index(game,market), Index(player,-captured_at), Index(market,is_closing)
+
+class PropConsensus(models.Model):
+    """Devigged SHARP fair number+prob per (game,player,market,line) — the
+    line-shop benchmark. Optionally materialised (can also be recomputed at
+    read time like safepicks derives DC/DNB). anchor names WHICH sharp book."""
+    game=FK; player=FK("core.Player"); market=FK(PropMarket)
+    line        = DecimalField(6,2)
+    fair_prob_over = DecimalField(6,5)      # Shin/multiplicative-devigged sharp p(over)
+    anchor      = CharField(max_length=32)  # "pinnacle" | "circa" | "consensus"
+    is_closing  = BooleanField(default=False); captured_at = DateTimeField()
+    UniqueConstraint(game,player,market,line,anchor,is_closing,captured_at)
+
+class PropPrediction(models.Model):                       # the MODEL layer (SECONDARY)
+    """Minutes->usage Poisson/neg-binom projection for neglected/thin lines.
+    dist_params lets prob(over line) be computed for ANY line (like soccer's
+    CORE pmf being the source of truth for any AH/total)."""
+    game    = FK("core.Game", related_name="prop_predictions")
+    player  = FK("core.Player", PROTECT)
+    market  = FK(PropMarket, PROTECT)
+    model_version = FK("predictions.ModelVersion", PROTECT)
+    proj_minutes = DecimalField(6,2)                      # the master driver
+    mean    = DecimalField(7,3)                           # projected stat mean
+    dist    = CharField(max_length=16, default="neg_binom")   # poisson|neg_binom|normal
+    dist_params = JSONField()                             # {"r":..,"p":..} etc.
+    created_at = DateTimeField(auto_now_add=True)
+    UniqueConstraint(game,player,market,model_version)
+
+========================= apps/edge/models.py =================================
+#  *** HERO PUBLISHER — mirror of apps/safepicks/models.py ***
+
+class RiskProfile(models.Model):    # copy safepicks RiskProfile, retune fields:
+    staking_mode (FLAT|KELLY), flat_stake_pct, kelly_fraction  # KELLY primary for DFS legs
+    min_edge            = DecimalField(6,4)   # min EV-vs-fair to publish (e.g. 0.03)
+    max_prop_odds       = DecimalField(6,3)   # ceiling — props hold 6-10%, avoid longshots
+    max_open_picks, max_player_exposure_pct, max_game_exposure_pct
+    dfs_max_legs        = PositiveSmallInt(default=6)     # pick'em correlation cap
+    dfs_max_correlated_legs = PositiveSmallInt(default=2) # same-game leg cap
+    completeness_min, slippage_haircut, circuit_breakers=JSONField
+    # (drop soccer's min_publish_odds / floor_margin safe-band knobs)
+
+class EdgeRule(models.Model):       # mirror MarketRule — per (venue, market) cell
+    cell        = CharField(unique=True)                 # E1a ...
+    venue       = CharField(max_length=16)               # DFS | SOFTBOOK | SHARP_shop
+    prop_market = FK(PropMarket, null=True)              # null => team-market cell
+    league_level = CharField(max_length=16)              # NBA|WNBA|NCAAB|EURO
+    min_edge    = DecimalField(6,4); min_devig_prob = DecimalField(5,4)
+    book_whitelist = JSONField(default=list)             # which soft books count
+    enabled     = BooleanField(default=False)            # earns ON via forward CLV (mini-G1)
+
+class ProductionModel(models.Model):  # copy safepicks verbatim: family -> model_version_name
+                                       # families = points_thin | reb | ast | wnba_* | euro_pir
+class PipelineState(models.Model):    # copy safepicks verbatim (circuit breaker + ramp)
+
+class EdgePick(models.Model):                            # *** the product row (Pick analog) ***
+    """One published +EV pick. DEVIG-CENTRIC: the benchmark is sharp-fair, not
+    the model. prop_prediction is NULLABLE — a pure line-shop pick has no
+    model. Candidates that fail a gate write NO row (audit -> publishing JobRun)."""
+    prop_line   = FK("props.PropLine", PROTECT, null=True)   # book/line taken (null=team mkt)
+    odds_snapshot = FK("odds.OddsSnapshot", PROTECT, null=True)
+    prop_prediction = FK("props.PropPrediction", PROTECT, null=True)  # only if model helped
+    cell        = CharField(max_length=8)                # EdgeRule.cell at publish
+    venue       = CharField(max_length=16)               # DFS|SOFTBOOK
+    market_key  = CharField(max_length=24); side = CharField(max_length=8)  # OVER|UNDER|HOME
+    line        = DecimalField(6,2, null=True)
+    sharp_fair_prob     = DecimalField(6,5)              # the devig benchmark
+    book_implied_devig  = DecimalField(6,5, null=True)
+    model_prob  = DecimalField(6,5, null=True)           # secondary, when present
+    edge        = DecimalField(7,5)                      # price*fair - 1
+    ev          = DecimalField(7,5)
+    min_acceptable_price = DecimalField(6,3)             # THE floor (relines fast)
+    published_at = DateTimeField(); expires_at = DateTimeField()   # tipoff
+    status      = OPEN|WON|LOST|PUSH|VOID|EXPIRED|RETRACTED   # +PUSH (whole-number lines)
+    settled_at  = DateTimeField(null=True)
+    audit       = JSONField(default=dict, blank=True)    # full gate trail + devig inputs
+    UniqueConstraint(prop_line, cell)   # + player/game dedupe at publish
+    Index(status, expires_at), Index(-published_at)
+
+========================= apps/predictions/models.py ==========================
+# copy safepicks verbatim — ModelVersion (name/algo/metrics/artifact_uri/is_active)
+# + Prediction (game-scoped team-market prob_vector). De-emphasised: team
+# markets are market-grade, kept for CLV/calibration reference, not the product.
+
+========================= apps/features/models.py =============================
+class TeamRating   # copy safepicks (elo) + add pace/off_rtg/def_rtg rating_type rows
+class PlayerForm(models.Model):                          # NEW — rolling player state
+    player=FK; as_of_date=DateField
+    games_window=SmallInt                                 # last-N (e.g. 10)
+    minutes_avg,usage_avg,pts_avg,reb_avg,ast_avg,tpm_avg = Decimal each
+    minutes_trend = Decimal   # role change detector
+    UniqueConstraint(player, as_of_date, games_window)
+class MinutesProjection(models.Model):                   # NEW — the master prop driver
+    game=FK; player=FK; proj_minutes=Decimal; p_active=Decimal  # injury-cascade adjusted
+    source=CharField  # model|manual|vegas-implied
+    UniqueConstraint(game, player, source)
+class FeatureSnapshot  # copy safepicks (frozen vector + completeness) — game & player grain
+
+========================= apps/portfolio/models.py ============================
+class Bankroll  # copy safepicks verbatim (paper only until a gate)
+class Bet       # copy safepicks; retarget pick FK -> edge.EdgePick; add PUSH pnl path
+class DFSEntry(models.Model):                            # *** NEW — pick'em parlay ***
+    """A DFS pick'em entry: 2-6 correlated legs, fixed payout multiplier, capped
+    stake. No singles analog in soccer. Correlation-managed at build time."""
+    bankroll   = FK(Bankroll, PROTECT)
+    venue      = CharField(max_length=16)                # underdog|prizepicks|pick6
+    entry_type = CharField(max_length=8)                 # power|flex
+    legs       = ManyToManyField("edge.EdgePick", related_name="dfs_entries")
+    stake      = DecimalField(12,2); payout_mult = DecimalField(6,3)
+    placed_at  = DateTimeField(); settled_at = DateTimeField(null=True)
+    pnl        = DecimalField(12,2, null=True)
+    status     = OPEN|WON|PARTIAL|LOST|VOID               # flex allows partial hits
+
+========================= apps/ingestion/models.py ============================
+# copy safepicks: JobRun (verbatim), GameSourceRef/TeamSourceRef (rename Match->Game),
+# add PlayerSourceRef (nba_api player ids -> per-player game-log endpoint).
+class InjuryReport(models.Model):                        # NBA MANDATED feed (cleaner than soccer)
+    game=FK; team=FK; player=FK("core.Player")
+    status = CharField(max_length=16)   # OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|GTD|AVAILABLE
+    reason = CharField(max_length=128, blank=True)       # injury/rest/personal
+    reported_at = DateTimeField()  # final report ~30 min pre-tip is the critical capture
+    source = CharField; raw = JSONField
+    UniqueConstraint(source, game, player)
+    Index(player, -reported_at)
+# (drop soccer's MatchLineup/TransferRecord; starters come via InjuryReport +
+#  the box-score `started` flag; no transfer-window analog.)
+
+--------------------------------------------------------------------------------
+(3) ETL ORCHESTRATOR + CELERY-BEAT SHAPE (ingest → predict → settle → validate)
+--------------------------------------------------------------------------------
+
+Reuse apps/ingestion/etl.py WHOLESALE — same parent/child JobRun pattern, same
+no-key-no-crash / no-data-no-crash contracts (ADR 007), same blocking validate
+gate that raises non-zero on hard fail. Only the STAGE BODIES change.
+
+STAGES (adapt STAGES tuple in etl.py):
+
+  anchor   (keyless*)   nba_api: schedule -> results (Game SCHEDULED->FINAL) ->
+                        TeamBoxScore + PlayerBoxScore ingest. *nba_api needs no
+                        key but is IP/rate-limited: treat exactly like a keyless
+                        source with network tolerance (a 429/blip = counted+
+                        skipped child, never a raised run failure — the ESPN
+                        pattern in _run_espn).
+
+  props    (key-gated)  *** the money stage *** The Odds API BUSINESS:
+                        - team markets (h2h/spreads/totals) -> OddsSnapshot
+                        - player props (player_points/rebounds/assists/pra/
+                          threes/...) -> PropLine, capturing SHARP (pinnacle,
+                          circa) + soft + DFS books in one pass.
+                        Extend odds/sources/the_odds_api.py with the prop
+                        market keys; each poll window (t3d/t24/final90) mirrors
+                        soccer's t7d/t24/final2h.
+
+  enrich   (mixed)      injuries (ESPN/rotowire KEYLESS -> InjuryReport; the
+                        30-min-pre-tip final report is the highest-value poll),
+                        DFS pick'em lines (Underdog/PrizePicks scraper -> PropLine
+                        rows with payout_mult), optional real-time EV vendor
+                        (OddsJam/StatsBench) as a sharp-fair cross-check.
+
+  validate (always)     the blocking gate (validation.py adapted): prop-line
+                        coverage per slate, sharp-anchor presence (>= X% of prop
+                        lines have a Pinnacle/Circa peer to devig against),
+                        box-score completeness, minutes conservation (sum≈240+OT),
+                        stale-injury freshness. HARD FAIL -> non-zero exit +
+                        Sentry, same as soccer.
+
+SEPARATE beats (NOT in the ETL, mirroring soccer's split of predict/publish/settle):
+  predict:  MinutesProjection + PlayerForm rebuild, then PropPrediction (Poisson/
+            neg-binom) for NEGLECTED lines, then PropConsensus devig materialise.
+  publish:  edge selection -> EdgePick candidates (devig soft/DFS vs sharp-fair,
+            apply EdgeRule gates + RiskProfile rails + PipelineState breaker).
+  settle:   grade EdgePick / Bet / DFSEntry from PlayerBoxScore; compute CLV.
+
+CELERY BEAT SCHEDULE (config/celery.py — adapt cadences to NBA's evening slate;
+US tip-offs 23:00-04:00 UTC, so the live loop is overnight-heavy):
+
+  props-final90-10min      */10          soft+sharp PROP capture in the T-90m
+                                          window — THE line-shop money loop
+  props-t24-hourly         :05           further-out prop + team lines
+  props-t3d-6h             :20 */6        opening prop lines (early CLV anchor)
+  injuries-15min           */15          injury feed; the pre-tip final report
+                                          triggers the usage-cascade repricing
+  results-boxscore-15min   */15          nba_api results + box scores (live/final)
+  closing-capture-15min    3-58/15       freeze closing prop+team lines near tip
+  dfs-lines-30min          */30          Underdog/PrizePicks pick'em poll
+  daily-etl-0900           09:00 UTC     anchor->props->enrich->validate (after the
+                                          night's games are FINAL ~06:00-08:00 UTC)
+  ratings-form-daily-0930  09:30         TeamRating + PlayerForm + MinutesProjection
+  predict-daily-1000       10:00         PropPrediction (neglected lines) + PropConsensus
+  publish-daily-1030       10:30         EdgePick selection + publish
+  settle-15min             6-59/15       grade picks/bets/DFS + CLV
+  paper-clv-weekly-mon     Mon 07:45     *** FORWARD validation (central here) ***
+  monthly-model-review     1st 08:00     retrain recommendations (never writes models)
+  watchdog-30min           7,37          missed-beat watchdog (copy verbatim)
+
+Queues: keep core/secondary split; ADD an `ingestion` queue for nba_api (its
+game-log calls are slow and must never delay the 10-min prop loop on `core`).
+
+--------------------------------------------------------------------------------
+(4) DOCKER-COMPOSE + SETTINGS DELTAS FROM SAFEPICKS
+--------------------------------------------------------------------------------
+
+docker-compose.yml — near-identical (postgres:16, redis:7, web/worker/beat off
+one build). Deltas:
+  - POSTGRES_DB/USER/PASSWORD defaults: safepicks -> basketballpicks
+  - worker command adds the ingestion queue:
+        celery -A config worker -Q core,ingestion,secondary -l INFO
+    (optionally a SECOND worker service pinned to -Q ingestion so slow nba_api
+     pulls never block the core prop loop)
+  - env passthrough: swap the soccer keys for
+        THE_ODDS_API_KEY (Business tier), NBA_API_* (base/UA/rate),
+        ODDSJAM_API_KEY / STATSBENCH_API_KEY (optional EV feed),
+        UNDERDOG_* (DFS scraper knobs)
+  - Dockerfile / gunicorn / healthchecks: unchanged.
+
+config/settings.py — copy wholesale; swap the "Live data sources" block:
+  DROP:  API_FOOTBALL_*, SPORTMONKS_*, THESTATSAPI_*, ESPN_* (soccer),
+         MAX_SAFE_LEG_ODDS, BEAT_FORECAST_HORIZON_DAYS (soccer-specific)
+  ADD:
+    NBA_API_BASE_URL   = "https://stats.nba.com/stats"   # keyless, needs headers
+    NBA_API_USER_AGENT = "<browser UA>"                  # stats.nba.com 403s bots
+    NBA_API_RATE_PER_MIN = 20                            # be polite / avoid IP ban
+    THE_ODDS_API_KEY   = env("")     # Business tier REQUIRED for props+Pinnacle
+    THE_ODDS_API_PROP_MARKETS = "player_points,player_rebounds,player_assists,
+                                 player_points_rebounds_assists,player_threes,
+                                 player_blocks,player_steals"
+    THE_ODDS_API_DAILY_BUDGET = 5000   # props are credit-heavy; Business is generous
+    SPORT_KEYS = {NBA:"basketball_nba", WNBA:"basketball_wnba",
+                  NCAAB:"basketball_ncaab", EURO:"basketball_euroleague"}
+    SHARP_BOOKS = ["pinnacle","circa"]                   # the devig anchors
+    DFS_BOOKS   = ["underdog","prizepicks","pick6"]
+    DEVIG_METHOD = "shin"                                # reuse odds.devig verbatim
+    MIN_EDGE     = 0.03                                  # publish floor (EV vs fair)
+    MAX_PROP_ODDS = 3.0
+    ODDSJAM_API_KEY / STATSBENCH_API_KEY = env("")       # optional real-time EV feed
+  KEEP unchanged: DB/SQLite fallback, DRF, Celery/Redis, Sentry, notifications,
+  the frontend Redis page-cache block (retarget prefix basketballpicks_fe).
+
+requirements.txt — copy; keep numpy/scipy/pandas/scikit-learn/lightgbm/optuna
+(neg-binom + minutes model), Django/DRF/celery/redis/psycopg/gunicorn/PyYAML/
+sentry-sdk. ADD: `nba_api` (or hand-roll a stats.nba.com client on the existing
+ingestion/http.BudgetedClient — recommended, to reuse the token-bucket/budget
+audit). `requests` only if a source needs it; the stdlib-urllib BudgetedClient
+already covers The Odds API.
+
+--------------------------------------------------------------------------------
+(5) CONCRETE DIRECTORY TREE + COPY-vs-BUILD-FRESH GUIDE
+--------------------------------------------------------------------------------
+
+basketballpicks/
+  config/                 wsgi asgi urls settings celery sentry     [COPY+ADAPT]
+  manage.py pyproject.toml requirements.txt docker-compose.yml
+  Dockerfile .env.example .pre-commit-config.yaml .github/workflows/ci.yml  [COPY]
+  seeds/                  edge_rules.yaml risk_profile.yaml ramp_stages.yaml
+                          prop_markets.yaml production_models.yaml
+                          secondary_modules.yaml  mock_live/*        [ADAPT]
+  apps/
+    core/        models.py(EXTEND) admin services + tests
+    ingestion/   http.py[COPY] models.py[ADAPT] etl.py[ADAPT] validation.py[ADAPT]
+                 tasks.py services.py  sources/{nba_api.py, the_odds_api.py,
+                 dfs_underdog.py, injuries_espn.py}                  [MOSTLY FRESH]
+    odds/        models.py(Game-scoped) devig.py[COPY VERBATIM]
+                 sharp_anchor.py[ADAPT->team mkts] baseline.py services.py
+    props/       models.py[FRESH] devig_engine.py settle.py         [ALL FRESH]
+                 consensus.py  sources(reuse the_odds_api parse)  tests/
+    predictions/ models.py[COPY] engines/{base.py[COPY], calibrators.py[COPY],
+                 minutes.py[FRESH], prop_poisson.py[FRESH]}  management/
+    edge/        models.py[ADAPT from safepicks] services.py ramp.py[COPY]
+                 cadence.py[COPY] notifications.py[COPY] monitoring.py[COPY]
+    secondary/   models.py[COPY valuebets] services.py
+    backtesting/ engine.py[COPY+add prop settle] services.py tests/
+    portfolio/   models.py[COPY+DFSEntry] services.py[COPY+parlay math] tests/
+    dashboard/   views templates static                            [COPY+RESKIN]
+    api/         urls views serializers views_frontend             [COPY+PROP ROUTES]
+  frontend/      React/Vite shell[COPY]; new pages: PropBoard, EdgeToday,
+                 DFSBuilder, PlayerCard                             [SHELL COPY, pages FRESH]
+
+COPY-VERBATIM (pure/portable, zero soccer coupling):
+  odds/devig.py (Shin) · ingestion/http.py (BudgetedClient token-bucket+budget) ·
+  ingestion/models.JobRun · edge(=safepicks) ramp.py/cadence.py/notifications.py/
+  monitoring.py · predictions engines/base.py + calibrators.py · portfolio
+  Bankroll/Bet · config/sentry.py · Dockerfile/compose/CI/pre-commit.
+
+COPY-AND-ADAPT (same skeleton, rename Match->Game / soccer->basketball fields):
+  ingestion/etl.py (stage bodies) · validation.py (checks) · odds/sharp_anchor.py
+  (team markets, and it becomes the TEMPLATE for props/devig_engine.py) ·
+  odds/paper_clv.py (THE forward-CLV harness — retarget to prop picks; central) ·
+  edge/models.py (Pick->EdgePick, add devig fields, drop safe-band knobs) ·
+  features/elo.py + models.py · api/*, dashboard/*, frontend shell · settings.py.
+
+BUILD FRESH (no soccer analog — the differentiators):
+  apps/props ENTIRE (PropMarket/PropLine/PropConsensus/PropPrediction +
+  devig_engine + settle) · core Player/PlayerBoxScore/TeamBoxScore/Game models +
+  the nba_api parser · predictions/engines/minutes.py + prop_poisson.py ·
+  features PlayerForm + MinutesProjection · portfolio DFSEntry + parlay/
+  correlation math · ingestion/sources/nba_api.py + dfs_underdog.py · The Odds
+  API player-prop market parsing · InjuryReport (cascade) handling.
+
+--------------------------------------------------------------------------------
+(6) THE TOP 3 THINGS THAT DIFFER BECAUSE BASKETBALL ≠ SOCCER
+--------------------------------------------------------------------------------
+
+1. PLAYER-FIRST SCHEMA. safepicks made Match/Team the grain and left Player a
+   bare string (deferred to "Phase 3+"). basketballpicks makes Player,
+   PlayerBoxScore and the two-sided PropLine the first-class, high-cardinality
+   core (200-400 lines/night). The unit of value shifts from team-match to
+   player-game-market.
+
+2. THE HERO ENGINE IS DEVIG + LINE-SHOP, NOT A FORECASTING MODEL. In safepicks,
+   sharp_anchor.py is an evidence-only study explicitly forbidden from writing
+   Picks; the product came from the CORE model's own probabilities. Here that
+   devig-vs-sharp-consensus study is PROMOTED to the live product core (apps/
+   edge), and the model (PropPrediction) is a secondary input used only on
+   neglected/thin lines. We harvest bookmaker laziness, we do not out-forecast
+   the sharp price — because (per the feasibility memo) we cannot.
+
+3. DFS PICK'EM AS A FIRST-CLASS VENUE + PARLAY CONSTRUCT, AND FORWARD-ONLY
+   VALIDATION. safepicks is singles-only paper bets vs sportsbooks, validated on
+   a deep (2012+) odds archive. basketballpicks adds DFSEntry — correlated
+   2-6-leg pick'em combos on Underdog/PrizePicks, the durable limit-resistant
+   home for the edge — with new correlation/partial-hit staking math; and
+   because prop odds history only reaches ~2023, validation leans on the FORWARD
+   paper-CLV harness (paper_clv.py promoted to central) rather than a deep
+   backtest. (Bonus structural differences: NBA injuries are league-mandated and
+   public — a clean InjuryReport feed vs soccer's "injuries: 2 rows" — and the
+   exploitable signal is the SECOND-ORDER usage cascade onto teammates' props
+   that soft books reprice slowly across 300 lines.)
+
+================================================================================
+END bball-01
+================================================================================

@@ -1,0 +1,571 @@
+================================================================================
+BASKETBALLPICKS — CORE PREDICTION MODEL ARCHITECTURE (bball-03)
+Quantitative-modeler design memo · 2026-07-19
+Companion to: basketball-feasibility.txt (the verdict) and safepicks' dc-v1 /
+stack / calibration stack (the philosophy we mirror, NOT the math we reuse).
+Status: architecture spec, pre-build. Read bball-01/02 (data + scope) first.
+================================================================================
+
+--------------------------------------------------------------------------------
+(0) THE ONE-PARAGRAPH FRAME (why this model exists and what it must NOT promise)
+--------------------------------------------------------------------------------
+
+The feasibility verdict is binding: we will NOT beat the sharp NBA closing line
+on spread/moneyline/total with a public-data model — a pace-efficiency model goes
+MARKET-GRADE and stalls at the same information ceiling the soccer goals model
+hit (lineups, minutes intent, late injury/load-management, sharp flow). So the
+CORE team model is NOT the product. It is INFRASTRUCTURE with two honest jobs:
+  (1) be a calibrated, market-grade forecaster we can trust as a sanity anchor
+      and a devig cross-check (know when a soft book/DFS line is genuinely off
+      vs when WE are the one who is wrong); and
+  (2) produce the PLAYER-LEVEL distributions (minutes → usage → per-stat) that
+      FEED the props edge — the one genuinely-live +EV door (soft books + DFS
+      pick'em, especially neglected stats and WNBA/college).
+Every design choice below serves "calibrated and honest," never "beats the
+market." We inherit safepicks' entire calibration-first, leakage-paranoid,
+seal-the-holdout doctrine and port it wholesale; we replace the Poisson/
+Dixon-Coles GENERATIVE core because basketball is a different stochastic object.
+
+--------------------------------------------------------------------------------
+(1) WHY NOT POISSON / DIXON-COLES — the generative model must change
+--------------------------------------------------------------------------------
+
+Soccer's dc-v1 works because a soccer match is a LOW-COUNT event process: ~2.7
+goals/match, goals are rare Poisson-ish arrivals, and the interesting markets
+(O1.5, U3.5, BTTS, correct score) live in the first few integer cells — exactly
+where the tau low-score correction earns its keep. The scoreline is modeled as a
+product of two Poisson lambdas; probabilities come from a 11×11 score matrix.
+
+Basketball breaks every one of those assumptions:
+  - HIGH COUNT. An NBA team scores ~110-120 points across ~98-100 possessions.
+    You are summing ~100 near-independent possession outcomes per team per game.
+  - CENTRAL LIMIT THEOREM APPLIES. A sum of ~100 possession values is
+    approximately NORMAL. The team-score and (more usefully) the MARGIN
+    distributions are well-described by a Gaussian, not a Poisson. This is the
+    single most important modeling fact in basketball betting and it is why the
+    whole sport is modeled on a CONTINUOUS margin, not a discrete score matrix.
+  - MARGIN, NOT SCORELINE, IS THE NATURAL UNIT. Spread/ML are functions of the
+    margin distribution; total is a function of the sum distribution. There is no
+    "correct score" market worth pricing (the score-cell probabilities are
+    diffuse and nobody books them seriously). A score matrix is the wrong object.
+  - EMPIRICAL SD IS STABLE AND KNOWN. Game-to-game margin has a standard
+    deviation of ~11-13 points (practitioner consensus ~12-12.5; regression on
+    pace/efficiency explains only ~21% of MOV variance — the rest is irreducible
+    game noise, which is precisely why the market can only be matched, not beaten)
+    [thedatajocks; apbrmetrics; rstudio-pubs CBB normal-dist].
+
+CONCLUSION: the CORE generative model is a PACE × EFFICIENCY point-differential
+model whose output is a NORMAL (with a skew/t refinement, see 2d) distribution
+over MARGIN and over TOTAL. Dixon-Coles is retired for the team model. (Poisson/
+negative-binomial DOES return — but downstream, for player COUNTING stats in the
+props model, §4, where counts are low again: a player's rebounds ARE a low-count
+arrival process.)
+
+--------------------------------------------------------------------------------
+(2) THE CORE TEAM MODEL — pace × efficiency → margin+total distribution
+--------------------------------------------------------------------------------
+
+2a. THE IDENTITY (the whole model in one line)
+    Points = Possessions × Points-Per-Possession.
+    We predict the two sides separately, opponent-adjusted, then combine:
+
+      Poss_game   = f(pace_home, pace_away)                 (a rate, shared)
+      PPP_home    = g(ORtg_home, DRtg_away, context)        (offense vs defense)
+      PPP_away    = g(ORtg_away, DRtg_home, context)
+      Pts_home    = Poss_game × PPP_home
+      Pts_away    = Poss_game × PPP_away
+      MARGIN (mu_m) = Pts_home − Pts_away
+      TOTAL  (mu_t) = Pts_home + Pts_away
+
+    Ratings are expressed per-100-possessions (the standard unit) so pace and
+    efficiency are cleanly separable — the KenPom/Pomeroy/Oliver decomposition.
+    Dean Oliver's "Four Factors" (eFG%, TOV%, ORB%, FT rate) are the structural
+    decomposition of PPP and give us interpretable, opponent-adjustable
+    sub-ratings if/when we want them; v1 can operate on aggregate ORtg/DRtg.
+
+2b. POSSESSIONS (pace) — a shared rate, jointly determined
+    Possessions per game estimated from the box-score identity
+      Poss ≈ FGA − ORB + TOV + 0.44 × FTA
+    Each team has a pace tendency (possessions they impose). Because both teams
+    play the SAME number of possessions (to within one), the game pace is well
+    approximated by combining the two tendencies against league average:
+      Poss_game ≈ pace_home × pace_away / pace_league   (the "log-ish" combine)
+    Pace must ALSO be opponent-adjusted (a fast team drags a slow team up) and is
+    itself predictable — it is one of the more stable, more forecastable
+    quantities in the sport, and it is the lever the TOTAL market lives on.
+    [thedatajocks Pace&Efficiency Pt1; nbastuffer].
+
+2c. OPPONENT-ADJUSTED EFFICIENCY RATINGS (the core estimation problem)
+    Raw ORtg/DRtg are strength-of-schedule contaminated. We need ADJUSTED ratings
+    — points per 100 possessions a team would score/allow vs a league-average
+    opponent on a neutral floor. Three candidate estimators, in ascending
+    sophistication; we build (i) first and treat (ii)/(iii) as challengers under
+    the same promotion gate (§7):
+
+    (i) RIDGE-REGRESSION ADJUSTED EFFICIENCY (the v1 workhorse).
+        Treat each game's offensive output (pts/100) as
+          y = mu + off_i − def_j + home·HCA + context + eps
+        and solve the whole season's system by RIDGE (L2) regression for every
+        team's off_i and def_j simultaneously. The L2 penalty shrinks toward the
+        league mean (a prior), which is what makes early-season and thin-sample
+        (WNBA, college small-conference) ratings stable rather than wild. This is
+        the linear, transparent analog of KenPom's adjusted efficiency and the
+        college adjusted-efficiency betting models [college-hoops-data; Riordan
+        Medium; sradjoker SoS-adjustment]. Time-decay weight each game
+        (exp(-xi·days_ago)) EXACTLY like dc-v1's xi — recency matters more in a
+        roster-churn sport, and we reuse safepicks' xi-tuning grid machinery.
+
+    (ii) ELO / GLICKO POINT-DIFFERENTIAL RATING (a robust cross-check and cold-
+        start prior). A margin-aware Elo (update on MOV, not just W/L, with
+        diminishing returns on blowouts and a preseason regression toward a
+        roster-adjusted mean) is cheap, streaming, and famously well-calibrated
+        for team strength (FiveThirtyEight/Silver-style). It carries ratings
+        ACROSS seasons through the info-poor early weeks better than a within-
+        season regression, so it seeds the ridge prior in games 1-15. Kept as a
+        permanent ensemble member, not discarded.
+
+    (iii) RAPM / PLAYER-AGGREGATED RATINGS (the info-ceiling frontier and the
+        bridge to the player model). Regularized Adjusted Plus-Minus solves a
+        possession-level ridge system over the 10 players on the floor to get each
+        player's offensive/defensive per-100 impact with an informed prior
+        (L-RAPM). Team rating = sum of projected on-court players' RAPM. This is
+        the ONLY estimator that natively handles the thing that actually moves
+        lines — WHO is playing — and it is the shared spine with §4's player
+        model (DARKO/LEBRON/EPM/BPM are all RAPM-priored). It is also where the
+        information ceiling bites: RAPM is only as good as our MINUTES/lineup
+        projection, which is the private-information the market prices and we
+        approximate. Build last; it is the differentiator AND the ceiling.
+        [arxiv L-RAPM 2601.15000; John Chen RAPM; evanmiya BPR].
+
+2d. FROM POINT ESTIMATES TO A DISTRIBUTION (the deliverable)
+    The market/total markets need probabilities, so we wrap the two point
+    estimates in a predictive distribution:
+
+      MARGIN  ~ Normal(mu_m, sigma_m)      [skew-t refinement below]
+      TOTAL   ~ Normal(mu_t, sigma_t)
+
+    * sigma_m ≈ 11-13 pts is the dominant term and is EMPIRICAL, not fitted from
+      our features (our features explain only ~21% of MOV variance — the residual
+      IS sigma_m). We estimate it from historical residuals of OUR OWN model,
+      per-league (NBA ~11.5-12.5; WNBA/college differ), and let it FLEX with
+      context: sigma shrinks slightly in low-total games and for large mu (a
+      known heteroskedasticity — blowout margins fan out), and widens with
+      lineup/injury uncertainty (a genuinely valuable, honest signal — when we
+      don't know the minutes, we WIDEN, we don't bluff a tight number).
+    * sigma_t (total) is separately estimated; margin and total are only weakly
+      correlated so they are modeled as two marginals, not one bivariate (we do
+      NOT need the joint for the listed markets; if we ever price margin-total
+      combos we add a Gaussian copula).
+    * SKEW / FAT TAILS. Pure Normal is ~90% of the value. Two documented
+      refinements, added only if they earn it under calibration (§6): (a) a
+      slight fat tail (Student-t, ν≈8-10) better fits blowout/garbage-time and
+      overtime mass; (b) the KEY POINTS problem — NBA margins cluster on
+      integers and disproportionately on specific numbers, but far LESS than NFL
+      (no 3/7 spike); a smoothed empirical or a mild discretization correction
+      near whole-number spreads captures push probability honestly. These are the
+      basketball analog of dc-v1's tau low-score correction: small, targeted
+      density fixes where the money actually sits (the hook, the push).
+
+2e. DERIVING THE MARKET PROBABILITIES (all four from the two marginals)
+      Spread (home −s):   P(MARGIN > s)      = 1 − Φ((s − mu_m)/sigma_m)
+      Moneyline (home):   P(MARGIN > 0)      = 1 − Φ((0 − mu_m)/sigma_m)
+      Total over line L:  P(TOTAL > L)       = 1 − Φ((L − mu_t)/sigma_t)
+      Team total (home):  home pts ~ Normal((mu_t+mu_m)/2, sigma_teamtotal)
+                          → P(home pts > L) directly.
+      Push mass on integer lines handled by the 2d discretization; alt-lines are
+      just other L values off the SAME distribution — one distribution prices the
+      entire ladder, which is exactly the property the props/devig engine wants.
+
+2f. JUSTIFICATION VS ALTERNATIVES (why this architecture, not another)
+    * vs POISSON SCORE-MATRIX (dc-v1 ported): wrong stochastic object — CLT says
+      margin is Gaussian; a score matrix wastes effort on diffuse cells nobody
+      books and mis-prices the continuous spread ladder. Rejected on first
+      principles (§1).
+    * vs A PURE ELO: Elo gives a strong margin mean but a fixed/implicit variance
+      and NO native total, no team totals, no pace lever, no player bridge. We
+      KEEP Elo as an ensemble member and cold-start prior, but it cannot be the
+      whole model because the props product needs pace and player structure.
+    * vs A PURE ML BLACK BOX (LightGBM on margin, like safepicks' stack):
+      basketball's margin is so close to "opponent-adjusted-rating-diff + HCA +
+      rest," a monotone structural model gets ~all the signal with full
+      interpretability and stable extrapolation to thin leagues. We STILL train a
+      gradient-boosted CHALLENGER (mirroring safepicks' stack-v2) on the residual
+      — its job is to squeeze non-linear context (rest×travel interactions,
+      pace-mismatch, specific injury cascades) — but as a residual/blend
+      component under the promotion gate, never the un-inspectable primary. This
+      is precisely safepicks' dc-v1-primary + stack-challenger + market-blend
+      shape, re-instantiated on a Gaussian core.
+    * NET: a structural pace×efficiency Gaussian model = interpretable, thin-
+      league-robust, natively prices the whole ladder, and shares its spine (RAPM)
+      with the player model. It is the right CORE; ML and market are blend layers.
+
+--------------------------------------------------------------------------------
+(3) FEATURES — and the free-derivable vs info-ceiling-blocked split
+--------------------------------------------------------------------------------
+
+The honest dividing line (the whole feasibility thesis in one table): features
+we can DERIVE from free public data move us toward market-GRADE; the features
+that would beat the market are INFORMATION we get late/noisily or not at all.
+
+FREE-DERIVABLE (nba_api / box scores / schedule — we can be as good as anyone):
+  - Adjusted ORtg / DRtg (ridge, §2c)          — the core signal.
+  - Pace / possessions (box-score identity)    — stable, forecastable.
+  - Home-court advantage (~2.0-2.7 pts NBA,     — declining historically; fit
+    fit per-league; smaller than it was)          per-season, don't hardcode.
+  - REST / SCHEDULE (fully known in advance):
+      * Back-to-back (2nd night): defense sags ~+1.5-2.5 pts/100 allowed; a B2B
+        team loses ~1.8 pts on the spread; rested home vs B2B covers >55%. Totals
+        can dip (fatigue slows pace). These are ROBUST, publicly-known, and
+        already largely in the closing line — we include them to MATCH the line,
+        not to beat it. [nbastuffer; heatcheckhq; inpredictable].
+      * 3-in-4 nights, 4-in-6, days-rest differential (relative-rest index),
+        second-game-of-road-trip — all schedule-derivable, all small (1-3 pts).
+  - TRAVEL / altitude (Denver), time-zone shift, road-trip length — derivable
+    from schedule+geo; small but real, and cheap.
+  - RECENT FORM — handled by the time-decay weights (xi) on the ratings, NOT as a
+    naive "last-10" feature (which is mostly noise + variance-chasing; the
+    feasibility memo's warning against confusing predictability with edge). We
+    trust decayed opponent-adjusted ratings over hot-hand narratives.
+
+INFO-CEILING-BLOCKED (this is why we can't beat the main line — be blunt):
+  - MINUTES / ROTATION INTENT — the master variable for BOTH the team RAPM
+    rollup and every player prop. Officially unknown until tip; load-management
+    and blowout garbage-time are semi-random. We can PROJECT it (§4a) but the
+    market prices the coach's actual plan, which we don't have.
+  - LATE INJURY / LOAD-MANAGEMENT declarations — league-mandated reports help
+    (NBA is far more transparent than soccer, feasibility §5) but the DECISIVE
+    final bulletin lands 15-30 min pre-tip and swings the main line 4-5 pts
+    within MINUTES. Transparency denies the insider an edge; it does not hand us
+    one on the main line. Its ONLY exploitable residue is the slow second-order
+    prop cascade onto teammates (the props door, §4d).
+  - STARTING LINEUP CONFIRMATION, in-game adjustments, matchup-specific game
+    plans, sharp money flow — all priced faster than we can act.
+
+DESIGN CONSEQUENCE: the core model's sigma_m must WIDEN under lineup uncertainty
+(2d) so that "we don't know who's playing" shows up as honest doubt, not false
+confidence. The model that says "I'm 92% here" when a star is questionable is the
+exact failure mode safepicks' band-bias metric was invented to catch.
+
+--------------------------------------------------------------------------------
+(4) THE PLAYER MODEL FOR PROPS — the differentiator
+--------------------------------------------------------------------------------
+
+This is the reason the project exists. It is a hierarchical, distributional
+projection: MINUTES → USAGE/OPPORTUNITY → PER-STAT RATE → per-prop DISTRIBUTION.
+We do not output a point estimate; we output a full distribution per stat so we
+can price ANY line and any alt-line and devig against soft books/DFS.
+
+4a. MINUTES PROJECTION (the ceiling on everything — and the hardest part)
+    "Minutes is the ceiling on everything else": no counting stat can exceed the
+    opportunity minutes provide [rotogrinders; nbastuffer]. Model a player's
+    minutes as a DISTRIBUTION, not a number:
+      - Baseline from decayed recent minutes (role), conditioned on games where
+        the same teammates were active/inactive (lineup-state conditioning).
+      - Blowout risk (garbage-time haircut) driven by the CORE model's margin
+        distribution — favorites' starters have a left tail; this is a real
+        linkage where the team model feeds the player model.
+      - Foul-out / injury-exit hazard (thin tail).
+      - Back-to-back / rest load-management haircut for veterans.
+      - Output: a minutes distribution (e.g. a censored/truncated Normal or a
+        small mixture) whose UNCERTAINTY is the dominant driver of prop variance.
+    This is the info-ceiling made concrete: our minutes distribution is our
+    biggest edge on neglected lines AND our biggest source of honest error.
+
+4b. USAGE / OPPORTUNITY LAYER
+    Given minutes, convert to opportunity:
+      - USG% (share of team possessions a player ends via FGA, FTA-trip, TOV);
+        starters 18-25%, primaries 27-32%, stars 33%+ [nba.com/stats; nbastats
+        forbetting]. Usage is fairly stable per role and SHIFTS predictably when
+        a teammate is out (the cascade, 4d).
+      - Team possessions available = CORE model's Poss_game (the pace lever again
+        links team→player).
+      - Per-position/scheme rates for the non-usage stats: rebound chances (team
+        & opponent ORB/DRB rates × minutes), assist opportunity (teammate FG made
+        while on floor), 3PA rate.
+
+4c. PER-STAT DISTRIBUTIONS (the right distribution per stat — this is the craft)
+    Counting stats are LOW-COUNT again → discrete arrival models return:
+      - POINTS: a COMPOUND distribution, not a single family. Points =
+        2·(2P made) + 3·(3P made) + (FT made). Model FGA (≈ minutes×usage×pace)
+        then makes as Binomial given attempts and a matchup-adjusted FG%/3P%,
+        plus FT trips×FT%. Convolve → an approximately-Normal-but-lumpy points
+        distribution (the 3-pointer adds discrete 3-point jumps and fat right
+        tail). Points variance is dominated by SHOOTING luck — the least
+        "modelable" of the big three, which is exactly why books price points
+        MOST carefully and the neglected stats (below) are softer.
+      - REBOUNDS: NEGATIVE BINOMIAL. Counts are overdispersed vs Poisson
+        (variance > mean; VMR > ~1.3 for volatile roles) driven by role
+        volatility [dumbmoneypicks VMR; squared2020 NB regression]. Rebounds are
+        the MOST predictable counting stat — tightly tied to minutes, position,
+        and opponent rebounding rate — the single best prop-modeling target.
+      - ASSISTS: NEGATIVE BINOMIAL, mean = f(minutes, usage, teammate FG%). More
+        predictable than points in EXPECTATION (opportunity-driven) but carries an
+        irreducible teammate-shooting-luck term (a PG's assists swing on whether
+        shooters hit) — so we model it but keep honest wide intervals.
+      - THREES MADE: Binomial(3PA, 3P%) or Negative Binomial — but HIGH VARIANCE
+        (make/miss luck dominates); modelable in mean, noisy in outcome.
+      - BLOCKS / STEALS: Poisson/NB with LOW rate (0.5-1.5), so nearly ALL the
+        distribution mass is shooting-luck-like noise; these are the least
+        predictable-in-outcome (§5).
+      - PRA and other COMBOS (P+R, P+A, R+A): SUM of correlated marginals. Do NOT
+        just add point estimates — convolve the distributions WITH their
+        correlation (minutes is the shared driver, so components are positively
+        correlated; a big-minutes night lifts all three). A Gaussian copula on
+        the per-stat marginals, correlation estimated per archetype, gives the
+        combo distribution. Combos have LOWER relative variance than components
+        (one category compensates another) — which is why P+R is a favored,
+        more-calibratable target [hownbabettingwork; propellerpicks].
+
+4d. THE INJURY CASCADE (the second-order edge the feasibility memo flagged)
+    When a starter is ruled out, the MAIN line reprices in minutes (no edge), but
+    the redistribution of his ~30 minutes and ~28% usage onto teammates is
+    repriced SLOWLY and UNEVENLY across 200-400 prop lines. Our model handles
+    this natively BECAUSE it is hierarchical: remove the player from the lineup
+    state, re-solve minutes (his minutes flow to specific teammates by
+    role/position), bump their usage, re-project. This is the one place a real
+    model beats a lazy book rather than merely shopping it — and it is a direct,
+    mechanical output of the minutes→usage→rate chain, not a bolt-on.
+
+4e. WHAT THE PLAYER MODEL IS FOR (keep the feasibility frame front of mind)
+    The player distributions feed the DEVIG/LINE-SHOP engine (bball-04, separate
+    memo): sharp consensus (Pinnacle/Circa) → fair prob → flag soft-book/DFS
+    drift. Our model is OPTIONAL on well-covered points lines (the market is
+    sharp there) and DECISIVE on NEGLECTED lines (rebounds/assists/threes/bench-
+    cascade, WNBA, college) where even the sharp consensus is thin — that thin-
+    market slice is the only place modeling beats rather than shops the market.
+
+--------------------------------------------------------------------------------
+(5) CALIBRATE vs NOISE — the honest market map (the basketball analog of soccer's
+    cards/BTTS anti-predictive verdict)
+--------------------------------------------------------------------------------
+
+Soccer's lesson: some markets are genuinely calibratable, others are efficient/
+anti-predictive at the price and confidence there is a TRAP (cards went -0.8% →
+-14.4% ROI as model confidence rose). The basketball map:
+
+CAN CALIBRATE WELL (tight reliability, low band-ECE achievable; MARKET-GRADE — we
+match the line, we do not beat it, and we say so):
+  - Full-game SPREAD, MONEYLINE, TOTAL — the CLT-Gaussian core prices these
+    cleanly and calibration is excellent. Expect market-grade, ~0 edge net of
+    vig. Value = a trustworthy anchor + devig cross-check, not a bet signal.
+  - TEAM TOTALS — same distribution, slightly wider; calibratable.
+  - REBOUNDS props — the single best-calibrating player market (minutes+position
+    +opponent-rate driven, NB-modelable). Prime target.
+  - POINTS props and P+R / PRA combos — calibratable in expectation; combos
+    especially because summing correlated stats shrinks relative variance. Points
+    alone carries shooting variance but the LINE is modelable even if the outcome
+    is noisy (calibration is about the probability, not certainty of outcome).
+  - ASSISTS props for high-usage lead guards — calibratable mean, honest-wide
+    intervals; secondary players' assists are noisier.
+  - MINUTES / "to record a double-double" for entrenched stars — the stable end.
+
+CANNOT CALIBRATE / NOISE / ANTI-PREDICTIVE (the cards/BTTS analogs — model
+confidence here is the trap; we DISPLAY-ONLY or EXCLUDE, never bet our own edge):
+  - BLOCKS and STEALS props — rare-event (rate 0.5-1.5), variance-dominated;
+    books "struggle to price precisely" but so do WE — outcome is mostly luck.
+    Devig/line-shop them if the market disagrees, but NEVER trust our point
+    projection as an edge. Highest-noise counting stats.
+  - THREES-MADE props — modelable mean, but make/miss luck dominates the outcome;
+    treat like points-with-extra-variance, lean on devig not model conviction.
+  - FIRST-BASKET / FIRST-TO-SCORE, exact-stat, "player to score in every
+    quarter," race-to-N-points — near-pure noise / novelty; the basketball
+    equivalent of exotic soccer corner/card derivatives. EXCLUDE from any model-
+    edge claim.
+  - QUARTER / HALF sub-totals and sub-margins — thinner samples, more variance,
+    and the lineup/rotation noise is proportionally larger; calibratable in
+    principle but low priority and easy to over-trust. Display-only until proven.
+  - LIVE / IN-GAME everything — out of scope; a different (and adversarial) game.
+
+THE RULE (ported from safepicks' "sot display-only," "cards marginal" doctrine):
+a market enters the SAFE/edge pool ONLY after it clears the calibration gate on a
+held-out window (§6). Blocks/steals/threes/first-basket are display-or-devig-only
+by default. We do not repeat the soccer cards mistake of letting a confident-
+looking-but-anti-predictive market into the trusted pool.
+
+--------------------------------------------------------------------------------
+(6) CALIBRATION — ported wholesale from safepicks, extended for distributions
+--------------------------------------------------------------------------------
+
+We inherit safepicks' calibration stack verbatim in PHILOSOPHY and largely in
+code shape (calibration.py, metrics.py), extended for the continuous-distribution
+outputs basketball adds.
+
+6a. PROBABILITY CALIBRATION (binary markets: each side of spread/ML/total/prop)
+    Same three-candidate, held-out-selected machinery as safepicks:
+      - IdentityCalibrator (no-op; calibration must never make it worse),
+        IsotonicCalibrator (step function, breakpoints persisted),
+        BetaCalibrator (Kull et al. logistic on log-odds features).
+      - Fit on the chronological first ~70% of walk-forward predictions, judge on
+        the held-out ~30%; pick the winner per (league, market/line, side).
+      - THE gate metric is BAND-ECE / BAND-BIAS in the operating band [0.80,0.98)
+        with the signed-bias scalar that "directly corrupts EV" — safepicks'
+        exact insight that a model can look globally calibrated and still be 3pts
+        optimistic at 0.90, which at prop odds is the whole margin. We keep the
+        equal-mass ECE estimator (band samples are small; equal-width bins have a
+        noise floor above the 0.02 gate).
+      - Per-line calibration for props EXACTLY like totals_calibration.py fits
+        per-(line,side) isotonic for OU15/25/35: rebounds-over-7.5 is a different
+        calibration cell from rebounds-over-9.5. Artifact-gated, identity until
+        fit, gitignored + regenerated.
+
+6b. DISTRIBUTIONAL CALIBRATION (new for basketball — the Gaussian core & player
+    distributions must be calibrated AS DISTRIBUTIONS, not just at one line)
+      - PIT / PROBABILITY-INTEGRAL-TRANSFORM histograms: for each realized margin/
+        total/stat, compute F_pred(actual); if the predictive distribution is
+        honest, PITs are Uniform(0,1). A U-shaped PIT = overconfident (sigma too
+        small — the exact failure the feasibility memo warns about); a hump =
+        underconfident. This is the CONTINUOUS analog of a reliability curve and
+        it directly validates our sigma choices in §2d/§4a.
+      - CRPS (Continuous Ranked Probability Score) as the primary distributional
+        scoring rule — the proper-scoring generalization of Brier to a full
+        predictive distribution; used to compare candidate sigma models and skew/
+        t refinements, and to compare us vs the market-implied distribution.
+      - A calibrated sigma is the whole ballgame for props: get the MEAN right and
+        the WIDTH wrong and every over/under is mispriced. PIT/CRPS gate every
+        refinement in §2d and §4.
+
+6c. WHAT WE REPORT (the safepicks metric suite, per market, per league):
+      Brier, full-range ECE, band-ECE, band-bias, log-loss, reliability curve —
+      PLUS CRPS and PIT for the distributional outputs — PLUS the market-relative
+      number (below). Calibration artifacts are versioned JSON, gitignored,
+      regenerated by a `calibrate_*` command, loaded process-cached with mtime
+      invalidation (totals_calibration.py pattern).
+
+--------------------------------------------------------------------------------
+(7) MODEL VERSIONING + BACKTEST / FORWARD-VALIDATION PLAN
+--------------------------------------------------------------------------------
+
+7a. VERSIONING (mirror safepicks' ModelVersion + champion/challenger)
+    - Named ModelVersion rows: core-v1 (ridge pace×efficiency Gaussian),
+      elo-v1 (ensemble member), stack-v1 (gbm residual challenger), blend-v1
+      (core + market prior), player-v1 (minutes→usage→rate). Each carries algo,
+      feature_set_version, train_window, artifact_uri, metrics, is_active — the
+      exact safepicks schema. is_active flips ONLY on human promotion review.
+    - CHAMPION/CHALLENGER PROMOTION GATE (safepicks ml/promotion.py, ported):
+      a challenger promotes ONLY when it beats the champion on (a) held-out band-
+      bias / band-ECE (and CRPS for distributions), (b) per-market MBI, and
+      (c) flat-stake yield / paper-CLV, over >= 2 seasons across >= 3 leagues.
+      No single-metric promotions; no promotion on the development window alone.
+
+7b. WALK-FORWARD BACKTEST (the only honest backtest — safepicks discipline)
+    - Seasonal walk-forward folds: fold i fits STRICTLY on games before cutoff_i
+      and predicts forward (training.walk_forward_folds shape). Ratings, sigma,
+      calibrators, blend weights — everything is fit only on the past. A burn-in
+      minimum (dc-v1 uses 130 matches; basketball: ~10-15 games/team early-season,
+      leaning on the Elo prior through burn-in) before the first real prediction.
+    - Recency weighting (exp decay, xi) inside every fold, tuned per league on
+      out-of-sample log-loss/CRPS on EARLY seasons only (tune_dc pattern).
+
+7c. THE LEAKAGE BOUNDARY (ADR-006 doctrine, non-negotiable)
+    - CLOSING odds are the BENCHMARK, never an input. Any pre-closing market
+      prior used in blend-v1 is is_closing=False ONLY, enforced twice (ORM filter
+      + a LeakageError raise on any closing flag) — the belt-and-braces pattern
+      from blend.py. B0/closing is the yardstick we measure against, full stop.
+    - MINUTES/lineup features must use only information available pre-tip at the
+      prediction timestamp — no post-hoc actual-minutes leakage into training
+      targets vs features. (Actual minutes is the TARGET for the minutes model;
+      it must never appear as a same-game FEATURE for the stat models.)
+
+7d. THE SEALED HOLDOUT (repeated-tuning-overfits doctrine)
+    - Designate a development window and SEAL a forward window that is NEVER
+      evaluated or reported until final validation — the exact "Q1 is dev,
+      Apr-Jun stays sealed, do not even look" rule. For a new build: use prior
+      seasons as walk-forward dev, seal the most recent full season (and the live
+      forward feed) as the untouched holdout for any candidate that wins on dev.
+
+7e. FORWARD PAPER-VALIDATION (the load-bearing one, given thin prop history)
+    - Prop odds history only goes back ~2023 (feasibility §6) — too thin for a
+      soccer-grade "Last Dance" deep backtest. So the PRIMARY validation is
+      FORWARD PAPER-TRADING: log every prediction with a timestamp, capture the
+      line we would have taken and the eventual CLOSING line, and score:
+        * CLV (closing-line value) — did we beat the number that later closed?
+          The single most predictive proxy for long-run edge.
+        * Realized Brier/ECE/band-bias/CRPS on settled results, rolling.
+        * Market-Beating-Index (MBI = market log-loss − model log-loss) per market
+          — positive means we beat the closing line (expected ~0/negative on main
+          markets = market-grade confirmation; the signal to watch is POSITIVE MBI
+          on neglected props/soft venues, the live edge).
+      Reuse safepicks' paper_clv logger pattern wholesale.
+    - The forward log doubles as the promotion evidence (7a-c) and the honesty
+      ledger: it will, if the feasibility memo is right, SHOW core-v1 going
+      market-grade on main lines and the player model earning its keep only on
+      neglected/soft prop lines. That is the expected, honest result — and the
+      validation plan is designed to reveal it, not hide it.
+
+--------------------------------------------------------------------------------
+(8) BUILD ORDER (dependency-first, calibration-gated at each step)
+--------------------------------------------------------------------------------
+  1. Possessions/pace estimator + ridge adjusted ORtg/DRtg (core-v1 mean).
+  2. Elo margin model (cold-start prior + ensemble member).
+  3. sigma_m / sigma_t estimation + Normal wrap → spread/ML/total/team-total
+     probabilities; PIT/CRPS calibration gate. (Market-grade anchor done.)
+  4. Probability calibrators (isotonic/beta/identity, band-ECE selection) +
+     per-line calibration scaffolding. Skew/t refinement iff it clears CRPS.
+  5. Minutes distribution model (the hard, info-ceiling piece).
+  6. Usage/opportunity + per-stat NB/compound distributions (rebounds first —
+     best-calibrating — then points, assists, threes; combos via copula).
+  7. Injury-cascade lineup-state re-solve.
+  8. gbm residual challenger (stack-v1) + market blend (blend-v1), both under the
+     promotion gate.
+  9. Forward paper-CLV logger + walk-forward backtest harness + seal the holdout.
+  Each stage ships ONLY after clearing its calibration gate; nothing enters the
+  trusted/edge pool on structural plausibility alone (the §5 rule).
+
+--------------------------------------------------------------------------------
+(9) SOURCES (consulted 2026-07-19)
+--------------------------------------------------------------------------------
+Margin normality / pace-efficiency / SD:
+  - The Data Jocks, "Pace and Efficiency Pt 1: Measuring and Predicting NBA Pace"
+    https://thedatajocks.com/models-and-nba-pace-stats/
+  - APBRmetrics, "Estimating Wins From a +/- Model" (MOV SD ~12.5)
+    https://www.apbr.org/metrics/viewtopic.php?f=2&t=9262
+  - "How the Normal Distribution applies to College Basketball" (RStudio Pubs)
+    https://rstudio-pubs-static.s3.amazonaws.com/1012507_9efaff105a584c53ad971fb5f01886fc.html
+  - Crockpot Thoughts, "Predicting NBA Games Pt 3: The Model"
+    https://crockpotthoughts.wordpress.com/2019/08/05/predicting-nba-games-part-3-the-model/
+  - Basketball-Reference glossary (Poss/Pace/ORtg/DRtg identities)
+    https://www.basketball-reference.com/about/glossary.html
+Adjusted efficiency / RAPM / opponent adjustment:
+  - college-hoops-data, "Efficiency Ratings Explained (2026)"
+    https://www.college-hoops-data.com/guide/efficiency-ratings
+  - Jonathan Riordan, "College Basketball Adjusted Efficiency Betting Model"
+    https://medium.com/@jriordan1/college-basketball-adjusted-efficiency-betting-model-c089b350012c
+  - sradjoker, "Adjusting NBA Offensive/Defensive Ratings using SoS"
+    https://blog.sradjoker.cc/posts/nba-sosadj/
+  - John Chen, "NBA Player Value Models: Calculating RAPM"
+    https://medium.com/@johnchenmbb/calculating-rapm-steps-1-and-2-of-my-summer-plan-1a78e1476b1f
+  - "Lineup Regularized Adjusted Plus-Minus (L-RAPM)" (arXiv 2601.15000)
+    https://arxiv.org/html/2601.15000v1
+  - evanmiya, "Bayesian Performance Rating"
+    https://blog.evanmiya.com/p/bayesian-performance-rating
+  - Sill, "Improved NBA Adjusted +/- Using Regularization and OOS testing"
+    https://supermariogiacomazzo.github.io/STOR538_WEBSITE/Articles/Basketball/Basketball_Sill.pdf
+Player props / minutes / usage / distributions:
+  - RotoGrinders, "NBA Player Projections: Foundational Knowledge"
+    https://rotogrinders.com/fantasy/lessons/nba-player-projections
+  - NBAstuffer, "Usage Rate, Rest Days, Turnovers ... prop research"
+    https://www.nbastuffer.com/usage-restdays-turnovers-nba-prop-research
+  - nbastatsforbetting, "NBA Usage Rate Explained: A Prop Bettor's Lens"
+    https://nbastatsforbetting.com/articles/usage-rate/
+  - NBA.com Stats, Players Usage  https://www.nba.com/stats/players/usage
+  - hownbabettingwork, "NBA Player Props: PRA, Points, Rebounds, Assists Guide"
+    https://hownbabettingwork.com/articles/nba-player-props-betting-guide/
+Overdispersion / negative binomial / stat variance:
+  - dumbmoneypicks, "Variance-to-Mean Ratio: When Poisson Fails"
+    https://www.dumbmoneypicks.ai/learn/statistical-foundations/variance-to-mean-ratio
+  - Squared Statistics, "Basics in Negative Binomial Regression (3P%)"
+    https://squared2020.com/2017/08/20/basics-in-negative-binomial-regression-predicting-three-point-field-goal-percentages/
+  - Binomial Basketball, "Predicting Sensational Stats pt 3"
+    https://www.binomialbasketball.com/p/predicting-sensational-stats-pt-3
+Rest / back-to-back / schedule:
+  - NBAstuffer, "How Rest Day Stats can Give you the Edge"
+    https://www.nbastuffer.com/how-rest-day-stats-can-give-you-the-edge-in-your-nba-predictions/
+  - HeatCheck HQ, "NBA Back-to-Back Games and Rest Impact on Player Props"
+    https://heatcheckhq.io/blog/nba-back-to-back-rest-analysis
+  - inpredictable, "NBA Home Court Advantage and Rest"
+    https://www.inpredictable.com/2012/02/nba-home-court-advantage-and-rest.html
+Internal (read-only, mirrored not modified):
+  - safepicks apps/predictions: calibration.py, metrics.py, totals_calibration.py,
+    dixon_coles.py, ml/blend.py, ml/promotion.py, tests/test_walk_forward.py
+  - basketball-feasibility.txt (the binding verdict)
+================================================================================

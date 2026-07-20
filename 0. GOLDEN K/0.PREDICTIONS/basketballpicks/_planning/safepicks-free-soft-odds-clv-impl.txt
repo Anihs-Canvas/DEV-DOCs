@@ -1,0 +1,204 @@
+================================================================================
+SAFEPICKS — FREE SOFT-ODDS NICHE CLV EDGE TEST (soccer) · IMPLEMENTATION NOTES
+Additive, review-gated. Validates whether an edge exists vs a LAZY SOFT book on
+the NICHE surfaces the model is calibrated on; NOT a production betting engine.
+Built 2026-07-19. All code lives in the safepicks tree. No git run, no money.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. VERDICT UP FRONT (what a free budget can and cannot buy)
+--------------------------------------------------------------------------------
+* Soccer OU GOAL lines at soft prices: YES, free — via The Odds API (already
+  wired into safepicks). The mainline beat only pulls ONE totals line per event
+  (`markets=h2h,totals,spreads`). The full alternate goal-total LADDER lives on
+  the PER-EVENT endpoint. So we add a NEW module hitting that endpoint. Coverage
+  is THIN for soccer ("spreads/totals mainly US sports/books") but present, and
+  eu region also returns Betfair Exchange (near-zero-vig, closest free sharp-ish
+  team reference post-Pinnacle).
+* Soccer CORNERS at soft prices: SCARCE but free — The Odds API is the ONLY
+  verified free source that even NAMES soccer corner markets
+  (`alternate_totals_corners`, `alternate_team_totals_corners`,
+  `alternate_spreads_corners`, `corners_1x2`), from SELECTED books only, again
+  via the per-event endpoint. We capture TOTAL corners -> CORN_OU.
+* SportsGameOdds free: NOT usable here. Free "Amateur" tier = 8 leagues incl.
+  MLS only; international/European soccer (EPL/UCL/the 16 leagues safepicks
+  tracks) needs paid Rookie+. Its consensus/fair-odds field is nice but the
+  European coverage gate rules it out. (Useful only for USA/MLS.)
+* OddsPapi free: the SHARP AUDIT source. 250 req/mo (~8 boards/mo), no card,
+  soccer OU goal totals 1.5/2.5/3.5 across 100+ books INCLUDING Pinnacle +
+  Betfair Exchange. This is the one free thread of INDEPENDENT sharp truth
+  post-Pinnacle-shutdown. CORNERS on Pinnacle here are NOT confirmed (Pinnacle
+  barely prices soccer corners) -> the corners edge test has NO sharp audit.
+* Bovada: reachable but no clean structured soccer corners; not used.
+
+Honest bottom line: soft-consensus is materially WEAKER than a true sharp line
+(it is the average opinion of the same lazy market, blind to shared soft-book
+error). The empirical CLV_venue drift (did the number come to us) is the ONE
+non-circular signal, so it is the gate. The soft-devig "edge" is reported ONLY
+as the quantity the Pinnacle audit must survive. CORNERS can reach HOLD/KILL but
+NEVER CONFIRM (no free sharp cross-check).
+
+--------------------------------------------------------------------------------
+1. FILES ADDED / EDITED
+--------------------------------------------------------------------------------
+ADDED (new files — zero risk to existing tests):
+  apps/odds/sources/the_odds_api_niche.py   per-event OU-ladder + CORN_OU parser
+                                            + fetch_event_odds (pure; reuses the
+                                            mainline SPORT_KEYS/ParsedQuote).
+  apps/odds/sources/oddspapi.py             OddsPapi Pinnacle board parser +
+                                            fetch_board/fetch_tournament_boards +
+                                            normalize_raw adapter (first-key TODO).
+  apps/odds/niche_services.py               persistence: capture_niche_odds
+                                            (soft is_closing=False rows, REAL
+                                            captured_at) + capture_pinnacle_audit
+                                            (Pinnacle is_closing=True audit rows,
+                                            conservative board->match resolver).
+  apps/odds/tests/test_niche_odds.py        parser goldens + upsert tests (9).
+  apps/odds/tests/test_soft_edge_clv.py     edge-test end-to-end + frozen-
+                                            threshold unit tests (14).
+
+EDITED (surgical, ADDITIVE ONLY — no existing behaviour changed):
+  apps/odds/paper_clv.py       appended the SOFT-BOOK NICHE EDGE TEST block
+                               (compute_soft_edge_test + helpers). The existing
+                               compute_paper_clv and its helpers are UNTOUCHED.
+  apps/ingestion/http.py       + oddspapi_client() factory (new function).
+  config/settings.py           + ODDSPAPI_* + THE_ODDS_API_NICHE_MAX_EVENTS.
+  config/celery.py             + 3 beat entries (odds-niche-6h, pinnacle-audit-6h,
+                               soft-edge-weekly-mon-0750). Existing beats untouched.
+  apps/odds/tasks.py           + sync_niche_beat, pinnacle_audit_beat,
+                               soft_edge_weekly_beat (all no-op without keys).
+  .env.example                 + ODDSPAPI_KEY / tournament ids / niche cap docs.
+
+--------------------------------------------------------------------------------
+2. CAPTURE ARCHITECTURE (how early-vs-close drift accrues)
+--------------------------------------------------------------------------------
+* the_odds_api_niche.fetch_event_odds -> GET
+    /v4/sports/{sport}/events/{event_id}/odds?regions=eu
+        &markets=alternate_totals,alternate_totals_corners&oddsFormat=decimal
+  Billed markets_returned x regions (empty markets free) -> ~2 credits/event.
+  Reuses the EXISTING the_odds_api BudgetedClient => shares the 500-credit/mo
+  account. Runs at LOW priority: the reserve floors (apps/ingestion/http.py)
+  sacrifice it BEFORE the CRITICAL final-2h mainline pulls. One run touches at
+  most THE_ODDS_API_NICHE_MAX_EVENTS (default 20) events, soonest kickoff first.
+* niche_services.capture_niche_odds finds tracked SCHEDULED matches in the T-7d
+  window that already carry a the_odds_api MatchSourceRef (external_id = the
+  event id — no fuzzy team resolution needed), pulls per event, upserts
+  OddsSnapshot rows: market "OU" (line=point) and "CORN_OU" (line=point),
+  selection OVER/UNDER, is_closing=False, captured_at=REAL now.
+* NO new closing beat: the EXISTING odds.capture_closing_beat iterates ALL
+  markets for a the_odds_api-ref match, so it flags the last pre-kickoff niche
+  row per combo as is_closing automatically. Early (T-7d) + last pre-kick pull
+  => a measurable early->close soft drift, forward.
+* Beat: "odds-niche-6h" (crontab minute=40, hour=*/6). Skips with a `skipped`
+  JobRun when THE_ODDS_API_KEY is empty.
+
+Note on market="CORN_OU": stored as a raw market string (7 chars, fits the
+8-char field). Deliberately NOT added to OddsSnapshot.MARKET_CHOICES -> NO model
+migration. paper_clv already treats CORN_OU as a market string, so this matches
+existing precedent. Team-corner totals / corner handicaps are intentionally NOT
+captured (paper_clv only prices/settles total corners; keeps scope on the two
+surfaces the model is genuinely calibrated / least-bad on).
+
+--------------------------------------------------------------------------------
+3. THE CLV EDGE-TEST DESIGN (paper_clv.compute_soft_edge_test)
+--------------------------------------------------------------------------------
+Surfaces graded (ONLY): OU goal lines (CORE OU2.5 ECE ~0.1%; other lines via the
+wide `tot` engine) + CORN_OU (least-bad wide surface). 1X2/AH/DC/DNB/CARD/BTTS
+EXCLUDED (efficient mainline or anti-predictive).
+
+A PICK = a match with a CORE prediction where the model FAVORS a side at the
+SOFT early price: edge = (1-p_push)*(p_model*O_soft_early - 1) > 0 AND
+O_soft_early >= 1.10 (engine.GateParams.min_publish_odds — single source of
+truth) AND a soft CLOSING benchmark exists for the same combo.
+
+PRIMARY metric = CLV_venue = O_soft_early / O_soft_close - 1 (Bet.clv
+convention; positive when the soft line SHORTENS toward the pick). Empirical,
+NOT circular. Realized ROI-at-early is also logged on settled matches
+(engine.settle_wide + _early_pnl, reused).
+
+Aggregated per market-group (OU / CORN_OU), per league, and pooled, each with a
+SEEDED bootstrap 95% CI (n_iter=2000, seed=20260719; i.i.d. resample -> CI
+modestly narrow, noted) and a pre-registered verdict.
+
+PRE-REGISTERED THRESHOLDS (frozen; move only via a dated ADR, never to rescue a
+dying cell; all cells DISABLED at birth — report-only, no MarketRule writes):
+  CONFIRM (cell): n_picks >= 200 (CLV legs) AND mean CLV_venue >= +0.5%
+     AND bootstrap CI lower bound > 0 AND sustained >= 8 distinct kickoff weeks
+     AND NOT contamination_kill AND group is CONFIRMABLE (CORN_OU is not).
+  KILL (cell):    n_picks >= 150 AND CLV_venue CI upper bound < 0
+     (the soft line moves AWAY from us -> no edge).
+  Else HOLD.
+It runs FORWARD only (no historical soft-niche data). On today's data it returns
+a clean zero report; numbers accrue weekly via "soft-edge-weekly-mon-0750".
+
+--------------------------------------------------------------------------------
+4. ANTI-CONTAMINATION GUARDRAIL (the deepest hazard — bball-06 §7 / K6)
+--------------------------------------------------------------------------------
+The soft "consensus fair" is a Shin-devig of the SAME soft market we grade
+against, so it can CONFIRM A PHANTOM EDGE when the soft books are wrong together.
+Guardrail = re-grade the SAME legs against the INDEPENDENT Pinnacle close:
+  * per pick, edge_vs_soft_fair = O_soft_early * p_softfair_close - 1
+  * per audit leg, edge_vs_pin_fair = O_soft_early * p_pinfair_close - 1
+    (only where an OddsPapi Pinnacle two-sided close exists for that line)
+  * _anti_contamination: over the audit legs, if n_audit >= 20 AND
+    mean(edge_vs_soft_fair) > 0 AND mean(edge_vs_pin_fair) <= 0 -> the apparent
+    edge VANISHES against independent truth -> verdict = KILL_CONTAMINATION
+    (overrides everything). This is K6, encoded.
+Wiring: oddspapi.py fetches Pinnacle boards; niche_services.capture_pinnacle_audit
+writes them as is_closing=True SHARP rows (Pinnacle -> is_sharp=True via the
+existing ensure_bookmaker). _niche_offers routes sharp closing pairs into the
+audit fair only (never the pick price). Beat "pinnacle-audit-6h" skips unless
+BOTH ODDSPAPI_KEY and ODDSPAPI_TOURNAMENT_IDS are set.
+LIMITATION (honest): corners have NO Pinnacle audit -> CORN_OU can never CONFIRM
+(enforced in _verdict via NO_CONFIRM_GROUPS). If the OddsPapi Pinnacle thread
+vanishes (ongoing lockdown risk), run the test but DO NOT act on any OU CONFIRM.
+
+--------------------------------------------------------------------------------
+5. TESTS (23 new, all green; run the documented way)
+--------------------------------------------------------------------------------
+  POSTGRES_HOST= .venv/Scripts/python.exe -m pytest \
+      apps/odds/tests/test_niche_odds.py apps/odds/tests/test_soft_edge_clv.py
+  -> 23 passed. Existing apps/odds/tests/test_paper_clv.py +
+     test_the_odds_api.py re-run green (24 passed) — additive edits broke
+     nothing. Django import/beat-registration check: clean.
+Coverage: niche parser (OU+corner ladders, bad-odds/skip), OddsPapi parser
+(Pinnacle-only, normalize_raw shapes), capture_niche_odds upsert (real
+captured_at, no-ref-no-poll), capture_pinnacle_audit (sharp closing rows, board
+resolution, conservative skip), and the edge test end-to-end (positive/negative
+CLV, floor/edge screens, missing-close skip, settled ROI, soft+pin fairs) plus
+the frozen thresholds unit-pinned (contamination kill at n>=20, verdict
+CONFIRM/KILL/HOLD, corners-never-confirm).
+
+--------------------------------------------------------------------------------
+6. FREE SIGNUPS THE OWNER MUST COMPLETE
+--------------------------------------------------------------------------------
+1. The Odds API (ALREADY have the account/key for the mainline beat): NOTHING
+   new to sign up. But the niche per-event pulls bill the SAME 500-credit/mo
+   account -> either (a) accept the LOW-priority niche cap (default 20 events/
+   run) which the reserve floors already protect, or (b) get a SECOND free key
+   / paid plan for the niche beat to avoid starving the mainline closing pulls.
+   Set nothing extra to run as (a). Optional: THE_ODDS_API_NICHE_MAX_EVENTS.
+2. OddsPapi (oddspapi.io) — FREE tier, NO card. Sign up -> copy the API key ->
+   set ODDSPAPI_KEY. Then enumerate the tournament ids for the tracked leagues
+   (oddspapi.io/tournaments or /v4/odds-by-tournaments) -> set
+   ODDSPAPI_TOURNAMENT_IDS (CSV). Until BOTH are set the audit beat no-ops.
+   VERIFY on first key: the raw JSON field names (normalize_raw adapter in
+   oddspapi.py is the one place to adjust) + that Pinnacle soccer OU is actually
+   returned + whether ANY Pinnacle corners exist (expected: no).
+3. SportsGameOdds — only worth a free key if you extend to USA/MLS (free tier
+   is MLS-among-8-leagues); NOT for the European leagues.
+
+--------------------------------------------------------------------------------
+7. HONEST CAVEATS (do not wave away)
+--------------------------------------------------------------------------------
+* Soft-consensus is NOT an independent sharp signal; a shared soft-book blind
+  spot makes the devig "edge" phantom. CLV_venue + the Pinnacle audit are the
+  only defences, and both are weaker than a true sharp line was.
+* Soccer soft OU/corners coverage on the free tier is THIN and forward-only; the
+  per-event budget means only a handful of events/day are realistically pulled.
+* Corners: no free sharp audit -> unbettable-tier evidence; display/monitor only.
+* Closing "capturability" is optimistic (soft books limit winners; the recorded
+  close may not be takeable) — same tax noted in the sharp_anchor study.
+* OddsPapi longevity/ToS risk (resold Pinnacle post-shutdown): could vanish. If
+  the audit dies, the guardrail dies — then run the predictor, do NOT bet.
+================================================================================
